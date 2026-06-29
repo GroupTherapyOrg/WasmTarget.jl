@@ -1375,8 +1375,11 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                     ref_test!(bld, Int64(target_wasm.type_idx), false)
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
+                    # F-ii: route through the SINGLE-SOURCE discriminator (was ref.test of the
+                    # box struct, which can't distinguish same-wasm-rep types that share it —
+                    # emit_isa_classid! reads the classId field instead).
                     any_convert_extern!(bld)
-                    ref_test!(bld, Int64(box_type_idx), false)
+                    emit_isa_classid!(bld, ctx, box_type_idx, check_type)
                 else
                     # Fallback: non-null check for non-concrete wasm types
                     ref_is_null!(bld)
@@ -1388,16 +1391,13 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
             if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
-                # Numeric type: test against the numeric box struct
+                # Numeric type: route through the SINGLE-SOURCE discriminator (was ref.test of
+                # the box struct, which same-wasm-rep types share — emit_isa_classid! reads the
+                # classId field to distinguish Bool/Int8/Int16/Int32/Char).
                 local _box_wasm = julia_to_wasm_type(check_type)
-                if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
-                    local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
-                    ref_test!(bld, Int64(_box_idx), false)
-                else
-                    # Box type not registered yet — register it
-                    local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
-                    ref_test!(bld, Int64(_box_idx2), false)
-                end
+                local _box_idx = get(ctx.type_registry.numeric_boxes, _box_wasm,
+                                     get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm))
+                emit_isa_classid!(bld, ctx, _box_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
                 # E2E-001: When multiple Julia types share the same WasmGC type index
@@ -2848,18 +2848,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                     fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
                                     if union_wasm === AnyRef
                                         if fw === I64 || fw === I32 || fw === F32 || fw === F64
-                                            # B1: ALL numerics → full-width numeric box (was: I64/I32
-                                            # via ref.i31, which SILENTLY TRUNCATED any value ≥ 2^30 —
-                                            # e.g. an Int64 field ≥ 2^40 came back wrong). The box keeps
-                                            # the value at its real width; the consumer unboxes via
-                                            # ref.cast box; struct.get 1 (same path the F64 field used).
-                                            box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, fw)
-                                            sc = length(ctx.locals) + ctx.n_params
-                                            push!(ctx.locals, fw)
-                                            local_set!(_hetb, sc)
-                                            i32_const!(_hetb, 0)
-                                            local_get!(_hetb, sc)
-                                            struct_new!(_hetb, box_idx, WasmValType[])
+                                            # F-ii: route through the SINGLE-SOURCE box producer
+                                            # (was an inline numeric box w/ a literal-0 typeId). B1
+                                            # already killed the lossy ref.i31 here; now the box also
+                                            # stores the field's REAL classId so same-wasm-rep members
+                                            # (Bool/Int8/Int32 all i32) stay distinguishable on isa.
+                                            emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
                                         elseif fw === ExternRef
                                             any_convert_extern!(_hetb)
                                         end

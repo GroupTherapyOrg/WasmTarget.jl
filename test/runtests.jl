@@ -198,6 +198,18 @@ _wt_htup_i64f64_big(i::Int64)::Int64 = begin
     v = t[i]
     v isa Int64 ? v : Int64(-1)
 end
+# WASMTARGET-FUZZ (Loop B/F-ii): same-WASM-REP Union distinguishability via the single-
+# source classId funnel. A het-tuple of Bool/Int8/Int32 (all i32) indexed at runtime →
+# Union{Bool,Int8,Int32}; the value was COLLAPSED to a raw i32 local (unboxed), so every
+# `isa` mis-fired (Int8 & Int32 both matched `isa Bool`). Fixed by: needs_anyref_boxing now
+# boxes same-rep unions (value stays a boxed ref), emit_classid_box! stores the field's REAL
+# classId, and emit_isa_classid! reads the classId off the box (not ref.test of the shared
+# struct). i=1→Bool, 2→Int8, 3→Int32.
+_wt_htup_disc(i::Int64)::Int64 = begin
+    t = (true, Int8(7), Int32(9))
+    v = t[i]
+    v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
+end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
 # Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
@@ -7742,6 +7754,11 @@ console.log(JSON.stringify({
             # Loop B/B1: an AnyRef-union (Union{Int64,Float64}) Int64 field ≥ 2^40 was
             # i31-TRUNCATED → returned -1; now full-width numeric box → 2^40+7 exactly.
             @test compare_julia_wasm(_wt_htup_i64f64_big, Int64(1)).pass  # = (1<<40)+7
+            # Loop B/F-ii: same-wasm-rep Union (Bool/Int8/Int32 all i32) — collapsed local
+            # made every isa match the first branch; now boxed w/ real classId + classId-read.
+            @test compare_julia_wasm(_wt_htup_disc, Int64(1)).pass  # Bool  → 1
+            @test compare_julia_wasm(_wt_htup_disc, Int64(2)).pass  # Int8  → 2
+            @test compare_julia_wasm(_wt_htup_disc, Int64(3)).pass  # Int32 → 3
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin

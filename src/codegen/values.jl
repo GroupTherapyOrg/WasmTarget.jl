@@ -380,8 +380,20 @@ of the coercion body that was copy-pasted across ~21 sites (PARITY_LEDGER B1):
 Does NOT handle numeric→ref boxing nor ref→numeric unboxing — those stay at their sites
 (they need a value/typeId, not just a stack coercion). Returns `b`.
 """
-function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType, ctx::AbstractCompilationContext)
-    if _wt_is_ref(from) && _wt_is_ref(to)
+function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
+                       ctx::AbstractCompilationContext; from_julia::Union{Type,Nothing}=nothing)
+    if !_wt_is_ref(from) && _wt_is_ref(to)
+        # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
+        # canonical {classId,value} struct (real classId when from_julia is known), then upcast
+        # the box ref to `to` (the box subtypes $JlBase, so any/eq/struct targets are free).
+        box_idx = emit_classid_box!(b, ctx, from, from_julia)
+        convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx)
+        return b
+    elseif _wt_is_ref(from) && !_wt_is_ref(to)
+        # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
+        emit_classid_unbox!(b, ctx, to)
+        return b
+    elseif _wt_is_ref(from) && _wt_is_ref(to)
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
         if to === ExternRef && from !== ExternRef
             # any→extern at the JS boundary.

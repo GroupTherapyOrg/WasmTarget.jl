@@ -484,14 +484,22 @@ function needs_anyref_boxing(T::Union)::Bool
     length(non_nothing) < 2 && return false
     # Check if all are numeric
     all(t -> t <: Number, non_nothing) || return false
-    # Check if they have mixed Wasm categories (int vs float)
+    # Per-member wasm reps.
     wasm_types = Set{WasmValType}()
     for t in non_nothing
         push!(wasm_types, julia_to_wasm_type(t))
     end
     has_int = any(w -> w === I32 || w === I64, wasm_types)
     has_float = any(w -> w === F32 || w === F64, wasm_types)
-    return has_int && has_float
+    # Mixed int/float — collapsing to one primitive reinterprets the bits (lossy value).
+    (has_int && has_float) && return true
+    # Loop B distinguishability: ≥2 DISTINCT Julia types that share a wasm rep (e.g.
+    # Bool/Int8/Int16/Int32/Char all → i32) are INDISTINGUISHABLE when collapsed to that
+    # primitive — the value round-trips but the TYPE TAG is lost, so a downstream isa/typeof
+    # mis-fires (the local becomes a raw numeric, unboxed). Box behind AnyRef to keep the
+    # classId, as dart2wasm does for every dynamic value.
+    length(wasm_types) < length(non_nothing) && return true
+    return false
 end
 
 """
