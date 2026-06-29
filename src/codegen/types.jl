@@ -1888,7 +1888,20 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
                 wt === I32 || wt === I64 || wt === F32 || wt === F64
             end
             if all_numeric_u
-                # Numeric-only union: widest numeric type, no boxing.
+                # F1/P1 (dart2wasm convertType + boxedClasses): a numeric Union that
+                # spans incompatible Wasm categories (int vs float — e.g.
+                # Union{Int64,Float64}) is LOSSY if collapsed to the widest primitive
+                # (Int 1 and Float 1.0 become the same f64, and the tag is gone).
+                # needs_anyref_boxing flags exactly that case; box it as a classId-tagged
+                # {typeId,value} struct behind AnyRef — the SAME representation the
+                # ReturnNode/param/local/field box paths already produce. MUST agree
+                # with julia_to_wasm_type_concrete (the SSA-local allocator), which is
+                # aligned to return AnyRef here too.
+                if T isa Union && needs_anyref_boxing(T)
+                    return AnyRef
+                end
+                # Same-category numeric union (all-int or all-float): widening to the
+                # widest primitive is faithful (no int/float tag to lose).
                 return julia_to_wasm_type(T)
             end
             if all(t -> t isa DataType && t <: Type, non_nothing_u) && registry.jl_datatype_idx !== nothing
