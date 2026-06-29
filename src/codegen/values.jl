@@ -332,6 +332,79 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
 end
 
 """
+    convert_type!(b, from, to, ctx)
+
+The single coercion funnel (dart2wasm `translator.dart convertType`). Given a value of wasm
+type `from` already on the stack, emit the ops to coerce it to `to`. Byte-identical extraction
+of the coercion body that was copy-pasted across ~21 sites (PARITY_LEDGER B1):
+
+  * `from === to` OR `wasm_subtype(from,to)` (upcast) ⇒ emit NOTHING.
+  * ref→ref: extern↔any bridge / `ref.as_non_null` (nullability-only narrowing, P9) /
+    `ref.cast` (downcast). Mirrors `emit_return_coerced!`'s ref→ref branch (Loop A).
+  * numeric→numeric: WT's 6-branch widening ladder (dart2wasm throws here; Julia widens).
+
+Does NOT handle numeric→ref boxing nor ref→numeric unboxing — those stay at their sites
+(they need a value/typeId, not just a stack coercion). Returns `b`.
+"""
+function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType, ctx::AbstractCompilationContext)
+    if _wt_is_ref(from) && _wt_is_ref(to)
+        # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
+        if to === ExternRef && from !== ExternRef
+            # any→extern at the JS boundary.
+            extern_convert_any!(b)
+        elseif from === ExternRef && to !== ExternRef
+            # extern→any boundary, then narrow if the GC target is below `any`.
+            any_convert_extern!(b)
+            if !wasm_subtype(AnyRef, to, ctx.mod)
+                if to isa ConcreteRef
+                    ref_cast!(b, Int64(to.type_idx), to.nullable)
+                elseif to isa RefType && _wt_gc_refkind(to)
+                    ref_cast!(b, to, true)
+                end
+                # FuncRef/NonNullAbstractRef target after extern→any: nothing principled to emit.
+            end
+        elseif wasm_subtype(from, to, ctx.mod)
+            # Upcast is free — emit nothing.
+        elseif wasm_subtype(_wt_drop_nullable(from), to, ctx.mod)
+            # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
+            # nullability (heap types compatible, source nullable → non-null target).
+            # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
+            ref_as_non_null!(b)
+        else
+            # Downcast.
+            if to isa ConcreteRef
+                ref_cast!(b, Int64(to.type_idx), to.nullable)
+            elseif to isa RefType && _wt_gc_refkind(to)
+                ref_cast!(b, to, true)
+            end
+            # FuncRef / NonNullAbstractRef target: no ref.cast emitted.
+        end
+    else
+        # numeric→numeric: WT's widening ladder (dart2wasm throws here; Julia widens).
+        if from === I32 && to === I64
+            num!(b, Opcode.I64_EXTEND_I32_S)
+        elseif from === I64 && to === F64
+            num!(b, Opcode.F64_CONVERT_I64_S)
+        elseif from === I32 && to === F64
+            num!(b, Opcode.F64_CONVERT_I32_S)
+        elseif from === F32 && to === F64
+            num!(b, Opcode.F64_PROMOTE_F32)
+        elseif from === I64 && to === F32
+            num!(b, Opcode.F32_CONVERT_I64_S)
+        elseif from === I32 && to === F32
+            num!(b, Opcode.F32_CONVERT_I32_S)
+        end
+    end
+    return b
+end
+
+# Unknown source/target type (e.g. get_phi_edge_wasm_type returned `nothing`): the
+# inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
+# branch matches), so a no-op preserves byte-identity.
+convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext) = b
+convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext) = b
+
+"""
     emit_return_coerced!(b, val, ctx)
 
 Emit a ReturnNode value `val` coerced to the function's wasm return type. Extracted from ~9
@@ -358,54 +431,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         unreachable!(b)
     else
         emit_raw!(b, compile_value(val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-        if _wt_is_ref(val_wasm_type) && _wt_is_ref(func_ret_wasm)
-            # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
-            if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                # any→extern at the JS boundary.
-                extern_convert_any!(b)
-            elseif val_wasm_type === ExternRef && func_ret_wasm !== ExternRef
-                # extern→any boundary, then narrow if the GC target is below `any`.
-                any_convert_extern!(b)
-                if !wasm_subtype(AnyRef, func_ret_wasm, ctx.mod)
-                    if func_ret_wasm isa ConcreteRef
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm.nullable)
-                    elseif func_ret_wasm isa RefType && _wt_gc_refkind(func_ret_wasm)
-                        ref_cast!(b, func_ret_wasm, true)
-                    end
-                    # FuncRef/NonNullAbstractRef target after extern→any: nothing principled to emit.
-                end
-            elseif wasm_subtype(val_wasm_type, func_ret_wasm, ctx.mod)
-                # Upcast is free — emit nothing.
-            elseif wasm_subtype(_wt_drop_nullable(val_wasm_type), func_ret_wasm, ctx.mod)
-                # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
-                # nullability (heap types compatible, source nullable → non-null target).
-                # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
-                ref_as_non_null!(b)
-            else
-                # Downcast.
-                if func_ret_wasm isa ConcreteRef
-                    ref_cast!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm.nullable)
-                elseif func_ret_wasm isa RefType && _wt_gc_refkind(func_ret_wasm)
-                    ref_cast!(b, func_ret_wasm, true)
-                end
-                # FuncRef / NonNullAbstractRef target: no ref.cast emitted.
-            end
-        else
-            # numeric→numeric: WT's widening ladder (dart2wasm throws here; Julia widens).
-            if val_wasm_type === I32 && func_ret_wasm === I64
-                num!(b, Opcode.I64_EXTEND_I32_S)
-            elseif val_wasm_type === I64 && func_ret_wasm === F64
-                num!(b, Opcode.F64_CONVERT_I64_S)
-            elseif val_wasm_type === I32 && func_ret_wasm === F64
-                num!(b, Opcode.F64_CONVERT_I32_S)
-            elseif val_wasm_type === F32 && func_ret_wasm === F64
-                num!(b, Opcode.F64_PROMOTE_F32)
-            elseif val_wasm_type === I64 && func_ret_wasm === F32
-                num!(b, Opcode.F32_CONVERT_I64_S)
-            elseif val_wasm_type === I32 && func_ret_wasm === F32
-                num!(b, Opcode.F32_CONVERT_I32_S)
-            end
-        end
+        convert_type!(b, val_wasm_type, func_ret_wasm, ctx)
         return_!(b)
     end
     return b

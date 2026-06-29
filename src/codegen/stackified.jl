@@ -1804,15 +1804,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_arr = Int(ret_local) - ctx.n_params + 1
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
-                                if _rl_wasm === I32 && func_ret_wasm === I64
-                                    num!(b, Opcode.I64_EXTEND_I32_S)
-                                elseif _rl_wasm === I64 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_CONVERT_I64_S)
-                                elseif _rl_wasm === I32 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_CONVERT_I32_S)
-                                elseif _rl_wasm === F32 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_PROMOTE_F32)
-                                end
+                                convert_type!(b, _rl_wasm, func_ret_wasm, ctx)
                             end
                             return_!(b)
                         else

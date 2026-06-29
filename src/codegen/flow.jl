@@ -1810,19 +1810,7 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
             emit_raw!(b, compile_value(then_value, ctx); pushes=WasmValType[AnyRef])
             # PURE-1101: Convert numeric type to match IF block result type
             then_val_type = infer_value_wasm_type(then_value, ctx)
-            if then_val_type === I64 && result_type === F64
-                num!(b, Opcode.F64_CONVERT_I64_S)
-            elseif then_val_type === I32 && result_type === F64
-                num!(b, Opcode.F64_CONVERT_I32_S)
-            elseif then_val_type === F32 && result_type === F64
-                num!(b, Opcode.F64_PROMOTE_F32)
-            elseif then_val_type === I32 && result_type === I64
-                num!(b, Opcode.I64_EXTEND_I32_S)
-            elseif then_val_type === I64 && result_type === F32
-                num!(b, Opcode.F32_CONVERT_I64_S)
-            elseif then_val_type === I32 && result_type === F32
-                num!(b, Opcode.F32_CONVERT_I32_S)
-            end
+            convert_type!(b, then_val_type, result_type, ctx)
         end
 
         # Else branch
@@ -1852,19 +1840,7 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
             emit_raw!(b, compile_value(else_value, ctx); pushes=WasmValType[AnyRef])
             # PURE-1101: Convert numeric type to match IF block result type
             else_val_type = infer_value_wasm_type(else_value, ctx)
-            if else_val_type === I64 && result_type === F64
-                num!(b, Opcode.F64_CONVERT_I64_S)
-            elseif else_val_type === I32 && result_type === F64
-                num!(b, Opcode.F64_CONVERT_I32_S)
-            elseif else_val_type === F32 && result_type === F64
-                num!(b, Opcode.F64_PROMOTE_F32)
-            elseif else_val_type === I32 && result_type === I64
-                num!(b, Opcode.I64_EXTEND_I32_S)
-            elseif else_val_type === I64 && result_type === F32
-                num!(b, Opcode.F32_CONVERT_I64_S)
-            elseif else_val_type === I32 && result_type === F32
-                num!(b, Opcode.F32_CONVERT_I32_S)
-            end
+            convert_type!(b, else_val_type, result_type, ctx)
         end
 
         # End if - phi result is on the stack
@@ -2017,19 +1993,9 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                             extern_convert_any!(b)
-                        # PURE-1101: Numeric widening for typed IF block result
-                        elseif val_wasm === I64 && result_type === F64
-                            num!(b, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm === I32 && result_type === F64
-                            num!(b, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm === F32 && result_type === F64
-                            num!(b, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm === I32 && result_type === I64
-                            num!(b, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm === I64 && result_type === F32
-                            num!(b, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm === I32 && result_type === F32
-                            num!(b, Opcode.F32_CONVERT_I32_S)
+                        else
+                            # PURE-1101: Numeric widening for typed IF block result (B1 funnel).
+                            convert_type!(b, val_wasm, result_type, ctx)
                         end
                     end
                 end
@@ -2094,19 +2060,9 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                         if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                             extern_convert_any!(b)
-                        # PURE-1101: Numeric widening for typed IF block result
-                        elseif val_wasm === I64 && result_type === F64
-                            num!(b, Opcode.F64_CONVERT_I64_S)
-                        elseif val_wasm === I32 && result_type === F64
-                            num!(b, Opcode.F64_CONVERT_I32_S)
-                        elseif val_wasm === F32 && result_type === F64
-                            num!(b, Opcode.F64_PROMOTE_F32)
-                        elseif val_wasm === I32 && result_type === I64
-                            num!(b, Opcode.I64_EXTEND_I32_S)
-                        elseif val_wasm === I64 && result_type === F32
-                            num!(b, Opcode.F32_CONVERT_I64_S)
-                        elseif val_wasm === I32 && result_type === F32
-                            num!(b, Opcode.F32_CONVERT_I32_S)
+                        else
+                            # PURE-1101: Numeric widening for typed IF block result (B1 funnel).
+                            convert_type!(b, val_wasm, result_type, ctx)
                         end
                     end
                 end
@@ -2207,19 +2163,9 @@ function compile_nested_if_else(ctx::AbstractCompilationContext, code, goto_idx:
                     emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                         extern_convert_any!(b)
-                    # PURE-1101: Numeric widening for typed IF block result
-                    elseif val_wasm === I64 && result_type === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm === I32 && result_type === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm === F32 && result_type === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm === I32 && result_type === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm === I64 && result_type === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm === I32 && result_type === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
+                    else
+                        # PURE-1101: Numeric widening for typed IF block result (B1 funnel).
+                        convert_type!(b, val_wasm, result_type, ctx)
                     end
                 end
             end
@@ -2285,19 +2231,9 @@ function compile_nested_if_else(ctx::AbstractCompilationContext, code, goto_idx:
                     emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
                     if func_ret_wasm === ExternRef && val_wasm !== ExternRef
                         extern_convert_any!(b)
-                    # PURE-1101: Numeric widening for typed IF block result
-                    elseif val_wasm === I64 && result_type === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm === I32 && result_type === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm === F32 && result_type === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm === I32 && result_type === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm === I64 && result_type === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm === I32 && result_type === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
+                    else
+                        # PURE-1101: Numeric widening for typed IF block result (B1 funnel).
+                        convert_type!(b, val_wasm, result_type, ctx)
                     end
                 end
             end
