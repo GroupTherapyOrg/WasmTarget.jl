@@ -438,6 +438,85 @@ end
 convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext) = b
 convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext) = b
 
+# ============================================================================
+# Single-source classId box/unbox/discriminate (Loop B funnel — dev/LOOP_B_DESIGN.md).
+# dart2wasm's convertType boxing: a dynamic value is a {classId:i32@0, value@1} struct
+# subtyping the Top struct ($JlBase); type-tests read classId off the box. These are the
+# ONE producer + ONE consumer that ALL boxing/discrimination routes through (replacing the
+# ~41 scattered emit_box_type_id!+struct_new sites + the inlined isa copies). Added DORMANT
+# in F-i (byte-identical); wired via convert_type!'s box/unbox arms + the isa sites in F-ii.
+# ============================================================================
+
+"""
+    emit_classid_box!(b, ctx, wasm_type, julia_type) -> box_type_idx
+
+Box the numeric value on the stack into a `{classId:i32, value:wasm_type}` struct (the
+canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type classId when
+`julia_type` is given; otherwise the wasm-rep id fallback (`emit_box_type_id!`) for sites
+that don't yet carry the Julia type — those distinguish only by width until they migrate.
+Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
+"""
+function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                           wasm_type::WasmValType, julia_type::Union{Type,Nothing})
+    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
+    sc = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, wasm_type)
+    builder_set_local_type!(b, sc, wasm_type)
+    local_set!(b, sc)                       # save the value
+    let tid = UInt8[]
+        if julia_type === nothing
+            emit_box_type_id!(tid, ctx.type_registry, wasm_type)   # fallback: wasm-rep id
+        else
+            emit_type_id!(tid, ctx.type_registry, julia_type)      # REAL classId
+        end
+        emit_raw!(b, tid; pushes=WasmValType[I32])                 # field 0 = classId
+    end
+    local_get!(b, sc)                       # reload the value (field 1)
+    struct_new!(b, box_idx, WasmValType[])
+    return box_idx
+end
+
+"""
+    emit_classid_unbox!(b, ctx, to_wasm)
+
+Unbox: the boxed ref is on the stack; narrow to the `to_wasm` numeric box and read its
+value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm).
+"""
+function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType)
+    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, to_wasm)
+    ref_cast!(b, Int64(box_idx), false)
+    struct_get!(b, UInt32(box_idx), UInt32(1), to_wasm)
+    return b
+end
+
+"""
+    emit_isa_classid!(b, ctx, box_idx, check_type)
+
+`isa`/`typeof`/`===` discriminator for a boxed numeric: is the value the box AND is its
+classId (field 0) == `check_type`'s DFS id? Guarded by `ref.test` so a non-box value yields
+0 (no trap). Same-wasm-rep types SHARE `box_idx`, so this classId read — NOT `ref.test` of
+the struct — is what distinguishes Bool/Int8/Int16/Int32/Char. THE single discriminator.
+"""
+function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                           box_idx::Integer, check_type::Type)
+    tid = ensure_type_id!(ctx.type_registry, check_type)
+    tmp = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, AnyRef)
+    builder_set_local_type!(b, tmp, AnyRef)
+    local_tee!(b, tmp)
+    ref_test!(b, Int64(box_idx), false)
+    if_!(b, I32)
+    local_get!(b, tmp)
+    ref_cast!(b, Int64(box_idx), false)
+    struct_get!(b, UInt32(box_idx), UInt32(0), I32)   # field 0 = classId
+    i32_const!(b, Int64(tid))
+    num!(b, Opcode.I32_EQ)
+    else_!(b)
+    i32_const!(b, 0)
+    end_block!(b)
+    return b
+end
+
 """
     emit_return_coerced!(b, val, ctx)
 
