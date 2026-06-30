@@ -158,6 +158,8 @@ _wt_shard0() && include("f3_box_capture_l0.jl")
 _wt_shard0() && include("f3_box_capture_l1.jl")
 # F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass (dormant).
 _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
+# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure (dormant).
+_wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal

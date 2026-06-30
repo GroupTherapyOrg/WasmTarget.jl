@@ -177,6 +177,77 @@ function find_box_news(code)::Vector{Int}
     return out
 end
 
+# Result type of one call stmt with box-derived operands typed by `out` (propagated) — the engine
+# of f3_box_value_types. A `getfield(box,:contents)` read → the box's contents type; any other call
+# → `return_type` with each SSA operand typed by `out[id]` if propagated, else its inferred type.
+function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Type}, ssa_types)
+    op = stmt.args[1]
+    if op isa GlobalRef && op.name === :getfield && length(stmt.args) >= 3 &&
+       stmt.args[3] isa QuoteNode && stmt.args[3].value === :contents
+        boxref = stmt.args[2]
+        for (bid, T) in boxT
+            _f3_refers_to_box(boxref, bid, code) && return T
+        end
+        return nothing
+    end
+    f = op isa GlobalRef ? (isdefined(op.mod, op.name) ? getfield(op.mod, op.name) : nothing) :
+        (op isa Function ? op : nothing)
+    f === nothing && return nothing
+    argtypes = Any[]
+    uses_box = false   # only propagate through ops that actually CONSUME a box-derived value
+    for a in stmt.args[2:end]
+        if a isa Core.SSAValue && haskey(out, a.id)
+            push!(argtypes, out[a.id]); uses_box = true
+        elseif a isa Core.SSAValue && 1 <= a.id <= length(ssa_types)
+            push!(argtypes, _F3_CC.widenconst(ssa_types[a.id]))
+        elseif a isa QuoteNode
+            push!(argtypes, typeof(a.value))
+        else
+            push!(argtypes, a isa Type ? Type : (a isa Core.Argument ? Any : typeof(a)))
+        end
+    end
+    uses_box || return nothing
+    return try _F3_CC.return_type(f, Tuple{argtypes...}) catch; nothing end
+end
+
+"""
+    f3_box_value_types(code, ssa_types) -> Dict{Int,Type}
+
+F3 L2b — the VALUE-TYPE PROPAGATION past Julia's `Box{Any}` erasure (the F3 L2 unblocker the L2
+attempt surfaced; dart2wasm `node.accept1 → ValueType`). Forward fixed-point: each `%new(Core.Box)`
+with CONCRETE contents T seeds box-reads of it → T; any op over already-propagated SSAs → its
+computed result type (`return_type` with propagated operand types). Returns ssa_id → concrete Julia
+type for box-DERIVED values (the getfield result, the `s+i` arithmetic) — these are inferred `Any`
+by Julia (the dynamic `+`) but compute at a concrete width, so without this they get anyref locals
+the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
+it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/F3_LOOP.md.
+"""
+function f3_box_value_types(code, ssa_types)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    box_news = find_box_news(code)
+    isempty(box_news) && return out
+    boxT = Dict{Int,Type}()
+    for bid in box_news
+        t = box_contents_type(code, ssa_types, bid)
+        t !== nothing && (boxT[bid] = t)
+    end
+    isempty(boxT) && return out
+    changed = true
+    while changed
+        changed = false
+        for (i, stmt) in enumerate(code)
+            haskey(out, i) && continue
+            (stmt isa Expr && stmt.head === :call) || continue
+            ft = _f3_call_result_type(stmt, code, out, boxT, ssa_types)
+            if ft isa DataType && isconcretetype(ft) && ft !== Core.Box
+                out[i] = ft
+                changed = true
+            end
+        end
+    end
+    return out
+end
+
 """
     populate_box_field_types!(mod, registry, code, ssa_types)
 
