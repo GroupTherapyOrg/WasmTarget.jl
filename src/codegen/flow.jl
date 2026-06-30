@@ -405,6 +405,54 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
 end
 
 """
+    _emit_phi_edge_convert!(b, ctx, phi_local_type, src_type, value_bytes) -> Bool
+
+THE single-source phi-edge value conversion (Loop C flow/phi dedup). `value_bytes` pushes the
+source value (already typed `src_type`); this emits the box / cast / UNBOX needed to land it in
+a phi local of `phi_local_type`, leaving the converted value on `b`'s stack (the caller does the
+local.set). Returns true if an arm applied, false if none did (caller emits a type-safe default).
+
+This is the ONE place that knows how a numeric value boxes into a ref phi local — and, the arm
+that was missing at every copy of this logic, how a classId box UNBOXES into a numeric phi local
+(`v[i]::Any` narrowed to Int64 via an isa-split phi). Without the unbox arm those edges fell to
+the default → `i64.const 0`, a silent miscompile (`Any[1,2,3][i]` → 0).
+"""
+function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                 phi_local_type, src_type, value_bytes::Vector{UInt8})::Bool
+    isempty(value_bytes) && return false
+    _num(t) = (t === I32 || t === I64 || t === F32 || t === F64)
+    _ref(t) = (t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === ExternRef || t isa ConcreteRef)
+    if phi_local_type === ExternRef && _num(src_type)
+        # numeric → ExternRef: classId box, then to externref
+        let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, src_type); emit_raw!(b, tb; pushes=WasmValType[I32]); end
+        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        struct_new!(b, get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type), WasmValType[])
+        extern_convert_any!(b)
+        return true
+    elseif phi_local_type === AnyRef && _num(src_type)
+        # numeric → AnyRef: classId box (a struct ref is already an anyref subtype)
+        let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, src_type); emit_raw!(b, tb; pushes=WasmValType[I32]); end
+        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        struct_new!(b, get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type), WasmValType[])
+        return true
+    elseif phi_local_type === ExternRef && _ref(src_type)
+        # internal ref → ExternRef
+        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        extern_convert_any!(b)
+        return true
+    elseif _num(phi_local_type) && _ref(src_type)
+        # THE missing arm — UNBOX a classId box into a numeric phi local (inverse of the
+        # numeric→AnyRef box arm above). Well-typed numeric phi ⟹ the edge is a numeric box,
+        # so the ref.cast inside emit_classid_unbox! succeeds; a genuine mistype traps (loud).
+        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        src_type === ExternRef && any_convert_extern!(b)
+        emit_classid_unbox!(b, ctx, phi_local_type)
+        return true
+    end
+    return false
+end
+
+"""
 Emit bytecode to store a phi edge value to a phi local, with type compatibility checking.
 If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
 the store is skipped (these represent unreachable code paths in Union types).
@@ -507,6 +555,15 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 return _ret(true)
             end
             return _ret(false)
+        elseif (phi_local_type === I64 || phi_local_type === I32 || phi_local_type === F64 || phi_local_type === F32) &&
+               (edge_val_type === AnyRef || edge_val_type === EqRef || edge_val_type === StructRef || edge_val_type === ExternRef || edge_val_type isa ConcreteRef)
+            # Loop C flow/phi dedup: UNBOX a classId box into a numeric phi local via the single
+            # shared converter (the arm that was missing here → i64.const 0, Any[i]→0).
+            if _emit_phi_edge_convert!(lb, ctx, phi_local_type, edge_val_type, compile_value(val, ctx))
+                local_set!(lb, local_idx)
+                return _ret(true)
+            end
+            return _ret(false)
         else
             # PURE-6025: Type mismatch — emit type-safe default instead of skipping.
             # Skipping leaves the local uninitialized, but we need a valid value
@@ -546,19 +603,12 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             if val_local_array_idx >= 1 && val_local_array_idx <= length(ctx.locals)
                 val_local_type = ctx.locals[val_local_array_idx]
                 if !wasm_types_compatible(phi_local_type, val_local_type)
-                    if phi_local_type === ExternRef && (val_local_type === I32 || val_local_type === I64 || val_local_type === F32 || val_local_type === F64)
-                        # PURE-325: Box numeric SSA local for ExternRef phi local
-                        vb = compile_value(val, ctx)
-                        if !isempty(vb)
-                            # PURE-9028: Push correct DFS typeId as field 0
-                            let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_local_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                            emit_raw!(lb, vb; pushes=(val_local_type === nothing ? WasmValType[] : WasmValType[val_local_type]))
-                            box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_local_type)
-                            struct_new!(lb, box_type, WasmValType[])
-                            extern_convert_any!(lb)
-                            local_set!(lb, local_idx)
-                            return _ret(true)
-                        end
+                    # Loop C flow/phi dedup: box / cast / UNBOX via the single shared converter.
+                    # The UNBOX arm (numeric phi local ← classId-box SSA local) is what was
+                    # missing on THIS Any-typed-edge path → i64.const 0 → Any[1,2,3][i] → 0.
+                    if _emit_phi_edge_convert!(lb, ctx, phi_local_type, val_local_type, compile_value(val, ctx))
+                        local_set!(lb, local_idx)
+                        return _ret(true)
                     end
                     # Incompatible: emit type-safe default for phi local type
                     if phi_local_type isa ConcreteRef

@@ -588,32 +588,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if phi_local_wasm_type === I64 && ssa_local_type === I32
                         # PURE-313: Return i32 local.get — caller handles i64 widening
                         local_get!(pvb, local_idx)
-                    elseif phi_local_wasm_type === ExternRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
-                        # PURE-325: Box numeric local for ExternRef phi
-                        # PURE-9028: Push correct DFS typeId as field 0
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_local_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        local_get!(pvb, local_idx)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                        extern_convert_any!(pvb)
-                    elseif phi_local_wasm_type === AnyRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
-                        # F1: Box numeric local for AnyRef phi (numeric Union). Same
-                        # classId-tagged box as ExternRef, minus extern_convert_any.
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_local_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        local_get!(pvb, local_idx)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                    elseif phi_local_wasm_type === ExternRef && (ssa_local_type isa ConcreteRef || ssa_local_type === StructRef || ssa_local_type === ArrayRef || ssa_local_type === AnyRef)
-                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
-                        local_get!(pvb, local_idx)
-                        extern_convert_any!(pvb)
                     else
-                        # Type mismatch: emit type-safe default for the phi local's type.
-                        # (B4/U2: the tagged-union phi-wrap path is retired — union phi-locals are
-                        # AnyRef classId boxes, so phi_tagged_union_wrap never fired here.)
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                        # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
+                        # converter (source = local.get of the SSA local). The unbox arm is
+                        # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
+                        local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                        local_get!(_srcb, local_idx)
+                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
+                            emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                        end
                     end
                 else
                     local_get!(pvb, local_idx)
@@ -1052,6 +1035,22 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             if !_pvb3_has_ecv && !_pvb3_is_ref_null
                                                 extern_convert_any!(b)
                                             end
+                                            local_set!(b, local_idx)
+                                            phi_count += 1
+                                            found_edge = true
+                                            break
+                                        end
+                                    end
+                                    if (phi_local_type === I64 || phi_local_type === I32 || phi_local_type === F64 || phi_local_type === F32) &&
+                                       (edge_val_type === AnyRef || edge_val_type === EqRef || edge_val_type === StructRef || edge_val_type === ExternRef || edge_val_type isa ConcreteRef)
+                                        # Loop C flow/phi dedup: numeric phi local ← classId-box edge.
+                                        # compile_phi_value ALREADY unboxes (shared converter at the
+                                        # SSA-with-local branch), so use its output directly — do NOT
+                                        # re-unbox here (that double-casts the i64). This is the arm that
+                                        # was missing → i64.const 0, the Any[1,2,3][i] → 0 miscompile.
+                                        _pvbu = compile_phi_value(val, i)
+                                        if !isempty(_pvbu)
+                                            emit_raw!(b, _pvbu; pushes=WasmValType[phi_local_type])
                                             local_set!(b, local_idx)
                                             phi_count += 1
                                             found_edge = true
