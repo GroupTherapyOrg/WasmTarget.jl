@@ -606,27 +606,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Check type compatibility for phi-to-phi
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
-                    if phi_local_wasm_type === ExternRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
-                        # PURE-325: Box numeric phi-to-phi for ExternRef
-                        # PURE-9028: Push correct DFS typeId as field 0
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, src_local_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        local_get!(pvb, local_idx)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                        extern_convert_any!(pvb)
-                    elseif phi_local_wasm_type === AnyRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
-                        # F1: Box numeric phi-to-phi for AnyRef phi (numeric Union).
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, src_local_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        local_get!(pvb, local_idx)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                    elseif phi_local_wasm_type === ExternRef && (src_local_type isa ConcreteRef || src_local_type === StructRef || src_local_type === ArrayRef || src_local_type === AnyRef)
-                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion (phi-to-phi)
-                        local_get!(pvb, local_idx)
-                        extern_convert_any!(pvb)
-                    else
+                    # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
+                    local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                    local_get!(_srcb, local_idx)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 else
@@ -646,44 +629,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
-                    if phi_local_wasm_type === ExternRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
-                        # PURE-325: Box recomputed numeric SSA for ExternRef phi
-                        # PURE-9028: Push correct DFS typeId as field 0
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_wasm_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
-                        else
-                            emit_raw!(pvb, compile_value(val, ctx))
-                        end
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                        extern_convert_any!(pvb)
-                    elseif phi_local_wasm_type === AnyRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
-                        # F1: Box recomputed numeric SSA for AnyRef phi (numeric Union).
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_wasm_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
-                        else
-                            emit_raw!(pvb, compile_value(val, ctx))
-                        end
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                    elseif phi_local_wasm_type === ExternRef && (ssa_wasm_type isa ConcreteRef || ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef || ssa_wasm_type === AnyRef)
-                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
-                        # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
-                        # and wrap with extern_convert_any to get back to ExternRef.
-                        @debug "PURE-325 FIX HIT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type stmt=$(typeof(stmt))"
-                        if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
-                        else
-                            emit_raw!(pvb, compile_value(val, ctx))
-                        end
-                        extern_convert_any!(pvb)
+                    # Loop C flow/phi dedup: box / cast / UNBOX (recomputed SSA) via the single
+                    # helper. Source = the recomputed statement (or compile_value fallback).
+                    local _sb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                    if stmt !== nothing && !(stmt isa Core.PhiNode)
+                        emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
                     else
-                        # Type mismatch: emit type-safe default instead of recomputing
-                        @debug "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
+                        emit_raw!(_sb, compile_value(val, ctx))
+                    end
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
@@ -737,39 +691,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                        # PURE-325: Box numeric non-SSA value for ExternRef phi
-                        # PURE-9028: Push correct DFS typeId as field 0
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, edge_val_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        emit_raw!(pvb, compile_value(val, ctx))
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                        extern_convert_any!(pvb)
-                        return builder_code(pvb)
-                    elseif phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                        # F1: Box numeric non-SSA value for AnyRef phi (numeric Union, e.g.
-                        # φ(1::Int64, 2.5::Float64)::Union{Int64,Float64} → AnyRef). Same
-                        # classId-tagged {typeId,value} box as ExternRef, minus the
-                        # extern_convert_any (a struct ref is already a subtype of anyref).
-                        # The PiNode/condition unbox reads it via ref.cast $BoxedT + struct.get.
-                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, edge_val_type)
-                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
-                        emit_raw!(pvb, compile_value(val, ctx))
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                        struct_new!(pvb, _box_t, WasmValType[])
-                        return builder_code(pvb)
-                    elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
-                        # PURE-4151: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef for non-SSA phi edges
-                        # (e.g., Union{} literal in phi node produces global.get of DataType struct,
-                        #  needs extern_convert_any to store in ExternRef phi local)
-                        emit_raw!(pvb, compile_value(val, ctx))
-                        extern_convert_any!(pvb)
-                        return builder_code(pvb)
+                    # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type, edge_val_type, compile_value(val, ctx))
+                        # Type mismatch with no conversion arm: emit a type-safe default.
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_type))
                     end
-                    # Type mismatch: emit type-safe default (B4/U2: the tagged-union phi-wrap is
-                    # retired — union phi-locals are AnyRef classId boxes).
-                    emit_raw!(pvb, emit_phi_type_default(phi_local_type))
                     return builder_code(pvb)
                 end
             end
