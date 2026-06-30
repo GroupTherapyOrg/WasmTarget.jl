@@ -609,14 +609,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
                         local_get!(pvb, local_idx)
                         extern_convert_any!(pvb)
-                    elseif (_w = phi_tagged_union_wrap(ctx, phi_local_wasm_type, val, ssa_local_type)) !== nothing
-                        # F31: a live variant flowing into a tagged-union phi-local — CONSTRUCT
-                        # the tagged-union struct instead of dummying to ref.null (which lost the
-                        # value → heterogeneous Union extraction trapped on a null deref).
-                        local_get!(pvb, local_idx)
-                        emit_raw!(pvb, emit_wrap_union_value(ctx, _w[2], _w[1]); pops=1, pushes=WasmValType[phi_local_wasm_type])
                     else
-                        # Type mismatch: emit type-safe default for the phi local's type
+                        # Type mismatch: emit type-safe default for the phi local's type.
+                        # (B4/U2: the tagged-union phi-wrap path is retired — union phi-locals are
+                        # AnyRef classId boxes, so phi_tagged_union_wrap never fired here.)
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 else
@@ -647,11 +643,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion (phi-to-phi)
                         local_get!(pvb, local_idx)
                         extern_convert_any!(pvb)
-                    elseif (_w = phi_tagged_union_wrap(ctx, phi_local_wasm_type, val, src_local_type)) !== nothing
-                        # F31: live variant → tagged-union phi-local (phi-to-phi). Construct the
-                        # struct rather than dummying to ref.null.
-                        local_get!(pvb, local_idx)
-                        emit_raw!(pvb, emit_wrap_union_value(ctx, _w[2], _w[1]); pops=1, pushes=WasmValType[phi_local_wasm_type])
                     else
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
@@ -707,15 +698,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             emit_raw!(pvb, compile_value(val, ctx))
                         end
                         extern_convert_any!(pvb)
-                    elseif (_w = phi_tagged_union_wrap(ctx, phi_local_wasm_type, val, ssa_wasm_type)) !== nothing
-                        # F31: live variant → tagged-union phi-local (recomputed SSA). Compile the
-                        # value, then CONSTRUCT the tagged-union struct rather than dummying to ref.null.
-                        if stmt !== nothing && !(stmt isa Core.PhiNode)
-                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
-                        else
-                            emit_raw!(pvb, compile_value(val, ctx))
-                        end
-                        emit_raw!(pvb, emit_wrap_union_value(ctx, _w[2], _w[1]); pops=1, pushes=WasmValType[phi_local_wasm_type])
                     else
                         # Type mismatch: emit type-safe default instead of recomputing
                         @debug "PURE-325 NULL DEFAULT: phi=$phi_idx val=$(val.id) ssa_wasm=$ssa_wasm_type phi_wasm=$phi_local_wasm_type"
@@ -802,15 +784,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         extern_convert_any!(pvb)
                         return builder_code(pvb)
                     end
-                    if (_wl = phi_tagged_union_wrap(ctx, phi_local_type, val, edge_val_type)) !== nothing
-                        # F31: a literal variant (e.g. φ(%a => 42, %b => "neg")::Union{Int64,String})
-                        # flowing into a tagged-union phi-local — CONSTRUCT the tagged-union struct
-                        # instead of dummying to ref.null (which lost the value → trap on extract).
-                        emit_raw!(pvb, compile_value(val, ctx); pushes=WasmValType[edge_val_type])
-                        emit_raw!(pvb, emit_wrap_union_value(ctx, _wl[2], _wl[1]); pops=1, pushes=WasmValType[phi_local_type])
-                        return builder_code(pvb)
-                    end
-                    # Type mismatch: emit type-safe default instead
+                    # Type mismatch: emit type-safe default (B4/U2: the tagged-union phi-wrap is
+                    # retired — union phi-locals are AnyRef classId boxes).
                     emit_raw!(pvb, emit_phi_type_default(phi_local_type))
                     return builder_code(pvb)
                 end
@@ -1083,19 +1058,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             break
                                         end
                                     end
-                                    if phi_tagged_union_wrap(ctx, phi_local_type, val, edge_val_type) !== nothing
-                                        # F31: a variant flowing into a tagged-union phi-local — route to
-                                        # compile_phi_value, which CONSTRUCTS the tagged-union struct
-                                        # (rather than dummying here to ref.null, which lost the value).
-                                        _uwb = compile_phi_value(val, i)
-                                        if !isempty(_uwb)
-                                            emit_raw!(b, _uwb; pushes=WasmValType[phi_local_type])
-                                            local_set!(b, local_idx)
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
+                                    # (B4/U2: the tagged-union phi-wrap path is retired — union
+                                    # phi-locals are AnyRef classId boxes.)
                                     # Type mismatch: emit type-safe default
                                     emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                     local_set!(b, local_idx)
