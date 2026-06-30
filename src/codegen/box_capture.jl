@@ -180,7 +180,7 @@ end
 # Result type of one call stmt with box-derived operands typed by `out` (propagated) — the engine
 # of f3_box_value_types. A `getfield(box,:contents)` read → the box's contents type; any other call
 # → `return_type` with each SSA operand typed by `out[id]` if propagated, else its inferred type.
-function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Type}, ssa_types)
+function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Type}, ssa_types, spectypes)
     op = stmt.args[1]
     if op isa GlobalRef && op.name === :getfield && length(stmt.args) >= 3 &&
        stmt.args[3] isa QuoteNode && stmt.args[3].value === :contents
@@ -200,10 +200,14 @@ function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Ty
             push!(argtypes, out[a.id]); uses_box = true
         elseif a isa Core.SSAValue && 1 <= a.id <= length(ssa_types)
             push!(argtypes, _F3_CC.widenconst(ssa_types[a.id]))
+        elseif a isa Core.Argument
+            # resolve closure/fn arguments (e.g. the closure's `i`) via slottypes/specTypes
+            push!(argtypes, (spectypes !== nothing && 1 <= a.n <= length(spectypes)) ?
+                  _F3_CC.widenconst(spectypes[a.n]) : Any)
         elseif a isa QuoteNode
             push!(argtypes, typeof(a.value))
         else
-            push!(argtypes, a isa Type ? Type : (a isa Core.Argument ? Any : typeof(a)))
+            push!(argtypes, a isa Type ? Type : typeof(a))
         end
     end
     uses_box || return nothing
@@ -222,12 +226,10 @@ by Julia (the dynamic `+`) but compute at a concrete width, so without this they
 the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
 it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/F3_LOOP.md.
 """
-function f3_box_value_types(code, ssa_types)::Dict{Int,Type}
+function f3_box_value_types(code, ssa_types; extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(), spectypes=nothing)::Dict{Int,Type}
     out = Dict{Int,Type}()
-    box_news = find_box_news(code)
-    isempty(box_news) && return out
-    boxT = Dict{Int,Type}()
-    for bid in box_news
+    boxT = Dict{Int,Type}(extra_box_seeds)
+    for bid in find_box_news(code)
         t = box_contents_type(code, ssa_types, bid)
         t !== nothing && (boxT[bid] = t)
     end
@@ -237,13 +239,55 @@ function f3_box_value_types(code, ssa_types)::Dict{Int,Type}
         changed = false
         for (i, stmt) in enumerate(code)
             haskey(out, i) && continue
+            # Propagate through PiNode narrowings + φ nodes (the isa-split that narrows a box read
+            # to its concrete type) so an op CONSUMING the narrowed value still sees a box-derived
+            # operand — else the `s+=i` add over the read keeps its anyref-from-erasure.
+            if stmt isa Core.PiNode && stmt.val isa Core.SSAValue && haskey(out, stmt.val.id)
+                out[i] = out[stmt.val.id]; changed = true; continue
+            end
+            if stmt isa Core.PhiNode
+                vts = Type[]; nssa = 0
+                for v in stmt.values
+                    v isa Core.SSAValue || continue
+                    nssa += 1
+                    haskey(out, v.id) && push!(vts, out[v.id])
+                end
+                if !isempty(vts) && length(vts) == nssa
+                    j = reduce((a, b) -> Union{a, b}, vts)
+                    if j isa DataType && isconcretetype(j)
+                        out[i] = j; changed = true; continue
+                    end
+                end
+            end
             (stmt isa Expr && stmt.head === :call) || continue
-            ft = _f3_call_result_type(stmt, code, out, boxT, ssa_types)
+            ft = _f3_call_result_type(stmt, code, out, boxT, ssa_types, spectypes)
             if ft isa DataType && isconcretetype(ft) && ft !== Core.Box
                 out[i] = ft
                 changed = true
             end
         end
+    end
+    return out
+end
+
+# F3 L2b CLOSURE-BODY seed (dart2wasm `Capture.type = context.struct.fields[i].type`): in a closure
+# BODY there is no %new(Core.Box) to seed from — the box arrives as `getfield(#self#, boxfield)` where
+# `boxfield` is a Core.Box field of the closure type `selfT`. Map each such read → the box's contents
+# type (`contents_T`, recovered from the enclosing fn's L2a side-table), so the body's box-derived
+# arithmetic types past Box{Any} erasure exactly like dart reads its typed context field directly.
+function f3_closure_box_seeds(code, selfT, contents_T)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    (selfT isa DataType && isstructtype(selfT) && contents_T isa Type) || return out
+    boxfields = Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT) if fieldtype(selfT, i) === Core.Box)
+    isempty(boxfields) && return out
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :getfield) || continue
+        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue   # #self#
+        fld = stmt.args[3]
+        fldn = fld isa QuoteNode ? fld.value : fld
+        fldn in boxfields && (out[i] = contents_T)
     end
     return out
 end
