@@ -762,6 +762,48 @@ function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompila
     return nothing
 end
 
+_egal_num_eqop(w::WasmValType)::UInt8 =
+    w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
+
+"""
+    _emit_egal_box_vs_num!(bld, ctx, ref_local, ref_is_extern, num_local, num_type)
+
+`===` between a BOXED-NUMERIC ref operand (saved in `ref_local`) and an UNBOXED numeric
+operand (saved in `num_local`, Julia type `num_type`). Julia `===` requires the same type
+AND value, so this is `isa(ref, num_type) && unbox(ref) == num`: the box's classId (field 0)
+must equal `num_type`'s DFS id AND its value (field 1) must equal `num`. Guarded by `ref.test`
+so a genuine non-numeric ref (struct/string/array) yields false — no trap, no regression
+(matches the old "ref vs numeric ⇒ false" for those). Pushes i32 (0/1). Single source for
+both arg orderings. (The boxed numeric value rep is the same `get_numeric_box_type!` the
+classId funnel boxes into.)
+"""
+function _emit_egal_box_vs_num!(bld::InstrBuilder, ctx::AbstractCompilationContext,
+                                ref_local::Integer, ref_is_extern::Bool,
+                                num_local::Integer, num_type::Type)
+    num_wasm = julia_to_wasm_type(num_type)
+    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, num_wasm)
+    tid = ensure_type_id!(ctx.type_registry, num_type)
+    local _anytmp = allocate_local!(ctx, AnyRef)
+    local_get!(bld, ref_local)
+    ref_is_extern && any_convert_extern!(bld)
+    local_tee!(bld, _anytmp)
+    ref_test!(bld, Int64(box_idx), false)            # is it this numeric box?
+    if_!(bld, I32)
+    # classId (field 0) == num_type's id?
+    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
+    struct_get!(bld, UInt32(box_idx), UInt32(0), I32)
+    i32_const!(bld, Int64(tid)); num!(bld, Opcode.I32_EQ)
+    # && value (field 1) == num?
+    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
+    struct_get!(bld, UInt32(box_idx), UInt32(1), num_wasm)
+    local_get!(bld, num_local); num!(bld, _egal_num_eqop(num_wasm))
+    num!(bld, Opcode.I32_AND)
+    else_!(bld)
+    i32_const!(bld, 0)
+    end_block!(bld)
+    return bld
+end
+
 """
     _compile_call_egaleq(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
@@ -1076,15 +1118,28 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
                 num!(bld, Opcode.REF_EQ)
             end
         elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
-            # Comparing ref with non-ref: type mismatch, drop both and push false
-            drop!(bld)
-            drop!(bld)
-            i32_const!(bld, 0)
+            # arg1 is a ref (possibly a BOXED NUMERIC), arg2 an unboxed numeric. Julia ===
+            # needs same type+value: a numeric box of arg2's type with arg2's value ⇒ true;
+            # a genuine non-numeric ref ⇒ false (ref.test guards it). Was: always drop+false,
+            # a SILENT WRONG ANSWER for e.g. Any[true][1] === true (returned false).
+            local _a2w_eg = julia_to_wasm_type(arg2_type)
+            if (_a2w_eg === I32 || _a2w_eg === I64 || _a2w_eg === F32 || _a2w_eg === F64) && isconcretetype(arg2_type)
+                local _eg_num = allocate_local!(ctx, _a2w_eg); local_set!(bld, _eg_num)       # save arg2 (top)
+                local _eg_ref = allocate_local!(ctx, arg1_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref)
+                _emit_egal_box_vs_num!(bld, ctx, _eg_ref, arg1_is_externref, _eg_num, arg2_type)
+            else
+                drop!(bld); drop!(bld); i32_const!(bld, 0)
+            end
         elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
-            # Comparing non-ref with ref: type mismatch, drop both and push false
-            drop!(bld)
-            drop!(bld)
-            i32_const!(bld, 0)
+            # Mirror: arg2 is the ref (possibly a boxed numeric), arg1 an unboxed numeric.
+            local _a1w_eg = julia_to_wasm_type(arg_type)
+            if (_a1w_eg === I32 || _a1w_eg === I64 || _a1w_eg === F32 || _a1w_eg === F64) && isconcretetype(arg_type)
+                local _eg_ref2 = allocate_local!(ctx, arg2_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref2)  # save arg2 (ref, top)
+                local _eg_num2 = allocate_local!(ctx, _a1w_eg); local_set!(bld, _eg_num2)      # save arg1 (num)
+                _emit_egal_box_vs_num!(bld, ctx, _eg_ref2, arg2_is_externref, _eg_num2, arg_type)
+            else
+                drop!(bld); drop!(bld); i32_const!(bld, 0)
+            end
         else
             # Both args are numeric. Check actual Wasm types to select correct opcode.
             # Julia type inference (is_32bit) may differ from actual Wasm local types.

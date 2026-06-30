@@ -239,6 +239,20 @@ _wt_htup_mixwidth(i::Int64)::Int64 = begin
     v = t[i]
     v isa Int64 ? v : Int64(-1)
 end
+# WASMTARGET-FUZZ (Loop B/B4b): boxed-=== was a SILENT WRONG ANSWER. A boxed numeric (Any/
+# Union) compared via === to an unboxed numeric hit "ref vs non-ref ⇒ drop both, false", so
+# Any[true][1] === true returned FALSE. Now: a numeric box of the other's type+value ⇒ true
+# (classId+value compare via emit_egal_box_vs_num!); different type/value or a genuine
+# non-numeric ref ⇒ false. x>0 ⇒ a[1]=true. Returns: 1 if ===true, 2 if ===false, else 0.
+_wt_egal_boxed(x::Int64)::Int64 = begin
+    a = Any[x > 0, x < 0]
+    a[1] === true ? Int64(1) : a[1] === false ? Int64(2) : Int64(0)
+end
+# different-type === must be false (Bool box vs Int32): boxed Bool === Int32(1) → 0.
+_wt_egal_difftype(x::Int64)::Int64 = begin
+    a = Any[x > 0]
+    a[1] === Int32(1) ? Int64(1) : Int64(0)
+end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
 # Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
@@ -7801,6 +7815,11 @@ console.log(JSON.stringify({
             # (if/else read different-width fields under one block result); now boxed → compiles.
             @test compare_julia_wasm(_wt_htup_mixwidth, Int64(1)).pass  # Int64 → 99
             @test compare_julia_wasm(_wt_htup_mixwidth, Int64(2)).pass  # Bool  → -1
+            # Loop B/B4b: boxed-=== was a SILENT WRONG ANSWER (Any[true][1] === true → false);
+            # now classId+value compare → correct, incl. different-type === false.
+            @test compare_julia_wasm(_wt_egal_boxed, Int64(5)).pass      # a[1]=true === true → 1
+            @test compare_julia_wasm(_wt_egal_boxed, Int64(-5)).pass     # a[1]=false === false → 2
+            @test compare_julia_wasm(_wt_egal_difftype, Int64(5)).pass   # boxed Bool === Int32 → 0
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin
