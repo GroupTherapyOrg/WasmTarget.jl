@@ -1974,9 +1974,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     if is_func(func, :ifelse) && length(args) == 3
         # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
         # Julia ifelse(cond, true_val, false_val)
-        # Compile each value separately to check for empty results
-        true_bytes = compile_value(args[2], ctx)   # true_val
-        false_bytes = compile_value(args[3], ctx)  # false_val
+        # Compile each value separately to check for empty results. Loop C: capture the
+        # pushed type (emission byproduct) for the true/false EMIT pushes (was a re-guess).
+        # The cond keeps infer_value_wasm_type — that's a pure pre-emit type QUERY (drives the
+        # cond_is_ref SELECT-vs-fallback decision below), legitimate dart-style type knowledge,
+        # NOT the redundant re-guess-at-emit the typed channel deletes.
+        true_bytes, _true_ty = compile_value_typed(args[2], ctx)   # true_val
+        false_bytes, _false_ty = compile_value_typed(args[3], ctx)  # false_val
         cond_bytes = compile_value(args[1], ctx)   # cond
 
         # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
@@ -2003,9 +2007,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Fall back to emitting just the true value (or a type-safe default).
         if isempty(true_bytes) || isempty(false_bytes) || isempty(cond_bytes)
             if !isempty(true_bytes)
-                emit_raw!(_ieb, true_bytes; pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_raw!(_ieb, true_bytes; pushes=(_true_ty===nothing ? WasmValType[] : WasmValType[_true_ty]))
             elseif !isempty(false_bytes)
-                emit_raw!(_ieb, false_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                emit_raw!(_ieb, false_bytes; pushes=(_false_ty===nothing ? WasmValType[] : WasmValType[_false_ty]))
             else
                 # All empty — emit type-safe default for the value type
                 val_type = infer_value_type(args[2], ctx)
@@ -2027,8 +2031,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
         # All three values are non-empty, emit proper select
-        emit_raw!(_ieb, true_bytes; pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
-        emit_raw!(_ieb, false_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+        emit_raw!(_ieb, true_bytes; pushes=(_true_ty===nothing ? WasmValType[] : WasmValType[_true_ty]))
+        emit_raw!(_ieb, false_bytes; pushes=(_false_ty===nothing ? WasmValType[] : WasmValType[_false_ty]))
         emit_raw!(_ieb, cond_bytes; pushes=WasmValType[I32])
 
         # Determine the type of the values for select
@@ -2292,7 +2296,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             num!(_pshb, Opcode.I32_WRAP_I64)  # array.set expects i32 index
 
             # Value to store
-            local item_bytes = compile_value(item_arg, ctx)
+            local (item_bytes, item_ty) = compile_value_typed(item_arg, ctx)
             # If array element type is externref (elem_type is Any), convert ref→externref
             if elem_type === Any
                 # Determine source value's wasm type to decide conversion.
@@ -2304,14 +2308,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
                     emit_raw!(_pshb, _n2e; pushes=WasmValType[ExternRef])
                 else
-                    emit_raw!(_pshb, item_bytes; pushes=WasmValType[infer_value_wasm_type(item_arg, ctx)])
+                    emit_raw!(_pshb, item_bytes; pushes=(item_ty===nothing ? WasmValType[] : WasmValType[item_ty]))
                     # PURE-048: Skip extern_convert_any if value is already externref
                     if !is_already_externref_item
                         extern_convert_any!(_pshb)
                     end
                 end
             else
-                emit_raw!(_pshb, item_bytes; pushes=WasmValType[infer_value_wasm_type(item_arg, ctx)])
+                emit_raw!(_pshb, item_bytes; pushes=(item_ty===nothing ? WasmValType[] : WasmValType[item_ty]))
                 # PURE-6025: If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
                 local elem_wasm = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
@@ -3103,7 +3107,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         # Compile the value to store - we need it twice (for array.set and return)
         # First compile gets the value on stack for array.set
-        local mset_val_bytes = compile_value(value_arg, ctx)
+        local (mset_val_bytes, mset_val_ty) = compile_value_typed(value_arg, ctx)
         # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
         # PURE-045: Check the actual wasm element type, not just elem_type === Any
         # Abstract types like CallInfo also map to ExternRef
@@ -3172,7 +3176,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Numeric value (nothing) for ref-typed array — emit ref.null of the element type
                 ref_null!(_msb, Int64(wasm_elem_type.type_idx), ConcreteRef(UInt32(wasm_elem_type.type_idx), true))
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
+                emit_raw!(_msb, mset_val_bytes; pushes=(mset_val_ty===nothing ? WasmValType[] : WasmValType[mset_val_ty]))
                 # PURE-6025: If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
                 # Check both: (1) byte-level local type, (2) Julia type inference
@@ -3197,7 +3201,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             elseif wasm_elem_type === F64 && length(mset_val_bytes) >= 1 && mset_val_bytes[1] == Opcode.I32_CONST && !_wt_is_ref(infer_value_wasm_type(value_arg, ctx))
                 f64_const!(_msb, 0.0)
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
+                emit_raw!(_msb, mset_val_bytes; pushes=(mset_val_ty===nothing ? WasmValType[] : WasmValType[mset_val_ty]))
             end
         end
 
@@ -3211,8 +3215,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # is left on the stack when the SSA has no allocated local, causing
         # "values remaining on stack at end of block" validation errors.
         if haskey(ctx.ssa_locals, idx)
-            local ret_val_bytes = compile_value(value_arg, ctx)
-            emit_raw!(_msb, ret_val_bytes; pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
+            local (ret_val_bytes, ret_val_ty) = compile_value_typed(value_arg, ctx)
+            emit_raw!(_msb, ret_val_bytes; pushes=(ret_val_ty===nothing ? WasmValType[] : WasmValType[ret_val_ty]))
             # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
             # emit extern_convert_any. The compile_statement safety check can't catch this
             # because has_gc_prefix=true (from array_set above) skips the trailing local_get
@@ -3404,7 +3408,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # struct field expects externref (Any-typed tuple element)
             struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
             for (fi, arg) in enumerate(args)
-                arg_bytes = compile_value(arg, ctx)
+                arg_bytes, arg_ty = compile_value_typed(arg, ctx)
                 expected_wasm = nothing
                 # Account for typeId at field 0: struct_type_def.fields is 1-indexed,
                 # wasm field for Julia field fi is at position fi + field_offset
@@ -3440,7 +3444,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     if is_numeric_arg
                         ref_null!(_tupb, ExternRef)
                     else
-                        emit_raw!(_tupb, arg_bytes; pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                        emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
                         # Convert internal ref to externref if not already externref
                         is_already_extern = false
                         if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
@@ -3495,10 +3499,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             ref_null!(_tupb, expected_wasm isa UInt8 ? RefType(expected_wasm) : StructRef)
                         end
                     else
-                        emit_raw!(_tupb, arg_bytes; pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                        emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
                     end
                 else
-                    emit_raw!(_tupb, arg_bytes; pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                    emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
                 end
             end
 
@@ -5812,9 +5816,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
             if !_throw_used_default
                 # Compile the exception value normally
-                exn_bytes = compile_value(_throw_val, ctx)
+                exn_bytes, exn_ty = compile_value_typed(_throw_val, ctx)
                 if !isempty(exn_bytes)
-                    emit_raw!(_thrb, exn_bytes; pushes=WasmValType[infer_value_wasm_type(_throw_val, ctx)])
+                    emit_raw!(_thrb, exn_bytes; pushes=(exn_ty===nothing ? WasmValType[] : WasmValType[exn_ty]))
                     global_set!(_thrb, exn_global)
                 end
             end
@@ -6548,10 +6552,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Locals-first approach: compile each piece into a local, then assemble.
 
             # Step 1: Compile head (Symbol = array<i32>) → local
-            local _head_bytes = compile_value(head_arg, ctx)
+            local (_head_bytes, _head_ty) = compile_value_typed(head_arg, ctx)
             head_local = allocate_local!(ctx, ConcreteRef(str_type_idx, true))
             let ib = InstrBuilder(; func_name="compile_call", strict=false)
-                emit_raw!(ib, _head_bytes; pushes=WasmValType[infer_value_wasm_type(head_arg, ctx)])
+                emit_raw!(ib, _head_bytes; pushes=(_head_ty===nothing ? WasmValType[] : WasmValType[_head_ty]))
                 local_set!(ib, head_local)
                 append!(bytes, builder_code(ib))
             end

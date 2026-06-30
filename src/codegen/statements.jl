@@ -471,7 +471,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         i32_const!(b, 0)
                     end
                 else
-                    val_bytes = compile_value(stmt.val, ctx)
+                    val_bytes, val_ty = compile_value_typed(stmt.val, ctx)
                     # Safety: check if val_bytes pushes multiple values (all local_gets, N>=2).
                     # local_set only consumes 1, so N-1 would be orphaned.
                     is_multi_value_bytes = false
@@ -543,10 +543,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 ref_null!(b, StructRef)
                             end
                         else
-                            emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                            emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                         end
                     else
-                        emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                        emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                     end
                 end
             end
@@ -590,7 +590,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # This handles things like Main.SLOT_EMPTY that are module-level constants
             try
                 val = getfield(stmt.mod, stmt.name)
-                value_bytes = compile_value(val, ctx)
+                value_bytes, value_ty = compile_value_typed(val, ctx)
 
                 # CG-003d: Safety check for Nothing/numeric values stored to ref-typed locals.
                 # compile_value(nothing) → i32_const 0, which is incompatible with ref locals
@@ -616,7 +616,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
 
-                emit_raw!(b, value_bytes; pushes=(isempty(value_bytes) ? WasmValType[] : WasmValType[infer_value_wasm_type(val, ctx)]))
+                emit_raw!(b, value_bytes; pushes=(value_ty===nothing ? WasmValType[] : WasmValType[value_ty]))
 
                 # If this SSA value needs a local, store it (only if we actually pushed a value)
                 # compile_value returns empty bytes for Functions, Types, etc.

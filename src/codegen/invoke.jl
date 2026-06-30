@@ -3106,7 +3106,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bas, Opcode.I32_SUB)
 
                 # Value
-                local val_bytes = compile_value(args[3], ctx)
+                local (val_bytes, val_ty) = compile_value_typed(args[3], ctx)
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
                     # Determine source value's wasm type to decide conversion.
@@ -3118,14 +3118,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
                         emit_raw!(bas, _n2e; pushes=WasmValType[ExternRef])
                     else
-                        emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                        emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                         # PURE-048: Skip extern_convert_any if value is already externref
                         if !is_already_externref_val
                             extern_convert_any!(bas)
                         end
                     end
                 else
-                    emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                    emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                 end
 
                 # array.set
