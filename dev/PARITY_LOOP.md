@@ -1,5 +1,16 @@
 # WasmTarget → dart2wasm production-parity loop
 
+> ## ★★★ PARITY GATE — NON-NEGOTIABLE, EVERY STEP (Dale, burned in 2026-06-29 after a drift he caught + HATED)
+> 1. **BEFORE building:** open dart2wasm (`/Users/daleblack/Documents/sdk` pkg/{wasm_builder,dart2wasm}), find the
+>    analogous code, build to **STRUCTURALLY MATCH** it. Don't invent — mirror.
+> 2. **AFTER building:** verify by differential native-vs-wasm + `Pkg.test()` — the **SOUNDNESS** gate.
+> 3. **DIFFERENTIAL-GREEN ≠ PARITY. Sound ≠ dart-faithful.** Passing tests = CORRECT, not dart-structured. A
+>    step/loop is **NOT DONE until WT structurally equals dart2wasm.**
+> 4. **NEVER write "done"/"cleanup-only"/"low-value" for anything whose dart-parity structure isn't reached** —
+>    structural unification toward dart's design IS the core mission, not cleanup.
+> 5. **EVERY future loop edit/creation MUST carry this gate.** differential+Pkg.test = "is it SOUND?" · dart2wasm =
+>    "is it PARITY?" · BOTH required; NEVER substitute one.
+
 Branch `wt-dart2wasm-parity` (off main @ v0.4.0). Mission: **full 1:1 dart2wasm production-readiness
 parity, no gaps.** Autonomous, aggressive, undoable (isolated branch). Driven by Dale 2026-06-29.
 

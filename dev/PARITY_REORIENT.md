@@ -1,5 +1,16 @@
 # WasmTarget → dart2wasm parity — REORIENTED loop sequence (2026-06-29 discovery swarm)
 
+> ## ★★★ PARITY GATE — NON-NEGOTIABLE, EVERY STEP (Dale, burned in 2026-06-29 after a drift he caught + HATED)
+> 1. **BEFORE building:** open dart2wasm (`/Users/daleblack/Documents/sdk` pkg/{wasm_builder,dart2wasm}), find the
+>    analogous code, build to **STRUCTURALLY MATCH** it. Don't invent — mirror.
+> 2. **AFTER building:** verify by differential native-vs-wasm + `Pkg.test()` — the **SOUNDNESS** gate.
+> 3. **DIFFERENTIAL-GREEN ≠ PARITY. Sound ≠ dart-faithful.** A passing test = CORRECT, NOT that it matches dart's
+>    structure. A step/loop is **NOT DONE until WT structurally equals dart2wasm.**
+> 4. **NEVER write "done" / "cleanup-only" / "low-value" for anything whose dart-parity structure isn't reached.**
+>    Structural unification toward dart's design IS the core mission, NOT cleanup.
+> 5. **EVERY future loop edit/creation MUST carry this gate.** differential+Pkg.test = "is it SOUND?" · dart2wasm =
+>    "is it PARITY?" · BOTH required; NEVER substitute one for the other.
+
 Output of a 15-agent reorientation swarm (13 per-dimension WT-vs-dart2wasm audits + synthesis +
 adversarial critique). Supersedes the old `Loop 0/A/B/C/D/E` order in `PARITY_LOOP.md`. The ETHOS
 (`[[feedback-pure-dart2wasm-ethos]]`): every loop = ADOPT one dart principled design + DELETE the WT

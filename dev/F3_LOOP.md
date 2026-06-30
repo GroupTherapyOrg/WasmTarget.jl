@@ -1,5 +1,11 @@
 # F3 — mutable closure capture (`Core.Box`): dart2wasm-aligned sub-loop
 
+> ## ★★★ PARITY GATE — NON-NEGOTIABLE, EVERY STEP (Dale, burned in 2026-06-29 after a drift he caught + HATED)
+> Build to STRUCTURALLY MATCH dart2wasm (`/Users/daleblack/Documents/sdk` pkg/{wasm_builder,dart2wasm}, here
+> `closures.dart` ClosureLayouter) — verify by differential+`Pkg.test()` for SOUNDNESS. **Differential-green ≠ parity;
+> sound ≠ dart-faithful.** NOT DONE until WT structurally equals dart. **NEVER "done"/"cleanup-only"/"low-value" for
+> anything not at dart-parity.** Every future loop edit carries this gate.
+
 Part of the dart2wasm production-parity mission (branch `wt-dart2wasm-parity`). This is a
 **multi-loop task**, run as a proper incremental loop — **NOT try/discard**. Each loop lands a
 **committed, GREEN, non-breaking** step; the infrastructure PERSISTS and the behavior change
