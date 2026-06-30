@@ -423,17 +423,15 @@ function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContex
     _num(t) = (t === I32 || t === I64 || t === F32 || t === F64)
     _ref(t) = (t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === ExternRef || t isa ConcreteRef)
     if phi_local_type === ExternRef && _num(src_type)
-        # numeric → ExternRef: classId box, then to externref
-        let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, src_type); emit_raw!(b, tb; pushes=WasmValType[I32]); end
+        # numeric → ExternRef: classId box (via THE single emitter), then to externref
         emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
-        struct_new!(b, get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type), WasmValType[])
+        emit_classid_box!(b, ctx, src_type, nothing)
         extern_convert_any!(b)
         return true
     elseif phi_local_type === AnyRef && _num(src_type)
         # numeric → AnyRef: classId box (a struct ref is already an anyref subtype)
-        let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, src_type); emit_raw!(b, tb; pushes=WasmValType[I32]); end
         emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
-        struct_new!(b, get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type), WasmValType[])
+        emit_classid_box!(b, ctx, src_type, nothing)
         return true
     elseif phi_local_type === ExternRef && _ref(src_type)
         # internal ref → ExternRef
