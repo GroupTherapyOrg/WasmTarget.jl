@@ -566,67 +566,12 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             end
             return inner_wasm
         else
-            # Multi-variant union (2+ non-Nothing types).
-            # Check if all non-Nothing variants are numeric (no tagged struct needed).
-            types_u = Base.uniontypes(T)
-            non_nothing_u = filter(t -> t !== Nothing, types_u)
-            all_numeric_u = !isempty(non_nothing_u) && all(non_nothing_u) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric_u
-                # F1/P1: a numeric Union spanning incompatible Wasm categories (int vs
-                # float) MUST be boxed (classId-tagged {typeId,value} struct behind
-                # AnyRef) — collapsing to the widest primitive is lossy (Int 1 / Float
-                # 1.0 indistinguishable). MUST agree with get_concrete_wasm_type's
-                # all-numeric-Union branch (the value-type resolver): if the two
-                # disagree, the SSA store sees a false type mismatch and DROPs the value.
-                # AnyRef (NOT ExternRef) so the PiNode/condition unbox paths — which
-                # ref.cast $BoxedT + struct.get on AnyRef/StructRef sources — match.
-                if T isa Union && needs_anyref_boxing(T)
-                    return AnyRef
-                end
-                # Same-category numeric union (all-int or all-float): widest numeric type
-                # (no struct boxing needed — no int/float tag to lose).
-                # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
-                result = julia_to_wasm_type(T)
-                # PURE-908/9064: Never return AnyRef for locals unless JlType hierarchy active
-                if result === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                    return ExternRef
-                end
-                return result
-            else
-                # FOUND-5003: Union of Type{T} values (e.g., Union{Type{Any}, Type{Number}}).
-                # All Type{T} values compile to JlDataType struct refs via global.get.
-                # Use the DataType type directly instead of creating a tagged union,
-                # which would cause ConcreteRef type mismatches at phi edges.
-                all_type_vals = all(non_nothing_u) do t
-                    t isa DataType && t <: Type
-                end
-                if all_type_vals && ctx.type_registry.jl_datatype_idx !== nothing
-                    return ConcreteRef(ctx.type_registry.jl_datatype_idx, true)
-                end
-
-                # Non-numeric multi-variant union.
-                # Check if all variants are WasmGC struct types — if so, use StructRef.
-                # This aligns with get_concrete_wasm_type which returns StructRef for
-                # all-struct unions via resolve_union_type → find_common_wasm_type.
-                # Using StructRef avoids the PiNode narrowing bug where a raw struct value
-                # (from a StructRef parameter) gets illegally cast to a tagged union type
-                # when Julia IR narrows Union{A,B,C} to Union{B,C} via PiNode.
-                # Tagged union ConcreteRef is only needed for heterogeneous unions
-                # (e.g., mix of structs and arrays/strings) where StructRef won't work.
-                is_all_struct = all(non_nothing_u) do t
-                    (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
-                end
-                if is_all_struct
-                    return StructRef
-                else
-                    # B4/U2 — dart2wasm parity: a heterogeneous Union value is JUST a boxed
-                    # AnyRef discriminated by classId, NOT a {typeId,tag,value} wrapper struct.
-                    return AnyRef
-                end
-            end
+            # Multi-variant union → THE single resolver (dart2wasm translateType parity),
+            # shared with get_concrete_wasm_type so the local allocator + value-type resolver
+            # CANNOT drift. `for_local=true` keeps WT's anyref→externref-for-locals wart on the
+            # numeric path (the value-type resolver omits it); all other arms are identical.
+            non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
+            return _resolve_multivariant_union(T, non_nothing_u, ctx.mod, ctx.type_registry; for_local=true)
         end
     else
         # Use the standard conversion for non-struct types

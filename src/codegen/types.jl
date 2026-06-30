@@ -1736,6 +1736,46 @@ function get_string_ref_array_type!(mod::WasmModule, registry::TypeRegistry)::UI
 end
 
 """
+    _resolve_multivariant_union(T, non_nothing, mod, registry; for_local=false) -> WasmValType
+
+THE single resolver for a multi-variant (2+ non-Nothing) Union value's wasm type — dart2wasm
+parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT had
+TWO drifting copies — get_concrete_wasm_type + julia_to_wasm_type_concrete — that the "MUST agree"
+comments warned would silently null-deref on divergence). Mirrors dart's two outcomes: an UNBOXED
+primitive for a same-category numeric union (dart's unboxed int/double via `boxedClasses`), else the
+TOP type AnyRef (dart's `topInfo.nullableType`) — heterogeneous/incompatible-numeric values live
+boxed-with-classId behind AnyRef. `for_local=true` (the SSA-local allocator) applies WT's anyref→
+externref-for-locals wart on the numeric path (a WT-only anyref/externref split dart doesn't have;
+preserved exactly here, retired when that hierarchy unifies). The nullable (Union{Nothing,T}) case
+stays caller-side — the two callers diverge there intentionally (EqRef vs concrete inner ref).
+"""
+function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
+    all_numeric = !isempty(non_nothing) && all(non_nothing) do t
+        wt = julia_to_wasm_type(t)
+        wt === I32 || wt === I64 || wt === F32 || wt === F64
+    end
+    if all_numeric
+        # int/float categories don't mix without losing the tag → box behind AnyRef (dart topInfo).
+        needs_anyref_boxing(T) && return AnyRef
+        # same-category numeric union → widest primitive (dart: unboxed int/double).
+        result = julia_to_wasm_type(T)
+        for_local && result === AnyRef && registry.jl_type_idx === nothing && return ExternRef
+        return result
+    end
+    # union of Type{T} values → the DataType struct ref (dart: a reified-type value).
+    if all(t -> t isa DataType && t <: Type, non_nothing) && registry.jl_datatype_idx !== nothing
+        return ConcreteRef(registry.jl_datatype_idx, true)
+    end
+    # all-struct union → the common struct supertype.
+    is_all_struct = all(non_nothing) do t
+        (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
+    end
+    is_all_struct && return StructRef
+    # heterogeneous union → the top type (dart topInfo.nullableType); value is a classId box.
+    return AnyRef
+end
+
+"""
 Get a concrete Wasm type for a Julia type, using the module and registry.
 This is used before CompilationContext is created.
 """
@@ -1867,50 +1907,12 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             # Union{Nothing, T} -> concrete type of T (nullable reference)
             return get_concrete_wasm_type(inner_type, mod, registry)
         else
-            # Multi-variant union. MUST agree with julia_to_wasm_type_concrete
-            # (which allocates the SSA local for the union value): if the two
-            # disagree, the final SSA store sees a false type mismatch, DROPs the
-            # value and substitutes ref.null → null-deref at runtime. The plain
-            # julia_to_wasm_type() fallback returns AnyRef for HETEROGENEOUS unions
-            # (e.g. Union{Int64,String}) while the local is the tagged-union STRUCT.
-            # Mirror the local allocator's cases here. Surfaced by heterogeneous
-            # tuple indexing — `Any[a,"x",a]` / `md"…$x…$y…"` interpolation.
+            # Multi-variant union → THE single resolver (dart2wasm translateType parity).
+            # Formerly a copy that "MUST agree" with julia_to_wasm_type_concrete's twin; both
+            # now delegate here so they cannot drift (drift DROPped the value → ref.null →
+            # null-deref at runtime, on heterogeneous-tuple / interpolation inputs).
             non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
-            all_numeric_u = !isempty(non_nothing_u) && all(non_nothing_u) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric_u
-                # F1/P1 (dart2wasm convertType + boxedClasses): a numeric Union that
-                # spans incompatible Wasm categories (int vs float — e.g.
-                # Union{Int64,Float64}) is LOSSY if collapsed to the widest primitive
-                # (Int 1 and Float 1.0 become the same f64, and the tag is gone).
-                # needs_anyref_boxing flags exactly that case; box it as a classId-tagged
-                # {typeId,value} struct behind AnyRef — the SAME representation the
-                # ReturnNode/param/local/field box paths already produce. MUST agree
-                # with julia_to_wasm_type_concrete (the SSA-local allocator), which is
-                # aligned to return AnyRef here too.
-                if T isa Union && needs_anyref_boxing(T)
-                    return AnyRef
-                end
-                # Same-category numeric union (all-int or all-float): widening to the
-                # widest primitive is faithful (no int/float tag to lose).
-                return julia_to_wasm_type(T)
-            end
-            if all(t -> t isa DataType && t <: Type, non_nothing_u) && registry.jl_datatype_idx !== nothing
-                # Union of Type{T} values → JlDataType struct ref.
-                return ConcreteRef(registry.jl_datatype_idx, true)
-            end
-            is_all_struct = all(non_nothing_u) do t
-                (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
-            end
-            if is_all_struct
-                return StructRef
-            end
-            # B4/U2 — dart2wasm parity: a heterogeneous Union value is JUST a boxed AnyRef
-            # discriminated by classId (NO {typeId,tag,value} wrapper struct). emit_wrap/
-            # unwrap_union_value box/unbox through the canonical classId box.
-            return AnyRef
+            return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=false)
         end
     elseif T === Core.SimpleVector
         # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
