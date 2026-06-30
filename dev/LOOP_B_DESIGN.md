@@ -5,6 +5,8 @@
 > differential+`Pkg.test()` for SOUNDNESS. **Differential-green ≠ parity; sound ≠ dart-faithful.** NOT DONE until WT
 > structurally equals dart. **NEVER "done"/"cleanup-only"/"low-value" for anything not at dart-parity** — e.g. the 4
 > box families STILL coexisting here is a PARITY GAP (dart has ONE), NOT cleanup. Every future edit carries this gate.
+> **VERIFY TIER ([[wt-fast-testing-loop]]):** inner loop `julia --project=. test/smoke.jl` (~23s); commit gate
+> `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` (OOM-safe). Never the unbounded full run.
 
 Branch `wt-dart2wasm-parity`. Adopt dart2wasm's value-boxing; DELETE WT's ad-hoc shadow
 (i31 family + 3 disjoint tag schemes + WASM-type-keyed classId collapse). This is the

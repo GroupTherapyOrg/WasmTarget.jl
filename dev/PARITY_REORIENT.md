@@ -11,6 +11,16 @@
 > 5. **EVERY future loop edit/creation MUST carry this gate.** differential+Pkg.test = "is it SOUND?" · dart2wasm =
 >    "is it PARITY?" · BOTH required; NEVER substitute one for the other.
 
+## ★ VERIFY TIER — EVERY loop uses this (NOT the OOM-prone full serial). See [[wt-fast-testing-loop]].
+> - **INNER LOOP (after every edit, ~23s):** `julia --project=. test/smoke.jl` — 48 native-vs-wasm
+>   differential cases across all dimensions; xfail lane tracks known-pending gaps (a now-PASSING xfail =
+>   that loop landed → promote it out). Fast pre-filter, NOT a soundness substitute.
+> - **COMMIT GATE (OOM-safe):** `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` —
+>   caps concurrent shards so jetsam can't kill the ~4GB full-parallel fleet (the old bottleneck). This is
+>   the rule-#0 SOUNDNESS gate. NEVER launch the unbounded-parallel or monolithic `WT_NO_SHARD=1` full run.
+> - Background long gates with NO inner `&`; never edit `src/` while a suite runs. A jetsam-killed run that
+>   reached main-suite 2681/2681 green is strong evidence for a narrow additive change.
+
 ## ★ SCOPE BOUNDARY + COMPLETENESS — what "full structural parity" MEANS (so "done" is PROVABLE, not vibes)
 "Full structural parity" = WT matches dart2wasm's design across the **12 IN-SCOPE structural dimensions** —
 the `PARITY_LEDGER.md` axes: Boxing/dynamic · Closures · Type-lattice · Exceptions · Validation · Strings ·
