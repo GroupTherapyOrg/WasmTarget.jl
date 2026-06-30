@@ -392,44 +392,9 @@ function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_ty
     emit_type_id!(bytes, registry, julia_type)
 end
 
-"""
-PURE-9028: Box an i32 value as ref.i31 (zero-allocation boxing for small integers).
-Expects an i32 on the Wasm stack. Produces (ref i31) which is a subtype of anyref.
-Use for Bool, Int8, UInt8, Int16, UInt16 — values that always fit in 31 bits.
-"""
-function emit_box_i31!(bytes::Vector{UInt8})
-    b = InstrBuilder(; func_name="emit_box_i31!", strict=false)
-    ref_i31!(b)
-    append!(bytes, builder_code(b))
-end
-
-"""
-PURE-9028: Unbox a ref.i31 value to i32 (signed extension).
-Expects (ref null i31) on the Wasm stack. Produces i32.
-"""
-function emit_unbox_i31_s!(bytes::Vector{UInt8})
-    b = InstrBuilder(; func_name="emit_unbox_i31_s!", strict=false)
-    i31_get_s!(b)
-    append!(bytes, builder_code(b))
-end
-
-"""
-PURE-9028: Unbox a ref.i31 value to i32 (unsigned extension).
-Expects (ref null i31) on the Wasm stack. Produces i32.
-Use for UInt8, UInt16, Bool (non-negative values).
-"""
-function emit_unbox_i31_u!(bytes::Vector{UInt8})
-    b = InstrBuilder(; func_name="emit_unbox_i31_u!", strict=false)
-    i31_get_u!(b)
-    append!(bytes, builder_code(b))
-end
-
-"""
-PURE-9028: Check if a Julia type should use ref.i31 for boxing (fits in 31 bits).
-"""
-function should_use_i31(T::Type)::Bool
-    T === Bool || T === Int8 || T === UInt8 || T === Int16 || T === UInt16
-end
+# (B4: the i31 boxing helpers emit_box_i31! / emit_unbox_i31_s! / emit_unbox_i31_u! /
+# should_use_i31 were DELETED — dart2wasm uses no i31, and B4 routed every former i31 site
+# through the single-source emit_classid_box! [classId boxes]. All four were zero-caller.)
 
 """
     get_base_struct_type!(mod::WasmModule, registry::TypeRegistry) -> UInt32
