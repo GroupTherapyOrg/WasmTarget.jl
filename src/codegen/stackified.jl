@@ -80,6 +80,20 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 
 `target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
 """
+# The value's static Julia type for boxing (SSA inferred / Bool literal / argument type),
+# or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
+# decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
+function _value_julia_type(val, ctx::AbstractCompilationContext)
+    if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
+        return ctx.ssa_types[val.id]
+    elseif val isa Bool
+        return Bool
+    elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
+        return ctx.arg_types[val.n]
+    end
+    return nothing
+end
+
 function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
     # local builder, then append its code to the caller-supplied buffer (byte-identical).
@@ -91,33 +105,22 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         append!(target_bytes, builder_code(b))
         return
     end
-    # PURE-9029: Check if this value should use ref.i31 (Bool, Int8, UInt8)
-    # ref.i31 is zero-allocation and makes ref.eq work correctly for ===
-    if val_wasm === I32
-        local _jl_type = nothing
-        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-            _jl_type = ctx.ssa_types[val.id]
-        elseif val isa Bool
-            _jl_type = Bool
-        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-            _jl_type = ctx.arg_types[val.n]
-        end
-        if _jl_type !== nothing && should_use_i31(_jl_type)
-            # ref.i31 path: compile i32 value → ref.i31 → extern.convert_any
-            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-            ref_i31!(b)
-            extern_convert_any!(b)
-            append!(target_bytes, builder_code(b))
-            return
-        end
+    # The value's static Julia type (for the real classId + the i31 decision).
+    local _jl_type = _value_julia_type(val, ctx)
+    # PURE-9029: ref.i31 fast path for Bool/Int8/UInt8 (zero-alloc, ref.eq for ===).
+    # KEPT until F-iv/B4 (i31 removal + boxed-=== handled together).
+    if val_wasm === I32 && _jl_type !== nothing && should_use_i31(_jl_type)
+        emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
+        ref_i31!(b)
+        extern_convert_any!(b)
+        append!(target_bytes, builder_code(b))
+        return
     end
-    # Box: compile value → struct_new(box_type) → extern_convert_any
-    # PURE-9028: Push correct DFS typeId as field 0 before the value
-    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
-    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    # F-iii: box through the SINGLE-SOURCE producer (was an inline emit_box_type_id!+
+    # struct_new with the collapsed wasm-rep id). Concrete type → REAL classId; Union/
+    # abstract → wasm-rep fallback (no regression). Then extern.convert_any.
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
-    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    struct_new!(b, box_type, WasmValType[])
+    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
     append!(target_bytes, builder_code(b))
     return
@@ -138,29 +141,19 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
         append!(target_bytes, builder_code(b))
         return
     end
-    # ref.i31 path for Bool/Int8/UInt8 — ref.i31 is already a subtype of anyref
-    if val_wasm === I32
-        local _jl_type = nothing
-        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-            _jl_type = ctx.ssa_types[val.id]
-        elseif val isa Bool
-            _jl_type = Bool
-        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-            _jl_type = ctx.arg_types[val.n]
-        end
-        if _jl_type !== nothing && should_use_i31(_jl_type)
-            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-            ref_i31!(b)
-            append!(target_bytes, builder_code(b))
-            return  # ref.i31 is already anyref — no conversion needed
-        end
+    # The value's static Julia type (for the real classId + the i31 decision).
+    local _jl_type = _value_julia_type(val, ctx)
+    # ref.i31 fast path for Bool/Int8/UInt8 (already an anyref subtype). KEPT until F-iv/B4.
+    if val_wasm === I32 && _jl_type !== nothing && should_use_i31(_jl_type)
+        emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
+        ref_i31!(b)
+        append!(target_bytes, builder_code(b))
+        return  # ref.i31 is already anyref — no conversion needed
     end
-    # Box: compile value → struct_new(box_type) — struct ref is already a subtype of anyref
-    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
-    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    # F-iii: box through the SINGLE-SOURCE producer (struct ref is already an anyref subtype).
+    # Concrete type → REAL classId; Union/abstract → wasm-rep fallback (no regression).
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
-    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    struct_new!(b, box_type, WasmValType[])
+    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     append!(target_bytes, builder_code(b))
     return  # No extern_convert_any — struct ref is already anyref
 end
