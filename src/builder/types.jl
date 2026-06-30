@@ -482,23 +482,17 @@ function needs_anyref_boxing(T::Union)::Bool
     types = Base.uniontypes(T)
     non_nothing = filter(t -> t !== Nothing, types)
     length(non_nothing) < 2 && return false
-    # Per-member wasm reps. Box only when EVERY member boxes as a NUMERIC value (i32/i64/
-    # f32/f64) — covers Number subtypes AND Char and other numeric-rep primitives, while
-    # excluding struct/string/ref members (those use their own ConcreteRef/tagged rep).
+    # Box iff EVERY member boxes as a NUMERIC value (i32/i64/f32/f64) — covers Number
+    # subtypes AND Char/other numeric-rep primitives, excluding struct/string/ref members
+    # (those use their own ConcreteRef/tagged rep).
     wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
     all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
-    wasm_types = Set{WasmValType}(wasm_list)
-    has_int = any(w -> w === I32 || w === I64, wasm_types)
-    has_float = any(w -> w === F32 || w === F64, wasm_types)
-    # Mixed int/float — collapsing to one primitive reinterprets the bits (lossy value).
-    (has_int && has_float) && return true
-    # Loop B distinguishability: ≥2 DISTINCT Julia types that share a wasm rep (e.g.
-    # Bool/Int8/Int16/Int32/Char all → i32) are INDISTINGUISHABLE when collapsed to that
-    # primitive — the value round-trips but the TYPE TAG is lost, so a downstream isa/typeof
-    # mis-fires (the local becomes a raw numeric, unboxed). Box behind AnyRef to keep the
-    # classId, as dart2wasm does for every dynamic value.
-    length(wasm_types) < length(non_nothing) && return true
-    return false
+    # ANY multi-member numeric union must box (dart2wasm boxes every dynamic value): members
+    # with DIFFERENT wasm reps (e.g. Int64 i64 vs Bool i32, or int vs float) can't collapse to
+    # one faithful primitive — the het-tuple/phi if-else would read different-width fields under
+    # a single block result type → INVALID wasm; members SHARING a rep (Bool/Int8/Int32 all i32)
+    # lose their type tag on collapse → isa/typeof mis-fire. Either way: box, keep the classId.
+    return true
 end
 
 """

@@ -229,6 +229,16 @@ _wt_char_disc(i::Int64)::Int64 = begin
     v = t[i]
     v isa Char ? Int64(1) : v isa Int32 ? Int64(2) : Int64(0)
 end
+# WASMTARGET-FUZZ (Loop B/B4e): MIXED-WIDTH numeric union. Tuple{Int64,Bool} indexed at
+# runtime → Union{Int64,Bool} (i64 vs i32). It wasn't boxed (no int/float mix, no same-rep
+# collapse), so the getfield if/else read field 1 (i64) vs field 2 (i32) under a single i64
+# block result → INVALID WASM (wouldn't even compile). needs_anyref_boxing now boxes EVERY
+# multi-member numeric union, so it compiles + works. i=1→the Int64 (99); i=2→Bool→ -1.
+_wt_htup_mixwidth(i::Int64)::Int64 = begin
+    t = (Int64(99), true)
+    v = t[i]
+    v isa Int64 ? v : Int64(-1)
+end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
 # Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
@@ -7787,6 +7797,10 @@ console.log(JSON.stringify({
             # wasm rep, so Char boxes w/ its classId + distinguishes from Int32.
             @test compare_julia_wasm(_wt_char_disc, Int64(1)).pass  # Char  → 1
             @test compare_julia_wasm(_wt_char_disc, Int64(2)).pass  # Int32 → 2
+            # Loop B/B4e: mixed-WIDTH numeric union (Int64 i64 vs Bool i32) was INVALID WASM
+            # (if/else read different-width fields under one block result); now boxed → compiles.
+            @test compare_julia_wasm(_wt_htup_mixwidth, Int64(1)).pass  # Int64 → 99
+            @test compare_julia_wasm(_wt_htup_mixwidth, Int64(2)).pass  # Bool  → -1
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin
