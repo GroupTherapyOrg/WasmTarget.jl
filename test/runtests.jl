@@ -36,16 +36,26 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
         # so its setup (~18s) and Node-pool boot hide entirely inside phase A.
         flf = joinpath(logdir, "fuzz.log")
         fp = _spawn(("WT_FUZZ" => "1", "WT_FUZZ_TIMEOUT" => "30"), flf)
-        # ── Codegen shards run CONCURRENTLY. Capture each worker to its own log (a
-        # shared stdout interleaves + buffers away on exit), so a failing shard's
-        # error is actually visible.
-        procs = map(0:nshards-1) do i
-            lf = joinpath(logdir, "shard_$i.log")
-            (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf))
-        end
+        # ── Codegen shards run concurrently, but the CONCURRENCY CAP is ALWAYS ON by
+        # default (Dale: "always always") so the whole fleet never gets jetsam-killed.
+        #   WT_TEST_CONCURRENCY unset → memory-aware default: ~1 worker per 3GB free RAM
+        #     (min 2) — a memory-pressured Mac self-caps to ~2, big-RAM CI still parallelizes.
+        #   WT_TEST_CONCURRENCY=K (K>0) → explicit cap of K shards at a time (+ overlapped fuzz).
+        #   WT_TEST_CONCURRENCY=0 → opt OUT to full all-at-once (only on a known-roomy box).
+        # Each shard captures to its own log (a shared stdout interleaves + buffers away on exit).
         phase_times = String[]   # "<secs>\t<name>" collected across all shard logs
-        codes = map(procs) do triple
-            i, lf, p = triple
+        maxconc = let m = tryparse(Int, get(ENV, "WT_TEST_CONCURRENCY", ""))
+            if m === nothing
+                min(nshards, max(2, Int(div(Sys.free_memory(), 3 * 1024^3))))  # memory-aware default
+            elseif m <= 0
+                nshards            # explicit opt-out → full parallel
+            else
+                m                  # explicit cap
+            end
+        end
+        @info "Test shard concurrency cap = $maxconc of $nshards (WT_TEST_CONCURRENCY=$(get(ENV, "WT_TEST_CONCURRENCY", "<auto>")); free RAM $(round(Sys.free_memory()/1024^3; digits=1))GB)"
+        codes = Int[]
+        _drain = function (i, lf, p)
             wait(p)
             lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
             if p.exitcode != 0
@@ -58,8 +68,18 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
                     startswith(ln, "WT_SETUP_TIME\t") && println("  shard $i setup: ", split(ln, '\t')[2], "s")
                 end
             end
-            p.exitcode
+            push!(codes, p.exitcode)
         end
+        batch = Tuple{Int,String,Any}[]
+        for i in 0:nshards-1
+            lf = joinpath(logdir, "shard_$i.log")
+            push!(batch, (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf)))
+            if length(batch) >= maxconc
+                for (j, jlf, jp) in batch; _drain(j, jlf, jp); end
+                empty!(batch)
+            end
+        end
+        for (j, jlf, jp) in batch; _drain(j, jlf, jp); end
         # Refresh the LPT-packing input (committed) on demand. sorted-by-name → stable diffs.
         if get(ENV, "WT_RECORD_TIMES", "") == "1" && !isempty(phase_times)
             open(joinpath(@__DIR__, "phase_times.tsv"), "w") do io
