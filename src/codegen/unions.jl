@@ -88,10 +88,12 @@ Check if a Union type needs tagged union representation.
 Returns true for multi-variant unions that aren't simple nullable types.
 """
 function needs_tagged_union(T::Union)::Bool
-    types = Base.uniontypes(T)
-    non_nothing = filter(t -> t !== Nothing, types)
-    # Need tagged union if we have 2+ non-Nothing types
-    return length(non_nothing) >= 2
+    # B4/U2 — dart2wasm parity: there is NO tagged-union wrapper. A Union value is JUST a
+    # boxed AnyRef discriminated by classId (the canonical classId box for numerics, the
+    # struct ref directly for objects). The {typeId,tag,value} 3-field wrapper + per-union
+    # tag scheme is RETIRED — every former wrapper site now routes through emit_wrap/
+    # unwrap_union_value (box/unbox via the classId box) + the AnyRef isa path (classId read).
+    return false
 end
 
 """
@@ -238,75 +240,29 @@ then wrapped with its type tag.
 # MIGRATED to InstrBuilder (typed, dart2wasm-style). Consumes the value the caller left
 # on the stack (seed_input!); emits a tagged-union struct. Byte-identical to before.
 function emit_wrap_union_value(ctx, value_type::Type, union_type::Union)::Vector{UInt8}
-    # Get or register the union type
-    union_info = get_union_type!(ctx.mod, ctx.type_registry, union_type)
-    tag = get_union_tag(union_info, value_type)
-
-    if tag < 0
-        # Not a direct variant — try subtype-based matching (handles concrete subtypes)
-        for (variant_type, vtag) in union_info.tag_map
-            if value_type <: variant_type
-                tag = vtag
-                break
-            end
-        end
-    end
-
-    if tag < 0
-        # Check if value is already a compatible tagged union struct on the stack.
-        # This happens when val_type == union_type (value already wrapped elsewhere).
-        if value_type isa Union && value_type <: union_type
-            return UInt8[]  # Value is already a properly tagged union struct; no re-wrap needed
-        end
-        # Truly incompatible type (dead code path from imprecise type inference).
-        # Convert to anyref and use tag 0 so compilation succeeds.
-        tag = Int32(0)
-    end
-
-    b = InstrBuilder(; func_name="emit_wrap_union_value", strict=_wt_builder_strict())
+    # B4/U2 — dart2wasm parity (translator.dart:854-862 convertType): a Union value is JUST a
+    # boxed ref discriminated by classId — NO wrapper struct, NO tag, NO double-box. Box the
+    # variant value to an AnyRef: numerics → the canonical classId box (emit_classid_box!,
+    # real classId for concrete variants); struct/array refs pass through (already anyref
+    # subtypes, discriminated by their own field-0 classId); Nothing → ref.null.
+    b = InstrBuilder(; func_name="emit_wrap_union_value", strict=_wt_builder_strict(), mod=ctx.mod)
     set_context!(b, "wrap $(value_type) → $(union_type)")
-    # union struct layout: typeId(i32), tag(i32 mutable), value(anyref)
-    union_fields = WasmValType[I32, I32, AnyRef]
-
-    # For Nothing, we need to create a null anyref
     if value_type === Nothing
-        i32_const!(b, 0)            # PURE-9024: typeId (0 placeholder)
-        i32_const!(b, Int64(tag))   # tag (0 for Nothing)
-        ref_null!(b, AnyRef)        # null anyref value
-    else
-        # Value is on stack — save it, push typeId + tag, then restore + box.
-        scratch_local = length(ctx.locals) + ctx.n_params
-        value_wasm_type = julia_to_wasm_type_concrete(value_type, ctx)
-        push!(ctx.locals, value_wasm_type)
-        seed_input!(b, WasmValType[value_wasm_type])  # caller left the value on the stack
-        builder_set_local_type!(b, scratch_local, value_wasm_type)
-
-        local_set!(b, scratch_local)
-        i32_const!(b, 0)             # PURE-9024: typeId (0 placeholder)
-        i32_const!(b, Int64(tag))    # tag
-        local_get!(b, scratch_local) # reload value
-
-        # Convert to anyref if needed
-        if value_wasm_type === I32 || value_wasm_type === I64 || value_wasm_type === F32 || value_wasm_type === F64
-            # F-i31/F31: i31ref holds only 31 bits → boxing i32/i64 via ref.i31 SILENTLY
-            # TRUNCATES any value ≥ 2^30 (verified: typemax(Int64) → -1, 2^31 → 0). Box ALL
-            # numerics full-width into the {typeId,value} numeric box (the same rep Loop B's
-            # numeric-Union AnyRef path uses), preserving every bit. emit_unwrap_union_value
-            # reads it back symmetrically. dart2wasm likewise boxes large ints (no bare i31).
-            drop!(b)
-            box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, value_wasm_type)
-            i32_const!(b, 0)                             # box typeId
-            local_get!(b, scratch_local)
-            struct_new!(b, box_idx, WasmValType[I32, value_wasm_type])
-        elseif value_wasm_type === ExternRef
-            any_convert_extern!(b)                       # externref → anyref
-        elseif value_wasm_type isa ConcreteRef || value_wasm_type isa RefType
-            # Struct/array refs are subtypes of anyref — no conversion needed
-        end
+        ref_null!(b, AnyRef)
+        return builder_code(b)
     end
-
-    # Create the tagged union struct
-    struct_new!(b, union_info.wasm_type_idx, union_fields)
+    # The value is already on the stack (caller left it).
+    if value_type isa Union && value_type <: union_type
+        return UInt8[]   # already a boxed union value (anyref) — no re-wrap
+    end
+    value_wasm_type = julia_to_wasm_type_concrete(value_type, ctx)
+    seed_input!(b, WasmValType[value_wasm_type])
+    if value_wasm_type === I32 || value_wasm_type === I64 || value_wasm_type === F32 || value_wasm_type === F64
+        emit_classid_box!(b, ctx, value_wasm_type, isconcretetype(value_type) ? value_type : nothing)
+    elseif value_wasm_type === ExternRef
+        any_convert_extern!(b)                       # externref → anyref
+    # else: struct/array ConcreteRef/RefType — already an anyref subtype, pass through as-is.
+    end
     return builder_code(b)
 end
 
@@ -320,40 +276,24 @@ Note: Caller should verify type via isa() first for safety.
 # MIGRATED to InstrBuilder (typed, dart2wasm-style). Consumes the tagged-union struct the
 # caller left on the stack (seed_input!); emits the unboxed target value. Byte-identical.
 function emit_unwrap_union_value(ctx, union_type::Union, target_type::Type)::Vector{UInt8}
-    # Handle Nothing specially - just drop the union struct
+    # B4/U2 — dart2wasm parity (translator.dart:863-870 convertType unbox): the union value
+    # IS the boxed AnyRef (no wrapper). Numerics → unbox the classId box (ref.cast box;
+    # struct.get value); struct/array refs → ref.cast to target; Nothing → drop.
+    b = InstrBuilder(; func_name="emit_unwrap_union_value", strict=_wt_builder_strict(), mod=ctx.mod)
+    set_context!(b, "unwrap $(union_type) → $(target_type)")
     if target_type === Nothing
-        b = InstrBuilder(; func_name="emit_unwrap_union_value", strict=_wt_builder_strict())
-        seed_input!(b, WasmValType[AnyRef])  # the union struct on the stack
-        drop!(b)
+        seed_input!(b, WasmValType[AnyRef]); drop!(b)
         return builder_code(b)
     end
-
-    # Get the union info
-    union_info = get_union_type!(ctx.mod, ctx.type_registry, union_type)
-
-    b = InstrBuilder(; func_name="emit_unwrap_union_value", strict=_wt_builder_strict())
-    set_context!(b, "unwrap $(union_type) → $(target_type)")
-    seed_input!(b, WasmValType[ConcreteRef(UInt32(union_info.wasm_type_idx), true)])
-
-    # Get the value field (PURE-9024: field 2 due to typeId at field 0)
-    struct_get!(b, union_info.wasm_type_idx, 2, AnyRef)
-
-    # Cast anyref to the target type
+    seed_input!(b, WasmValType[AnyRef])   # the boxed union value (was the wrapper struct)
     target_wasm_type = julia_to_wasm_type_concrete(target_type, ctx)
-    if target_wasm_type isa ConcreteRef
-        # Cast anyref to concrete type using ref.cast / ref.cast_null
+    if target_wasm_type === I32 || target_wasm_type === I64 || target_wasm_type === F32 || target_wasm_type === F64
+        emit_classid_unbox!(b, ctx, target_wasm_type)
+    elseif target_wasm_type isa ConcreteRef
         ref_cast!(b, target_wasm_type.type_idx, target_wasm_type.nullable)
     elseif target_wasm_type === ArrayRef || target_wasm_type === StructRef
-        # PURE-6024: cast anyref → abstract arrayref/structref (e.g. AbstractString → ArrayRef)
         ref_cast!(b, target_wasm_type, true)
-    elseif target_wasm_type === I32 || target_wasm_type === I64 || target_wasm_type === F32 || target_wasm_type === F64
-        # F-i31/F31: numerics are boxed FULL-WIDTH into the {typeId,value} numeric box by
-        # emit_wrap_union_value (was lossy i31 for ints) — read field 1 back symmetrically.
-        box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm_type)
-        ref_cast!(b, box_idx, true)
-        struct_get!(b, box_idx, 1, target_wasm_type)  # field 1 = value (0=typeId)
     end
-
     return builder_code(b)
 end
 

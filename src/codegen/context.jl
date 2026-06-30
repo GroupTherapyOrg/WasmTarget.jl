@@ -622,10 +622,9 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
                 if is_all_struct
                     return StructRef
                 else
-                    # PURE-6021b: Heterogeneous non-numeric union uses a tagged-union struct.
-                    # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
-                    union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
-                    return ConcreteRef(union_info.wasm_type_idx, true)
+                    # B4/U2 — dart2wasm parity: a heterogeneous Union value is JUST a boxed
+                    # AnyRef discriminated by classId, NOT a {typeId,tag,value} wrapper struct.
+                    return AnyRef
                 end
             end
         end

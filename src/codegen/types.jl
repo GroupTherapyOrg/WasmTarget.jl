@@ -1908,9 +1908,10 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             if is_all_struct
                 return StructRef
             end
-            # Heterogeneous non-numeric union → tagged-union struct ref.
-            union_info = get_union_type!(mod, registry, T)
-            return ConcreteRef(union_info.wasm_type_idx, true)
+            # B4/U2 — dart2wasm parity: a heterogeneous Union value is JUST a boxed AnyRef
+            # discriminated by classId (NO {typeId,tag,value} wrapper struct). emit_wrap/
+            # unwrap_union_value box/unbox through the canonical classId box.
+            return AnyRef
         end
     elseif T === Core.SimpleVector
         # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.

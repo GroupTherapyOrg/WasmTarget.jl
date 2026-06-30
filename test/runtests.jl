@@ -4182,10 +4182,13 @@ begin
             mod = WasmTarget.WasmModule()
             registry = WasmTarget.TypeRegistry()
 
-            # Test needs_tagged_union function
-            @test WasmTarget.needs_tagged_union(Union{Int32, Float64}) == true
-            @test WasmTarget.needs_tagged_union(Union{Int32, String, Bool}) == true
+            # B4/U2 — dart2wasm parity: the {typeId,tag,value} tagged-union WRAPPER is RETIRED.
+            # A Union value is JUST a boxed AnyRef discriminated by classId (no wrapper, no tag),
+            # so needs_tagged_union is now ALWAYS false; a heterogeneous union maps to AnyRef.
+            @test WasmTarget.needs_tagged_union(Union{Int32, Float64}) == false
+            @test WasmTarget.needs_tagged_union(Union{Int32, String, Bool}) == false
             @test WasmTarget.needs_tagged_union(Union{Nothing, Int32}) == false
+            @test WasmTarget.get_concrete_wasm_type(Union{Int32, String}, mod, registry) === WasmTarget.AnyRef
 
             # Test get_nullable_inner_type function
             @test WasmTarget.get_nullable_inner_type(Union{Nothing, Int32}) === Int32
