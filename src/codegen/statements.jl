@@ -2325,42 +2325,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 field_bytes = UInt8[]
             end
             # Union-typed field (no Nothing variant) registered as a tagged-union
-            # box struct (typeId, tag, anyref): wrap the concrete value in the box.
-            # E.g. IdSet.idxs::Union{Memory{UInt8},Memory{UInt16},Memory{UInt32}} —
-            # the value compiles to a raw array ref, but the field wants the box
-            # (trim-collected show machinery hit this first).
-            local _ub_ft = i <= fieldcount(struct_type) ? fieldtype(struct_type, i) : nothing
-            if _ub_ft isa Union && actual_field_wasm isa ConcreteRef && !isempty(field_bytes) &&
-               field_bytes[1] != Opcode.I32_CONST && field_bytes[1] != Opcode.I64_CONST &&
-               field_bytes[1] != Opcode.F32_CONST && field_bytes[1] != Opcode.F64_CONST
-                local _ub_info = get(ctx.type_registry.unions, _ub_ft, nothing)
-                if _ub_info !== nothing && Int(actual_field_wasm.type_idx) == Int(_ub_info.wasm_type_idx)
-                    # Skip if the value is already the box (local.get of a box-typed local)
-                    _already_boxed = false
-                    if length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                        _ub_src = 0; _ub_sh = 0
-                        for _bi in 2:length(field_bytes)
-                            byt = field_bytes[_bi]
-                            _ub_src |= (Int(byt & 0x7f) << _ub_sh); _ub_sh += 7
-                            (byt & 0x80) == 0 && break
-                        end
-                        _ub_arr = _ub_src - ctx.n_params + 1
-                        if _ub_arr >= 1 && _ub_arr <= length(ctx.locals)
-                            _ub_lt = ctx.locals[_ub_arr]
-                            _already_boxed = _ub_lt isa ConcreteRef && Int(_ub_lt.type_idx) == Int(_ub_info.wasm_type_idx)
-                        end
-                    end
-                    if !_already_boxed
-                        local _ub_vt = try infer_value_type(val, ctx) catch; nothing end
-                        local _ub_tag = _ub_vt isa Type ? get(_ub_info.tag_map, _ub_vt, Int32(0)) : Int32(0)
-                        i32_const!(b, 0)             # typeId
-                        i32_const!(b, Int64(_ub_tag))  # tag
-                        emit_raw!(b, field_bytes)                                # value (ref ⊑ anyref)
-                        struct_new!(b, _ub_info.wasm_type_idx, WasmValType[])
-                        field_bytes = UInt8[]
-                    end
-                end
-            end
+            # B4/U2: the union-field tagged-union-wrapper box-coercion is RETIRED — a union
+            # field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
+            # wrapper ConcreteRef, so the value flows in as an anyref subtype directly.
             if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
                 # dart2wasm carries the type with the value: derive the source's wasm type
                 # from the inferred value type rather than decoding the local index out of bytes.

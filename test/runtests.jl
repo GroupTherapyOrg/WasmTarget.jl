@@ -4195,29 +4195,10 @@ begin
             @test WasmTarget.get_nullable_inner_type(Union{Nothing, String}) === String
             @test WasmTarget.get_nullable_inner_type(Union{Int32, String}) === nothing
 
-            # Test register_union_type!
-            union_type = Union{Int32, Float64}
-            info = WasmTarget.register_union_type!(mod, registry, union_type)
-            @test info isa WasmTarget.UnionInfo
-            @test info.julia_type === union_type
-            @test length(info.variant_types) == 2
-            @test Int32 in info.variant_types
-            @test Float64 in info.variant_types
-            @test haskey(info.tag_map, Int32)
-            @test haskey(info.tag_map, Float64)
-
-            # Test get_union_tag
-            tag_int32 = WasmTarget.get_union_tag(info, Int32)
-            tag_float64 = WasmTarget.get_union_tag(info, Float64)
-            @test tag_int32 >= 0
-            @test tag_float64 >= 0
-            @test tag_int32 != tag_float64
-
-            # Test union with Nothing
-            union_with_nothing = Union{Nothing, Int32, String}
-            info2 = WasmTarget.register_union_type!(mod, registry, union_with_nothing)
-            @test length(info2.variant_types) == 3
-            @test WasmTarget.get_union_tag(info2, Nothing) == Int32(0)  # Nothing always gets tag 0
+            # B4/U2 — dart2wasm parity: register_union_type! / UnionInfo / get_union_tag and the
+            # whole {typeId,tag,value} tagged-union wrapper scheme are DELETED. A Union value is a
+            # boxed AnyRef discriminated by classId; differential coverage of union compile+run is
+            # in the "Union parameter type" / het-tuple / distinguishability / boxed-=== testsets.
         end
 
         # Test 2: Function parameter with union type

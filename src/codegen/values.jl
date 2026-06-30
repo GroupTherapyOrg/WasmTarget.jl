@@ -1385,30 +1385,9 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             end
             field_val = getfield(val, field_name)
             field_val_bytes = compile_value(field_val, ctx)
-            # P6-ioprint: Union-typed field (no Nothing variant) registered as a
-            # tagged-union box (typeId, tag, anyref) — wrap the concrete value.
-            # The constant's runtime type gives the exact tag.
-            local _cub_ft = fieldtype(T, fi)
-            if _cub_ft isa Union && !isempty(field_val_bytes)
-                local _cub_info = get(ctx.type_registry.unions, _cub_ft, nothing)
-                local _cub_wfi = fi + Int(info.field_offset)
-                if _cub_info !== nothing && struct_type_def isa StructType &&
-                   _cub_wfi <= length(struct_type_def.fields) &&
-                   (struct_type_def.fields[_cub_wfi].valtype isa ConcreteRef) &&
-                   Int(struct_type_def.fields[_cub_wfi].valtype.type_idx) == Int(_cub_info.wasm_type_idx) &&
-                   (_wt_is_ref(infer_value_wasm_type(field_val, ctx)) || is_nothing_value(field_val, ctx))
-                    _cub_boxed = UInt8[]
-                    push!(_cub_boxed, Opcode.I32_CONST)
-                    append!(_cub_boxed, encode_leb128_signed(Int64(0)))   # typeId
-                    push!(_cub_boxed, Opcode.I32_CONST)
-                    append!(_cub_boxed, encode_leb128_signed(Int64(get(_cub_info.tag_map, typeof(field_val), Int32(0)))))
-                    append!(_cub_boxed, field_val_bytes)                   # value (ref ⊑ anyref)
-                    push!(_cub_boxed, Opcode.GC_PREFIX)
-                    push!(_cub_boxed, Opcode.STRUCT_NEW)
-                    append!(_cub_boxed, encode_leb128_unsigned(_cub_info.wasm_type_idx))
-                    field_val_bytes = _cub_boxed
-                end
-            end
+            # B4/U2: the union-typed-field tagged-union-wrapper box-coercion is RETIRED — a
+            # union field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
+            # wrapper, so the constant's field value (a ref) is already anyref-compatible.
             # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
             # emit ref.null for the field's expected type
             if isempty(field_val_bytes)

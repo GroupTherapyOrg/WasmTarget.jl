@@ -30,17 +30,9 @@ accounting for the typeId field offset (PURE-9024).
 """
 wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx - 1 + info.field_offset)
 
-"""
-Maps Julia Union types to their WasmGC tagged union representation.
-Tagged unions are WasmGC structs with {tag: i32, value: anyref}.
-The tag identifies which variant the union currently holds.
-"""
-struct UnionInfo
-    julia_type::Union                        # The original Union type
-    wasm_type_idx::UInt32                    # Index of the wrapper struct type
-    variant_types::Vector{Type}              # Types in the union (ordered)
-    tag_map::Dict{Type, Int32}               # Type -> tag value
-end
+# (B4/U2 — dart2wasm parity: the `UnionInfo` tagged-union descriptor + the whole
+# {typeId,tag,value} wrapper scheme are DELETED. A Union value is a boxed AnyRef
+# discriminated by classId — no per-union wrapper type, no tag, no descriptor.)
 
 """
 Registry for struct and array type mappings within a module.
@@ -49,7 +41,8 @@ mutable struct TypeRegistry
     structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
     arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
-    unions::Union{Nothing, Dict{Union, UnionInfo}}  # Union type -> tagged union info
+    # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
+    # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
     numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # PURE-325: box types for numeric→externref returns
     # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
     # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
@@ -87,7 +80,7 @@ end
 
 TypeRegistry() = TypeRegistry(
     Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing,
-    Dict{Union, UnionInfo}(), Dict{WasmValType, UInt32}(),
+    Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing, Int32(0),

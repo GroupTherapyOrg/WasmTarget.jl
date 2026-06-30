@@ -2748,7 +2748,6 @@ function copy_type_registry(src::TypeRegistry)::TypeRegistry
         copy(src.structs),
         copy(src.arrays),
         src.string_array_idx,
-        copy(src.unions),
         copy(src.numeric_boxes),
         copy(src.type_constant_globals),
         copy(src.typename_constant_globals),

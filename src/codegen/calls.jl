@@ -1334,27 +1334,10 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
 
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
-    if value_type isa Union && needs_tagged_union(value_type) && haskey(ctx.type_registry.unions, value_type)
-        # Tagged union: check the tag field
-        union_info = ctx.type_registry.unions[value_type]
-        expected_tag = get(union_info.tag_map, check_type, Int32(-1))
-
-        if expected_tag >= 0
-            # Value is already on stack (tagged union struct)
-            # PURE-701: Value may be structref if from a union-typed local.
-            # Insert ref.cast null to narrow before struct_get.
-            ref_cast!(bld, Int64(union_info.wasm_type_idx), true)
-            # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
-            struct_get!(bld, union_info.wasm_type_idx, 1, I32)  # field 1 is tag (0=typeId, 1=tag, 2=value)
-            # Compare tag to expected value
-            i32_const!(bld, Int64(expected_tag))
-            num!(bld, Opcode.I32_EQ)
-        else
-            # Type not in this union - drop value and return false
-            drop!(bld)
-            i32_const!(bld, 0)
-        end
-    elseif check_type === Nothing
+    # B4/U2: the tagged-union isa branch (struct.get tag) is RETIRED — a Union value is a
+    # boxed AnyRef discriminated by classId, so isa flows through the AnyRef path below
+    # (emit_isa_classid! / ref.test on the classId box & struct refs).
+    if check_type === Nothing
         # isa(x, Nothing) -> ref.is_null
         # Value is already on stack — check if it's actually a ref type
         local isa_val_wasm = nothing
@@ -2873,10 +2856,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
                                 Ueff = U
                             end
-                            is_tagged_union = union_wasm isa ConcreteRef &&
-                                Ueff isa Union &&
-                                haskey(ctx.type_registry.unions, Ueff) &&
-                                union_wasm.type_idx == ctx.type_registry.unions[Ueff].wasm_type_idx
+                            # B4/U2: the tagged-union wrapper is retired — a het-tuple field's
+                            # union value is an AnyRef classId box (the `else` branch below), never
+                            # the {typeId,tag,value} wrapper.
+                            is_tagged_union = false
 
                             local _hetb = InstrBuilder(; func_name="compile_call", strict=false)
                             # tuple value → tuple_local
