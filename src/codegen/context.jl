@@ -689,7 +689,12 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     wt === I32 || wt === I64 || wt === F32 || wt === F64
                 end
                 if all_numeric && !isempty(non_nothing)
-                    phi_wasm_type = resolve_union_type(phi_julia_type)
+                    # Route through THE single resolver (julia_to_wasm_type_concrete →
+                    # _resolve_multivariant_union) instead of the old lossy resolve_union_type,
+                    # which collapsed mixed int/float (Union{Int64,Float64}) to F64 — losing the
+                    # tag (Int 1 / Float 1.0 indistinguishable). The principled path boxes it (AnyRef),
+                    # matching the value-type resolver + dart's top type. Same-category → widest (same).
+                    phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
                 end
             end
 
