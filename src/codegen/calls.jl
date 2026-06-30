@@ -6191,16 +6191,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
                                 append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
                             else
-                                # ConcreteRef expected but not a union — box numeric to ref via ref.i31
-                                local _bb = InstrBuilder(; func_name="compile_call", strict=false)
-                                if actual_wasm === I32
-                                    ref_i31!(_bb)
-                                elseif actual_wasm === I64
-                                    num!(_bb, Opcode.I32_WRAP_I64)
-                                    ref_i31!(_bb)
-                                end
-                                # Cast to expected concrete ref type
-                                ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
+                                # B4: numeric → a non-union ConcreteRef. Route through the
+                                # single-source funnel (box arm) instead of the old
+                                # ref.i31-then-ref.cast, which TRUNCATED I64 and ALWAYS trapped
+                                # (an i31 is never a subtype of the target struct). convert_type!
+                                # boxes the numeric (real classId), then coerces to the expected
+                                # ref: if it's the numeric box it matches; otherwise the cast
+                                # traps LOUDLY on a genuine type mismatch (no silent truncation).
+                                local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
+                                convert_type!(_bb, actual_wasm, expected_wasm, ctx;
+                                              from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                                 append!(bytes, builder_code(_bb))
                             end
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
