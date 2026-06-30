@@ -203,6 +203,26 @@ Rebuild as ONE funnel + ONE discriminator, dart2wasm `convertType`-faithful:
   sites through the funnel + DELETE the scattered boxing (per batch: differential + suite) → (F-iv) the i31 family +
   emit_box_type_id! collapse + union double-box fall out as the routing completes. This IS Loop C's convertType funnel.
 
+## ★ BOX-UNIFICATION = THE REAL LOOP-B PARITY WORK (dart-RE-CHECKED 2026-06-29 against the actual source)
+Re-read dart directly (PARITY GATE): `class_info.dart` FieldIndex {classId=0, boxValue=1, objectFieldBase=2};
+`translator.dart:202` boxedClasses {i32→bool, i64→int, f64→double}; `translator.dart:854-870` convertType box =
+`i32_const classId; local_get v; struct_new box` / unbox = `struct_get boxValue`. **dart has NO union wrapper, NO tag,
+NO double-box — a dynamic/Union value is JUST a boxed ref discriminated by `struct.get classId`.**
+- WT's `numeric_boxes {typeId,value}` (one per wasm rep, classId+value) ALREADY matches dart's box. My `convert_type!`
+  box/unbox arms + `emit_classid_box!`/`emit_classid_unbox!` ALREADY emit dart's exact sequence. ✓ (sound + parity here).
+- **THE GAP = the union `{typeId, tag, value:anyref}` 3-field wrapper (unions.jl register_union_type!) + per-union
+  tag_map + the double-boxing (union field-2 ← inner numeric box). NON-dart-faithful. PARITY WORK = DELETE it:** a
+  Union value becomes the raw boxed ref (the classId numeric box for numerics, the struct ref directly for objects);
+  wrap = `emit_classid_box!` (numeric) or pass-through (already a ref); unwrap = `emit_classid_unbox!` or `ref_cast`;
+  isa/typeof = `emit_typeof!` (struct.get classId) + classId compare — NOT `struct.get tag`.
+- nothing box `{typeId}` → dart uses `ref.null`; simplify where cheap. F3 `box_types {typeId,(mut)contents}` = the
+  MUTABLE capture cell (dart Context field) — a DIFFERENT concept, KEEP.
+- INCREMENTAL (each committed; SOUNDNESS = differential+Pkg.test, PARITY-DONE = union wrapper gone + classId-only):
+  U1 map unions.jl + all wrap/unwrap/isa-on-union sites · U2 reroute `emit_wrap_union_value`→box/passthrough +
+  `emit_unwrap_union_value`→unbox/cast (keep the struct registered until consumers move) · U3 reroute union-isa →
+  emit_typeof!+classId (delete the tag read) · U4 delete the union {typeId,tag,value} struct + tag_map + register_union_type!
+  + emit_box_type_id! collapse + disjoint registries. CHECK class_info.dart/translator.dart at each step.
+
 ## identityHash/objectid DECISION (locked): primitive box = `[i32 classId, payload]`, NO hash slot —
 objectid of a boxed primitive is value-derived (compute on demand). A hash slot, if ever needed for boxed
 MUTABLE objects, goes at field 1 on the Object-equivalent subtree only, never on primitive boxes (mirrors dart).
