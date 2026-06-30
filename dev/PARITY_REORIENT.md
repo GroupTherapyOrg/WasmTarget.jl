@@ -40,18 +40,35 @@ into ~nothing**. Each loop activates one dormant piece dart's way, then deletes 
 funnel work is NET-NEW + hard-blocks on Loop B · its numeric-widening (values.jl:387) is a SETTLE (dart
 throws on numeric→numeric) → split into `coerce_numeric!`.
 
-## ▶ LIVE STATUS (2026-06-29) + the one REVISION the build surfaced
-✅ **Loop A DONE** (5fd44ce). ✅ **Loop 0 partial** — P13 (bf864a2) + F17 (ad7b0fa) banked; Int128-div + EH-tag
-DEFERRED (sound-today, off critical path; do EH-tag right before Loop D). 🔄 **Loop B started** — B1 het-tuple i31
-truncation fixed (811100e).
+## ▶ LIVE STATUS + PARITY-ANCHORED FORWARD PLAN (2026-06-29, corrected after Dale caught the drift)
+**HONEST PARITY: ~20-25% (≈1-2 of 12 dims). The differential oracle is GREEN broadly = SOUND, but NOT dart-parity.**
+- ✅ **Loop A DONE** (5fd44ce, validator uses wasm_subtype). ✅ **Loop 0 partial** (P13 bf864a2 + F17 ad7b0fa; Int128-div
+  + EH-tag deferred → EH-tag right before Loop D).
+- 🟡 **Loop B = SOUND, NOT PARITY.** Committed + differential-green: B1·F-i·F-ii·F-iii-b1·B4a-e·boxed-===·cast-trap
+  (distinguishability same-rep/diff-width/mixed-width/Char, boxed-=== silent-miscompile, mixed-width invalid-wasm,
+  i31 FULLY removed). **BUT the box is NOT unified to dart's design:** WT still has **4 box families** (numeric_boxes
+  {typeId,value} + union {typeId,tag,value} 3-field + nothing box + F3 box_types) where **dart has ONE** uniform
+  {classId,value} subtyping the Top struct (`class_info.dart`). **Collapsing them = the real Loop-B PARITY work, NOT
+  cleanup** (this is the drift Dale caught). Earlier "distinguishability is the channel" finding still true (the
+  channel work is Loop C), but B is not parity-done until the box is ONE.
 
-**★ REVISION (Dale's "fundamental-first / combine-loops" steer, build-surfaced):** Loop B's box-rep is largely
-ALREADY in place (the numeric box subtypes `$JlBase` via set_struct_supertypes!; B1 fixed truncation). The remaining
-Loop B **distinguishability is NOT a box problem — it's the typed VALUE CHANNEL (Loop C core).** Probe-proven: a
-multi-member-Union SSA value is stored in a COLLAPSED-NUMERIC local (I32), unboxing it + dropping its classId at
-allocation, so `isa` hits a "numeric → always true" shortcut (`_compile_call_isa` calls.jl:1323-1352). dart never
-unboxes before a type-test. ⇒ **Loop B distinguishability + Loop C channel-core COMBINE; the channel-core is PULLED
-FORWARD as the fundamental** (it unlocks B2 distinguishability AND B′ collections). Full trace: `dev/LOOP_B_DESIGN.md`.
+## ▶ THE PARITY-ANCHORED FORWARD SEQUENCE (what "done" requires = STRUCTURAL match to dart, per the PARITY GATE)
+1. **Loop B parity finish — UNIFY THE BOX (start here).** dart `class_info.dart`: one box = `{classId:i32@0, value@1}`,
+   classId = real per-type DFS id, discriminate by `struct.get classId` + range. Collapse WT's 4 families into ONE
+   `get_boxed_value_type!` (all storing the real classId, all subtyping the Top struct); retire the union {typeId,tag,
+   value} 3-field scheme (unions.jl) + `emit_box_type_id!` collapse + the disjoint registry dicts; route the ~41 inline
+   sites + the union wrap/unwrap through the one box + `convert_type!`. CHECK class_info.dart/translator.dart at each step.
+2. **Loop C — typed value channel (THE NORTH-STAR).** `compile_value` RETURNS its WasmValType (dart `node.accept1 ->
+   ValueType`); DELETE `infer_value_wasm_type` (267 re-guesses) + the emit_raw! bridges + the 4-way resolver dup + the
+   coercion ladders → the ONE `convert_type!` funnel. Fixes the #1 silent-wrong filtered-fold (`_InitialValue` sentinel).
+3. **Loop D — strict + total loud-reject.** dart THROWS on type mismatch; WT's validator only RECORDS → wire
+   has_errors→throw, delete the 2 escape hatches; typed emitters, delete RawBytes. Needs Loop 0's EH payload tag.
+4. **Loop E [LARGEST DELTA, mostly untouched] — closures + dispatch + GC class-info.** dart ClosureRepresentation
+   (`closures.dart`) + classId+offset dispatch table (`dispatch_table.dart`; WT still O(n) if-chain) + class-info GC model.
+5. **Deferred but REQUIRED for 1:1:** strings i16 · EH catchable driver · Float16 · linear-memory · Int128 full div/rem.
+
+**(superseded note kept for trace:)** the old "Loop B distinguishability is the channel" combine — true, and done as
+F-ii/B4; the channel itself is Loop C (#2 above). Full Loop-B detail: `dev/LOOP_B_DESIGN.md`.
 
 ## THE SEQUENCE (dependency-ordered; revised per the LIVE STATUS above)
 - **Loop 0 — free soundness banking** (small, independent, FIRST; de-risks A). Adopt: always-on cast verify,
