@@ -581,7 +581,7 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
     b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
     set_context!(b, "GotoIfNot cond → i32")
     # bridge the (still-raw) compile_value with its known pushed type
-    emit_raw!(b, compile_value(cond, ctx); pushes=WasmValType[infer_value_wasm_type(cond, ctx)])
+    emit_value!(b, cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
@@ -647,6 +647,22 @@ the emit produced no single result — e.g. an unreachable/dead path). Callers c
 function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
     b = _compile_value_b(val, ctx)
     return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
+end
+
+"""
+    emit_value!(b, val, ctx) -> Union{WasmValType,Nothing}
+
+Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
+emission ACTUALLY pushed (`compile_value_typed`'s byproduct) — NOT a re-guess via
+`infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value(v,ctx);
+pushes=WasmValType[infer_value_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
+Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
+validator's stack type is now the truth instead of a re-derivation).
+"""
+function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
+    bytes, ty = compile_value_typed(val, ctx)
+    emit_raw!(b, bytes; pushes=(ty === nothing ? WasmValType[] : WasmValType[ty]))
+    return ty
 end
 
 function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
@@ -721,7 +737,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                    emit_value!(b, stmt.val, ctx)
                     # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1

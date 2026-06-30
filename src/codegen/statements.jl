@@ -209,7 +209,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
        !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
         if haskey(ctx.slot_locals, _slot_assign_id)
             # MIGRATED: compile_value bridges via emit_raw!; slot local.set typed on `b`.
-            emit_raw!(b, compile_value(stmt, ctx); pushes=WasmValType[infer_value_wasm_type(stmt, ctx)])
+            emit_value!(b, stmt, ctx)
             local_set!(b, ctx.slot_locals[_slot_assign_id])
         end
         emit_raw!(b, bytes)
