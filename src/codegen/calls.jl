@@ -1390,11 +1390,13 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-            if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
-                # Numeric type: route through the SINGLE-SOURCE discriminator (was ref.test of
-                # the box struct, which same-wasm-rep types share — emit_isa_classid! reads the
-                # classId field to distinguish Bool/Int8/Int16/Int32/Char).
-                local _box_wasm = julia_to_wasm_type(check_type)
+            local _ck_box_wasm = julia_to_wasm_type(check_type)
+            if (_ck_box_wasm === I32 || _ck_box_wasm === I64 || _ck_box_wasm === F32 || _ck_box_wasm === F64) &&
+               !(check_type <: Int128) && !(check_type <: UInt128)
+                # Numeric-box rep (Number subtypes AND Char etc.): route through the SINGLE-SOURCE
+                # discriminator (was ref.test of the box struct, which same-wasm-rep types share —
+                # emit_isa_classid! reads the classId field to distinguish Bool/Int8/Int16/Int32/Char).
+                local _box_wasm = _ck_box_wasm
                 local _box_idx = get(ctx.type_registry.numeric_boxes, _box_wasm,
                                      get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm))
                 emit_isa_classid!(bld, ctx, _box_idx, check_type)

@@ -482,13 +482,12 @@ function needs_anyref_boxing(T::Union)::Bool
     types = Base.uniontypes(T)
     non_nothing = filter(t -> t !== Nothing, types)
     length(non_nothing) < 2 && return false
-    # Check if all are numeric
-    all(t -> t <: Number, non_nothing) || return false
-    # Per-member wasm reps.
-    wasm_types = Set{WasmValType}()
-    for t in non_nothing
-        push!(wasm_types, julia_to_wasm_type(t))
-    end
+    # Per-member wasm reps. Box only when EVERY member boxes as a NUMERIC value (i32/i64/
+    # f32/f64) — covers Number subtypes AND Char and other numeric-rep primitives, while
+    # excluding struct/string/ref members (those use their own ConcreteRef/tagged rep).
+    wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
+    all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
+    wasm_types = Set{WasmValType}(wasm_list)
     has_int = any(w -> w === I32 || w === I64, wasm_types)
     has_float = any(w -> w === F32 || w === F64, wasm_types)
     # Mixed int/float — collapsing to one primitive reinterprets the bits (lossy value).
