@@ -486,11 +486,8 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             # a phi node assignment. Numeric values must be boxed to externref.
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                # PURE-9028: Push correct DFS typeId as field 0
-                let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
-                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                struct_new!(lb, box_type, WasmValType[])
+                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_classid_box!(lb, ctx, edge_val_type, nothing)   # THE single box emitter
                 extern_convert_any!(lb)
                 local_set!(lb, local_idx)
                 return _ret(true)
@@ -506,13 +503,11 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 local_set!(lb, local_idx)
                 return _ret(true)
             end
-            # Real numeric value → box to anyref via struct.new
+            # Real numeric value → box to anyref via THE single box emitter
             value_bytes = compile_value(val, ctx)
             if !isempty(value_bytes)
-                let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, edge_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                emit_raw!(lb, value_bytes; pushes=(edge_val_type === nothing ? WasmValType[] : WasmValType[edge_val_type]))
-                box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                struct_new!(lb, box_type, WasmValType[])
+                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_classid_box!(lb, ctx, edge_val_type, nothing)
                 local_set!(lb, local_idx)
                 return _ret(true)
             end
@@ -720,12 +715,9 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 elseif phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
                     # Handled below by F32_CONVERT_I64_S / F32_CONVERT_I32_S
                 elseif phi_local_type === ExternRef && (actual_val_type === I32 || actual_val_type === I64 || actual_val_type === F32 || actual_val_type === F64)
-                    # PURE-325: Box numeric local.get for ExternRef phi local
-                    # PURE-9028: Push correct DFS typeId as field 0
-                    let tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, actual_val_type); emit_raw!(lb, tb; pushes=WasmValType[I32]); end
-                    emit_raw!(lb, value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
-                    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_val_type)
-                    struct_new!(lb, box_type, WasmValType[])
+                    # PURE-325: Box numeric local.get for ExternRef phi local — THE single box emitter
+                    emit_raw!(lb, value_bytes; pushes=WasmValType[actual_val_type])
+                    emit_classid_box!(lb, ctx, actual_val_type, nothing)
                     extern_convert_any!(lb)
                     local_set!(lb, local_idx)
                     return _ret(true)
