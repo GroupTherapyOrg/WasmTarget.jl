@@ -1973,10 +1973,8 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                             ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                         elseif func_ret_wasm === AnyRef && is_numeric_val
                             # PURE-9030: Box numeric value for AnyRef return (Union return type)
-                            local _ret_box_idx_flow = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                            let tb=UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32]); end
-                            emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                            struct_new!(b, _ret_box_idx_flow, WasmValType[])
+                            emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                            emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                             # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                             ref_null!(b, func_ret_wasm)
@@ -2022,10 +2020,8 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                         ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                     elseif func_ret_wasm === AnyRef && is_numeric_val
                         # PURE-9030: Box numeric value for AnyRef return (Union return type)
-                        local _ret_box_idx_f2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                        let tb=UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32]); end
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        struct_new!(b, _ret_box_idx_f2, WasmValType[])
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                        emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                         ref_null!(b, func_ret_wasm)
@@ -2089,10 +2085,8 @@ function generate_if_then_else(ctx::AbstractCompilationContext, blocks::Vector{B
                         ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                     elseif func_ret_wasm === AnyRef && is_numeric_val
                         # PURE-9030: Box numeric value for AnyRef return (Union return type)
-                        local _ret_box_idx_f2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                        let tb=UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32]); end
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        struct_new!(b, _ret_box_idx_f2, WasmValType[])
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                        emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                         ref_null!(b, func_ret_wasm)
@@ -2192,10 +2186,8 @@ function compile_nested_if_else(ctx::AbstractCompilationContext, code, goto_idx:
                     ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                 elseif func_ret_wasm === AnyRef && is_numeric_val
                     # PURE-9030: Box numeric value for AnyRef return (Union return type)
-                    local _ret_box_idx_f3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                    let tb=UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32]); end
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                    struct_new!(b, _ret_box_idx_f3, WasmValType[])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                    emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                     ref_null!(b, func_ret_wasm)
@@ -2260,10 +2252,8 @@ function compile_nested_if_else(ctx::AbstractCompilationContext, code, goto_idx:
                     ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
                 elseif func_ret_wasm === AnyRef && is_numeric_val
                     # PURE-9030: Box numeric value for AnyRef return (Union return type)
-                    local _ret_box_idx_f3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                    let tb=UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32]); end
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                    struct_new!(b, _ret_box_idx_f3, WasmValType[])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                    emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                     ref_null!(b, func_ret_wasm)
