@@ -270,6 +270,79 @@ function f3_box_value_types(code, ssa_types; extra_box_seeds::Dict{Int,Type}=Dic
     return out
 end
 
+# Is `T` one of WT's concrete numeric wasm-representable scalar types?
+_f3_is_numeric_jl(T) = T isa DataType && isconcretetype(T) &&
+    (T <: Integer || T <: AbstractFloat) && T !== Bool && sizeof(T) <= 8 && !(T <: BigInt)
+
+"""
+    propagate_numeric_value_types(code, ssa_types) -> Dict{Int,Type}
+
+Loop C value channel (dart2wasm `node.accept1 → ValueType` — the type is a byproduct of emission).
+Julia erases a mutated capture to `Any` even after the WT interpreter inlines + scalar-replaces the
+`Core.Box` away, leaving an `Any`-typed numeric phi-accumulator computing concrete values (e.g.
+`%acc = φ(0::Int64, %add)::Any; %add = %acc + i::Any`). Those `Any` SSAs get anyref locals the i64
+value can't fill. This recovers the concrete type: anchor on already-concrete-numeric SSAs, then a
+fixed point that types an `Any` numeric op / phi by its operands (OPTIMISTICALLY seeding a phi from
+its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass that drops any phi
+whose operands don't ALL resolve numeric (so `φ(0,"x")` stays Any). Returns ssa_id → concrete numeric
+Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
+"""
+function propagate_numeric_value_types(code, ssa_types)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    _ssat(i) = (1 <= i <= length(ssa_types)) ? _F3_CC.widenconst(ssa_types[i]) : Any
+    _opT(a) = a isa Core.SSAValue ? (haskey(out, a.id) ? out[a.id] : _ssat(a.id)) :
+              a isa QuoteNode ? typeof(a.value) : (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
+    # only consider SSAs Julia left as Any (don't override a known concrete type)
+    pend = Int[i for (i, _) in enumerate(code) if _ssat(i) === Any]
+    changed = true
+    while changed
+        changed = false
+        for i in pend
+            haskey(out, i) && continue
+            stmt = code[i]
+            if stmt isa Core.PhiNode
+                ts = Type[]; have_concrete = false
+                for v in stmt.values
+                    t = _opT(v)
+                    _f3_is_numeric_jl(t) && (push!(ts, t); have_concrete = true)
+                end
+                # optimistic: a phi with ≥1 resolved-numeric operand seeds to their join (cycle break)
+                if have_concrete
+                    j = reduce((a, b) -> Union{a, b}, ts)
+                    if _f3_is_numeric_jl(j)
+                        out[i] = j; changed = true
+                    end
+                end
+            elseif stmt isa Expr && stmt.head === :call
+                op = stmt.args[1]
+                f = op isa GlobalRef ? (isdefined(op.mod, op.name) ? getfield(op.mod, op.name) : nothing) :
+                    (op isa Function ? op : nothing)
+                f === nothing && continue
+                ats = Any[_opT(a) for a in stmt.args[2:end]]
+                all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
+                rt = try _F3_CC.return_type(f, Tuple{ats...}) catch; Any end
+                if _f3_is_numeric_jl(rt)
+                    out[i] = rt; changed = true
+                end
+            end
+        end
+    end
+    # VERIFY: drop any phi we optimistically typed whose operands don't ALL resolve numeric.
+    verifying = true
+    while verifying
+        verifying = false
+        for (i, _) in collect(out)
+            stmt = code[i]
+            stmt isa Core.PhiNode || continue
+            ok = all(v -> _f3_is_numeric_jl(_opT(v)), stmt.values)
+            if !ok
+                delete!(out, i); verifying = true
+            end
+        end
+    end
+    return out
+end
+
 # F3 L2b CLOSURE-BODY seed (dart2wasm `Capture.type = context.struct.fields[i].type`): in a closure
 # BODY there is no %new(Core.Box) to seed from — the box arrives as `getfield(#self#, boxfield)` where
 # `boxfield` is a Core.Box field of the closure type `selfT`. Map each such read → the box's contents

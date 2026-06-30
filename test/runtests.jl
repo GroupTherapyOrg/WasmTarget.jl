@@ -160,6 +160,8 @@ _wt_shard0() && include("f3_box_capture_l1.jl")
 _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
 # F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure (dormant).
 _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
+# Loop C value channel: general numeric value-type propagation (Any-but-really-i64) (dormant).
+_wt_shard0() && include("value_channel_propagate.jl")
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
