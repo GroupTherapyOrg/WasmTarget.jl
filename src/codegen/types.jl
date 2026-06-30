@@ -76,6 +76,10 @@ mutable struct TypeRegistry
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
     box_types::Union{Nothing, Dict{WasmValType, UInt32}}
+    # F3 L2 cross-function glue: closure type → the WASM contents type of the Core.Box it captures.
+    # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
+    # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
+    box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -86,7 +90,8 @@ TypeRegistry() = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
-    Dict{WasmValType, UInt32}()  # box_types (F3)
+    Dict{WasmValType, UInt32}(),  # box_types (F3)
+    Dict{Type, WasmValType}()     # box_contents_types (F3 L2)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -100,7 +105,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
-    nothing   # box_types (F3)
+    nothing,  # box_types (F3)
+    nothing   # box_contents_types (F3 L2)
 )
 
 """

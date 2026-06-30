@@ -89,9 +89,8 @@ end
 # Retrieve the typed IR + specTypes of each closure invoked in `code` that captures `box_id`
 # (via the `invoke`'s CodeInstance/MethodInstance — the robust, non-guessing way). The box writes
 # live in these bodies. Returns Vector{(code, ssavaluetypes, spectypes)}.
-function _f3_capturing_closure_bodies(code, box_id::Int)
-    out = Tuple{Vector{Any}, Vector{Any}, Any}[]
-    # closure types that capture this box (from %new(clo, …, box, …))
+# The set of closure types that capture the box at SSA index `box_id` (from `%new(clo, …, box, …)`).
+function _f3_box_captors(code, box_id::Int)::Set{Type}
     captors = Set{Type}()
     for stmt in code
         stmt isa Expr && stmt.head === :new && length(stmt.args) >= 2 || continue
@@ -101,6 +100,12 @@ function _f3_capturing_closure_bodies(code, box_id::Int)
              (a1 isa Type ? a1 : nothing)
         ty isa Type && ty !== Core.Box && push!(captors, ty)
     end
+    return captors
+end
+
+function _f3_capturing_closure_bodies(code, box_id::Int)
+    out = Tuple{Vector{Any}, Vector{Any}, Any}[]
+    captors = _f3_box_captors(code, box_id)
     isempty(captors) && return out
     # find the invokes of those closures → their MethodInstance.specTypes → typed IR
     for stmt in code
@@ -170,4 +175,29 @@ function find_box_news(code)::Vector{Int}
         end
     end
     return out
+end
+
+"""
+    populate_box_field_types!(mod, registry, code, ssa_types)
+
+F3 L2 cross-function glue (pre-pass over an enclosing fn's typed IR). For each `%new(Core.Box)`
+whose contents type is CONCRETE (`box_contents_type`), map every closure type that captures it →
+the box's contents WASM type, into `registry.box_contents_types`. `register_closure_type!` then
+types the captured-box field as a typed `Box{contents}` instead of anyref. Dynamic-contents boxes
+(`box_contents_type` ⇒ `nothing`) get NO entry → anyref fallback (current behavior, no regression).
+
+DORMANT until the L2 wiring consults the side-table + types box SSAs (context.jl SSA-type pass);
+adding entries to a dict that nothing reads is byte-identical. See dev/F3_LOOP.md.
+"""
+function populate_box_field_types!(mod, registry, code, ssa_types)
+    registry.box_contents_types === nothing && return registry.box_contents_types
+    for box_id in find_box_news(code)
+        bt = box_contents_type(code, ssa_types, box_id)
+        bt === nothing && continue                       # dynamic contents → anyref fallback
+        contents_wasm = get_concrete_wasm_type(bt, mod, registry)
+        for clo_T in _f3_box_captors(code, box_id)
+            registry.box_contents_types[clo_T] = contents_wasm
+        end
+    end
+    return registry.box_contents_types
 end
