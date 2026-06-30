@@ -210,6 +210,15 @@ _wt_htup_disc(i::Int64)::Int64 = begin
     v = t[i]
     v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
 end
+# WASMTARGET-FUZZ (Loop B/B4): same-WASM-REP Vector{Any} distinguishability. Bool/Int8
+# used a ref.i31 fast path (no classId struct) so isa on them returned false (the whole
+# chain fell through to 0). B4 removed i31 — Bool/Int8/UInt8 now box with their REAL
+# classId like everything else, and emit_isa_classid! distinguishes them. i=1→Bool,2→Int8,3→Int32.
+_wt_vany_disc(i::Int64)::Int64 = begin
+    a = Any[true, Int8(7), Int32(9)]
+    v = a[i]
+    v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
+end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
 # Markdown.Admonition.content). A Vector{T} value is a vector-STRUCT, not the raw
@@ -7759,6 +7768,11 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_htup_disc, Int64(1)).pass  # Bool  → 1
             @test compare_julia_wasm(_wt_htup_disc, Int64(2)).pass  # Int8  → 2
             @test compare_julia_wasm(_wt_htup_disc, Int64(3)).pass  # Int32 → 3
+            # Loop B/B4: same-wasm-rep Vector{Any} — Bool/Int8 were i31'd (no classId) so isa
+            # → 0; i31 removed, now they box w/ real classId + distinguish.
+            @test compare_julia_wasm(_wt_vany_disc, Int64(1)).pass  # Bool  → 1
+            @test compare_julia_wasm(_wt_vany_disc, Int64(2)).pass  # Int8  → 2
+            @test compare_julia_wasm(_wt_vany_disc, Int64(3)).pass  # Int32 → 3
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin

@@ -105,20 +105,11 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         append!(target_bytes, builder_code(b))
         return
     end
-    # The value's static Julia type (for the real classId + the i31 decision).
+    # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
-    # PURE-9029: ref.i31 fast path for Bool/Int8/UInt8 (zero-alloc, ref.eq for ===).
-    # KEPT until F-iv/B4 (i31 removal + boxed-=== handled together).
-    if val_wasm === I32 && _jl_type !== nothing && should_use_i31(_jl_type)
-        emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-        ref_i31!(b)
-        extern_convert_any!(b)
-        append!(target_bytes, builder_code(b))
-        return
-    end
-    # F-iii: box through the SINGLE-SOURCE producer (was an inline emit_box_type_id!+
-    # struct_new with the collapsed wasm-rep id). Concrete type → REAL classId; Union/
-    # abstract → wasm-rep fallback (no regression). Then extern.convert_any.
+    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
+    # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
+    # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
@@ -141,17 +132,11 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
         append!(target_bytes, builder_code(b))
         return
     end
-    # The value's static Julia type (for the real classId + the i31 decision).
+    # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
-    # ref.i31 fast path for Bool/Int8/UInt8 (already an anyref subtype). KEPT until F-iv/B4.
-    if val_wasm === I32 && _jl_type !== nothing && should_use_i31(_jl_type)
-        emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-        ref_i31!(b)
-        append!(target_bytes, builder_code(b))
-        return  # ref.i31 is already anyref — no conversion needed
-    end
-    # F-iii: box through the SINGLE-SOURCE producer (struct ref is already an anyref subtype).
-    # Concrete type → REAL classId; Union/abstract → wasm-rep fallback (no regression).
+    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
+    # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
+    # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     append!(target_bytes, builder_code(b))
