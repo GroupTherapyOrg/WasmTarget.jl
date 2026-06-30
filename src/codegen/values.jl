@@ -626,7 +626,30 @@ Compile a value reference (SSA, Argument, or Literal).
 # object-identity stack for struct-constant compilation (cycle/depth guard)
 const _VALUE_COMPILE_STACK = Vector{Any}()
 
+# B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
+# code_generator.dart:879): the body builds into the typed InstrBuilder `b`, so the type it
+# pushes IS a byproduct of emission = `b.v.stack[end]`. `_compile_value_b` returns that
+# builder; `compile_value` is the byte-only wrapper (back-compat for the 410 raw callers);
+# `compile_value_typed` returns (bytes, pushed-type) so callers stop RE-GUESSING via
+# infer_value_wasm_type (265 sites — the north-star deletion).
 function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
+    return builder_code(_compile_value_b(val, ctx))
+end
+
+"""
+    compile_value_typed(val, ctx) -> (bytes::Vector{UInt8}, pushed_type::Union{WasmValType,Nothing})
+
+dart2wasm-faithful: compile `val` and RETURN the wasm type it left on the stack (the
+emission byproduct), not a re-guess. `pushed_type` is `b.v.stack[end]` (or `nothing` when
+the emit produced no single result — e.g. an unreachable/dead path). Callers coerce via
+`convert_type!` (dart `wrap`), deleting their `infer_value_wasm_type` call.
+"""
+function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
+    b = _compile_value_b(val, ctx)
+    return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
+end
+
+function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
@@ -642,14 +665,14 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
     if ctx.last_stmt_was_stub
         haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
         unreachable!(b)  # 0x00
-        return builder_code(b)
+        return b
     end
 
     # Handle nothing explicitly - it's the Julia singleton
     if val === nothing
         # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
         i32_const!(b, 0)
-        return builder_code(b)
+        return b
     end
 
     if val isa Core.SSAValue
@@ -670,7 +693,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             # PURE-6021: Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
             # that appear as constant literals in IR of compiler functions like construct_ssa!)
             if val.id < 1 || val.id > length(ctx.code_info.code)
-                return builder_code(b)  # Dead code - sentinel SSAValue with invalid id
+                return b  # Dead code - sentinel SSAValue with invalid id
             end
             stmt = ctx.code_info.code[val.id]
             if stmt isa Core.PiNode
@@ -1062,7 +1085,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
             ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return builder_code(b)
+            return b
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -1341,7 +1364,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         if n_undefined == length(fieldnames(T))
             # Fully undefined struct - emit ref.null
             ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return builder_code(b)
+            return b
         end
 
         # Push field values with type safety checks
@@ -1525,6 +1548,6 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
     end
 
-    return builder_code(b)
+    return b
 end
 
