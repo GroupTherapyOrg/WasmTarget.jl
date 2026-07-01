@@ -1,3 +1,6 @@
+# ⛔ SUPERSEDED (2026-07-01) by dev/PARITY_MASTER.md — the authoritative campaign doc.
+# Kept as reference/history only; the loop sequence + status below are STALE. Do not drive from this file.
+
 # WasmTarget → dart2wasm parity — REORIENTED loop sequence (2026-06-29 discovery swarm)
 
 > ## ★★★ PARITY GATE — NON-NEGOTIABLE, EVERY STEP (Dale, burned in 2026-06-29 after a drift he caught + HATED)

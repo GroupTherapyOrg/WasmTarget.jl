@@ -1,3 +1,6 @@
+# ⛔ HISTORICAL (2026-07-01): this is the PRE-PARITY soundness/coverage campaign (v0.3.x era). The live
+# mission is dev/PARITY_MASTER.md (dart2wasm structural parity; coverage is a side effect, not the KPI).
+
 # The WasmTarget soundness loop — autonomous campaign spec
 
 > **North star.** WasmTarget compiles the *entire set of Julia and Julia packages*.
