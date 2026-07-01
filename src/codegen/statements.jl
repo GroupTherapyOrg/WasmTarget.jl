@@ -383,20 +383,17 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # ref_cast to box type + struct_get field 0.
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
-                        local box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
+                        # externref holds a boxed numeric — extern→any, then unbox via the one consumer.
                         any_convert_extern!(b)
-                        ref_cast!(b, Int64(box_type_idx), true)
-                        struct_get!(b, box_type_idx, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
+                        emit_classid_unbox!(b, ctx, pi_local_type; nullable=true)
                     # PURE-9030: PiNode narrowing from AnyRef → numeric (I64/I32/F64/F32).
                     # The anyref holds a boxed numeric value (WasmGC struct with typeId + value).
                     # Unbox via ref.cast to box type + struct_get field 1.
                     # This handles Union{Int32, Float64} dispatch where the param is anyref.
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
-                        # anyref → ref.cast (ref $BoxedXxx) → struct.get field 1
-                        ref_cast!(b, Int64(box_type_idx_any), false)  # non-null cast (inside isa-guarded branch)
-                        struct_get!(b, box_type_idx_any, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
+                        # anyref holds a boxed numeric — unbox via THE single consumer (non-null: isa-guarded).
+                        emit_classid_unbox!(b, ctx, pi_local_type)
                     # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
                     # Example: anyref → String, anyref → MyStruct
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef

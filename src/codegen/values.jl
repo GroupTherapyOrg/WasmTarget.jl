@@ -495,11 +495,21 @@ end
     emit_classid_unbox!(b, ctx, to_wasm)
 
 Unbox: the boxed ref is on the stack; narrow to the `to_wasm` numeric box and read its
-value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm).
+value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm). `nullable`
+selects the ref.cast form: `false` (default) traps on a null ref — correct inside an isa/ref.test
+guard; `true` permits null (the permissive external/dynamic call boundary). An extern→any prefix
+(`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
 """
-function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType)
-    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, to_wasm)
-    ref_cast!(b, Int64(box_idx), false)
+function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
+                             nullable::Bool=false)
+    return emit_classid_unbox!(b, ctx.mod, ctx.type_registry, to_wasm; nullable=nullable)
+end
+# Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
+# codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
+function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                             to_wasm::WasmValType; nullable::Bool=false)
+    box_idx = get_numeric_box_type!(mod, registry, to_wasm)
+    ref_cast!(b, Int64(box_idx), nullable)
     struct_get!(b, UInt32(box_idx), UInt32(1), to_wasm)
     return b
 end
@@ -596,11 +606,9 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             if local_offset >= 0 && local_offset < length(ctx.locals)
                 local_type = ctx.locals[local_offset + 1]
                 if local_type === AnyRef || local_type === ExternRef
-                    # Value is anyref/externref but should be i32 (Bool). Unbox.
+                    # Value is anyref/externref but should be i32 (Bool). Unbox via the one consumer.
                     local_type === ExternRef && any_convert_extern!(b)
-                    box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
-                    ref_cast!(b, box_type_idx, true)
-                    struct_get!(b, box_type_idx, 1, I32)  # field 1 (0=typeId, 1=value)
+                    emit_classid_unbox!(b, ctx, I32; nullable=true)
                 elseif local_type isa ConcreteRef
                     # PURE-6025: tagged-union concrete ref → extract i32 tag from field 1.
                     type_idx = local_type.type_idx
@@ -773,10 +781,8 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                             end
                         end
                         if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
-                            # Value is boxed in anyref — unbox via ref.cast + struct.get
-                            local _box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, _pi_target_wasm)
-                            ref_cast!(b, Int64(_box_idx), false)  # non-null cast (inside isa-guarded branch)
-                            struct_get!(b, _box_idx, 1, _pi_target_wasm)  # field 1 = value (field 0 = typeId)
+                            # Value is boxed in anyref — unbox via THE single consumer (non-null: isa-guarded).
+                            emit_classid_unbox!(b, ctx, _pi_target_wasm)
                         end
                     else
                         # CG-003d: PiNode narrows to a struct/ref type (not numeric).

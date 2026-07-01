@@ -2142,9 +2142,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if actual_wasm === ExternRef
                             any_convert_extern!(_cvb)
                         end
-                        local _ub_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, expected_wasm)
-                        ref_cast!(_cvb, Int64(_ub_box), true)
-                        struct_get!(_cvb, _ub_box, UInt32(1), expected_wasm)  # field 1 = value
+                        emit_classid_unbox!(_cvb, ctx, expected_wasm; nullable=true)
                         append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i32 — drop and push 0 (type mismatch, likely dead code)

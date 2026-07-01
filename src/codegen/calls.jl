@@ -4528,10 +4528,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             func.name in (:+, :-, :*, :div, :rem, :mod)
         if (is_numeric_intrinsic || _generic_arith) && _arg_anyref
             local _aa_target = is_32bit ? I32 : I64
-            local _aa_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, _aa_target)
             local _ub = InstrBuilder(; func_name="compile_call", strict=false)
-            ref_cast!(_ub, Int64(_aa_box), true)
-            struct_get!(_ub, _aa_box, UInt32(1), _aa_target)  # field 1 = value
+            emit_classid_unbox!(_ub, ctx, _aa_target; nullable=true)
             append!(bytes, builder_code(_ub))
         end
         # PURE-904: Unbox externref args for numeric intrinsics.
@@ -4539,11 +4537,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
         if is_numeric_intrinsic && _is_externref_value(arg, ctx)
             target_wasm = is_32bit ? I32 : I64
-            box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, target_wasm)
             local _eub = InstrBuilder(; func_name="compile_call", strict=false)
             any_convert_extern!(_eub)
-            ref_cast!(_eub, Int64(box_type), true)
-            struct_get!(_eub, box_type, UInt32(1), target_wasm)  # Field 1 = value (0=typeId)
+            emit_classid_unbox!(_eub, ctx, target_wasm; nullable=true)
             append!(bytes, builder_code(_eub))
         end
     end
@@ -6309,13 +6305,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         _dq_is || (_dq_all_ref = false)
                     end
                     if _dq_all_ref
-                        local _dq_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, I64)
                         bytes = UInt8[]
                         local _dqb = InstrBuilder(; func_name="compile_call", strict=false)
                         for _dq_a in args
                             emit_value!(_dqb, _dq_a, ctx)
-                            ref_cast!(_dqb, Int64(_dq_box), true)
-                            struct_get!(_dqb, _dq_box, UInt32(1), I64)
+                            # unbox each boxed-i64 operand via THE single consumer, then compare
+                            emit_classid_unbox!(_dqb, ctx, I64; nullable=true)
                         end
                         num!(_dqb, Opcode.I64_EQ)
                         func.name === :!= && num!(_dqb, Opcode.I32_EQZ)
@@ -6327,13 +6322,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             local _dq_lt = _dq_doff >= 0 && _dq_doff < length(ctx.locals) ?
                                 ctx.locals[_dq_doff + 1] : nothing
                             if _dq_lt === AnyRef || _dq_lt isa ConcreteRef || _dq_lt === StructRef
-                                local _dq_b32 = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
-                                local _dq_scr = length(ctx.locals) + ctx.n_params
-                                push!(ctx.locals, I32)
-                                local_set!(_dqb, _dq_scr)
-                                i32_const!(_dqb, 0)   # typeId
-                                local_get!(_dqb, _dq_scr)
-                                struct_new!(_dqb, _dq_b32, WasmValType[])
+                                # Box the Bool === result for the ref-typed dest via THE single emitter,
+                                # carrying Bool's REAL classId (was a hardcoded typeId 0 = non-discriminable).
+                                emit_classid_box!(_dqb, ctx, I32, Bool)
                             end
                         end
                         append!(bytes, builder_code(_dqb))

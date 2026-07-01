@@ -290,10 +290,8 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 if concrete_type !== nothing
                     arg_wasm_type = julia_to_wasm_type(concrete_type)
                     if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
-                        # Unbox: ref.cast to box struct, struct.get field 1 (the numeric value)
-                        box_idx = type_registry.numeric_boxes[arg_wasm_type]
-                        ref_cast!(b, Int64(box_idx), false)
-                        struct_get!(b, box_idx, UInt32(1), arg_wasm_type)  # field 1 = value
+                        # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
+                        emit_classid_unbox!(b, mod, type_registry, arg_wasm_type)
                     elseif haskey(type_registry.structs, concrete_type)
                         # Cast to concrete struct type
                         struct_info = type_registry.structs[concrete_type]
@@ -313,13 +311,14 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # Push ref.null none as the anyref return value.
                     ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
                 elseif entry_wasm_type in (I32, I64, F32, F64)
-                    # Box numeric result into a WasmGC struct: (struct (field typeId:i32) (field val:T))
+                    # Box numeric result into a WasmGC struct: (struct (field classId:i32) (field val:T))
                     box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
-                    # Stack has the numeric value; emit struct.new with typeId=0 + value
-                    # Need to reorder: value is on stack, but struct.new expects (typeId, value)
-                    # Use a local to save the value
+                    # Stack has the numeric value; save it, push the return type's REAL classId (was a
+                    # hardcoded 0 = non-discriminable — an isa/typeof on this result would wrongly fail),
+                    # reload, struct.new {classId, value}. (dispatch carries mod+registry, not ctx, so it
+                    # cannot share emit_classid_box!'s ctx-allocated scratch local — same shape inline.)
                     local_set!(b, UInt32(Int(dt.arity)))  # first extra local
-                    i32_const!(b, 0)  # typeId = 0 (generic box)
+                    i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                     local_get!(b, UInt32(Int(dt.arity)))
                     struct_new!(b, box_idx, WasmValType[])
                 end
@@ -952,9 +951,8 @@ function _emit_table_wrappers!(mod::WasmModule,
             if concrete_type !== nothing
                 arg_wasm_type = julia_to_wasm_type(concrete_type)
                 if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
-                    box_idx = type_registry.numeric_boxes[arg_wasm_type]
-                    ref_cast!(b, Int64(box_idx), false)
-                    struct_get!(b, box_idx, UInt32(1), arg_wasm_type)
+                    # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
+                    emit_classid_unbox!(b, mod, type_registry, arg_wasm_type)
                 elseif haskey(type_registry.structs, concrete_type)
                     struct_info = type_registry.structs[concrete_type]
                     ref_cast!(b, Int64(struct_info.wasm_type_idx), false)
@@ -971,9 +969,10 @@ function _emit_table_wrappers!(mod::WasmModule,
                 # WBUILD-4000: Target function returns void — push null anyref
                 ref_null!(b, AnyRef)
             elseif entry_wasm_type in (I32, I64, F32, F64)
+                # Box the numeric result carrying the return type's REAL classId (was hardcoded 0).
                 box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
                 local_set!(b, UInt32(Int(dt.arity)))
-                i32_const!(b, 0)
+                i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                 local_get!(b, UInt32(Int(dt.arity)))
                 struct_new!(b, box_idx, WasmValType[])
             end
