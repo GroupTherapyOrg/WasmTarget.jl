@@ -71,9 +71,6 @@ const METRICS = [
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),
-    "R8_legacy_flow_callers" => ("legacy flow-generator callers: nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow (M1 → 0, family DELETED)",
-        () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(";
-                          exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow)\(")),
     "R9_union_vestiges" => ("tagged-union vestiges: needs_tagged_union/emit_(un)wrap_union_value callers (M3 → 0, DELETED)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(";
                           exclude_line=r"function (needs_tagged_union|emit_wrap_union_value|emit_unwrap_union_value)\(")),
@@ -104,6 +101,9 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L3_legacy_flow_family" => ("legacy conditional/void flow family callers — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow (M1 slices 1+2; DELETED + locked 2026-07-01)",
+        () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(";
+                          exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow)\(")),
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))

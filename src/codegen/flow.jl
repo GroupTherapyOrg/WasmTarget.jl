@@ -17,7 +17,7 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
             # Loop with phi nodes: the stackified flow handles loops, forward
             # jumps, and phi merge points all together correctly.
             # generate_loop_code can't handle phi nodes at loop headers.
-            emit_raw!(b, generate_complex_flow(ctx, blocks, code))
+            emit_raw!(b, generate_stackified_flow(ctx, blocks, code))
         else
             emit_raw!(b, generate_loop_code(ctx))
         end
@@ -29,7 +29,7 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
         # (→ the stackifier). The is_simple_conditional → generate_if_then_else special case
         # is retired with the legacy conditional family (dart has ONE structured lowering;
         # the legacy diamond lowering silently dropped all-but-one phi on multivar merges).
-        emit_raw!(b, generate_complex_flow(ctx, blocks, code))
+        emit_raw!(b, generate_stackified_flow(ctx, blocks, code))
     end
 
     # Always end with END opcode

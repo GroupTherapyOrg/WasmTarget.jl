@@ -1,33 +1,11 @@
-"""
-Generate code for more complex control flow patterns.
-Uses nested blocks with br instructions.
-"""
-function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    # MIGRATED to InstrBuilder: this fn only splices whole-body sub-emitters via emit_raw!.
-    # strict=false (collect mode): the sub-emitters are full control-flow bodies whose
-    # operand-stack effect the fragment model can't track precisely, so we never gate.
-    b = InstrBuilder(; func_name="generate_complex_flow", strict=false, mod=ctx.mod)
-
-    # For void return types WITHOUT loops (like event handlers), use a simpler approach:
-    # just execute all statements in order and return at the end.
-    # PURE-314: Void functions WITH loops must use generate_stackified_flow because
-    # generate_void_flow doesn't handle pre-loop phi initialization (single-edge phis
-    # after if-then-else merge points stay at default 0, causing array bounds errors).
-    if ctx.return_type === Nothing && !any(ctx.loop_headers)
-        emit_raw!(b, generate_void_flow(ctx, blocks, code))
-        return builder_code(b)
-    end
-
-    # parity(M1) ONE LOWERING: the stackifier is THE single strategy for every non-void
-    # body (dart parity: one CodeGenerator, one structured lowering, no routing heuristic).
-    # The old 5-clause heuristic routed "simple" shapes to generate_nested_conditionals —
-    # a documented multivar-phi miscompiler (lowered the diamond as a single value-carrying
-    # `if (result T)` that silently dropped all-but-one phi; gap 1bcb0e7214c3 family,
-    # test/fuzz/repro_multivar_phi_merge.jl). generate_stackified_flow stores EVERY live
-    # phi local at each edge via set_phi_locals_for_edge!, and already owned all complex
-    # shapes (loops / 3+ conds / multi-phi / post-throw unreachable).
-    return generate_stackified_flow(ctx, blocks, code)
-end
+# parity(M1) ONE LOWERING: generate_complex_flow (the old strategy router) is GONE. The
+# stackifier below is THE single lowering for every multi-block body, void included (dart
+# parity: one CodeGenerator, one structured lowering, no routing heuristic). The old routes it
+# absorbed: the 5-clause heuristic → generate_nested_conditionals (a documented multivar-phi
+# miscompiler — dropped all-but-one phi at diamond merges, gap 1bcb0e7214c3 family,
+# test/fuzz/repro_multivar_phi_merge.jl), is_simple_conditional → generate_if_then_else, and
+# the void-without-loops fast-path → generate_void_flow (whose missing pre-loop phi init was
+# PURE-314; the stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
 
 """
 Stackifier algorithm for complex control flow.

@@ -4,17 +4,17 @@
 [locks]
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0
+L3_legacy_flow_family = 0
 
 [metrics]
 R10_silent_unreachable = 35
-R11_patch_markers = 772
+R11_patch_markers = 760
 R12_wasmtools_crutch = 12
-R1_untyped_compile_value = 159
-R2_emit_raw_bridges = 429
+R1_untyped_compile_value = 152
+R2_emit_raw_bridges = 404
 R3_infer_value_type = 136
 R4_infer_value_wasm_type = 56
-R5_julia_type_reguess = 149
-R6_strict_false_builders = 318
-R7_raw_coercion_ops = 157
-R8_legacy_flow_callers = 1
+R5_julia_type_reguess = 144
+R6_strict_false_builders = 314
+R7_raw_coercion_ops = 153
 R9_union_vestiges = 9
