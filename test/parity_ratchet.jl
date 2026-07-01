@@ -135,9 +135,9 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
-    "L3_legacy_flow_family" => ("legacy conditional/void flow family callers — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow (M1 slices 1+2; DELETED + locked 2026-07-01)",
-        () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(";
-                          exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow)\(")),
+    "L3_legacy_flow_family" => ("ALL legacy lowering strategies — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow/loop_code/branched_loops/complex_flow router (M1 COMPLETE: ONE lowering = the stackifier; DELETED + locked 2026-07-01)",
+        () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(|generate_loop_code\(|generate_branched_loops\(|generate_complex_flow\(";
+                          exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow|generate_loop_code|generate_branched_loops|generate_complex_flow)\(")),
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
