@@ -3275,7 +3275,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                     extern_convert_any!(bec)
                                 end
                             else
-                                emit_raw!(bec, compile_value(args[fi], ctx); pushes=WasmValType[_val_wasm])
+                                emit_value!(bec, args[fi], ctx)
                                 # WASMMAKIE E-003: Any fields map to EXTERNREF — a
                                 # concrete ref (e.g. BoundsError(LinearIndices(...), i)
                                 # in wilkinson's range indexing) fails struct.new

@@ -972,7 +972,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             # GlobalRef to a constant - evaluate and compile the value
             try
                 actual_val = getfield(val.mod, val.name)
-                emit_raw!(b, compile_value(actual_val, ctx); pushes=WasmValType[AnyRef])
+                emit_value!(b, actual_val, ctx)
             catch
                 # If we can't evaluate, might be a type reference (no runtime value)
             end
@@ -994,12 +994,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 if field_val isa Int
                     i64_const!(b, Int64(field_val))
                 else
-                    emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
+                    emit_value!(b, field_val, ctx)
                 end
             end
             struct_new!(b, type_idx, WasmValType[])
         else
-            emit_raw!(b, compile_value(inner, ctx); pushes=WasmValType[AnyRef])
+            emit_value!(b, inner, ctx)
         end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
@@ -1083,7 +1083,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     ref_null!(b, StructRef)
                 end
             else
-                emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
+                emit_value!(b, field_val, ctx)
             end
         end
 
@@ -1140,7 +1140,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         _emit_tid!(T)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
-            emit_raw!(b, compile_value(field_val, ctx); pushes=WasmValType[AnyRef])
+            emit_value!(b, field_val, ctx)
         end
 
         struct_new!(b, type_idx, WasmValType[])
@@ -1202,7 +1202,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 end
                 try
                     v = mem[i]
-                    emit_raw!(b, compile_value(v, ctx); pushes=WasmValType[AnyRef])
+                    emit_value!(b, v, ctx)
                 catch e
                     if e isa UndefRefError
                         emit_array_default!(arr_type_idx, elem_type)

@@ -2948,7 +2948,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
             # Compile ref_arg to push [array_ref, i32_index], then drop both
             local _mrgn = InstrBuilder(; func_name="compile_call", strict=false)
-            emit_raw!(_mrgn, compile_value(ref_arg, ctx); pushes=WasmValType[AnyRef, I32])
+            emit_value!(_mrgn, ref_arg, ctx)
             drop!(_mrgn)  # drop i32_index
             drop!(_mrgn)  # drop array_ref
             i32_const!(_mrgn, 0)
@@ -2997,7 +2997,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # The ref SSA value from memoryrefnew will have compiled to [array_ref, i32_index]
         # We need to compile ref_arg which will leave [array_ref, i32_index] on stack
         local _mrgb = InstrBuilder(; func_name="compile_call", strict=false)
-        emit_raw!(_mrgb, compile_value(ref_arg, ctx); pushes=WasmValType[AnyRef, I32])
+        emit_value!(_mrgb, ref_arg, ctx)
 
         array_get!(_mrgb, array_type_idx, AnyRef; signed=(elem_type === UInt8 ? false : nothing))
 
@@ -3050,7 +3050,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
             (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
             local _mrsn = InstrBuilder(; func_name="compile_call", strict=false)
-            emit_raw!(_mrsn, compile_value(ref_arg, ctx); pushes=WasmValType[AnyRef, I32])
+            emit_value!(_mrsn, ref_arg, ctx)
             drop!(_mrsn)  # drop i32_index
             drop!(_mrsn)  # drop array_ref
             append!(bytes, builder_code(_mrsn))
@@ -3093,7 +3093,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         # Compile ref_arg which will leave [array_ref, i32_index] on stack
         local _msb = InstrBuilder(; func_name="compile_call", strict=false)
-        emit_raw!(_msb, compile_value(ref_arg, ctx); pushes=WasmValType[AnyRef, I32])
+        emit_value!(_msb, ref_arg, ctx)
 
         # Compile the value to store - we need it twice (for array.set and return)
         # First compile gets the value on stack for array.set
@@ -4208,9 +4208,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _prg_vinfo = ctx.type_registry.structs[_prg_vt]
                 struct_get!(_prgb, _prg_vinfo.wasm_type_idx, UInt32(1), ConcreteRef(_prg_arr, true))
                 ref_cast!(_prgb, Int64(_prg_arr), true)
-                emit_raw!(_prgb, compile_value(ptr_arg, ctx); pushes=WasmValType[I64])      # i64 byte offset
+                emit_value!(_prgb, ptr_arg, ctx)      # i64 byte offset
                 if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
-                    emit_raw!(_prgb, compile_value(args[2], ctx); pushes=WasmValType[I64])
+                    emit_value!(_prgb, args[2], ctx)
                     i64_const!(_prgb, Int64(1))
                     num!(_prgb, Opcode.I64_SUB)
                     i64_const!(_prgb, Int64(sizeof(_prg_te)))
@@ -6741,7 +6741,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # --- Emit WASM bytecode ---
 
     # Step 1: Compile and store the container reference
-    emit_raw!(bld, compile_value(container_arg, ctx); pushes=WasmValType[ConcreteRef(vec_type_idx, true)])
+    emit_value!(bld, container_arg, ctx)
     local_set!(bld, vec_ref_local)
 
     # Step 2: Get the data array reference
@@ -6837,7 +6837,7 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     new_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
 
     # vec_ref = container
-    emit_raw!(bld, compile_value(container_arg, ctx); pushes=WasmValType[ConcreteRef(vec_type_idx, true)])
+    emit_value!(bld, container_arg, ctx)
     local_set!(bld, vec_ref_local)
 
     # src_arr = vec_ref.data  (field_offset)

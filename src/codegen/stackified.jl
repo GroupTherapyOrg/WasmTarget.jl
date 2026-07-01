@@ -59,7 +59,7 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
     # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
+    emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
     append!(target_bytes, builder_code(b))
@@ -86,7 +86,7 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
+    emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     append!(target_bytes, builder_code(b))
     return  # No extern_convert_any — struct ref is already anyref
@@ -584,7 +584,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if stmt !== nothing && !(stmt isa Core.PhiNode)
                         emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
                     else
-                        emit_raw!(_sb, compile_value(val, ctx))
+                        emit_value!(_sb, val, ctx)
                     end
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
@@ -593,12 +593,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
-                    emit_raw!(pvb, compile_value(val, ctx))
+                    emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
                 else
                     # Can't recompute - try compile_value as fallback
-                    emit_raw!(pvb, compile_value(val, ctx))
+                    emit_value!(pvb, val, ctx)
                 end
             end
         elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
@@ -648,7 +648,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     return builder_code(pvb)
                 end
             end
-            emit_raw!(pvb, compile_value(val, ctx))
+            emit_value!(pvb, val, ctx)
         end
         return builder_code(pvb)
     end
