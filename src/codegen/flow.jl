@@ -250,9 +250,9 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
             # PURE-325: Box numeric value for ExternRef phi local (Union return).
             # When a function with Union return type is inlined, the return becomes
             # a phi node assignment. Numeric values must be boxed to externref.
-            value_bytes = compile_value(val, ctx)
+            value_bytes, _pe_vty = compile_value_typed(val, ctx)
             if !isempty(value_bytes)
-                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_raw!(lb, value_bytes; pushes=(_pe_vty === nothing ? WasmValType[] : WasmValType[_pe_vty]))
                 emit_classid_box!(lb, ctx, edge_val_type, nothing)   # THE single box emitter
                 extern_convert_any!(lb)
                 local_set!(lb, local_idx)
@@ -270,9 +270,9 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
                 return _ret(true)
             end
             # Real numeric value → box to anyref via THE single box emitter
-            value_bytes = compile_value(val, ctx)
+            value_bytes, _pe_vty = compile_value_typed(val, ctx)
             if !isempty(value_bytes)
-                emit_raw!(lb, value_bytes; pushes=WasmValType[edge_val_type])
+                emit_raw!(lb, value_bytes; pushes=(_pe_vty === nothing ? WasmValType[] : WasmValType[_pe_vty]))
                 emit_classid_box!(lb, ctx, edge_val_type, nothing)
                 local_set!(lb, local_idx)
                 return _ret(true)
