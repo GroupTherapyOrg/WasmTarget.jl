@@ -300,8 +300,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
                             # MIGRATED: compile_value bridges via emit_raw!; local.set typed.
-                            emit_raw!(b, compile_value(stmt.val, ctx);
-                                      pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                            emit_value!(b, stmt.val, ctx)
                             local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
                         end
