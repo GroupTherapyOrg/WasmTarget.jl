@@ -2086,48 +2086,28 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     ref_null!(b, StructRef)
                 end
             else
-                # Non-null value - compile with type safety check
-                val_bytes = compile_value(val, ctx)
-                # Safety: if compile_value produced a numeric local.get but the field
-                # expects a ref type (Union{Nothing, String} field = ref null array),
-                # emit ref.null of the correct type instead.
-                is_numeric_for_ref = false
-                if inner_type !== nothing && length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                    src_idx = 0; shift = 0; leb_end = 0
-                    for bi in 2:length(val_bytes)
-                        byt = val_bytes[bi]
-                        src_idx |= (Int(byt & 0x7f) << shift)
-                        shift += 7
-                        if (byt & 0x80) == 0
-                            leb_end = bi
-                            break
-                        end
+                # Non-null value — typed channel: the emission's own type replaces the pure-
+                # local.get LEB scan + infer_value_wasm_type re-guess. A NUMERIC value into a
+                # ref-typed Union field is an ill-typed store (bad upstream inference); keep
+                # the type-correct null so the module validates (M5 turns this loud).
+                val_bytes, _cn_vty = compile_value_typed(val, ctx)
+                if inner_type !== nothing &&
+                   (_cn_vty === I32 || _cn_vty === I64 || _cn_vty === F32 || _cn_vty === F64)
+                    if inner_type === String || inner_type === Symbol
+                        str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                        ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
+                    elseif inner_type <: AbstractVector
+                        elem_type = eltype(inner_type)
+                        arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                        ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
+                    elseif haskey(ctx.type_registry.structs, inner_type)
+                        inner_info = ctx.type_registry.structs[inner_type]
+                        ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
+                    else
+                        ref_null!(b, StructRef)
                     end
-                    if leb_end == length(val_bytes)  # Pure local.get
-                        # dart2wasm carries the type with the value: derive the source's
-                        # wasm type from the inferred value type rather than the local index.
-                        src_type = infer_value_wasm_type(val, ctx)
-                        if src_type !== nothing && (src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64)
-                            # Numeric local used for ref-typed Union field — emit ref.null
-                            if inner_type === String || inner_type === Symbol
-                                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                                ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
-                            elseif inner_type <: AbstractVector
-                                elem_type = eltype(inner_type)
-                                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-                                ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
-                            elseif haskey(ctx.type_registry.structs, inner_type)
-                                inner_info = ctx.type_registry.structs[inner_type]
-                                ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
-                            else
-                                ref_null!(b, StructRef)
-                            end
-                            is_numeric_for_ref = true
-                        end
-                    end
-                end
-                if !is_numeric_for_ref
-                    emit_raw!(b, val_bytes)
+                else
+                    emit_raw!(b, val_bytes; pushes=(_cn_vty === nothing ? WasmValType[] : WasmValType[_cn_vty]))
                 end
             end
         elseif field_type === Any

@@ -92,9 +92,11 @@ pattern in the script:
 Per-phase protocol, every loop, no exceptions:
 1. **Re-read the dart anchor** for the invariant being installed.
 2. Implement the smallest coherent slice; DELETE the patchwork it obsoletes in the same commit.
-3. Gate: ratchet + smoke (`test/smoke.jl`, ~23s) every step; full
-   `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` at phase boundaries
-   and for every wide-blast-radius change (the capped form ALWAYS — never unbounded).
+3. Gate (Dale's speed directive 2026-07-01): ratchet + smoke (~30s total) EVERY commit,
+   targeted backfills when touching their area; the full capped gate
+   (`WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'`) runs ONCE per
+   M-phase, at its completion boundary — not per batch. Per-commit history keeps any
+   phase-gate failure bisectable.
 4. Commit green with metric deltas in the message (`parity(M2): … [R2 581→512]`).
 
 - **M0 — ENFORCEMENT HARNESS** *(this session)*: this doc + `test/parity_ratchet.jl` +
