@@ -2172,26 +2172,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         any_convert_extern!(_cvb)
                         append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                        # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
-                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
-                        local box_insert_pos_any = length(bytes) - length(arg_bytes) + 1
-                        local _tid_bytes_any = UInt8[]
-                        emit_box_type_id!(_tid_bytes_any, ctx.type_registry, actual_wasm)
-                        splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, _tid_bytes_any)
-                        local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                        # PURE-9022: Numeric value (on the stack) to anyref via THE single box emitter.
+                        # (The emitter saves the value to a local + rebuilds {classId, value}, so no
+                        # raw splice into `bytes` is needed — deletes the old insert-typeId hack.)
                         local _bxa = InstrBuilder(; func_name="compile_invoke", strict=false)
-                        struct_new!(_bxa, box_type_idx_any, WasmValType[])
+                        emit_classid_box!(_bxa, ctx, actual_wasm, nothing)
                         append!(bytes, builder_code(_bxa))
                     elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                        # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
-                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
-                        local box_insert_pos_inv = length(bytes) - length(arg_bytes) + 1
-                        local _tid_bytes_inv = UInt8[]
-                        emit_box_type_id!(_tid_bytes_inv, ctx.type_registry, actual_wasm)
-                        splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, _tid_bytes_inv)
-                        local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                        # PURE-6025: Numeric value to externref — box via the one emitter, then extern.convert_any.
                         local _bxi = InstrBuilder(; func_name="compile_invoke", strict=false)
-                        struct_new!(_bxi, box_type_idx_inv, WasmValType[])
+                        emit_classid_box!(_bxi, ctx, actual_wasm, nothing)
                         extern_convert_any!(_bxi)
                         append!(bytes, builder_code(_bxi))
                         extern_convert_emitted = true

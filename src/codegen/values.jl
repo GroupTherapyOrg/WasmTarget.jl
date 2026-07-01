@@ -454,9 +454,12 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 # Single-source classId box/unbox/discriminate (Loop B funnel — dev/LOOP_B_DESIGN.md).
 # dart2wasm's convertType boxing: a dynamic value is a {classId:i32@0, value@1} struct
 # subtyping the Top struct ($JlBase); type-tests read classId off the box. These are the
-# ONE producer + ONE consumer that ALL boxing/discrimination routes through (replacing the
-# ~41 scattered emit_box_type_id!+struct_new sites + the inlined isa copies). Added DORMANT
-# in F-i (byte-identical); wired via convert_type!'s box/unbox arms + the isa sites in F-ii.
+# ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41
+# scattered emit_box_type_id!+struct_new ladders (flow/conditionals/statements return boxes,
+# stackified phi-edge boxes, calls/invoke arg+ret boxes, tuple-field boxes) have ALL been
+# collapsed onto this producer; emit_box_type_id! survives only as this producer's private
+# wasm-rep classId fallback (values.jl below). Added DORMANT in F-i (byte-identical); wired via
+# convert_type!'s box/unbox arms + the isa sites in F-ii; the site sweep finished in Loop C.
 # ============================================================================
 
 """

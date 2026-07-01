@@ -916,12 +916,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
                                             if !_pvb2_boxed && !_pvb2_is_ref_null
-                                                # PURE-9028: Push correct DFS typeId as field 0
-                                                _tid2 = UInt8[]; emit_box_type_id!(_tid2, ctx.type_registry, edge_val_type)
-                                                emit_raw!(b, _tid2; pushes=WasmValType[I32])
+                                                # Box the numeric phi edge → externref via THE single box emitter.
                                                 emit_raw!(b, _pvb2; pushes=WasmValType[edge_val_type])
-                                                _box_t2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                                struct_new!(b, _box_t2, WasmValType[])
+                                                emit_classid_box!(b, ctx, edge_val_type, nothing)
                                                 extern_convert_any!(b)
                                             else
                                                 emit_raw!(b, _pvb2; pushes=WasmValType[ExternRef])
@@ -1290,12 +1287,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             # PURE-602: compile_phi_value may return ref.null extern for nothing values
                                             _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
                                             if !_pvb3_boxed && !_pvb3_is_ref_null
-                                                # PURE-9028: Push correct DFS typeId as field 0
-                                                _tid3 = UInt8[]; emit_box_type_id!(_tid3, ctx.type_registry, edge_val_type)
-                                                emit_raw!(bb, _tid3; pushes=WasmValType[I32])
+                                                # Box the numeric phi edge → externref via THE single box emitter.
                                                 emit_raw!(bb, _pvb3; pushes=WasmValType[edge_val_type])
-                                                _box_t3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
-                                                struct_new!(bb, _box_t3, WasmValType[])
+                                                emit_classid_box!(bb, ctx, edge_val_type, nothing)
                                                 extern_convert_any!(bb)
                                             else
                                                 emit_raw!(bb, _pvb3; pushes=WasmValType[ExternRef])

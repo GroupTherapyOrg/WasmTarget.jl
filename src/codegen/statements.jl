@@ -2337,23 +2337,13 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     elseif actual_field_wasm === ArrayRef
                         ref_null!(b, ArrayRef)
                     elseif actual_field_wasm === AnyRef
-                        # Box numeric local → struct_new for anyref field
-                        _btid = UInt8[]
-                        emit_box_type_id!(_btid, ctx.type_registry, src_type)
-                        emit_raw!(b, _btid)
-                        emit_raw!(b, field_bytes)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
-                        struct_new!(b, _box_t, WasmValType[])
+                        # Box numeric local for anyref field via THE single box emitter.
+                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        emit_classid_box!(b, ctx, src_type, nothing)
                     elseif actual_field_wasm === ExternRef
-                        # PURE-6024: Box numeric local → struct_new → extern_convert_any
-                        # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
-                        # PURE-9028: Push correct DFS typeId before the numeric value for box struct
-                        _btid = UInt8[]
-                        emit_box_type_id!(_btid, ctx.type_registry, src_type)
-                        emit_raw!(b, _btid)
-                        emit_raw!(b, field_bytes)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
-                        struct_new!(b, _box_t, WasmValType[])
+                        # PURE-6024: Box numeric local → box struct → extern_convert_any via the one emitter.
+                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        emit_classid_box!(b, ctx, src_type, nothing)
                         extern_convert_any!(b)
                     else
                         ref_null!(b, StructRef)

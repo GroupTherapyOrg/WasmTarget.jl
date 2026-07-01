@@ -1655,19 +1655,9 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         from === to && return
         if to === AnyRef || to === EqRef
             if from === I32 || from === I64 || from === F32 || from === F64
-                # Box numerics into a {typeId, value} numeric box — the canonical
-                # Any-int/float representation WT consumers unbox via struct.get
-                # (matches calls.jl:6606). (ref.i31 is the WRONG rep here: the
-                # consumer does `ref.cast (ref $box); struct.get $box 1`.)
-                bx = get_numeric_box_type!(ctx.mod, ctx.type_registry, from)
-                sc = length(ctx.locals) + ctx.n_params; push!(ctx.locals, from)
-                local_set!(cb, sc)
-                let tb = UInt8[]
-                    emit_box_type_id!(tb, ctx.type_registry, from)   # typeId field 0
-                    emit_raw!(cb, tb; pushes=WasmValType[I32])
-                end
-                local_get!(cb, sc)
-                struct_new!(cb, bx, WasmValType[])
+                # Box numerics into the canonical {classId, value} box via THE single emitter —
+                # the Any-int/float rep WT consumers unbox via `ref.cast (ref $box); struct.get 1`.
+                emit_classid_box!(cb, ctx, from, nothing)
             elseif from === ExternRef
                 any_convert_extern!(cb)
             end  # ConcreteRef/StructRef already anyref-compatible
@@ -3486,13 +3476,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                     if is_numeric_arg
                         if is_numeric_local && expected_wasm === AnyRef && numeric_src_type !== nothing
-                            # TRUE-PARSE-002: Box numeric local → struct_new for anyref field
-                            # (same pattern as compile_new in statements.jl)
-                            local _btid = UInt8[]; emit_box_type_id!(_btid, ctx.type_registry, numeric_src_type)
-                            emit_raw!(_tupb, _btid; pushes=WasmValType[I32])
-                            emit_raw!(_tupb, arg_bytes; pushes=(numeric_src_type === nothing ? WasmValType[] : WasmValType[numeric_src_type]))
-                            _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, numeric_src_type)
-                            struct_new!(_tupb, _box_t, WasmValType[])
+                            # TRUE-PARSE-002: Box numeric local for anyref tuple field via THE single box emitter.
+                            emit_raw!(_tupb, arg_bytes; pushes=WasmValType[numeric_src_type])
+                            emit_classid_box!(_tupb, ctx, numeric_src_type, nothing)
                         elseif expected_wasm isa ConcreteRef
                             ref_null!(_tupb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                         else
@@ -6202,39 +6188,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             any_convert_extern!(_bb)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                            # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
-                            # struct_new produces a GC ref which is a subtype of anyref
-                            local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
-                            # Save value, push typeId, restore value, then struct_new
-                            local _box_scratch_any = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, actual_wasm)
+                            # PURE-9022: Numeric value (on the stack) to anyref via THE single box emitter.
                             local _bb = InstrBuilder(; func_name="compile_call", strict=false)
-                            local_set!(_bb, _box_scratch_any)
-                            # PURE-9028: Push correct DFS typeId as field 0
-                            let tb = UInt8[]
-                                emit_box_type_id!(tb, ctx.type_registry, actual_wasm)
-                                emit_raw!(_bb, tb; pushes=WasmValType[I32])
-                            end
-                            local_get!(_bb, _box_scratch_any)
-                            struct_new!(_bb, box_type_idx_any, WasmValType[])
+                            emit_classid_box!(_bb, ctx, actual_wasm, nothing)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                            # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
-                            # This happens when a function expects Any (externref) but the actual value is numeric
-                            # (e.g., Int64 → externref for cross-function calls with abstract signatures).
-                            local box_type_idx_arg = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
-                            # Save value, push typeId, restore value, then struct_new
-                            local _box_scratch_ext = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, actual_wasm)
+                            # PURE-6025: Numeric value to externref — box via the one emitter, then extern.convert_any.
                             local _bb = InstrBuilder(; func_name="compile_call", strict=false)
-                            local_set!(_bb, _box_scratch_ext)
-                            # PURE-9028: Push correct DFS typeId as field 0
-                            let tb = UInt8[]
-                                emit_box_type_id!(tb, ctx.type_registry, actual_wasm)
-                                emit_raw!(_bb, tb; pushes=WasmValType[I32])
-                            end
-                            local_get!(_bb, _box_scratch_ext)
-                            struct_new!(_bb, box_type_idx_arg, WasmValType[])
+                            emit_classid_box!(_bb, ctx, actual_wasm, nothing)
                             extern_convert_any!(_bb)
                             append!(bytes, builder_code(_bb))
                         elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
@@ -6317,20 +6278,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # 1f6e77980994: callee returns a numeric but the SSA local is a
                             # ref class (dynamic Any-typed call site, e.g. getindex on a bond
                             # Vector resolving to an i32-returning overload) — box the RESULT
-                            # exactly like the PURE-9022 arg path ('expected anyref, found i32').
-                            local box_type_idx_ret = get_numeric_box_type!(ctx.mod, ctx.type_registry, ret_wasm)
-                            local _box_scratch_ret = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, ret_wasm)
-                            local_set!(_xcb, _box_scratch_ret)
-                            let tb = UInt8[]
-                                emit_box_type_id!(tb, ctx.type_registry, ret_wasm)
-                                emit_raw!(_xcb, tb; pushes=WasmValType[I32])
-                            end
-                            local_get!(_xcb, _box_scratch_ret)
-                            struct_new!(_xcb, box_type_idx_ret, WasmValType[])
-                            if target_local_type === StructRef
-                                # box struct is already a structref subtype — no cast needed
-                            end
+                            # (on the stack) exactly like the PURE-9022 arg path via the one emitter.
+                            # The box struct is already a structref subtype — no cast needed for StructRef.
+                            emit_classid_box!(_xcb, ctx, ret_wasm, nothing)
                         end
                     end
                 end

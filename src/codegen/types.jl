@@ -374,7 +374,10 @@ end
 
 PURE-9028: Emit `i32.const <typeId>` for a boxed primitive value.
 Maps WasmValType → default Julia type → DFS typeId.
-Used at boxing sites where only the Wasm type is known.
+INTERNAL: the sole caller is now `emit_classid_box!`'s `julia_type === nothing` fallback (the
+site sweep routed every former direct caller through that one producer). Because it maps to the
+*default* Julia type per width (every i64→Int64), it only distinguishes by width — a box that
+carries the value's real classId must pass `julia_type` to `emit_classid_box!` instead.
 """
 function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
     julia_type = if wasm_type === I32
