@@ -235,13 +235,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
             elseif func_ret_wasm === AnyRef && is_numeric_val
-                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float} return type).
-                # Push typeId, push value, struct.new BoxedXxx → anyref.
-                local _ret_box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                _bb = UInt8[]; emit_box_type_id!(_bb, ctx.type_registry, val_wasm)
-                emit_raw!(b, _bb; pushes=WasmValType[I32])
-                emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
-                struct_new!(b, _ret_box_idx, WasmValType[])
+                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float}) via THE single
+                # box emitter (was a copy-pasted return box, same as flow.jl/conditionals.jl).
+                emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                emit_classid_box!(b, ctx, val_wasm, nothing)
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
