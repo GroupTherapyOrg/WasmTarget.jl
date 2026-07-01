@@ -100,7 +100,11 @@ Per-phase protocol, every loop, no exceptions:
 - **M0 — ENFORCEMENT HARNESS** *(this session)*: this doc + `test/parity_ratchet.jl` +
   `dev/parity_baseline.json` + runtests wiring + supersession banners + task/memory rewrite.
 
-- **M1 — ONE LOWERING (kill the live miscompiler first)**. dart shape: ONE structured lowering
+- **✅ M1 — ONE LOWERING: COMPLETE (2026-07-01, commits 5ec731a·5c5e67d·044afdc, L3 LOCKED,
+  certified by the FULL capped gate: 10 shards 2,681/2,681 + fuzz 293/293).** All 8 legacy
+  strategy names deleted (−4,850 lines; conditionals.jl 3,156→15, flow.jl 2,306→593);
+  generate_structured = try/catch | single-block | THE stackifier — dart's exact shape.
+  Original plan for reference:. dart shape: ONE structured lowering
   per function body (one CodeGenerator, no alternative strategy). WT: route ALL control flow
   through the stackifier (`generate_stackified_flow`, the correct path) by collapsing the
   5-clause routing heuristic (`stackified.jl:43-50`); then DELETE the legacy family —
