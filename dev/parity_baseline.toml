@@ -1,6 +1,7 @@
 # dev/parity_baseline.toml — enforced by test/parity_ratchet.jl.
 # RATCHET: counts may only DECREASE. LOCKS: must match exactly.
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
+
 [locks]
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0

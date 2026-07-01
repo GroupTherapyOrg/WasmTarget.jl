@@ -18,7 +18,9 @@
 # ============================================================================
 module ParityRatchet
 
-using TOML
+# NO deps (not even stdlib TOML — the test env doesn't declare it; a `using TOML` here
+# LoadError'd shard 0 inside Pkg.test). The baseline is a flat TOML-shaped file of
+# `[section]` + `key = int` lines; the two 10-line helpers below read/write exactly that.
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 const SRC = joinpath(ROOT, "src")
@@ -26,6 +28,38 @@ const CODEGEN = joinpath(SRC, "codegen")
 const BASELINE_PATH = joinpath(ROOT, "dev", "parity_baseline.toml")
 
 _iscomment(line::AbstractString) = startswith(lstrip(line), "#")
+
+# Minimal reader for the baseline's `[section]` / `key = int` shape (TOML-compatible subset).
+function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
+    out = Dict{String,Dict{String,Int}}()
+    isfile(path) || return out
+    section = ""
+    for line in eachline(path)
+        s = strip(line)
+        (isempty(s) || startswith(s, "#")) && continue
+        if (m = match(r"^\[(\w+)\]$", s)) !== nothing
+            section = m.captures[1]
+            out[section] = get(out, section, Dict{String,Int}())
+        elseif (m = match(r"^(\w+)\s*=\s*(\d+)$", s)) !== nothing && !isempty(section)
+            out[section][m.captures[1]] = parse(Int, m.captures[2])
+        end
+    end
+    return out
+end
+
+function _write_baseline(path::String, metrics::Dict{String,Int}, locks::Dict{String,Int})
+    open(path, "w") do io
+        println(io, "# dev/parity_baseline.toml — enforced by test/parity_ratchet.jl.")
+        println(io, "# RATCHET: counts may only DECREASE. LOCKS: must match exactly.")
+        println(io, "# Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl")
+        for (name, d) in (("locks", locks), ("metrics", metrics))
+            println(io, "\n[", name, "]")
+            for k in sort!(collect(keys(d)))
+                println(io, k, " = ", d[k])
+            end
+        end
+    end
+end
 
 """
 Count non-comment lines in `.jl` files under `roots` matching `rx`, skipping files whose
@@ -107,9 +141,9 @@ const LOCKS = [
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
-    baseline = isfile(BASELINE_PATH) ? TOML.parsefile(BASELINE_PATH) : Dict{String,Any}()
-    bm = get(baseline, "metrics", Dict{String,Any}())
-    bl = get(baseline, "locks", Dict{String,Any}())
+    baseline = _read_baseline(BASELINE_PATH)
+    bm = get(baseline, "metrics", Dict{String,Int}())
+    bl = get(baseline, "locks", Dict{String,Int}())
 
     ok = true
     current_m = Dict{String,Int}()
@@ -139,12 +173,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
         if !ok
             println("refusing WT_RATCHET_UPDATE: a ratchet/lock is BROKEN (ratchets never loosen).")
         else
-            open(BASELINE_PATH, "w") do io
-                println(io, "# dev/parity_baseline.toml — enforced by test/parity_ratchet.jl.")
-                println(io, "# RATCHET: counts may only DECREASE. LOCKS: must match exactly.")
-                println(io, "# Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl")
-                TOML.print(io, Dict("metrics" => current_m, "locks" => current_l); sorted=true)
-            end
+            _write_baseline(BASELINE_PATH, current_m, current_l)
             println("baseline tightened → ", BASELINE_PATH)
         end
     end
