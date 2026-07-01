@@ -436,7 +436,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             end
                         end
                         if src_julia_type isa Union && needs_tagged_union(src_julia_type)
-                            emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
+                            emit_value!(b, stmt.val, ctx)
                             emit_raw!(b, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ);
                                       pops=1, pushes=(pi_local_type === nothing ? WasmValType[] : WasmValType[pi_local_type]))
                         elseif pi_local_type isa ConcreteRef

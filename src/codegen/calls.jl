@@ -1687,12 +1687,12 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     for (j, arg) in enumerate(args)
         if j == dpos
             cur = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
-            emit_raw!(bld, compile_value(arg, ctx); pushes=(cur === nothing ? WasmValType[] : WasmValType[cur]))
+            emit_value!(bld, arg, ctx)
             cur === ExternRef && any_convert_extern!(bld)
             aw = AnyRef
         else
             aw = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
-            emit_raw!(bld, compile_value(arg, ctx); pushes=(aw === nothing ? WasmValType[] : WasmValType[aw]))
+            emit_value!(bld, arg, ctx)
         end
         l = length(ctx.locals) + ctx.n_params; push!(ctx.locals, aw)
         local_set!(bld, l)

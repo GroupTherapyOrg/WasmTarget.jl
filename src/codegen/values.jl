@@ -568,7 +568,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
     elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
         unreachable!(b)
     else
-        emit_raw!(b, compile_value(val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
+        emit_value!(b, val, ctx)
         convert_type!(b, val_wasm_type, func_ret_wasm, ctx)
         return_!(b)
     end
