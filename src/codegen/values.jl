@@ -676,6 +676,28 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Uni
     return ty
 end
 
+"""
+    emit_value!(b, val, ctx, expected; from_julia=nothing) -> WasmValType
+
+THE wrap chokepoint (dart `CodeGenerator.wrap`, code_generator.dart:879-888): emit `val`, take
+the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
+`convert_type!` funnel (dart `convertType`), and return `expected`. This is the M2 primitive
+that replaces the `emit_raw!(b, compile_value(v,ctx); pushes=[re-guess])` + hand-rolled
+coercion-ladder anti-pattern — the type is never re-derived after emission.
+
+`from_julia` (when the caller knows the value's Julia type) lets the boxing arm stamp the REAL
+classId. A `nothing` actual type means the emit produced no single result (dead/unreachable
+path — the `unreachable` is already emitted); `expected` is returned so the declared stack
+shape stays consistent, matching dart's posture that unreachable code still validates.
+"""
+function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
+                     expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
+    ty = emit_value!(b, val, ctx)
+    ty === nothing && return expected
+    ty === expected || convert_type!(b, ty, expected, ctx; from_julia=from_julia)
+    return expected
+end
+
 function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
