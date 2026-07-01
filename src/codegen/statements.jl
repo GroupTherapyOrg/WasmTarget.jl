@@ -2180,58 +2180,14 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
             else
-                # Legacy ExternRef path
-                val_bytes = compile_value(val, ctx)
-                is_numeric_local = false
-                ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(val, ctx))
-                if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc
-                    is_numeric_local = true
-                elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                    src_idx = 0; shift = 0; leb_end = 0
-                    for bi in 2:length(val_bytes)
-                        byt = val_bytes[bi]
-                        src_idx |= (Int(byt & 0x7f) << shift)
-                        shift += 7
-                        if (byt & 0x80) == 0
-                            leb_end = bi
-                            break
-                        end
-                    end
-                    if leb_end == length(val_bytes)
-                        # dart2wasm carries the type with the value: a pure local.get is
-                        # numeric iff the inferred value type is not a ref.
-                        local src_type = infer_value_wasm_type(val, ctx)
-                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                            is_numeric_local = true
-                        end
-                    end
-                end
-                if is_numeric_local
-                    ref_null!(b, ExternRef)
-                else
-                    emit_raw!(b, val_bytes)
-                    is_already_externref = false
-                    if length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                        src_idx2 = 0; shift2 = 0; leb_end2 = 0
-                        for bi in 2:length(val_bytes)
-                            byt = val_bytes[bi]
-                            src_idx2 |= (Int(byt & 0x7f) << shift2)
-                            shift2 += 7
-                            if (byt & 0x80) == 0
-                                leb_end2 = bi
-                                break
-                            end
-                        end
-                        if leb_end2 == length(val_bytes)
-                            # dart2wasm carries the type with the value: a pure local.get is
-                            # already externref iff the inferred value type is externref.
-                            is_already_externref = (infer_value_wasm_type(val, ctx) === ExternRef)
-                        end
-                    end
-                    if !is_already_externref
-                        extern_convert_any!(b)
-                    end
-                end
+                # Legacy ExternRef path — THE wrap chokepoint: emit typed, coerce to externref
+                # through the ONE funnel (numeric → classId box → extern_convert_any; GC ref →
+                # extern_convert_any; already-externref → no-op). Replaces 50 lines of
+                # first-byte scans (0x41/0x42 const, 0x20 local.get + LEB decode) + 3
+                # infer_value_wasm_type re-guesses + a ref.null-extern SILENT VALUE DROP for
+                # numerics (now boxed properly — dart convertType) + a latent double
+                # extern-convert on compound externref expressions.
+                emit_value!(b, val, ctx, ExternRef)
             end
         else
             # Regular field - compile value directly
