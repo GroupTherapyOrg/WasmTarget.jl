@@ -47,6 +47,11 @@ bytes; element index == byte offset only for elsize 1).
 # (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)
     vt = infer_value_type(vec, ctx)
+    # parity(M9): a String/Symbol backing is the classed struct — the funnel reads .data
+    if vt === String || vt === Symbol
+        emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
+        return b
+    end
     emit_value!(b, vec, ctx)
     is_mem = vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory ||
                                  vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
@@ -2582,7 +2587,9 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # The string argument is at args[6]
             if length(expr.args) >= 6
                 str_arg = expr.args[6]
-                emit_value!(b, str_arg, ctx)
+                # parity(M9): the classed string → its DATA array (the funnel adjusts)
+                emit_value!(b, str_arg, ctx,
+                            ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             end
 
             return builder_code(b)
@@ -2602,6 +2609,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 i32_const!(b, 0)
             end
             array_new_default!(b, str_arr_type)
+            emit_string_wrap!(b, ctx)   # parity(M9): a String is classed from birth
             return builder_code(b)
         elseif name === :jl_string_ptr
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
@@ -2731,7 +2739,9 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # For ASCII/UTF-8 source code, the codepoint values equal the byte values.
             if length(expr.args) >= 6
                 str_arg = expr.args[6]
-                emit_value!(b, str_arg, ctx)
+                # parity(M9): the classed string → its DATA array (the funnel adjusts)
+                emit_value!(b, str_arg, ctx,
+                            ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             end
             return builder_code(b)
         elseif name === :jl_genericmemory_to_string
@@ -2770,12 +2780,14 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 local_get!(b, len_local)  # count
                 array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
 
-                # Return the new array
+                # parity(M9): publish as the CLASSED string
                 local_get!(b, dest_local)
+                emit_string_wrap!(b, ctx)
             elseif length(expr.args) >= 6
-                # Fallback: no length arg, just pass through
+                # Fallback: no length arg — wrap the passed-through memory as a string
                 mem_arg = expr.args[6]
                 emit_value!(b, mem_arg, ctx)
+                emit_string_wrap!(b, ctx)
             end
             return builder_code(b)
         elseif name === :jl_pchar_to_string
@@ -2809,13 +2821,15 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                     # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
                     i32_const!(b, 0)  # dest offset
-                    emit_value!(b, data_ssa, ctx)  # src array
+                    # parity(M9): the traced source may be a CLASSED string — funnel to DATA
+                    emit_value!(b, data_ssa, ctx, ConcreteRef(UInt32(str_arr_type), true))  # src array
                     i32_const!(b, 0)  # src offset
                     local_get!(b, len_local)  # count
                     array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
 
-                    # Return the new array
+                    # parity(M9): publish as the CLASSED string
                     local_get!(b, dest_local)
+                    emit_string_wrap!(b, ctx)
                     return builder_code(b)
                 end
                 # Fallback: the pointer might be directly compilable as a ref
@@ -2915,7 +2929,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(ctx.locals, I32)
 
             # Store string ref
-            emit_value!(b, str_ssa, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
+            emit_value!(b, str_ssa, ctx, ConcreteRef(UInt32(str_arr_type), true))   # parity(M9): funnel → DATA array
             local_set!(b, str_local)
 
             # Store start_ptr (the ptr argument to memchr = 1-based position)
@@ -3248,7 +3262,8 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # Get or create the string hash helper function
             hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
             # Push args: string array ref, length (i64), seed (i32)
-            emit_value!(b, str_arg, ctx)  # string array ref
+            emit_value!(b, str_arg, ctx,
+                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
             if length(expr.args) >= 7
                 len_arg = expr.args[7]
                 emit_value!(b, len_arg, ctx)  # length as i64

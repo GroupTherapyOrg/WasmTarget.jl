@@ -1,3 +1,11 @@
+# parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
+# their DATA array (op contract: these positions are strings; no type re-query).
+function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
+    haskey(ENV, "WT_DBG_STRARG") && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
+    emit_value!(b, arg, ctx, ConcreteRef(UInt32(str_type_idx), true))
+    return b
+end
+
 """
 Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h + char[i].
 """
@@ -25,7 +33,7 @@ function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store string reference
-    emit_value!(b, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, str_local)
 
     # Get length
@@ -125,13 +133,13 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -298,13 +306,13 @@ function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -453,13 +461,13 @@ function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store prefix
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, prefix_local)
     array_len!(b)
     local_set!(b, prefix_len_local)
@@ -558,13 +566,13 @@ function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store suffix
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, suffix_local)
     array_len!(b)
     local_set!(b, suffix_len_local)
@@ -666,7 +674,7 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -727,6 +735,7 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -764,7 +773,7 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -836,6 +845,7 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -867,7 +877,7 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -928,6 +938,7 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -959,7 +970,7 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1027,6 +1038,7 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -1058,7 +1070,7 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1126,6 +1138,7 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -1163,7 +1176,7 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_tee!(b, len_local)
@@ -1324,6 +1337,7 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
 
     end_block!(b)  # end else (not all whitespace)
     end_block!(b)  # end else (not empty)
+    emit_string_wrap!(b, ctx)   # parity(M9): the result is a CLASSED string
 
     return builder_code(b)
 end
@@ -2803,6 +2817,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Compile index arg and convert to 0-based
                 bchr = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
                 idx_type = infer_value_type(args[2], ctx)
+                # parity(M9): the pre-pushed string is the CLASSED struct sitting UNDER
+                # the index — save idx, read .data, reload idx.
+                _sc_idx = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, idx_type === Int64 || idx_type === Int ? I64 : I32)
+                builder_set_local_type!(bchr, _sc_idx, idx_type === Int64 || idx_type === Int ? I64 : I32)
+                local_set!(bchr, _sc_idx)
+                _ssi = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                ref_cast!(bchr, Int64(_ssi), false)
+                struct_get!(bchr, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(str_type_idx), true))
+                local_get!(bchr, _sc_idx)
                 if idx_type === Int64 || idx_type === Int
                     # Convert Int64 to Int32 and subtract 1
                     num!(bchr, Opcode.I32_WRAP_I64)
@@ -2931,8 +2955,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Clear bytes - recompile in correct order
                 bss = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
 
-                # Store source string
-                emit_value!(bss, args[1], ctx)
+                # Store source string DATA (parity M9: the funnel unwraps the class)
+                emit_value!(bss, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 local_set!(bss, src_local)
 
                 # Create new string of specified length
@@ -2969,8 +2993,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                 array_copy!(bss, str_type_idx, str_type_idx)
 
-                # Return result
+                # Return result — published as the CLASSED string (parity M9)
                 local_get!(bss, result_local)
+                emit_string_wrap!(bss, ctx)
                 return builder_code(bss)
 
             # WasmTarget string operations - str_hash(s) -> Int32
@@ -4026,7 +4051,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
                 if str_arg !== nothing
                     hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-                    emit_value!(bhb, str_arg, ctx)  # string array ref
+                    emit_value!(bhb, str_arg, ctx,
+                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
                     # len arg
                     if length(expr.args) >= 4
                         emit_value!(bhb, expr.args[4], ctx)  # length i64

@@ -850,6 +850,16 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
     str_type_idx = get_string_array_type!(mod, type_registry)
     # parity(M9): params are the CLASSED string — every string push reads through
     # to the DATA array (dart: methods read the class's array field).
+    # parity(M9): string-returning bodies publish the CLASSED string. The caller-visible
+    # result type is $JlString; the array is saved through a dedicated extra local.
+    function _wrap_result_str!(bb, scratch_idx)
+        builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
+        local_set!(bb, scratch_idx)
+        i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
+        local_get!(bb, scratch_idx)
+        struct_new!(bb, get_string_struct_type!(mod, type_registry),
+                    WasmValType[I32, ConcreteRef(UInt32(str_type_idx), true)])
+    end
     _str0!(bb) = (local_get!(bb, 0);
                   struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
                               ConcreteRef(UInt32(str_type_idx), true)))
@@ -1156,6 +1166,8 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Create new string array of given length
         local_get!(b, 0)  # length
         array_new_default!(b, str_type_idx)
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
+        _wrap_result_str!(b, 1 + length(extra_locals) - 1)   # 1 param
         end_block!(b)
         return (builder_code(b), extra_locals)
 
@@ -1178,42 +1190,54 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Concatenate two UTF-8 byte arrays into a new array
         # local 0 = a (array ref), local 1 = b (array ref)
         # extra locals: local 2 = len_a, local 3 = result (array ref)
-        push!(extra_locals, I32)  # local 2: len_a
+        # parity(M9): params are CLASSED strings — unwrap once into array locals
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
+        _a_data = 2 + length(extra_locals) - 2
+        _b_data = 2 + length(extra_locals) - 1
+        _str0!(b); local_set!(b, _a_data)
+        local_get!(b, 1)
+        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+                    ConcreteRef(UInt32(str_type_idx), true))
+        local_set!(b, _b_data)
+        push!(extra_locals, I32)  # len_a
         str_ref_type = ConcreteRef(str_type_idx, true)
         push!(extra_locals, str_ref_type)  # local 3: result array ref
 
         # len_a = array.len(a)
-        local_get!(b, 0)  # a
+        local_get!(b, _a_data)  # a data
         array_len!(b)
-        local_set!(b, 2)  # len_a
+        local_set!(b, 4)  # len_a
 
         # result = array.new_default(len_a + array.len(b))
-        local_get!(b, 2)  # len_a
-        local_get!(b, 1)  # b
+        local_get!(b, 4)  # len_a
+        local_get!(b, _b_data)  # b data
         array_len!(b)
         num!(b, Opcode.I32_ADD)
         array_new_default!(b, str_type_idx)
-        local_set!(b, 3)  # result
+        local_set!(b, 5)  # result
 
         # array.copy(result, 0, a, 0, len_a)
-        local_get!(b, 3)  # dst: result
+        local_get!(b, 5)  # dst: result
         i32_const!(b, 0)  # dst_offset: 0
-        local_get!(b, 0)  # src: a
+        local_get!(b, _a_data)  # src: a data
         i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 2)  # len: len_a
+        local_get!(b, 4)  # len: len_a
         array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # array.copy(result, len_a, b, 0, array.len(b))
-        local_get!(b, 3)  # dst: result
-        local_get!(b, 2)  # dst_offset: len_a
-        local_get!(b, 1)  # src: b
+        local_get!(b, 5)  # dst: result
+        local_get!(b, 4)  # dst_offset: len_a
+        local_get!(b, _b_data)  # src: b data
         i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 1)  # b
+        local_get!(b, _b_data)  # b data
         array_len!(b)  # len: array.len(b)
         array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # return result
-        local_get!(b, 3)  # result
+        local_get!(b, 5)  # result
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
+        _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
         end_block!(b)
         return (builder_code(b), extra_locals)
 
