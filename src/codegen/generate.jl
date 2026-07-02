@@ -640,7 +640,7 @@ end
 
 """
 Check if there's a conditional BEFORE the first loop that jumps PAST the first loop.
-This pattern requires special handling (generate_complex_flow instead of generate_loop_code).
+This pattern requires special handling (the stackifier instead of generate_loop_code).
 Example: if/else where each branch has its own loop (like float_to_string).
 """
 function has_branch_past_first_loop(ctx::AbstractCompilationContext, code)
@@ -1686,7 +1686,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
     if isempty(regions)
         # No try regions, fall back to normal generation
-        return generate_complex_flow(ctx, blocks, code)
+        return generate_stackified_flow(ctx, blocks, code)
     end
 
     # Ensure module has an exception tag for Julia exceptions

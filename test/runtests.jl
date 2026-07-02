@@ -162,6 +162,17 @@ _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
 _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
 # Loop C value channel: general numeric value-type propagation (Any-but-really-i64) (dormant).
 _wt_shard0() && include("value_channel_propagate.jl")
+# parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
+_wt_shard0() && include("m1_void_backfills.jl")
+# PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
+# completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
+if _wt_shard0()
+    ENV["WT_RATCHET_INCLUDED"] = "1"
+    include("parity_ratchet.jl")
+    @testset "parity ratchet (dev/PARITY_MASTER.md)" begin
+        @test ParityRatchet.run()
+    end
+end
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
