@@ -113,9 +113,16 @@ _xf(name, cases) = push!(XFAIL, name => cases)
 # SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
 # mutates the real one (two copies). Fix = dart Context structs (closures.dart:970): the
 # parent materializes ONE shared cell; no scalar replacement across an escaping closure.
-_xf("F3_mutable_capture", Any[
+# parity(M10a) PROMOTED: the scalar-replaced accumulator cycle computes correctly — the
+# numeric join is the variable's REAL type for EVERY consumer (dart
+# translateTypeOfLocalVariable), so the dynamic-+ default-zero arm never fires.
+_g("mutable_capture", Any[
+    ("mutate_capture_typed", (n::Int64) -> ((s = 0; foreach(i -> (s += i), 1:n); s)::Int64), Int64(5)),
+])
+# The un-annotated variant returns Any (a classId box) — computes correctly in-wasm; the
+# JS harness can't unmarshal the boxed export (host-boundary limitation, not codegen).
+_xf("any_return_boundary", Any[
     ("mutate_capture", (n::Int64) -> (s = 0; foreach(i -> (s += i), 1:n); s), Int64(5)),
-    ("mutate_capture_typed", (n::Int64) -> (s = 0; foreach(i -> (s += i), 1:n); s)::Int64, Int64(5)),
 ])
 # Strings lack the $JlBase classId header (bare array<i32> refs), so abstract isa on a
 # heterogeneous element can't range-check them — pre-existing rep gap (strings dimension),

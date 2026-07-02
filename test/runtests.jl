@@ -132,6 +132,7 @@ using Dates: Dates, @dateformat_str
 _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
+_wt_shard0() && include("m10_contexts.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures

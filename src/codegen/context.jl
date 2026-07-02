@@ -704,6 +704,13 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     catch
         Dict{Int,Type}()
     end
+    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
+    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
+    # type-safe-default ZERO (the mutable-capture silent 0).
+    for (_jk, _jv) in _numeric_joins
+        ctx.ssa_types[_jk] = _jv
+    end
 
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
@@ -931,6 +938,13 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         _joins
     catch
         Dict{Int,Type}()
+    end
+    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
+    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
+    # type-safe-default ZERO (the mutable-capture silent 0).
+    for (_jk, _jv) in _numeric_joins
+        ctx.ssa_types[_jk] = _jv
     end
 
     # Count uses of each SSA value
