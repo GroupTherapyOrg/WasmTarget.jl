@@ -525,6 +525,49 @@ function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeReg
 end
 
 """
+    emit_string_wrap!(b, mod, registry)
+
+parity(M9) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
+byte array on the stack, wrap it as `\$JlString{classId(String), data}`. The ONE
+place a string value is born; every string producer routes here.
+"""
+function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                           scratch::Integer)
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
+    local_set!(b, scratch)
+    i32_const!(b, Int64(ensure_type_id!(registry, String)))
+    local_get!(b, scratch)
+    struct_new!(b, struct_idx, WasmValType[I32, ConcreteRef(arr_idx, true)])
+    return b
+end
+
+"""ctx convenience: allocates the scratch local itself."""
+function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext)
+    arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    sc = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, ConcreteRef(arr_idx, true))
+    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc)
+end
+
+"""
+    emit_string_data!(b, mod, registry; from_anyref=false)
+
+parity(M9) — the classed string CONSUMER: with a string value on the stack
+(`\$JlString` or anyref), read its `data` byte array. String OPS call this once at
+entry and work on the array — dart's methods read the class's array field the same way.
+"""
+function emit_string_data!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
+                           from_anyref::Bool=false)
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    from_anyref && ref_cast!(b, Int64(struct_idx), false)
+    struct_get!(b, UInt32(struct_idx), UInt32(1), ConcreteRef(arr_idx, true))
+    return b
+end
+
+"""
     emit_classid_range_check!(b, low, high)
 
 dart's `emitClassIdRangeCheck` (code_generator.dart:3847-3884), THE single abstract-type
