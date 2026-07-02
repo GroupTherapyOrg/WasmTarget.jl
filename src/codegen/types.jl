@@ -364,7 +364,7 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
     # (e.g., types appearing only in isa checks or struct constants) still get unique
     # typeIds that match between struct construction and isa dispatch.
     id = ensure_type_id!(registry, T)
-    b = InstrBuilder(; func_name="emit_type_id!", strict=false)
+    b = InstrBuilder(; func_name="emit_type_id!")
     i32_const!(b, Int64(id))
     append!(bytes, builder_code(b))
 end
@@ -424,7 +424,7 @@ Assumes the value on top of the stack is a struct ref (or anyref that can be cas
 Result: i32 typeId on the stack.
 """
 function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
-    b = InstrBuilder(; func_name="emit_typeof!", strict=false)
+    b = InstrBuilder(; func_name="emit_typeof!")
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
     # struct.get $JlBase 0 — extract typeId field
@@ -823,7 +823,7 @@ Compile a constant value to WASM bytecode (for global initializers).
 This is a simplified version of compile_value for use in constant expressions.
 """
 function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_const_value", strict=false)
+    b = InstrBuilder(; func_name="compile_const_value")
 
     if val isa Int32
         i32_const!(b, val)
@@ -989,7 +989,7 @@ function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry
 
     # Build the body via the typed InstrBuilder. Locals: params (ref,i64,i32) + extras (i64,i32,i32).
     b = InstrBuilder(WasmValType[ConcreteRef(str_type_idx, true), I64, I32, I64, I32, I32],
-                     results; func_name="get_or_create_string_hash_func!", strict=false)
+                     results; func_name="get_or_create_string_hash_func!")
 
     # FNV-1a offset basis: 14695981039346656037 (0xcbf29ce484222325)
     # FNV-1a prime: 1099511628211 (0x00000100000001b3)
@@ -1134,7 +1134,7 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end
     box_type = get_nothing_box_type!(mod, registry)
     # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
-    b = InstrBuilder(; func_name="get_nothing_global!", strict=false)
+    b = InstrBuilder(; func_name="get_nothing_global!")
     # emit_type_id! mutates a raw buffer (pushes 1 i32) — bridge it.
     tb = UInt8[]
     emit_type_id!(tb, registry, Nothing)
@@ -1176,7 +1176,7 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # Each struct.new_default creates a unique allocation with all fields zeroed.
     # ref.eq compares pointer identity, so different allocations are distinguishable.
     # Fields are populated later by populate_type_constant_globals!
-    b = InstrBuilder(; func_name="get_type_constant_global!", strict=false)
+    b = InstrBuilder(; func_name="get_type_constant_global!")
     struct_new_default!(b, dt_type_idx)
     init_bytes = builder_code(b)
 
@@ -1233,7 +1233,7 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     end
 
     # Create with struct.new_default — fields populated later
-    b = InstrBuilder(; func_name="get_typename_constant_global!", strict=false)
+    b = InstrBuilder(; func_name="get_typename_constant_global!")
     struct_new_default!(b, tn_type_idx)
     init_bytes = builder_code(b)
 
@@ -1281,7 +1281,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = registry.jl_type_idx
     str_arr_idx = get_string_array_type!(mod, registry)
 
-    b = InstrBuilder(; func_name="_populate_jl_hierarchy!", strict=false)
+    b = InstrBuilder(; func_name="_populate_jl_hierarchy!")
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
@@ -1421,7 +1421,7 @@ function _emit_typename_string_field!(body::Vector{UInt8}, tn_global_idx::UInt32
     utf8 = Vector{UInt8}(str)
     n = length(utf8)
 
-    b = InstrBuilder(; func_name="_emit_typename_string_field!", strict=false)
+    b = InstrBuilder(; func_name="_emit_typename_string_field!")
     global_get!(b, tn_global_idx, AnyRef)
 
     if n == 0
@@ -1450,7 +1450,7 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
     svec_info = registry.structs[Core.SimpleVector]
     svec_arr_idx = svec_info.wasm_type_idx
 
-    b = InstrBuilder(; func_name="_populate_legacy_types!", strict=false)
+    b = InstrBuilder(; func_name="_populate_legacy_types!")
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
@@ -1595,7 +1595,7 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 
     # Create the lookup array global initialized with null refs
     # Init expression: i32.const <size>, array.new_default $arr_type
-    b = InstrBuilder(; func_name="create_type_lookup_table!", strict=false)
+    b = InstrBuilder(; func_name="create_type_lookup_table!")
     i32_const!(b, Int64(table_size))
     array_new_default!(b, arr_type_idx)
     init_bytes = builder_code(b)
@@ -1629,7 +1629,7 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
     # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
     table_size = registry.type_lookup_table_size
 
-    b = InstrBuilder(; func_name="populate_type_lookup_table!", strict=false)
+    b = InstrBuilder(; func_name="populate_type_lookup_table!")
 
     # For each concrete type with a DFS ID and a DataType global, populate the table
     for (T, type_id) in registry.type_ids
@@ -1708,7 +1708,7 @@ function emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
     emit_typeof!(bytes, base_idx)
     # Stack: [typeId:i32]
 
-    b = InstrBuilder(; func_name="emit_typeof_struct_with_local!", strict=false)
+    b = InstrBuilder(; func_name="emit_typeof_struct_with_local!")
     # Save typeId to scratch local
     local_set!(b, temp_local)
     # Push type lookup array

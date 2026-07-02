@@ -3,7 +3,7 @@ Generate code using Wasm's structured control flow.
 For simple if-then-else patterns, we use the `if` instruction.
 """
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
-    b = InstrBuilder(; func_name="generate_structured", strict=false)
+    b = InstrBuilder(; func_name="generate_structured")
     code = ctx.code_info.code
     # parity(M1) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): try/catch keeps its EH driver; a single block is plain statement emission;
@@ -230,7 +230,7 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
     # Replaces the ~360-line phi_local_type × edge_val_type elseif-chain (hand-rolled box/
     # extern/cast/widen arms, byte-scans, and the flagged unsigned-LEB REF_CAST_NULL bridge —
     # convert_type!'s ref_cast! emits the spec-correct s33 encoding).
-    lb = InstrBuilder(; func_name="emit_phi_local_set!", strict=false)
+    lb = InstrBuilder(; func_name="emit_phi_local_set!")
     _ret = (x) -> (append!(bytes, builder_code(lb)); x)
     haskey(ctx.phi_locals, phi_ssa_idx) || return _ret(false)
     local_idx = ctx.phi_locals[phi_ssa_idx]

@@ -17,5 +17,5 @@ R1_untyped_compile_value = 35
 R2_emit_raw_bridges = 241
 R3_infer_value_type = 136
 R5_julia_type_reguess = 126
-R6_strict_false_builders = 312
+R6_strict_false_builders = 288
 R7_raw_coercion_ops = 131

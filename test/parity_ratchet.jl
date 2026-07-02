@@ -98,8 +98,8 @@ const METRICS = [
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
                           exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
-    "R6_strict_false_builders" => ("strict=false InstrBuilder surface (M4 → 0, strict default ON)",
-        () -> count_sites(r"strict\s*=\s*false")),
+    "R6_strict_false_builders" => ("explicit InstrBuilder strict opt-outs (M4 → 0; pattern scoped to constructions — comments/strings about compile_function's UNRELATED loud-reject kwarg don't count)",
+        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),

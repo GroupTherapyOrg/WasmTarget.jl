@@ -179,7 +179,7 @@ function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tm
     # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
     # build into a local collect-mode builder and splice the result (no seeding needed; the
     # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
-    ib = InstrBuilder(; func_name="emit_jl_string_to_js", strict=false)
+    ib = InstrBuilder(; func_name="emit_jl_string_to_js")
     call!(ib, helper_idx, WasmValType[], WasmValType[])
     append!(bytes, builder_code(ib))
 end
@@ -200,7 +200,7 @@ function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
     # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
     # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
-    ib = InstrBuilder(; func_name="emit_js_to_jl_string", strict=false)
+    ib = InstrBuilder(; func_name="emit_js_to_jl_string")
     call!(ib, encode_func_idx, WasmValType[], WasmValType[])
     append!(bytes, builder_code(ib))
 end
@@ -417,7 +417,7 @@ function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
         # MIGRATED to InstrBuilder (typed). Const-expr init = (i64.const seed) (end).
         # Byte-identical: i64_const! emits I64_CONST + leb_s(seed); the const-expr END
         # terminator (0x0B) is bridged (no open block in a const expr to balance).
-        ib = InstrBuilder(; func_name="ensure_rng_globals!", strict=false)
+        ib = InstrBuilder(; func_name="ensure_rng_globals!")
         i64_const!(ib, seed)
         emit_raw!(ib, UInt8[Opcode.END])
         init = builder_code(ib)
