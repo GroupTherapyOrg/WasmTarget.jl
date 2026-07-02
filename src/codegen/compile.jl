@@ -843,7 +843,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return nothing
     end
     fname = nameof(f)
-    b = InstrBuilder(; func_name="generate_intrinsic_body")
+    b = InstrBuilder(; func_name="generate_intrinsic_body", mod=mod)
     extra_locals = WasmValType[]
 
     # Get string array type for string operations

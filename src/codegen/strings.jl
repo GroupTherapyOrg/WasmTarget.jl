@@ -417,7 +417,7 @@ function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
         # MIGRATED to InstrBuilder (typed). Const-expr init = (i64.const seed) (end).
         # Byte-identical: i64_const! emits I64_CONST + leb_s(seed); the const-expr END
         # terminator (0x0B) is bridged (no open block in a const expr to balance).
-        ib = InstrBuilder(; func_name="ensure_rng_globals!")
+        ib = InstrBuilder(; func_name="ensure_rng_globals!", mod=mod)
         i64_const!(ib, seed)
         emit_raw!(ib, UInt8[Opcode.END])
         init = builder_code(ib)

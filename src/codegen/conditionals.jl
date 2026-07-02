@@ -2,7 +2,7 @@
 Generate code for a single basic block.
 """
 @inline function generate_block_code(ctx::AbstractCompilationContext, block::BasicBlock)::Vector{UInt8}
-    b = InstrBuilder(; func_name="generate_block_code")
+    b = InstrBuilder(; func_name="generate_block_code", mod=ctx.mod)
     code = ctx.code_info.code
 
     for i in block.start_idx:block.end_idx

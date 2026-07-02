@@ -762,7 +762,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
     # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="compile_value")
+    b = InstrBuilder(; func_name="compile_value", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = (tb = UInt8[]; emit_type_id!(tb, ctx.type_registry, T); emit_raw!(b, tb; pushes=WasmValType[I32]))
