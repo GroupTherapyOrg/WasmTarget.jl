@@ -118,7 +118,17 @@ Per-phase protocol, every loop, no exceptions:
   already handles the complex shapes; full gate at the flip. EXIT LOCKS: R8=0 (family
   deleted); routing heuristic gone (one call site, no strategy choice).
 
-- **M2 — THE WRAP CHANNEL (I2+I3 fused; the keystone)**. dart anchors:
+- **✅ M2 — THE WRAP CHANNEL: COMPLETE (2026-07-01, certified by its full capped gate — 10
+  shards 2,681/2,681 + fuzz 293/293).** The wrap chokepoint (`emit_value!(b,val,ctx,expected)`)
+  is installed and is THE path everywhere a type is consumed: post-emission re-guessing DEAD
+  (R4=0, LOCK L4 — `infer_value_wasm_type` gone, pre-emit deciders → `static_wasm_type` w/
+  contract); returns (`emit_return_coerced!`) + phi stores (`emit_phi_local_set!` 366→36,
+  stackified clusters) + field/arg stores all emit-typed through `convert_type!`; byte-scanners
+  read their producers' types; `_seed_builder_locals!` makes emission types truthful (locals
+  known); the ONE box emitter declares its true stack effect. En-route correctness fixes: the
+  externref-store silent VALUE DROP, the return ConcreteRef null-drop, the double
+  extern-convert, the unsigned-LEB ref.cast bridge. R1 219→~38 · R2 581→~244 · R7 157→~137
+  ratchet into M4 (god-fn decomposition). Original plan: dart anchors:
   `code_generator.dart:879-888`, `translator.dart:828-875`, `intrinsics.dart:28-71`. Finish
   WT's `wrap`: ONE chokepoint `emit_value!(b, val, ctx, expected)::WasmValType` = emit → actual
   (already true: the type comes off the validator's stack, dart-style) → `convert_type!`
