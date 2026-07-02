@@ -1615,31 +1615,11 @@ function compile_module(functions::Vector;
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
 
     # PURE-9062: Build overlay tables if overlay_entries are specified.
-    # Overlay entries (user methods) go into a separate table checked before the base table.
-    overlay_registry = OverlayRegistry()
-    if !isempty(overlay_entries) && !isempty(dispatch_registry.tables)
-        # Convert overlay_entries Set{(func, arg_types)} → Dict{func → Set{arg_types}}
-        overlay_arg_types = Dict{Any, Set{Tuple}}()
-        for (func_ref, arg_types) in overlay_entries
-            if !haskey(overlay_arg_types, func_ref)
-                overlay_arg_types[func_ref] = Set{Tuple}()
-            end
-            push!(overlay_arg_types[func_ref], arg_types)
-        end
-
-        overlay_registry = build_overlay_tables(dispatch_registry, overlay_arg_types;
-                                                 type_registry=type_registry)
-
-        if !isempty(overlay_registry.overlays)
-            # Remove overlaid functions from the normal dispatch registry
-            # (they're now handled by overlay_registry)
-            for func_ref in keys(overlay_registry.overlays)
-                delete!(dispatch_registry.tables, func_ref)
-            end
-            # Emit overlay dispatch metadata (both overlay and base tables)
-            emit_overlay_metadata!(mod, type_registry, overlay_registry)
-        end
-    end
+    # parity(M8.4): overlays are NOT a parallel table apparatus — a user method is
+    # just a higher-priority ROW in the same selector (dart has one table, period).
+    # dt.entries already carries one entry per tuple with the user registration
+    # winning at register time; same-tuple collisions were resolved before build.
+    # The old split (build_overlay_tables → parallel tables checked first) is DELETED.
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
@@ -1670,16 +1650,9 @@ function compile_module(functions::Vector;
         # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
         dispatch_dt = nothing
-        overlay_pair = (nothing, nothing)
-        if code_info !== nothing && type_registry.base_struct_idx !== nothing
-            # PURE-9062: Check overlay registry first
-            if !isempty(overlay_registry.overlays)
-                overlay_pair = find_overlay_dispatch_call(code_info, overlay_registry)
-            end
-            # Then check normal dispatch registry
-            if overlay_pair[1] === nothing && !isempty(dispatch_registry.tables)
-                dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
-            end
+        if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
+           !isempty(dispatch_registry.tables)
+            dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
         end
 
         if name in stub_names
@@ -1705,13 +1678,6 @@ function compile_module(functions::Vector;
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
-        elseif overlay_pair[1] !== nothing
-            # PURE-9062: Generate overlay dispatch body (overlay probe → base fallback)
-            n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            overlay_dt, base_fallback_dt = overlay_pair
-            body, locals = generate_overlay_dispatch_caller_body(
-                overlay_dt, base_fallback_dt, n_params,
-                type_registry.base_struct_idx, type_registry)
         elseif dispatch_dt !== nothing
             # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
@@ -1785,9 +1751,6 @@ function compile_module(functions::Vector;
     end
 
     # PURE-9062 Phase 2: Add overlay wrapper functions
-    if !isempty(overlay_registry.overlays)
-        emit_overlay_wrappers!(mod, type_registry, overlay_registry)
-    end
 
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
