@@ -236,7 +236,16 @@ census (`generate_linear_flow`) → deleted in M1. Commit convention: `parity(Mn
 The certified gaps of `dev/CERTIFICATION.md` §gaps, in dependency order. Scope boundary §5
 still governs (NO ffi/async/reified-generics/threads).
 
-## M8 — THE DISPATCH TABLE (dart dispatch_table.dart:391-458, code_generator.dart:2072-2125)
+## M8 — THE DISPATCH TABLE ✅ COMPLETE (2026-07-03, LOCK L10 green, boundary gate 10 shards + fuzz)
+
+Delivered: selector registry (M8.1) · the dart virtual call classId+offset+call_indirect
+through ONE flat table, E2E-proven (M8.2) · the multi-axis cascade — Julia multiple dispatch
+as composed dart hops, E2E [21,22,51,52] (M8.3) · the FNV apparatus DELETED, dispatch.jl
+1365→~290L, overlays = rows not parallel tables, LOCK L10_no_fnv_dispatch (M8.4). Phases
+24/34 test zombies rewritten to pin the selector reality. Strings-axis exception stands
+until M9.
+
+(original design:)
 
 **dart invariant:** ONE flat funcref table for the whole module. A selector (method name)
 gets an OFFSET via first-fit packing (sort weight = classIds.length*10+callCount, desc);
