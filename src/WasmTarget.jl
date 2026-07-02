@@ -83,6 +83,18 @@ export I32, I64, F32, F64, NumType, Opcode, ExternRef
 export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
 
 """
+    _wt_default_validate() -> Bool
+
+parity(M4) — the wasm-tools DEMOTION (dart parity: dart2wasm ships no external validator;
+its builder IS the gate). Since 2026-07-01 every InstrBuilder hard-gates each emission
+against the full subtype lattice (strict by default, mod threaded), so the module is valid
+BY CONSTRUCTION and the external `wasm-tools validate` pass is a redundant double-check —
+now OFF by default. Re-enable per-call (`validate=true`) or globally (`WT_VALIDATE=1`,
+recommended in CI as the independent cross-check).
+"""
+_wt_default_validate() = get(ENV, "WT_VALIDATE", "") == "1"
+
+"""
     compile(f, arg_types; optimize=false) -> Vector{UInt8}
 
 Compile a Julia function `f` with the given argument types to WebAssembly bytes.
@@ -92,7 +104,7 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
-                 strict::Bool=true, validate::Bool=true)::Vector{UInt8}
+                 strict::Bool=true, validate::Bool=_wt_default_validate())::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
 
@@ -111,7 +123,7 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
 end
 
 # Convenience method for single argument type
-compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, strict::Bool=true, validate::Bool=true) =
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, strict::Bool=true, validate::Bool=_wt_default_validate()) =
     compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, strict=strict, validate=validate)
 
 """
@@ -137,7 +149,7 @@ Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
                        return_registries::Bool=false, optimize_ir::Bool=true,
-                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=true,
+                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=_wt_default_validate(),
                        discovery::Symbol=:trim)
     result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
                            optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
