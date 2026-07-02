@@ -38,6 +38,9 @@ jobs:
           julia --project=docs -e '
             using Pkg
             Pkg.Registry.add("General")
+            # add() is a NO-OP when the actions cache already holds a General clone —
+            # update() is what actually pulls newly registered packages (WasmMakie).
+            Pkg.Registry.update()
             Pkg.resolve()
             Pkg.instantiate()
           '
