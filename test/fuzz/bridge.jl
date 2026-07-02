@@ -4,7 +4,7 @@
 #
 # The type-directed, bit-exact transport core (descriptors, accessor/ctor
 # closures, JS walker, comparators) was PROMOTED into the package as
-# `WasmTarget.Bridge` so downstream consumers (PlutoIslands.jl) share the one
+# `WasmTarget.Bridge` so downstream consumers (Snapshot.jl) share the one
 # implementation. This module keeps the fuzz-specific part: `bridge_run`,
 # which executes a compiled target + accessor closure over the harness's
 # persistent Node runner pool.

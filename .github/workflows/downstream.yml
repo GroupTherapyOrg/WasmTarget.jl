@@ -1,7 +1,7 @@
 name: Downstream
 # Reactant.jl-style downstream integration testing. WasmTarget is a compiler;
 # the packages that compile THROUGH it (WasmMakie figures, Therapy reactive
-# islands, PlutoIslands @bind-cell islands) are where a codegen regression
+# islands, Snapshot.jl @bind-cell islands) are where a codegen regression
 # actually shows up. So run THEIR test
 # suites against this checkout of WasmTarget — a green WasmTarget unit suite is
 # necessary but not sufficient. Pairs with the in-suite regression in
@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pkg: [WasmMakie.jl, Therapy.jl, PlutoIslands.jl]
+        pkg: [WasmMakie.jl, Therapy.jl, Snapshot.jl]
     steps:
       # This WasmTarget checkout is the version under test. The downstream test
       # environments resolve it via a sibling path (WasmMakie's test [sources]
@@ -45,8 +45,8 @@ jobs:
           path: Therapy.jl
       - uses: actions/checkout@v4
         with:
-          repository: GroupTherapyOrg/PlutoIslands.jl
-          path: PlutoIslands.jl
+          repository: GroupTherapyOrg/Snapshot.jl
+          path: Snapshot.jl
 
       - uses: julia-actions/setup-julia@v2
         with:
@@ -83,23 +83,23 @@ jobs:
           julia --project=. -e 'import Pkg; Pkg.develop(Pkg.PackageSpec(path="../WasmTarget.jl")); Pkg.instantiate()'
           julia --project=. -e 'import Pkg; Pkg.test()'
 
-      # PlutoIslands compiles Pluto @bind-cell groups to WASM islands through
+      # Snapshot.jl compiles Pluto @bind-cell groups to WASM islands through
       # WasmTarget and verifies each with a differential oracle (native vs wasm) —
       # the closest signal to the real notebook-export use case. Its Project.toml
       # sources WasmTarget from ../WasmTarget.jl (this checkout). A deliberate
-      # breaking WasmTarget release can make PI's compat unresolvable; that's
+      # breaking WasmTarget release can make Snapshot.jl's compat unresolvable; that's
       # "compat-incompatible", NOT a codegen regression, so skip cleanly on a
       # ResolverError (the ChainRules reverse-dep convention).
-      - name: PlutoIslands.jl test suite
-        if: matrix.pkg == 'PlutoIslands.jl'
-        working-directory: PlutoIslands.jl
+      - name: Snapshot.jl test suite
+        if: matrix.pkg == 'Snapshot.jl'
+        working-directory: Snapshot.jl
         run: |
           julia --project=. -e '
             import Pkg
             try
                 Pkg.instantiate()
             catch e
-                isa(e, Pkg.Resolve.ResolverError) && (@info "PI compat-incompatible with this WasmTarget; skipping (not a regression)"; exit(0))
+                isa(e, Pkg.Resolve.ResolverError) && (@info "Snapshot.jl compat-incompatible with this WasmTarget; skipping (not a regression)"; exit(0))
                 rethrow()
             end
             Pkg.test()'

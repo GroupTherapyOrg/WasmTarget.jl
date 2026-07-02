@@ -198,7 +198,7 @@ runtime narrow-shift bug it resembles is **fixed** (see below).
   length → `array.new_data` with a huge unsigned count → `"requested new array is too
   large"` trap at RUNTIME. **Validation passed**, so it was invisible until executed;
   short literals (<64) coincidentally encoded identically, hiding it for a long time.
-  Surfaced by PlutoIslands interactive-feedback cells (admonition HTML segments are
+  Surfaced by Snapshot.jl interactive-feedback cells (admonition HTML segments are
   ~89/102/217/230 bytes). Fix: `encode_leb128_signed(Int32(len))` at all three sites.
   Regression: `test/runtests.jl` "String literal length — i32.const signed-LEB"
   (runs in node; asserts wasm == native for a 90-char literal). NOTE: `array.new_fixed`
@@ -368,11 +368,11 @@ depth-5+ fuzz sweep over boundscheck-arm + jump-target compositions is
 the likely organic reproducer source; until then this note is the
 tracking entry.
 
-## PlutoIslands featured-corpus → WT work-list (2026-06-13)
+## Snapshot.jl featured-corpus → WT work-list (2026-06-13)
 
-Source: the 30 non-shipping bond groups of the PlutoIslands featured corpus
+Source: the 30 non-shipping bond groups of the Snapshot.jl featured corpus
 (35/65 ship after the PI bind fixes). Triage of every WT-side degradation
-reason in `PlutoIslands/tools/ISLAND_SURVEY.md`. The blockers split into four
+reason in `Snapshot.jl/tools/ISLAND_SURVEY.md`. The blockers split into four
 classes — **only Classes 1–2 are conventional codegen/fuzzer work**; Class 3 is
 the larger bucket and is *not* fuzzer-tractable.
 
@@ -426,7 +426,7 @@ the larger bucket and is *not* fuzzer-tractable.
   i32 i32) (result (ref extern)))`. When an assembled module contains BOTH an
   array-constant type AND a bridge/tree-walk accessor func type (`(result (ref
   extern))`), the type-table index management collides. Hit by Collatz (baseline)
-  and by conv1d the moment PlutoIslands' partial-eval baked a *vector* constant
+  and by conv1d the moment Snapshot.jl's partial-eval baked a *vector* constant
   (so PI now gates `_bakeable_const` to scalars/strings/tuples and re-allows
   vectors only after this is fixed). Not reproduced by a 3-entry `compile_multi`
   with a vector-indexing fn + string accessors — the trigger needs the specific
@@ -443,7 +443,7 @@ the larger bucket and is *not* fuzzer-tractable.
   which works standalone). Independent of NTuple-vs-scalar fields (both fail).
   **Minimal runnable repro committed: `test/fuzz/repro_recursion_mutstruct.jl`**
   (`run_recur` → `trap: unreachable`, `run_linear` control → pass; both native=255).
-  Discovered reframing the PlutoIslands "turtles-art" L-system fractal
+  Discovered reframing the Snapshot.jl "turtles-art" L-system fractal
   (`lindenmayer`, binary recursion save/restoring turtle pos+heading); the notebook
   was shipped by rewriting the recursion ITERATIVELY (explicit stack), so this is
   noted for the loop, not blocking PI. Likely the dead-value/stackifier or a
@@ -499,7 +499,7 @@ via the fuzzer. Two sub-cases:
 - **Bond-DEPENDENT use** (the body genuinely calls into the library per bond
   value — e.g. `imresize` keyed by a slider): a true WT coverage gap; needs
   `objectid`/`Method` stub support or is fundamentally non-compilable.
-(Both filed as PlutoIslands work-items; the partial-eval one is high-value.)
+(Both filed as Snapshot.jl work-items; the partial-eval one is high-value.)
 
 ### Class 4 — already-tracked / not WT
 `string(::Float64)` Ryu (`19d59e9a61b3`), Matrix{NTuple} pixel access

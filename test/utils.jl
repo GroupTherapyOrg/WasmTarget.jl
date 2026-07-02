@@ -933,7 +933,7 @@ RETURN is ANY bridge-supported type — `String`, structs, `Vector`, tuples, nes
 combos — not just the scalars/`_bv_` vectors `compare_julia_wasm`/`_vec` handle.
 
 Uses the in-package bit-exact `WasmTarget.Bridge` (`descriptor` → `WALK_JS` →
-`tree_matches`), i.e. the SAME transport PlutoIslands and the differential fuzzer
+`tree_matches`), i.e. the SAME transport Snapshot.jl and the differential fuzzer
 use. This is what lets real island cells (which return strings/HTML/structs) be
 exercised directly in WT's own unit suite instead of only in downstream CI: the
 plain harness `JSON.stringify`s a WasmGC array/struct ref to `"undefined"`, while

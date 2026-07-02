@@ -88,7 +88,7 @@ bytes = compile_multi([
 
 WasmTarget compiles real, third-party Julia — not just toy kernels — to interactive WebAssembly that runs entirely client-side:
 
-- **[PlutoIslands.jl](https://github.com/GroupTherapyOrg/PlutoIslands.jl)** turns reactive Pluto notebooks into self-contained WasmGC "islands." The featured-notebook gallery — image processing, 2-D convolution, Mandelbrot/Julia fractals, dithering, Newton's method — recomputes live as you move the sliders, with **no Julia server**. **→ [Live gallery](https://grouptherapyorg.github.io/PlutoIslands.jl/)**
+- **[Snapshot.jl](https://github.com/GroupTherapyOrg/Snapshot.jl)** turns reactive Pluto notebooks into self-contained WasmGC "islands." The featured-notebook gallery — image processing, 2-D convolution, Mandelbrot/Julia fractals, dithering, Newton's method — recomputes live as you move the sliders, with **no Julia server**. **→ [Live gallery](https://grouptherapyorg.github.io/Snapshot.jl/)**
 - **[WasmMakie.jl](https://github.com/GroupTherapyOrg/WasmMakie.jl)** compiles a Makie-style plotting API (`lines!`, `scatter!`, `image!`, `heatmap!`) to an HTML canvas through WasmTarget. The WasmTarget docs homepage stitches it together with the SciML stack: a **live Lorenz attractor** solved by `SimpleDiffEq` over a `StaticArrays` state and drawn by WasmMakie, re-solving on every slider move — all in Wasm.
 - **[Therapy.jl](https://github.com/GroupTherapyOrg/Therapy.jl)** is a web framework that compiles `@island` components at build time.
 

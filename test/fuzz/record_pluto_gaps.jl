@@ -1,4 +1,4 @@
-# Record PlutoIslands-featured-corpus-derived WT gaps into the ledger.
+# Record Snapshot.jl-featured-corpus-derived WT gaps into the ledger.
 # Each reproducer is verified to THROW (gap present) before recording.
 #
 # Run:  julia --project=test/fuzz test/fuzz/record_pluto_gaps.jl
@@ -13,8 +13,8 @@ gaps = Tuple[]
 # ── string(::Complex{Float64}) — fractals Julia-set label "0.9 + 0.4im" ──
 push!(gaps, (
     :runtime_trap,
-    "string(::Complex{Float64}) traps/exec-errors in wasm (PlutoIslands fractals label `0.9 + 0.4im`); downstream of string(::Float64)/Ryu gap 19d59e9a61b3",
-    "PlutoIslands featured corpus (fractals.jl)",
+    "string(::Complex{Float64}) traps/exec-errors in wasm (Snapshot.jl fractals label `0.9 + 0.4im`); downstream of string(::Float64)/Ryu gap 19d59e9a61b3",
+    "Snapshot.jl featured corpus (fractals.jl)",
     "(Int64,)",
     """
 using WasmTarget

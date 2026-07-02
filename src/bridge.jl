@@ -6,7 +6,7 @@
 # Promoted from the differential fuzzer's oracle bridge (test/fuzz/bridge.jl +
 # bridge_args.jl), where it transports every supported Julia value into and
 # out of compiled modules without ever becoming decimal text. Downstream
-# consumers (PlutoIslands.jl islands, the fuzz oracle) share this one
+# consumers (Snapshot.jl islands, the fuzz oracle) share this one
 # implementation.
 #
 # READ side (return values / post-call re-reads):

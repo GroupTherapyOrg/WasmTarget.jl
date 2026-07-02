@@ -348,7 +348,7 @@ const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
     # high-precision StepRangeLen path — TwicePrecision is plain float-pair
     # struct arithmetic, compilable from its real Base IR.
     :steprangelen_hp, :twiceprecision, :_colon, :unsafe_getindex,
-    # a8c00917b1b0 (PlutoIslands newton): the 3-arg `(::Colon)(start, step, stop)`
+    # a8c00917b1b0 (Snapshot.jl newton): the 3-arg `(::Colon)(start, step, stop)`
     # callable stays an un-inlined :invoke — without it on the list the call site
     # silently compiled to `unreachable` (validates-then-traps). The deeper chain
     # (_colon, steprangelen_hp, twiceprecision) was already allowed above.
@@ -545,7 +545,7 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
     # P4-stdlib: kwcall sorters necessarily take the target function as an
     # argument (typeof(var) etc.) — exempt them from the function-singleton
     # skip, as the whole point is to compile through to the kwarg body.
-    # a8c00917b1b0 follow-up (PlutoIslands newton): user-defined higher-order
+    # a8c00917b1b0 follow-up (Snapshot.jl newton): user-defined higher-order
     # functions (e.g. `standard_Newton(f, …)` in a notebook sandbox module) were
     # silently skipped by the function-singleton-arg heuristic below — their
     # :invoke then compiled to `unreachable`. The heuristic exists to stop

@@ -75,7 +75,7 @@ The gap is COVERAGE:
   WORKING fallback getting routed to strict-error → false rejection of valid code. Each site
   must be classified, not bulk-converted.
 - **Differential fuzzer**: no new false-rejections of in-subset programs.
-- **Downstream CI (PlutoIslands / WasmMakie / Therapy) green** — confirms the strict guard
+- **Downstream CI (Snapshot.jl / WasmMakie / Therapy) green** — confirms the strict guard
   doesn't reject real compiled cells/figures. This is the decisive "did we break coverage"
   check.
 - `loop_guard.sh` clean.
