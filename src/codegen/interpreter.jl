@@ -165,7 +165,7 @@ end
 #      general Base IOBuffer string-building machinery (ensureroom growth +
 #      jl_string_ptr/jl_string_to_genericmemory memmove + take!) that WT does not
 #      implement — empty IOBuffer() yields a null .data array → trap. (gap
-#      cfd419793b0d, PlutoIslands fractal labels like "0.9 + 0.4im".)
+#      cfd419793b0d, Snapshot.jl fractal labels like "0.9 + 0.4im".)
 # How:  byte-assemble the result directly, reusing string(::Real) for the parts
 #      (which WT supports via the Ryu/StringVector overlays). The wrapper logic
 #      mirrors Base.show(io, ::Complex) EXACTLY (sign on imag, " + "/" - ", the
@@ -764,7 +764,7 @@ end
 #      hits the same func). For a plain IOBuffer — which is what the float/Complex
 #      formatting paths use — `get(io,:typeinfo,Any)` is `Any` and
 #      `nonmissingtype(nonnothingtype(Any)) === Any`, so returning `Any` is exact.
-#      (Only typeinfo-CONTEXT container display would differ; the PlutoIslands
+#      (Only typeinfo-CONTEXT container display would differ; the Snapshot.jl
 #      oracle byte-compares and degrades those rather than shipping them wrong.)
 #      Inference const-folds the result, so callers' typeinfo branches collapse.
 # Remove when: runtime type-subtraction (nonnothingtype/nonmissingtype) compiles,

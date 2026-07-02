@@ -1791,7 +1791,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
                 target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
                 # 453393ca4ba4: a CAPTURING closure entry takes the closure object as
-                # wasm param 1 — the call site must push it (PlutoIslands newton C-W3:
+                # wasm param 1 — the call site must push it (Snapshot.jl newton C-W3:
                 # 6 values for a 7-param functype → "nothing on stack")
                 if target_info_early !== nothing && is_closure_type(typeof(called_func_early))
                     closure_self_to_push = actual_func_ref_early
@@ -1803,7 +1803,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
     # 453393ca4ba4: capturing-closure callees — the function position is a VALUE
     # (SSA/argument/local); identity-keyed registry lookup can never match the
     # runtime-constructed instance, so the invoke silently fell through to an
-    # `unreachable` (PlutoIslands newton C-W3). Resolve by TYPE against the
+    # `unreachable` (Snapshot.jl newton C-W3). Resolve by TYPE against the
     # self-prepended signature and push the closure object as wasm param 1.
     get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
         println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),

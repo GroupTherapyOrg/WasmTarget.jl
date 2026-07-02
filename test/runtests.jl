@@ -133,7 +133,7 @@ _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 
 include("utils.jl")
-include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures
+include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
@@ -2767,7 +2767,7 @@ begin
         # literal length in [64,127] (1-byte unsigned-LEB with bit-6 set, e.g. 90)
         # decoded NEGATIVE → array.new_data with a huge unsigned length →
         # "requested new array is too large" trap at runtime (VALIDATION PASSED).
-        # Medium-length literals (admonition HTML in PlutoIslands feedback cells)
+        # Medium-length literals (admonition HTML in Snapshot.jl feedback cells)
         # hit it; short literals (<64) coincidentally encoded fine, hiding it.
         @noinline function str_mid_literal(x::Int64)::Int64
             # 90-char literal (in the broken [64,127] band) built at runtime via
@@ -7738,8 +7738,8 @@ console.log(JSON.stringify({
                 strict=true, validate=true, optimize=false); true)
         end
 
-        @testset "PlutoIslands fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
-            # Robust in-WT integration fixture for the PlutoIslands fractals island
+        @testset "Snapshot.jl fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
+            # Robust in-WT integration fixture for the Snapshot.jl fractals island
             # (@bind c ComplexNumberPicker(default=.9+.4im)): the island reactively
             # computes c = t(point.x) - im*t(point.y), t(x)=(x-150)/120, and renders
             # string(c) — the "0.9 + 0.4im" label the island survey flagged as wasm "".
@@ -7755,30 +7755,30 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_bridge(_wt_pi_fractals_clabel, 150.0, 270.0; rettype=String).pass  # negative imag → " - "
         end
 
-        @testset "PlutoIslands island fixtures — status-locked corpus (WASMTARGET-INTEGRATION)" begin
-            # Real PI featured-corpus island cells (harvested by PlutoIslands.jl/tools/
-            # harvest_wt_fixtures.jl → test/integration/pi_island_fixtures.json), each
+        @testset "Snapshot.jl island fixtures — status-locked corpus (WASMTARGET-INTEGRATION)" begin
+            # Real PI featured-corpus island cells (harvested by Snapshot.jl/tools/
+            # harvest_wt_fixtures.jl → test/integration/snapshot_island_fixtures.json), each
             # tested DIRECTLY against WT codegen via the in-package bridge. A per-piece
-            # status LOCK (pi_island_status.json) makes BOTH regressions (green→fail) and
+            # status LOCK (snapshot_island_status.json) makes BOTH regressions (green→fail) and
             # newly-fixed pieces (fail→green) trip the suite — so every PI binding is
             # tracked, passing or failing. The loop's product KPI is "PI pieces green:
             # N/total". To update after a (re-)harvest or codegen fix that flips a piece:
-            # `julia --project=. test/integration/regen_pi_lock.jl` and commit the lock.
+            # `julia --project=. test/integration/regen_snapshot_lock.jl` and commit the lock.
             # Node-gated (skips cleanly when the wasm runner is unavailable).
-            if WasmRunner.runner_available() && isfile(PI_FIX)
+            if WasmRunner.runner_available() && isfile(SNAP_FIX)
                 statuses = pi_all_statuses()
                 @test !isempty(statuses)
-                lock = isfile(PI_LOCK) ? JSON.parsefile(PI_LOCK) : Dict{String,Any}()
-                @info "PlutoIslands island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
+                lock = isfile(SNAP_LOCK) ? JSON.parsefile(SNAP_LOCK) : Dict{String,Any}()
+                @info "Snapshot.jl island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
                 for s in statuses
                     rec = get(lock, s.key, nothing)
                     if rec === nothing
-                        @warn "PI island piece missing from lock — run test/integration/regen_pi_lock.jl" key = s.key status = s.status
+                        @warn "PI island piece missing from lock — run test/integration/regen_snapshot_lock.jl" key = s.key status = s.status
                         @test false
                     else
                         _ok = s.status == rec["status"]
                         _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
-                        # The lock (pi_island_status.json) is generated on the stable
+                        # The lock (snapshot_island_status.json) is generated on the stable
                         # release Julia (1.12). On a moving prerelease (~1.13.0-rc) a few
                         # pieces legitimately classify differently; that shouldn't redden
                         # CI on the unstable target. Enforce strictly on stable, tolerate
@@ -10983,7 +10983,7 @@ console.log(JSON.stringify({
         # Singleton callable structs bound to their own type name (Base.Colon):
         # discovery extracted the TYPE, probed a nonexistent constructor, and the
         # un-inlined 3-arg colon invoke silently compiled to `unreachable`
-        # (validates-then-traps — PlutoIslands newton canvas groups). Pins the
+        # (validates-then-traps — Snapshot.jl newton canvas groups). Pins the
         # instance-extraction fix + the :Colon allowlist entry.
         _range_fls(n::Int64) = begin
             r = -10:0.01:10

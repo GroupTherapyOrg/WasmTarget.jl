@@ -4,7 +4,7 @@
 # The WasmTarget soundness loop — autonomous campaign spec
 
 > **North star.** WasmTarget compiles the *entire set of Julia and Julia packages*.
-> Pluto featured notebooks (via PlutoIslands), Therapy `@island`s, and WasmMakie
+> Pluto featured notebooks (via Snapshot.jl), Therapy `@island`s, and WasmMakie
 > figures are **stepping stones / seed corpora**, not the driver.
 >
 > **The whole campaign is one loop:**
@@ -27,7 +27,7 @@ The lower sections were written BEFORE the work. This block is the up-to-date ov
 leverage ranking. Dynamic dispatch **ON by default** (`WT_DYNDISPATCH=0` to disable):
 non-perturbing collection + registry isolation (`FunctionInfo.is_candidate`) + PURE-9060
 reconciliation (discovery yields to call_indirect for ≥9-method fns) — verified safe on
-WT-suite + WasmMakie + PlutoIslands gate-on. median/quantile cluster closed. PlutoIslands
+WT-suite + WasmMakie + Snapshot.jl gate-on. median/quantile cluster closed. Snapshot.jl
 added to `downstream.yml`. **Open gaps: 15** (was 22). Everything in §7-P0 and T1.1 below is
 COMPLETE — do not redo it.
 
@@ -64,32 +64,32 @@ bit-exact `WasmTarget.Bridge` into `compare_julia_wasm_bridge`. See the new sect
 
 ## 0.5 ⭐ PI ISLAND FIXTURES — the product-grounded loop KPI (2026-06-18, current driver)
 
-**The loop now targets REAL PlutoIslands island cells directly, in WT's own test suite.**
+**The loop now targets REAL Snapshot.jl island cells directly, in WT's own test suite.**
 This resolves Lesson #2 ("synthetic gaps ≠ product impact") at the root: the unit of work is
 a **PI island piece**, and the KPI is **"PI pieces green: N / total"** (not synthetic ledger
 count). The synthetic fuzzer stays as the soundness *backstop* (finds new bugs); PI fixtures
 drive *priority*.
 
 **Mechanism (no PI/Pluto dependency in WT):**
-1. **Harvester** (`PlutoIslands.jl/tools/harvest_wt_fixtures.jl`, run in PI's Pluto env)
+1. **Harvester** (`Snapshot.jl/tools/harvest_wt_fixtures.jl`, run in PI's Pluto env)
    walks every featured notebook → every `@bind` group → every extracted cell, emitting
-   `WasmTarget.jl/test/integration/pi_island_fixtures.json`: `{notebook, bonds, argtypes,
+   `WasmTarget.jl/test/integration/snapshot_island_fixtures.json`: `{notebook, bonds, argtypes,
    preamble, cell{fn_src, rettype, samples, GOLDEN native outputs}}`. Failing/extract-failed
    pieces are recorded too (status tracked, never dropped).
-2. **WT test** (`test/integration/pi_islands.jl`, run from `runtests.jl`) evals each piece's
-   fn (+ preamble + a vendored `PlutoIslands._plain_body`/`_html_body` shim), compiles via
+2. **WT test** (`test/integration/snapshot_islands.jl`, run from `runtests.jl`) evals each piece's
+   fn (+ preamble + a vendored `Snapshot._plain_body`/`_html_body` shim), compiles via
    `compile_multi`, runs through the in-package bridge (`compare_julia_wasm_bridge`), and
    classifies: `green` / `mismatch` / `runtime_trap` / `compile_fail` / `outside_bridge` /
    `nonscalar_args` / `extract_fail`. A drift guard asserts the vendored fn reproduces the
    captured golden.
-3. **Status LOCK** (`pi_island_status.json`): the testset asserts each piece's live status ==
+3. **Status LOCK** (`snapshot_island_status.json`): the testset asserts each piece's live status ==
    locked status, so a `green→fail` (regression) AND a `fail→green` (unrecorded fix) BOTH
    fail the suite. Known-failing pieces don't redden CI in steady state; any FLIP is loud.
 
 **The loop iteration becomes:** read the status table → pick the highest-value FAILING piece
 (cluster by status reason — `compile_fail`/`runtime_trap`/`outside_bridge`/`nonscalar_args`
 are the work-item families) → diagnose → fix WT codegen → piece flips `green` →
-`julia --project=. test/integration/regen_pi_lock.jl` → commit lock → regress forever.
+`julia --project=. test/integration/regen_snapshot_lock.jl` → commit lock → regress forever.
 
 **Current state (2026-06-18):** 9 pieces from the 2 light notebooks (Interactivity, Basic
 mathematics): **7 green**, 1 `mismatch` (`string(typeof(x))` → empty; Type-name/Type-as-value
@@ -98,7 +98,7 @@ gap = a real work item), 1 `nonscalar_args` (6-bond String/Bool/DateTime group �
 heavier notebooks (PlutoUI, newton, fractals, convolution, images, dither, turtles, Titration)
 returned 0 groups because their embedded Pluto package envs didn't run in the harvest session —
 re-run the harvester after warming those envs (e.g. via `tools/island_survey.jl`).
-**Re-harvest:** `cd PlutoIslands.jl && julia --project=. tools/harvest_wt_fixtures.jl` then
+**Re-harvest:** `cd Snapshot.jl && julia --project=. tools/harvest_wt_fixtures.jl` then
 regen the lock. KPI today: **7/9 green** (will grow to the full ~38-shipping / 65-total corpus).
 
 ---
@@ -269,13 +269,13 @@ test/fuzz/loop_guard.sh HEAD
 
 ---
 
-## 5. PlutoIslands / Therapy / WasmMakie as integration tests (Reactant pattern)
+## 5. Snapshot.jl / Therapy / WasmMakie as integration tests (Reactant pattern)
 
 Reactant does **not** run downstream suites in its CI — it *vendors* targeted tests and
 pins each to the bug it guards (`@testset "... #861"`). Copy that:
 
 - **(a) Coarse backstop:** the existing `.github/workflows/downstream.yml` runs
-  WasmMakie + Therapy suites against the WT checkout. Add **PlutoIslands** to that
+  WasmMakie + Therapy suites against the WT checkout. Add **Snapshot.jl** to that
   matrix (PI already path-sources WT at `../WasmTarget.jl`). Borrow the ChainRules
   refinement: catch `Pkg.Resolve.ResolverError → exit 0` so a deliberate breaking WT
   release reads as "compat-incompatible", not "WT regressed".

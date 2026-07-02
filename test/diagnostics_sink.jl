@@ -1,5 +1,5 @@
 # The caller-facing diagnostics ledger (compile(...; diagnostics_sink=...)) — the surface
-# PlutoIslands' failure cards read. Contract: fatal errors carry the FULL ledger on
+# Snapshot.jl's failure cards read. Contract: fatal errors carry the FULL ledger on
 # `err.all`; the sink mirrors every recorded diagnostic; the Ref is always restored.
 @testset "diagnostics sink (caller-facing ledger)" begin
     _ds_bad(x::Any) = Int64(x) + 1          # unresolved dynamic call on the entry
