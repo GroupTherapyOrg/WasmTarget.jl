@@ -487,7 +487,10 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
         emit_raw!(b, tid; pushes=WasmValType[I32])                 # field 0 = classId
     end
     local_get!(b, sc)                       # reload the value (field 1)
-    struct_new!(b, box_idx, WasmValType[])
+    # Declare the REAL stack effect ([classId:i32, value] → box ref) — an empty field list
+    # left the operands undeclared, so typed callers saw a phantom 3-value stack and the
+    # wrap templates mis-fired their multi-value guard (any_push_mixed_dyn → ref.null).
+    struct_new!(b, box_idx, WasmValType[I32, wasm_type])
     return box_idx
 end
 
