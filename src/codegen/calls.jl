@@ -2852,7 +2852,6 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # B4/U2: the tagged-union wrapper is retired — a het-tuple field's
                             # union value is an AnyRef classId box (the `else` branch below), never
                             # the {typeId,tag,value} wrapper.
-                            is_tagged_union = false
 
                             local _hetb = InstrBuilder(; func_name="compile_call", strict=false)
                             # tuple value → tuple_local
@@ -2874,27 +2873,20 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             emit_field_wrap = i -> begin
                                 local_get!(_hetb, tuple_local)
                                 struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
-                                if is_tagged_union
-                                    emit_raw!(_hetb, emit_wrap_union_value(ctx, elem_types[i + 1], Ueff); pops=1, pushes=(union_wasm === nothing ? WasmValType[] : WasmValType[union_wasm]))
-                                else
-                                    # Coerce the raw field value to U's canonical wasm rep.
-                                    fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
-                                    if union_wasm === AnyRef
-                                        if fw === I64 || fw === I32 || fw === F32 || fw === F64
-                                            # F-ii: route through the SINGLE-SOURCE box producer
-                                            # (was an inline numeric box w/ a literal-0 typeId). B1
-                                            # already killed the lossy ref.i31 here; now the box also
-                                            # stores the field's REAL classId so same-wasm-rep members
-                                            # (Bool/Int8/Int32 all i32) stay distinguishable on isa.
-                                            emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
-                                        elseif fw === ExternRef
-                                            any_convert_extern!(_hetb)
-                                        end
-                                        # ConcreteRef/StructRef field is already anyref-compatible
+                                # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
+                                # Coerce the raw field value to U's canonical wasm rep.
+                                fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
+                                if union_wasm === AnyRef
+                                    if fw === I64 || fw === I32 || fw === F32 || fw === F64
+                                        # THE single-source box producer with the field's REAL classId
+                                        # (same-wasm-rep members Bool/Int8/Int32 stay isa-distinguishable).
+                                        emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
+                                    elseif fw === ExternRef
+                                        any_convert_extern!(_hetb)
                                     end
-                                    # union_wasm === StructRef / numeric: the raw field value
-                                    # is already a subtype / the right type — push as-is.
+                                    # ConcreteRef/StructRef field is already anyref-compatible
                                 end
+                                # union_wasm === StructRef / numeric: push as-is.
                             end
                             # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
                             for i in 0:(n_fields - 2)
@@ -6155,21 +6147,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
                             # This happens when a function expects a Union param (represented as tagged union struct)
                             # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
-                            if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
-                                append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
-                            else
-                                # B4: numeric → a non-union ConcreteRef. Route through the
-                                # single-source funnel (box arm) instead of the old
-                                # ref.i31-then-ref.cast, which TRUNCATED I64 and ALWAYS trapped
-                                # (an i31 is never a subtype of the target struct). convert_type!
-                                # boxes the numeric (real classId), then coerces to the expected
-                                # ref: if it's the numeric box it matches; otherwise the cast
-                                # traps LOUDLY on a genuine type mismatch (no silent truncation).
-                                local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
-                                convert_type!(_bb, actual_wasm, expected_wasm, ctx;
-                                              from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                                append!(bytes, builder_code(_bb))
-                            end
+                            # B4/M3: numeric → ref. THE single-source funnel (box arm) — boxes
+                            # with the real classId, then coerces to the expected ref; a genuine
+                            # type mismatch traps LOUDLY (no silent truncation). (The dead
+                            # tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false.)
+                            local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
+                            convert_type!(_bb, actual_wasm, expected_wasm, ctx;
+                                          from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
+                            append!(bytes, builder_code(_bb))
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             local _bb = InstrBuilder(; func_name="compile_call", strict=false)

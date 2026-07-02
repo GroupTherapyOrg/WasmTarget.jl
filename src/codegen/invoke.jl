@@ -2101,17 +2101,12 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
                         # This happens when a function expects a Union param (represented as tagged union struct)
                         # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
-                        if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
-                            append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
-                        else
-                            # B4: numeric → a non-union ConcreteRef. Route through the single-source
-                            # funnel (box arm) instead of ref.i31-then-ref.cast (which TRUNCATED I64
-                            # and always trapped — an i31 is never a subtype of the target struct).
-                            local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false, mod=ctx.mod)
-                            convert_type!(_cvb, actual_wasm, expected_wasm, ctx;
-                                          from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                            append!(bytes, builder_code(_cvb))
-                        end
+                        # B4/M3: numeric → ref via THE single-source funnel (box arm; real
+                        # classId; loud trap on genuine mismatch). Dead tagged-union arm DELETED.
+                        local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false, mod=ctx.mod)
+                        convert_type!(_cvb, actual_wasm, expected_wasm, ctx;
+                                      from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
+                        append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I32 && actual_wasm === I64
                         # i64 to i32 — insert i32.wrap_i64
                         local _cvb = InstrBuilder(; func_name="compile_invoke", strict=false)

@@ -435,11 +435,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 src_julia_type = ctx.arg_types[arg_idx]
                             end
                         end
-                        if src_julia_type isa Union && needs_tagged_union(src_julia_type)
-                            emit_value!(b, stmt.val, ctx)
-                            emit_raw!(b, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ);
-                                      pops=1, pushes=(pi_local_type === nothing ? WasmValType[] : WasmValType[pi_local_type]))
-                        elseif pi_local_type isa ConcreteRef
+                        if pi_local_type isa ConcreteRef
                             ref_null!(b, Int64(pi_local_type.type_idx), pi_local_type)
                         elseif pi_local_type === ArrayRef
                             ref_null!(b, ArrayRef)
@@ -1999,31 +1995,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     for (i, val) in enumerate(field_values)
         field_type = info.field_types[i]
 
-        # Check if this field is a Union type that needs wrapping
-        if field_type isa Union && needs_tagged_union(field_type)
-            # Get the value's actual type
-            val_type = if val isa Core.SSAValue
-                get(ctx.ssa_types, val.id, Any)
-            elseif val isa Core.Argument
-                # Core.Argument(n) is an IR node for the nth argument; look up its declared type.
-                # PURE-6025: For non-closures, Core.Argument(1) is #self#, so subtract 1.
-                local arg_idx_fix = ctx.is_compiled_closure ? val.n : val.n - 1
-                (arg_idx_fix >= 1 && arg_idx_fix <= length(ctx.arg_types)) ? ctx.arg_types[arg_idx_fix] : Any
-            elseif val isa GlobalRef
-                actual_val = try getfield(val.mod, val.name) catch; nothing end
-                typeof(actual_val)
-            else
-                typeof(val)
-            end
-
-            # Compile the value first
-            emit_value!(b, val, ctx)
-
-            # If val_type is already a union (tagged union struct on stack), don't re-wrap
-            if !(val_type isa Union && val_type <: field_type)
-                emit_raw!(b, emit_wrap_union_value(ctx, val_type, field_type))
-            end
-        elseif field_type isa Union
+        # (M3: the tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false;
+        # a union field is AnyRef holding the classId box / struct ref directly.)
+        if field_type isa Union
             # Simple nullable union (Union{Nothing, T})
             inner_type = get_nullable_inner_type(field_type)
 
