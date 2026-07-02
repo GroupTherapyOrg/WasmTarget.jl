@@ -2416,6 +2416,29 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         obj_arg = args[1]
         field_ref = args[2]
         obj_type = infer_value_type(obj_arg, ctx)
+        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # (dart Context variable read) through the box's REAL struct type.
+        local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if obj_type === Core.Box && _mb_fld === :contents
+            local _mb_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _mb_bytes, _mb_ty = compile_value_typed(obj_arg, ctx)
+            emit_raw!(_mb_ib, _mb_bytes; pushes=(_mb_ty === nothing ? WasmValType[] : WasmValType[_mb_ty]))
+            local _mb_idx = _mb_ty isa ConcreteRef ? _mb_ty.type_idx :
+                            UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
+            local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
+            struct_get!(_mb_ib, _mb_idx, UInt32(1), _mb_ft)
+            # Land in a typed scratch + end with local.get: the SSA-store heuristics
+            # peek at the tail instruction and substitute ref.null for tails they
+            # can't type (same workaround as the het-tuple arm above).
+            local _mb_res = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, _mb_ft)
+            builder_set_local_type!(_mb_ib, _mb_res, _mb_ft)
+            local_set!(_mb_ib, _mb_res)
+            local_get!(_mb_ib, _mb_res)
+            append!(bytes, builder_code(_mb_ib))
+            return bytes
+        end
 
         # Handle Memory{T}.instance pattern (Julia 1.11+ Vector allocation)
         # This pattern appears as Core.getproperty(Memory{T}, :instance)
@@ -5921,6 +5944,87 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
             end
         end
+        # parity(M10b): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
+        # (dart Context variable write); the value wraps to anyref through the funnel.
+        if !_gfc_done && func.name === :setfield! && length(args) == 3 &&
+           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
+           infer_value_type(args[1], ctx) === Core.Box
+            local _bxs_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _bxs_bytes, _bxs_ty = compile_value_typed(args[1], ctx)
+            emit_raw!(_bxs_ib, _bxs_bytes; pushes=(_bxs_ty === nothing ? WasmValType[] : WasmValType[_bxs_ty]))
+            local _bxs_idx = _bxs_ty isa ConcreteRef ? _bxs_ty.type_idx :
+                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            !(_bxs_ty isa ConcreteRef) && ref_cast!(_bxs_ib, Int64(_bxs_idx), false)
+            local _bxs_ft = ctx.mod.types[_bxs_idx + 1].fields[2].valtype
+            emit_value!(_bxs_ib, args[3], ctx, _bxs_ft)
+            struct_set!(_bxs_ib, _bxs_idx, UInt32(1), _bxs_ft)
+            # setfield! evaluates to the VALUE; re-emit it (dup semantics via re-eval)
+            emit_value!(_bxs_ib, args[3], ctx, _bxs_ft)
+            append!(bytes, builder_code(_bxs_ib))
+            _gfc_done = true
+        end
+        # parity(M10b): isdefined(%box::Core.Box, :contents) — the shared cell's
+        # defined-check = a null test on the anyref contents.
+        if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
+           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
+           infer_value_type(args[1], ctx) === Core.Box
+            local _bxd_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _bxd_bytes, _bxd_ty = compile_value_typed(args[1], ctx)
+            emit_raw!(_bxd_ib, _bxd_bytes; pushes=(_bxd_ty === nothing ? WasmValType[] : WasmValType[_bxd_ty]))
+            local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
+                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            !(_bxd_ty isa ConcreteRef) && ref_cast!(_bxd_ib, Int64(_bxd_idx), false)
+            local _bxd_ft = ctx.mod.types[_bxd_idx + 1].fields[2].valtype
+            if _wt_is_ref(_bxd_ft)
+                struct_get!(_bxd_ib, _bxd_idx, UInt32(1), _bxd_ft)
+                ref_is_null!(_bxd_ib)
+                num!(_bxd_ib, Opcode.I32_EQZ)
+            else
+                # a TYPED box (i64 contents etc.) is always defined
+                drop!(_bxd_ib)
+                i32_const!(_bxd_ib, 1)
+            end
+            append!(bytes, builder_code(_bxd_ib))
+            _gfc_done = true
+        end
+        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # (dart Context variable read). The cell is the F3 anyref box struct.
+        if !_gfc_done && func.name === :getfield && length(args) == 2 &&
+           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
+           infer_value_type(args[1], ctx) === Core.Box
+            local _bx_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _bx_bytes, _bx_ty = compile_value_typed(args[1], ctx)
+            emit_raw!(_bx_ib, _bx_bytes; pushes=(_bx_ty === nothing ? WasmValType[] : WasmValType[_bx_ty]))
+            local _bx_idx = _bx_ty isa ConcreteRef ? _bx_ty.type_idx :
+                            UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            !( _bx_ty isa ConcreteRef) && ref_cast!(_bx_ib, Int64(_bx_idx), false)
+            local _bx_ft = ctx.mod.types[_bx_idx + 1].fields[2].valtype
+            struct_get!(_bx_ib, _bx_idx, UInt32(1), _bx_ft)
+            append!(bytes, builder_code(_bx_ib))
+            _gfc_done = true
+        end
+        # parity(M10b): getfield(closure_value, :boxfield) — the box was born in a
+        # callee; read the registered struct field here (the ONE shared cell).
+        if !_gfc_done && func.name === :getfield && length(args) == 2 &&
+           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
+            local _gfb_T = infer_value_type(args[1], ctx)
+            if _gfb_T isa DataType && isstructtype(_gfb_T) &&
+               haskey(ctx.type_registry.structs, _gfb_T)
+                local _gfb_info = ctx.type_registry.structs[_gfb_T]
+                local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+                local _gfb_fi = findfirst(==(_gfb_fld), fieldnames(_gfb_T))
+                if _gfb_fi !== nothing
+                    local _gfb_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                    # field index +1: field 0 is the classId header
+                    local _gfb_ft = ctx.mod.types[_gfb_info.wasm_type_idx + 1].fields[_gfb_fi + 1].valtype
+                    emit_value!(_gfb_ib, args[1], ctx,
+                                ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
+                    struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_fi), _gfb_ft)
+                    append!(bytes, builder_code(_gfb_ib))
+                    _gfc_done = true
+                end
+            end
+        end
         if !_gfc_done
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 record_unsupported!(ctx, :unsupported_method, "getfield call shape not lowerable"; idx=idx)
@@ -6214,6 +6318,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         append!(bytes, builder_code(_dqb))
                         _dyneq_ok = true
                     end
+                end
+                # parity(M10b): convert(T, x) where x's REFINED type is already T —
+                # identity (dart: no conversion node when types agree). The join can
+                # refine an erased Any to T after inference classified the convert.
+                if !_dyneq_ok && called_func === Base.convert && length(args) == 2 &&
+                   length(call_arg_types) == 2 && call_arg_types[1] isa Type &&
+                   call_arg_types[1] <: Type && call_arg_types[1] isa DataType &&
+                   length(call_arg_types[1].parameters) == 1 &&
+                   call_arg_types[2] === call_arg_types[1].parameters[1]
+                    local _cvi_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                    emit_value!(_cvi_ib, args[2], ctx)
+                    append!(bytes, builder_code(_cvi_ib))
+                    _dyneq_ok = true
                 end
                 if !_dyneq_ok
                 # WASMTARGET dynamic dispatch: before giving up, try an inline typeId

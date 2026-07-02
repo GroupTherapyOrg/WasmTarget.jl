@@ -1003,7 +1003,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # THE single return-coercion path (dead pre-emit type locals deleted).
                     bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
-                    return_!(bb)
+                    # A valueless ReturnNode is Julia IR `unreachable` (the tail of a
+                    # throw branch) — a structural trap, NEVER a bare `return` (which is
+                    # invalid in a result-typed function and was silently wrong in a void
+                    # one). dart: unimplemented/throw paths end in unreachable.
+                    unreachable!(bb)   # structural trap (dart-legit dead path)
                 end
 
             elseif stmt isa Core.GotoIfNot
@@ -1122,7 +1126,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # ref.null VALUE DROP; the single source boxes/converts properly).
                 b = emit_return_coerced!(b, term.val, ctx)
             else
-                return_!(b)
+                # A valueless ReturnNode terminator is Julia IR `unreachable` (throw tail):
+                # a structural trap, never a bare `return` (invalid in result-typed fns).
+                unreachable!(b)   # structural trap (dart-legit dead path)
             end
 
         elseif term isa Core.GotoIfNot

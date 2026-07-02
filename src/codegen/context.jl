@@ -709,7 +709,13 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
     for (_jk, _jv) in _numeric_joins
-        ctx.ssa_types[_jk] = _jv
+        # Only refine ERASED slots (Any / Union) — never overwrite a concrete type
+        # (e.g. the Core.Box value itself, which the join seeds but must stay a Box
+        # for the isdefined/getfield machinery).
+        local _orig = get(ctx.ssa_types, _jk, Any)
+        if _orig === Any || _orig isa Union
+            ctx.ssa_types[_jk] = _jv
+        end
     end
 
     # Allocate locals for phi nodes (they need to persist across iterations)
@@ -944,7 +950,13 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
     for (_jk, _jv) in _numeric_joins
-        ctx.ssa_types[_jk] = _jv
+        # Only refine ERASED slots (Any / Union) — never overwrite a concrete type
+        # (e.g. the Core.Box value itself, which the join seeds but must stay a Box
+        # for the isdefined/getfield machinery).
+        local _orig = get(ctx.ssa_types, _jk, Any)
+        if _orig === Any || _orig isa Union
+            ctx.ssa_types[_jk] = _jv
+        end
     end
 
     # Count uses of each SSA value
