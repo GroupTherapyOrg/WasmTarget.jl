@@ -67,9 +67,18 @@ Registry of dispatch tables for a module.
 """
 mutable struct DispatchTableRegistry
     tables::Dict{Any, DispatchTable}  # func_ref -> DispatchTable
+    # parity(M8.2): the dart selector bridge — single-axis tables dispatch via
+    # receiver.classId + offset into the ONE flat table (dispatch_table.dart:445-458)
+    # instead of the FNV probe. Multi-axis tables keep the probe until M8.3.
+    selector_axis::Dict{Any,Int}                      # func_ref → dispatch-axis position
+    selector_offset::Dict{Any,Int}                    # func_ref → packed table offset
+    selector_positions::Dict{Any,Vector{Tuple{Int,Int}}}  # func_ref → [(table_pos, entry_i)]
+    selector_table_idx::Union{Nothing,UInt32}         # THE one flat funcref table
+    selector_table_len::Int
 end
 
-DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}())
+DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}(),
+    Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0)
 
 """Check if a function has a hash dispatch table."""
 has_dispatch_table(reg::DispatchTableRegistry, func_ref) = haskey(reg.tables, func_ref)
@@ -347,6 +356,10 @@ function emit_dispatch_wrappers!(mod::WasmModule,
         # Add element segment with correct wrapper indices
         add_elem_segment!(mod, dt.func_table_idx, 0, wrapper_indices)
     end
+
+    # parity(M8.2): fill the ONE selector table (positions were packed at metadata
+    # time; wrapper indices only now exist). Contiguous runs → one segment each.
+    fill_selector_table_elements!(mod, dt_registry)
 end
 
 

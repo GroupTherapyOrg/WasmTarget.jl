@@ -41,3 +41,44 @@ end
     # dart sort weight: poly (10 targets) packs before duo (2 targets)
     @test s.offset == 0
 end
+
+# M8.2: the dart virtual call end-to-end — classId + offset + call_indirect through
+# the ONE flat table, replacing the FNV probe for single-axis selectors.
+module M8DispatchE2E
+struct E1 x::Int32 end; struct E2 x::Int32 end; struct E3 x::Int32 end
+struct E4 x::Int32 end; struct E5 x::Int32 end; struct E6 x::Int32 end
+struct E7 x::Int32 end; struct E8 x::Int32 end; struct E9 x::Int32 end
+struct E10 x::Int32 end
+dv(s::E1) = Int32(1); dv(s::E2) = Int32(2); dv(s::E3) = Int32(3)
+dv(s::E4) = Int32(4); dv(s::E5) = Int32(5); dv(s::E6) = Int32(6)
+dv(s::E7) = Int32(7); dv(s::E8) = Int32(8); dv(s::E9) = Int32(9)
+dv(s::E10) = Int32(10)
+caller(x::Any)::Int32 = dv(x)
+mk1(v::Int32) = E1(v); mk3(v::Int32) = E3(v); mk10(v::Int32) = E10(v)
+end
+@testset "M8.2 dart virtual call (classId+offset through the ONE table)" begin
+    M = M8DispatchE2E
+    fns = [(M.dv,(M.E1,)),(M.dv,(M.E2,)),(M.dv,(M.E3,)),(M.dv,(M.E4,)),(M.dv,(M.E5,)),
+           (M.dv,(M.E6,)),(M.dv,(M.E7,)),(M.dv,(M.E8,)),(M.dv,(M.E9,)),(M.dv,(M.E10,)),
+           (M.caller,(Any,)),(M.mk1,(Int32,)),(M.mk3,(Int32,)),(M.mk10,(Int32,))]
+    bytes = WasmTarget.compile_multi(fns)
+    @test !isempty(bytes)
+    # the routing PROOF: the selector bridge engaged for dv (single-axis, 10 targets)
+    bytes2, treg, freg, dreg = WasmTarget.compile_multi(fns; return_registries=true)
+    @test haskey(dreg.selector_offset, M.dv)
+    @test dreg.selector_table_idx !== nothing
+    @test dreg.selector_table_len >= 10
+    if success(`which node`)
+        p = joinpath(mktempdir(), "m82.wasm"); write(p, bytes)
+        js = """
+        import fs from 'fs';
+        const b = fs.readFileSync('$(escape_string(p))');
+        const m = await WebAssembly.instantiate(b, { Math: { pow: Math.pow } });
+        const e = m.instance.exports;
+        console.log(JSON.stringify([e.caller(e.mk1(0)), e.caller(e.mk3(0)), e.caller(e.mk10(0))]));
+        """
+        jp = joinpath(dirname(p), "m82.mjs"); write(jp, js)
+        out = strip(read(`node $jp`, String))
+        @test out == "[1,3,10]"
+    end
+end

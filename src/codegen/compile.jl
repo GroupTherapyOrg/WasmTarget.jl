@@ -1643,6 +1643,8 @@ function compile_module(functions::Vector;
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
+        # parity(M8.2): pack single-axis selectors into the ONE dart table
+        pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
     # Track export names to avoid duplicates (WASM requires unique export names)
@@ -1713,8 +1715,15 @@ function compile_module(functions::Vector;
         elseif dispatch_dt !== nothing
             # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            body, locals = generate_dispatch_caller_body(
-                dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
+            if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
+                # parity(M8.2): the dart virtual call — classId + offset + call_indirect
+                body, locals = generate_selector_caller_body(
+                    dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
+                    caller_return_type=return_type, mod=mod, type_registry=type_registry)
+            else
+                body, locals = generate_dispatch_caller_body(
+                    dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
+            end
         else
             # Generate function body from Julia IR
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;

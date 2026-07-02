@@ -174,3 +174,176 @@ function pack_selector_offsets!(reg::SelectorRegistry)::Int
     end
     return length(table)
 end
+
+# ============================================================================
+# M8.2 — route single-axis dispatch through the ONE dart table
+# ============================================================================
+
+"""
+    pack_dispatch_selectors!(mod, dt_registry, type_registry)
+
+At metadata time (entries known, wrappers not yet): detect each DispatchTable's
+dispatch axis; SINGLE-AXIS tables (exactly one varying typeId position — keying
+on that axis alone is provably equivalent to the full-tuple key) get first-fit
+packed into ONE flat funcref table (dart dispatch_table.dart:405-458). Offsets +
+positions land on `dt_registry`; elements are filled after wrapper emission by
+[`fill_selector_table_elements!`](@ref). Multi-axis tables keep the FNV probe
+(the M8.3 cascade replaces it).
+"""
+function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
+    isempty(dt_registry.tables) && return
+    # collect single-axis selectors: (func_ref, rows::Vector{(classId, entry_i)}, weight)
+    packable = Tuple{Any,Vector{Tuple{Int,Int}},Int}[]
+    for (func_ref, dt) in dt_registry.tables
+        arity = Int(dt.arity)
+        varying = Int[]
+        for pos in 1:arity
+            tids = Set{Int32}(e.type_ids[pos] for e in dt.entries)
+            length(tids) > 1 && push!(varying, pos)
+        end
+        length(varying) == 1 || continue
+        axis = varying[1]
+        rows = Tuple{Int,Int}[]
+        seen = Set{Int}()
+        unique_axis = true
+        for (i, e) in enumerate(dt.entries)
+            cid = Int(e.type_ids[axis])
+            cid in seen && (unique_axis = false; break)   # axis tie ⇒ not single-axis
+            push!(seen, cid)
+            push!(rows, (cid, i))
+        end
+        unique_axis || continue
+        dt_registry.selector_axis[func_ref] = axis
+        push!(packable, (func_ref, rows, length(rows) * 10))
+    end
+    isempty(packable) && return
+    # dart's first-fit packing (sort weight desc; callCount folded into weight when known)
+    sort!(packable; by=t -> -t[3])
+    table = Union{Nothing,Int}[]   # occupied marker (entry refs resolved later)
+    first_available = 0
+    is_first = true
+    for (func_ref, rows, _) in packable
+        sort!(rows; by=r -> r[1])
+        cids = [r[1] for r in rows]
+        offset = is_first ? 0 : first_available - cids[1]
+        is_first = false
+        while true
+            fits = true
+            for cid in cids
+                entry = offset + cid
+                entry < 0 && (fits = false; break)
+                entry >= length(table) && break
+                table[entry + 1] !== nothing && (fits = false; break)
+            end
+            fits && break
+            offset += 1
+        end
+        positions = Tuple{Int,Int}[]
+        for (cid, entry_i) in rows
+            pos = offset + cid
+            while length(table) <= pos
+                push!(table, nothing)
+            end
+            @assert table[pos + 1] === nothing
+            table[pos + 1] = entry_i
+            push!(positions, (pos, entry_i))
+        end
+        dt_registry.selector_offset[func_ref] = offset
+        dt_registry.selector_positions[func_ref] = positions
+        while first_available < length(table) && table[first_available + 1] !== nothing
+            first_available += 1
+        end
+    end
+    dt_registry.selector_table_len = length(table)
+    dt_registry.selector_table_idx = add_table!(mod, FuncRef, UInt32(length(table)))
+    return
+end
+
+"""
+    fill_selector_table_elements!(mod, dt_registry)
+
+After wrapper emission (dispatch.jl): write the packed positions' wrapper indices
+into the ONE table as element segments (contiguous runs, dart output(),
+dispatch_table.dart:461-470).
+"""
+function fill_selector_table_elements!(mod::WasmModule, dt_registry)
+    dt_registry.selector_table_idx === nothing && return
+    entries = Tuple{Int,UInt32}[]   # (position, wrapper_idx)
+    for (func_ref, positions) in dt_registry.selector_positions
+        dt = dt_registry.tables[func_ref]
+        for (pos, entry_i) in positions
+            push!(entries, (pos, dt.entries[entry_i].wrapper_idx))
+        end
+    end
+    sort!(entries; by=first)
+    i = 1
+    while i <= length(entries)
+        j = i
+        while j < length(entries) && entries[j + 1][1] == entries[j][1] + 1
+            j += 1
+        end
+        add_elem_segment!(mod, dt_registry.selector_table_idx, entries[i][1],
+                          UInt32[e[2] for e in entries[i:j]])
+        i = j + 1
+    end
+    return
+end
+
+"""
+    generate_selector_caller_body(dt, dt_registry, n_params, base_struct_idx) -> (body, locals)
+
+dart's virtual call site (code_generator.dart:2110-2122), as the dispatcher body:
+
+    push args · receiver.classId · [+ offset] · call_indirect(sig, THE table)
+
+A classId with no row hits a null funcref → trap: the honest MethodError analog
+(loud, dart-legit) — same posture the FNV probe's miss already had.
+"""
+function generate_selector_caller_body(dt::DispatchTable, dt_registry,
+                                       n_params::Int, base_struct_idx::UInt32;
+                                       caller_return_type::Type=Any, mod=nothing, type_registry=nothing)
+    axis = dt_registry.selector_axis[dt.func_ref]
+    offset = dt_registry.selector_offset[dt.func_ref]
+    b = InstrBuilder(; func_name="selector_caller")
+    arity = Int(dt.arity)
+    # dispatch signature params are AnyRef: push params in order
+    for j in 1:arity
+        local_get!(b, UInt32(j - 1))
+    end
+    # receiver.classId (dart: struct.get topInfo.classId)
+    local_get!(b, UInt32(axis - 1))
+    ref_cast!(b, Int64(base_struct_idx), false)
+    struct_get!(b, UInt32(base_struct_idx), UInt32(0), I32)
+    if offset != 0
+        i32_const!(b, Int64(offset))
+        num!(b, Opcode.I32_ADD)
+    end
+    sig = FuncType(fill(AnyRef, arity),
+                   dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+                       WasmValType[dt.result_wasm_type] : WasmValType[])
+    call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
+                   sig.params, sig.results)
+    # Result seam: the caller's DECLARED result may be anyref (dynamic-call inference)
+    # while the selector signature is typed — box through the ONE producer.
+    locals = WasmValType[]
+    declared = julia_to_wasm_type(caller_return_type)
+    if _wt_is_ref(declared) && dt.result_wasm_type in (I32, I64, F32, F64) &&
+       mod !== nothing && type_registry !== nothing
+        rts = Set{Type}(e.return_type for e in dt.entries)
+        jt = length(rts) == 1 ? first(rts) : nothing
+        if jt !== nothing
+            # the ONE box shape (emit_classid_box!): save value · classId · value · struct.new
+            box_idx = get_numeric_box_type!(mod, type_registry, dt.result_wasm_type)
+            tid = ensure_type_id!(type_registry, jt)
+            scratch = UInt32(n_params)   # first extra local
+            push!(locals, dt.result_wasm_type)
+            builder_set_local_type!(b, Int(scratch), dt.result_wasm_type)
+            local_set!(b, scratch)
+            i32_const!(b, Int64(tid))
+            local_get!(b, scratch)
+            struct_new!(b, box_idx, WasmValType[I32, dt.result_wasm_type])
+        end
+    end
+    end_block!(b)
+    return builder_code(b), locals
+end
