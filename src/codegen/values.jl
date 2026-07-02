@@ -555,24 +555,34 @@ ref.null / extern-box. Else if the value type cannot satisfy the return type →
 `return`. Byte-identical to the inlined blocks it replaces.
 """
 function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)
-    val_wasm_type = infer_value_wasm_type(val, ctx)
+    # parity(M2): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
+    # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
+    # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an
+    # ill-typed non-box concrete target now traps loudly instead of silently nulling).
     func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-    is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-    is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-    if is_numeric_val && is_ref_ret
-        if func_ret_wasm === ExternRef
-            tb = UInt8[]; emit_numeric_to_externref!(tb, val, val_wasm_type, ctx); emit_raw!(b, tb; pushes=WasmValType[ExternRef])
-        elseif func_ret_wasm isa ConcreteRef
+    # `nothing` into a ref return → typed null (dart returns null, never a boxed zero).
+    if _wt_is_ref(func_ret_wasm) && is_nothing_value(val, ctx)
+        if func_ret_wasm isa ConcreteRef
             ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
         else
             ref_null!(b, func_ret_wasm)
         end
         return_!(b)
-    elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
+        return b
+    end
+    ty = emit_value!(b, val, ctx)
+    if ty === nothing
+        # value compiler produced no single result (dead/unresolvable path)
+        unreachable!(b)
+    elseif !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
+        # numeric → ref return (PURE-315 precedence): the funnel boxes/converts.
+        convert_type!(b, ty, func_ret_wasm, ctx)
+        return_!(b)
+    elseif !return_type_compatible(ty, func_ret_wasm)
+        # genuinely unsatisfiable (dead Union arm) — trap, matching the old posture.
         unreachable!(b)
     else
-        emit_value!(b, val, ctx)
-        convert_type!(b, val_wasm_type, func_ret_wasm, ctx)
+        ty === func_ret_wasm || convert_type!(b, ty, func_ret_wasm, ctx)
         return_!(b)
     end
     return b
