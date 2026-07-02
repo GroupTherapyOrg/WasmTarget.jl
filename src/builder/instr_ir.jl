@@ -142,6 +142,10 @@ struct MemoryFill <: WasmInstr; mem::UInt32; end
 # array.new_elem (0xFB 0x0A): [offset:i32 length:i32] -> [(ref $type)] from an elem segment.
 struct ArrayNewElem <: WasmInstr; idx::UInt32; seg::UInt32; end
 
+# ── saturating truncation (0xFC prefix, sub-op 0x00–0x07) ────────────────────────
+# float → int, clamping out-of-range/NaN instead of trapping. `sub_op` is the FC sub-op.
+struct TruncSat <: WasmInstr; sub_op::UInt8; end
+
 # ── transitional bridge (deleted when every emitter is migrated) ──────────────────
 # Pre-encoded bytes spliced from an un-migrated callee (compile_value, etc.). A real
 # instruction in the stream that just carries already-serialized bytes.
@@ -162,7 +166,7 @@ import .InstrIR: WasmInstr,
     RefCastConcrete, RefCastAbstract, RefTest, BrOnCast, BrOnCastFail, AnyConvertExtern, ExternConvertAny,
     RefI31, I31GetS, I31GetU,
     TableGet, TableSet, TableSize, TableGrow, TableFill,
-    MemoryInit, DataDrop, MemoryCopy, MemoryFill, RawBytes
+    MemoryInit, DataDrop, MemoryCopy, MemoryFill, TruncSat, RawBytes
 
 # encode!(code, instr): append this instruction's exact on-wire bytes (dart2wasm `serialize`).
 @inline _u!(code, n) = append!(code, encode_leb128_unsigned(n))
@@ -263,6 +267,7 @@ encode!(c::Vector{UInt8}, i::MemoryInit) = (push!(c, Opcode.FC_PREFIX); _u!(c, U
 encode!(c::Vector{UInt8}, i::DataDrop)   = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.DATA_DROP));   _u!(c, i.seg))
 encode!(c::Vector{UInt8}, i::MemoryCopy) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_COPY)); _u!(c, i.dst_mem); _u!(c, i.src_mem))
 encode!(c::Vector{UInt8}, i::MemoryFill) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_FILL)); _u!(c, i.mem))
+encode!(c::Vector{UInt8}, i::TruncSat) = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(i.sub_op)))
 encode!(c::Vector{UInt8}, i::RawBytes) = append!(c, i.bytes)
 
 # mnemonic(instr): symbolic WAT-ish text (dart2wasm `printTo`) — for builder_diagnose /
@@ -344,4 +349,5 @@ mnemonic(i::MemoryInit) = "memory.init $(i.seg) $(i.mem)"
 mnemonic(i::DataDrop)   = "data.drop $(i.seg)"
 mnemonic(i::MemoryCopy) = "memory.copy $(i.dst_mem) $(i.src_mem)"
 mnemonic(i::MemoryFill) = "memory.fill $(i.mem)"
+mnemonic(i::TruncSat) = "trunc_sat 0x$(string(i.sub_op, base=16))"
 mnemonic(i::RawBytes) = "<raw $(length(i.bytes))B>"

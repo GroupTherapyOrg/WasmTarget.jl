@@ -1,5 +1,17 @@
 # WasmTarget Followup / Cleanup — the patch-debt-deletion loop (DISCOVERY-FIRST)
 
+> **▶▶ SUPERSEDED / FOLDED IN (2026-06-29):** the InstrBuilder foundation + the early cleanup loops
+> (fix_* deletion, `return_type_compatible` → WasmGC lattice) this spec drove SHIPPED in **v0.4.0**
+> (FULLY LANDED: General registry + git tag + GitHub release). The DEEP remaining work named in
+> "REMAINING WORK" below (the `compile_value` TYPE CHANNEL, numeric-Union BOXING, the 3-flow-generator
+> collapse, strict-by-default, loud-reject diagnostics) is now pursued INSIDE the active **dart2wasm
+> production-parity march** — see `dev/PARITY_LEDGER.md` + `dev/PARITY_LOOP.md` (Loop B = compile_value
+> type-channel + flow dedup; the boxing work; Loop D = strict-default + loud-reject). dart2wasm is the
+> HOW oracle; the real Julia compiler (differential native-vs-wasm + full Pkg.test) is the
+> verification. Ethos: **PURE not cheap — carry the real type, box only the genuinely-dynamic, wire
+> fixes THROUGHOUT and delete the old parallel code; no defer/settle, no loud-fail-as-substitute.**
+> This file is retained as the historical cleanup-loop record + the still-valid OPERATIONAL PROTOCOL.
+
 Branch: `wt-builder-cleanup` (off `wt-wasm-builder`, which is PR #70 — migration, do not merge yet).
 Prereq DONE: the InstrBuilder migration is complete + validated (`Pkg.test()` GREEN, 2679 tests;
 byte-identity-locked invariant in CI). See `dev/WASM_BUILDER_MIGRATION.md` + `dev/MIGRATION_PLAYBOOK.md`.

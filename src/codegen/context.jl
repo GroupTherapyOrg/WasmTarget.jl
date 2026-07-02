@@ -528,6 +528,11 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             # Register Vector as a struct type with (ref, size) layout
             info = register_vector_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
+        elseif T <: AbstractVector && T isa DataType && !isconcretetype(T) && !isstructtype(T)
+            # 1.13-rc1: inference widens Memory-backed values to abstract vector supertypes
+            # (DenseVector{UInt8} etc.) — can hold a Vector struct OR a raw Memory array at
+            # runtime; the sound wasm join is AnyRef (register_struct_type! would THROW).
+            return AnyRef
         elseif T <: AbstractVector && T isa DataType
             # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
             info = register_struct_type!(ctx.mod, ctx.type_registry, T)
@@ -566,56 +571,12 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             end
             return inner_wasm
         else
-            # Multi-variant union (2+ non-Nothing types).
-            # Check if all non-Nothing variants are numeric (no tagged struct needed).
-            types_u = Base.uniontypes(T)
-            non_nothing_u = filter(t -> t !== Nothing, types_u)
-            all_numeric_u = !isempty(non_nothing_u) && all(non_nothing_u) do t
-                wt = julia_to_wasm_type(t)
-                wt === I32 || wt === I64 || wt === F32 || wt === F64
-            end
-            if all_numeric_u
-                # Numeric-only union: use widest numeric type (no struct boxing needed).
-                # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
-                result = julia_to_wasm_type(T)
-                # PURE-908/9064: Never return AnyRef for locals unless JlType hierarchy active
-                if result === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                    return ExternRef
-                end
-                return result
-            else
-                # FOUND-5003: Union of Type{T} values (e.g., Union{Type{Any}, Type{Number}}).
-                # All Type{T} values compile to JlDataType struct refs via global.get.
-                # Use the DataType type directly instead of creating a tagged union,
-                # which would cause ConcreteRef type mismatches at phi edges.
-                all_type_vals = all(non_nothing_u) do t
-                    t isa DataType && t <: Type
-                end
-                if all_type_vals && ctx.type_registry.jl_datatype_idx !== nothing
-                    return ConcreteRef(ctx.type_registry.jl_datatype_idx, true)
-                end
-
-                # Non-numeric multi-variant union.
-                # Check if all variants are WasmGC struct types — if so, use StructRef.
-                # This aligns with get_concrete_wasm_type which returns StructRef for
-                # all-struct unions via resolve_union_type → find_common_wasm_type.
-                # Using StructRef avoids the PiNode narrowing bug where a raw struct value
-                # (from a StructRef parameter) gets illegally cast to a tagged union type
-                # when Julia IR narrows Union{A,B,C} to Union{B,C} via PiNode.
-                # Tagged union ConcreteRef is only needed for heterogeneous unions
-                # (e.g., mix of structs and arrays/strings) where StructRef won't work.
-                is_all_struct = all(non_nothing_u) do t
-                    (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
-                end
-                if is_all_struct
-                    return StructRef
-                else
-                    # PURE-6021b: Heterogeneous non-numeric union uses a tagged-union struct.
-                    # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
-                    union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
-                    return ConcreteRef(union_info.wasm_type_idx, true)
-                end
-            end
+            # Multi-variant union → THE single resolver (dart2wasm translateType parity),
+            # shared with get_concrete_wasm_type so the local allocator + value-type resolver
+            # CANNOT drift. `for_local=true` keeps WT's anyref→externref-for-locals wart on the
+            # numeric path (the value-type resolver omits it); all other arms are identical.
+            non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
+            return _resolve_multivariant_union(T, non_nothing_u, ctx.mod, ctx.type_registry; for_local=true)
         end
     else
         # Use the standard conversion for non-struct types
@@ -704,6 +665,46 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
+    # parity(M6/F3): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
+    # a variable's local is typed by its REAL inferred type, not the erased Any). The
+    # dormant Loop-C value-channel pass proves, conservatively, which Any-typed SSAs/phis
+    # only ever carry one numeric type (the scalar-replaced Core.Box accumulator cycle);
+    # their locals become that numeric type so the adds/stores line up — the return/phi
+    # boundaries box via the wrap channel where anyref is genuinely required.
+    _numeric_joins = try
+        # Parent side: record %new(Core.Box) contents types per capturing closure type
+        # (feeds the closure-side seeding below when THAT closure's body compiles).
+        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
+        # Closure side: seed the captured-Box getfields with the recorded contents type
+        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
+        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
+        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
+        if !isempty(ctx.arg_types)
+            _sbT = ctx.arg_types[1]
+            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+                argtypes=ctx.arg_types[2:end], self_shift=1))
+        end
+        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
+            _selfT = ctx.arg_types[1]
+            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
+            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
+                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
+            if _bj !== nothing
+                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                if !isempty(_seeds)
+                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, _seeds)
+                end
+            end
+        end
+        _joins
+    catch
+        Dict{Int,Type}()
+    end
+
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
@@ -719,6 +720,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     phi_julia_type = Int64
                 end
             end
+            haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
 
             # PURE-324: For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
@@ -733,7 +735,12 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     wt === I32 || wt === I64 || wt === F32 || wt === F64
                 end
                 if all_numeric && !isempty(non_nothing)
-                    phi_wasm_type = resolve_union_type(phi_julia_type)
+                    # Route through THE single resolver (julia_to_wasm_type_concrete →
+                    # _resolve_multivariant_union) instead of the old lossy resolve_union_type,
+                    # which collapsed mixed int/float (Union{Int64,Float64}) to F64 — losing the
+                    # tag (Int 1 / Float 1.0 indistinguishable). The principled path boxes it (AnyRef),
+                    # matching the value-type resolver + dart's top type. Same-category → widest (same).
+                    phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
                 end
             end
 
@@ -891,6 +898,40 @@ We need locals when:
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
+    # parity(M6/F3): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
+    _numeric_joins = try
+        # Parent side: record %new(Core.Box) contents types per capturing closure type
+        # (feeds the closure-side seeding below when THAT closure's body compiles).
+        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
+        # Closure side: seed the captured-Box getfields with the recorded contents type
+        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
+        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
+        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
+        if !isempty(ctx.arg_types)
+            _sbT = ctx.arg_types[1]
+            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+                argtypes=ctx.arg_types[2:end], self_shift=1))
+        end
+        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
+            _selfT = ctx.arg_types[1]
+            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
+            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
+                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
+            if _bj !== nothing
+                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                if !isempty(_seeds)
+                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, _seeds)
+                end
+            end
+        end
+        _joins
+    catch
+        Dict{Int,Type}()
+    end
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
@@ -1255,6 +1296,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # will actually push on the stack. If the source value has a local,
             # that local's type is what will be on the stack (via local.get).
             effective_type = ssa_type
+            # parity(M6/F3): Any-but-really-numeric SSAs take their JOIN type (see above).
+            haskey(_numeric_joins, ssa_id) && (effective_type = _numeric_joins[ssa_id])
             if stmt isa Core.PiNode
                 narrowed_wasm = julia_to_wasm_type_concrete(ssa_type, ctx)
                 # Check if the source value has a local with a different type
@@ -2080,7 +2123,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
                 get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
         end
     end
-    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", strict=false)
+    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", mod=ctx.mod)
     seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
@@ -2195,7 +2238,7 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
-        b = InstrBuilder(; func_name="_narrow_generic_local!", strict=false)
+        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
         seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
         if local_wasm_type === ExternRef
             # PURE-6025: ExternRef needs any_convert_extern before ref.cast

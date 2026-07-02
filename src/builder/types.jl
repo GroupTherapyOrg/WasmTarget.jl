@@ -403,12 +403,14 @@ function resolve_union_type(T::Union)::WasmValType
         # Union{Nothing, T} -> T
         return julia_to_wasm_type(non_nothing[1])
     else
-        # Multiple non-Nothing types - find common numeric type
-        # NOTE: For Union{Int128, Int64, BigInt}, this returns I64.
-        # Int128/BigInt are WasmGC structs, but the phi local uses I64 because:
-        # 1. The Int64 path is the common case (small numbers)
-        # 2. Int128/BigInt paths store i64.const 0 (type-safe default) in the phi
-        # 3. The caller discriminates via isa() checks and handles each branch
+        # Multi-variant: box mixed-CATEGORY numeric (int/float — Union{Int64,Float64}) behind
+        # AnyRef. Collapsing to the widest primitive is LOSSY (Int 1 / Float 1.0 become the same
+        # f64, tag gone). The SAME needs_anyref_boxing decision the codegen resolver uses
+        # (_resolve_multivariant_union) — so the builder + codegen layers AGREE on one boxing rule.
+        # Same-category numeric (all-int / all-float) → widest primitive (find_common_wasm_type).
+        # NOTE: Union{Int128,Int64,BigInt} → I64 (Int128/BigInt store i64.const 0 defaults; the
+        # caller discriminates via isa()).
+        needs_anyref_boxing(T) && return AnyRef
         return find_common_wasm_type(non_nothing)
     end
 end
@@ -482,16 +484,17 @@ function needs_anyref_boxing(T::Union)::Bool
     types = Base.uniontypes(T)
     non_nothing = filter(t -> t !== Nothing, types)
     length(non_nothing) < 2 && return false
-    # Check if all are numeric
-    all(t -> t <: Number, non_nothing) || return false
-    # Check if they have mixed Wasm categories (int vs float)
-    wasm_types = Set{WasmValType}()
-    for t in non_nothing
-        push!(wasm_types, julia_to_wasm_type(t))
-    end
-    has_int = any(w -> w === I32 || w === I64, wasm_types)
-    has_float = any(w -> w === F32 || w === F64, wasm_types)
-    return has_int && has_float
+    # Box iff EVERY member boxes as a NUMERIC value (i32/i64/f32/f64) — covers Number
+    # subtypes AND Char/other numeric-rep primitives, excluding struct/string/ref members
+    # (those use their own ConcreteRef/tagged rep).
+    wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
+    all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
+    # ANY multi-member numeric union must box (dart2wasm boxes every dynamic value): members
+    # with DIFFERENT wasm reps (e.g. Int64 i64 vs Bool i32, or int vs float) can't collapse to
+    # one faithful primitive — the het-tuple/phi if-else would read different-width fields under
+    # a single block result type → INVALID wasm; members SHARING a rep (Bool/Int8/Int32 all i32)
+    # lose their type tag on collapse → isa/typeof mis-fire. Either way: box, keep the classId.
+    return true
 end
 
 """

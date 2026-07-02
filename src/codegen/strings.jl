@@ -179,7 +179,7 @@ function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tm
     # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
     # build into a local collect-mode builder and splice the result (no seeding needed; the
     # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
-    ib = InstrBuilder(; func_name="emit_jl_string_to_js", strict=false)
+    ib = InstrBuilder(; func_name="emit_jl_string_to_js")
     call!(ib, helper_idx, WasmValType[], WasmValType[])
     append!(bytes, builder_code(ib))
 end
@@ -200,7 +200,7 @@ function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
     # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
     # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
-    ib = InstrBuilder(; func_name="emit_js_to_jl_string", strict=false)
+    ib = InstrBuilder(; func_name="emit_js_to_jl_string")
     call!(ib, encode_func_idx, WasmValType[], WasmValType[])
     append!(bytes, builder_code(ib))
 end
@@ -417,7 +417,7 @@ function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
         # MIGRATED to InstrBuilder (typed). Const-expr init = (i64.const seed) (end).
         # Byte-identical: i64_const! emits I64_CONST + leb_s(seed); the const-expr END
         # terminator (0x0B) is bridged (no open block in a const expr to balance).
-        ib = InstrBuilder(; func_name="ensure_rng_globals!", strict=false)
+        ib = InstrBuilder(; func_name="ensure_rng_globals!", mod=mod)
         i64_const!(ib, seed)
         emit_raw!(ib, UInt8[Opcode.END])
         init = builder_code(ib)
@@ -491,9 +491,9 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     builder_set_local_type!(b, len1_local, I32)
 
     # Store str1, str2
-    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    emit_value!(b, str1, ctx)
     local_set!(b, str1_local)
-    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    emit_value!(b, str2, ctx)
     local_set!(b, str2_local)
 
     # len1 = str1.len (stored); len2 = str2.len (left on stack)
@@ -545,9 +545,9 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, i_local, I32)
 
     # Store str1 and str2
-    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    emit_value!(b, str1, ctx)
     local_set!(b, str1_local)
-    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    emit_value!(b, str2, ctx)
     local_set!(b, str2_local)
 
     # len1 = str1.len (tee into len_local); compare with len2
@@ -579,7 +579,7 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
                 local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
                 br!(b, 0)
             end_block!(b)                                  # end loop
-            unreachable!(b)                                # loop never falls through
+            unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
         end_block!(b)                                      # end result block
     end_block!(b)                                          # end if-else
 

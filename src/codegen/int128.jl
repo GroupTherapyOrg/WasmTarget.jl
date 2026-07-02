@@ -52,7 +52,7 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     builder_set_local_type!(b, hi_local, I64)
     local_set!(b, hi_local)
-    i32_const!(b, 0)  # typeId = 0
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local)
     local_get!(b, hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
@@ -106,7 +106,7 @@ function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
     local_get!(b, borrow_local); num!(b, Opcode.I64_SUB); local_set!(b, result_hi_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -188,7 +188,7 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
     local_set!(b, result_hi_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -228,7 +228,7 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     num!(b, Opcode.I64_ADD); local_set!(b, result_hi_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -437,7 +437,7 @@ function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     select!(b); local_set!(b, result_hi_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -498,7 +498,7 @@ function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     select!(b); local_set!(b, result_lo_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -567,7 +567,7 @@ function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
     select!(b); local_set!(b, result_lo_local)
 
     # Create result struct (typeId, lo, hi)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
@@ -611,9 +611,103 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     builder_set_local_type!(b, result_local, I64)
     local_set!(b, result_local)
-    i32_const!(b, 0)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
     i64_const!(b, 0)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
+end
+
+"""
+Emit 128-bit count trailing zeros (F11). Stack: [x_struct] -> [result_struct].
+tz(x) = lo==0 ? 64 + ctz(hi) : ctz(lo). Mirrors emit_int128_ctlz (lo/hi roles swapped);
+the prior code emitted a single i64.ctz on a 128-bit value → invalid wasm.
+"""
+function emit_int128_cttz(ctx, arg_type::Type)::Vector{UInt8}
+    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_cttz", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+
+    x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    ctz_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for i in (x_lo_local, x_hi_local, ctz_lo_local); builder_set_local_type!(b, i, I64); end
+    builder_set_local_type!(b, x_struct_local, structref)
+
+    local_set!(b, x_struct_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+
+    # ctz_lo = ctz(x_lo)
+    local_get!(b, x_lo_local); num!(b, Opcode.I64_CTZ); local_set!(b, ctz_lo_local)
+
+    # lo==0 ? 64+ctz(hi) : ctz(lo)   via select(64+ctz(hi), ctz(lo), lo==0)
+    i64_const!(b, 64); local_get!(b, x_hi_local); num!(b, Opcode.I64_CTZ); num!(b, Opcode.I64_ADD)
+    local_get!(b, ctz_lo_local)
+    local_get!(b, x_lo_local); num!(b, Opcode.I64_EQZ)
+    select!(b)
+
+    result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, result_local, I64)
+    local_set!(b, result_local)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
+    local_get!(b, result_local)
+    i64_const!(b, 0)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
+end
+
+"""
+Emit 128-bit population count (F11). Stack: [x_struct] -> [result_struct].
+popcnt(x) = popcnt(lo) + popcnt(hi). The prior code emitted a single i64.popcnt on a
+128-bit value → invalid wasm.
+"""
+function emit_int128_ctpop(ctx, arg_type::Type)::Vector{UInt8}
+    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_ctpop", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    builder_set_local_type!(b, x_struct_local, structref)
+    local_set!(b, x_struct_local)
+
+    # popcnt(lo) + popcnt(hi)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); num!(b, Opcode.I64_POPCNT)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); num!(b, Opcode.I64_POPCNT)
+    num!(b, Opcode.I64_ADD)
+
+    result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    builder_set_local_type!(b, result_local, I64)
+    local_set!(b, result_local)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
+    local_get!(b, result_local)
+    i64_const!(b, 0)
+    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return builder_code(b)
+end
+
+"""
+Emit 128-bit bitwise NOT (F11). Stack: [x_struct] -> [result_struct].
+~x = {~lo, ~hi}. The prior code emitted a single i64.xor -1 on a 128-bit value → invalid
+wasm; surfaced via count_zeros (= count_ones(~x)).
+"""
+function emit_int128_not(ctx, arg_type::Type)::Vector{UInt8}
+    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
+    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    b = InstrBuilder(; func_name="emit_int128_not", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+
+    x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    builder_set_local_type!(b, x_struct_local, structref)
+    local_set!(b, x_struct_local)
+
+    # { typeId=0, lo = lo xor -1, hi = hi xor -1 }
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
     return builder_code(b)
 end
@@ -652,7 +746,7 @@ function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
         local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
-    i32_const!(b, 0)  # typeId = 0
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo & b_lo ; result_hi = a_hi & b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_AND)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_AND)
@@ -694,7 +788,7 @@ function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
         local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
-    i32_const!(b, 0)  # typeId = 0
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo | b_lo ; result_hi = a_hi | b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_OR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_OR)
@@ -736,7 +830,7 @@ function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
         local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
     end
 
-    i32_const!(b, 0)  # typeId = 0
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo ^ b_lo ; result_hi = a_hi ^ b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_XOR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_XOR)

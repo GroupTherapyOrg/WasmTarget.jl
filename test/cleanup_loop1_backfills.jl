@@ -73,7 +73,16 @@ function bf_lastidx(n::Int64)
 end
 
 # ── L1.g fix_numeric_to_ref_local_stores: numeric → ref-typed phi local (union/boxing) ──
-bf_union(x::Int64) = x > 0 ? 1 : 2.5     # Union{Int,Float} phi return (a WORKING corpus case)
+# F1 (Loop B): a numeric Union spanning int+float (Union{Int64,Float64}) is now BOXED as a
+# classId-tagged {typeId,value} struct (anyref), NOT collapsed to a lossy f64. So the bare
+# union RETURN below compiles+validates but its anyref result can't be Node-marshaled (the
+# return JSON is `undefined`) — assert COMPILE+VALIDATE only. The faithful round-trip is proven
+# by the union-INTERNAL companions (bfu_*), which create+consume the box internally and return
+# a primitive Node CAN marshal (value preserved, tag preserved, numeric content exact).
+bf_union(x::Int64) = x > 0 ? 1 : 2.5     # Union{Int,Float} phi return (now boxed → anyref)
+bfu_use(x::Int64)   = (a = x>0 ? 1 : 2.5; a > 1.5 ? 100 : 200)       # value preserved
+bfu_isa(x::Int64)   = (a = x>0 ? 1 : 2.5; a isa Float64 ? 1 : 0)     # TAG preserved (not lossy)
+bfu_arith(x::Int64) = (a = x>0 ? 1 : 2.5; Int(floor(Float64(a)*10))) # numeric content exact
 
 # ── raw-byte structural guards (no Node needed) ──────────────────────────────────────────
 # array.len is [0xFB 0x0F]; a spurious wrap after it would be the trailing 0xA7. The migrated
@@ -134,8 +143,16 @@ end
             @test _no_wrap_after_array_len(_WT.compile(f, map(typeof, a)))
         end
     end
-    @testset "L1.g numeric → ref phi local (union return validates)" begin
-        @test compare_julia_wasm(bf_union, Int64(5)).pass
-        @test compare_julia_wasm(bf_union, Int64(-5)).pass
+    @testset "L1.g numeric → ref phi local (F1: numeric union BOXED, faithful)" begin
+        # Bare boxed-union return: compiles + validates (wasm-tools gate inside compile),
+        # but the anyref result is not Node-marshalable → assert compile-validates only.
+        @test (_WT.compile(bf_union, (Int64,)); true)
+        # Union-INTERNAL → primitive: the faithful-boxing proof (Node-marshalable).
+        @test compare_julia_wasm(bfu_use, Int64(5)).pass    # value preserved (200)
+        @test compare_julia_wasm(bfu_use, Int64(-5)).pass   # value preserved (100)
+        @test compare_julia_wasm(bfu_isa, Int64(5)).pass    # TAG preserved (0 = Int, not Float)
+        @test compare_julia_wasm(bfu_isa, Int64(-5)).pass   # TAG preserved (1 = Float64)
+        @test compare_julia_wasm(bfu_arith, Int64(5)).pass  # numeric content exact (10)
+        @test compare_julia_wasm(bfu_arith, Int64(-5)).pass # numeric content exact (25)
     end
 end

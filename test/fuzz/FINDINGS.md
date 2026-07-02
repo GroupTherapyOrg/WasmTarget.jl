@@ -35,6 +35,124 @@ Full `Pkg.test()` + differential fuzzer GREEN. Regression guard (now passing, CI
 `test/fuzz/repro_multivar_phi_merge.jl`. NOT related to `fix_consecutive_local_sets` (which stays
 genuinely dead — the dropped store was never emitted).
 
+## ✅ SOUNDNESS FIXED (2026-06-29, parity loop): heterogeneous-Union value extraction (F31) + i31 int-box truncation (F-i31)
+
+`a = x>0 ? 42 : "neg"; Int(a)` (heterogeneous `Union{Int64,String}`) compiled, but reading the
+value TRAPPED on a null deref — the live arm flowing into the tagged-union phi-local was dummied
+to `ref.null` (`emit_phi_type_default` / `set_phi_locals_for_edge!` line-1100 fallback +
+`compile_phi_value`'s literal/SSA/recompute mismatch fallbacks). The `isa` tag survived only via
+branch-folding (it never read the value), which masked the gap. **ROOT FIX:** the phi-store now
+CONSTRUCTS the tagged-union struct (`emit_wrap_union_value`) when a concrete variant (`vt <: uT`)
+flows into a registered tagged-union phi-local — `phi_tagged_union_wrap` in `src/codegen/unions.jl`
+gates it; wired into all phi-store dispatches (compile_phi_value ×4 incl. the literal + Core.Argument
+edge, set_phi_locals_for_edge! routing). `p_anyret` (a standing probe ERR) now compiles AND is
+value-faithful → probe ERRs = 0.
+
+**F-i31 (deeper, a SILENT MISCOMPILE that shipped in v0.4.0):** the tagged-union value field
+boxed ints via `ref.i31` (31-bit) → any int ≥ 2^30 was SILENTLY TRUNCATED (verified
+`typemax(Int64)` → -1, `2^31` → 0, `3e9` → 852516352). Floats were already boxed full-width into
+the `{typeId,value}` numeric box; ints were not. **ROOT FIX:** box ALL numerics full-width into
+the numeric box in `emit_wrap_union_value` + read them back symmetrically in
+`emit_unwrap_union_value` (the i31-vs-struct split named in PARITY_LEDGER F31). Loop B's numeric
+`Union{Int,Float}` AnyRef path was already full-width (unaffected). Verified faithful across the
+full Int64 range native-vs-wasm. Migration corpus BYTE-IDENTICAL (no corpus fn used tagged-union
+ints). Regression guard: `test/f31_union_value_backfills.jl` (CI-wired, shard 0). **Flag for Dale:
+worth a v0.4.1 patch once merged — large-int tagged/heterogeneous unions silently truncated in
+0.4.0.**
+
+## ⚠ Float16 is mis-represented end-to-end (F26) — DEFERRED feature (2026-06-29, parity probe)
+
+A broad differential probe (26 cases across uint wraparound, bit-rotate, div/rem/fld/cld/mod,
+gcd/lcm, NaN/Inf, ldexp, modf, hypot, cbrt, expm1, Char) found the surface largely sound — the
+ONE gap was Float16 arithmetic. Characterization:
+  * `add_float`/`sub_float`/`mul_float`/`div_float` pick `arg_type===Float32 ? F32_* : F64_*`, so
+    a Float16 operand (represented as its i32 bit-pattern) gets an `f64.*` op on an i32 → INVALID
+    wasm (caught loudly at validation — not a silent miscompile).
+  * Worse, `fptrunc` (calls.jl ~5660) hard-assumes "source Float64 → target Float32" and emits a
+    bare `f32.demote_f64`; it does NOT encode to Float16 bits. So `Float16(x)` mis-produces an f32,
+    inconsistent with `_compile_call_fpext`'s Float16→Float64 path (which correctly decodes i32
+    half-float bits). Float16 is mis-typed coming AND going.
+Proper fix = a Float16 representation overhaul: pick ONE rep (i16/i32 bits), implement faithful
+f16↔f32 conversions (fptrunc target-f16 encode w/ round-to-nearest-even incl. subnormal/inf/nan;
+fpext source-f16 — exists), and route arithmetic through promote→f32-op→demote (Julia computes
+Float16 ops via Float32, so f32 — not f64 — intermediate is needed for bit-faithful division).
+DEFERRED as a focused feature sub-loop (rounding-sensitive; risky to patch piecemeal). Not a
+silent-soundness hole today (invalid wasm fails at validation). **Flag for Dale.**
+
+## 🔴 TOP PRIORITY — SILENT MISCOMPILE: filtered generator → reducer returns 0 (2026-06-29 probe)
+
+`sum(i for i in 1:n if iseven(i))` returns **0** instead of 120 (n=8) — a SILENT WRONG VALUE in a
+very common pattern. Confirmed across `sum`/`maximum` and both named (`iseven`) and anonymous
+(`i->i>5`) predicates (gen_filter_body/sq/gt/max all → 0). NOT invalid wasm, NOT a trap — it
+compiles to valid wasm that silently returns the empty/init value.
+
+Characterization (tight):
+  * `sum(i^2 for i in 1:n)` (UNfiltered generator) — WORKS (→30). So `_foldl_impl(BottomRF{add_sum},
+    _InitialValue(), range)` + the `Union{_InitialValue,Int}` accumulator is fine on its own.
+  * `sum([i^2 for i in 1:n if iseven(i)])` (materialized ARRAY comprehension) — WORKS (→120).
+  * Only the LAZY filtered generator consumed directly by a reducer fails. It lowers to
+    `Base._foldl_impl(Base.FilteringRF{pred, BottomRF{add_sum}}, Base._InitialValue(), 1:n)`
+    (verified via code_typed). The ONLY delta vs the working unfiltered case is the `FilteringRF`
+    wrapper: `(op)(acc,x) = op.flt(x) ? op.rf(acc,x) : acc`.
+BLAST RADIUS (2nd probe): the same silent-0 hits `mapreduce(f, +, Iterators.filter(...))`,
+`prod(i for i in 1:n if cond)`, AND `sum(Iterators.flatten(...))` — but NOT `sum(Iterators.takewhile(...))`,
+`sum(Iterators.map(...))`, nested generators `sum(i+j for i in 1:2 for j in 1:n)`, `count(pred, r)`,
+or `sum(collect(Iterators.filter(...)))`. The PASS/FAIL split is decisive: a fold whose steps can
+**skip updating the accumulator** (filter skips non-matches; flatten's inner range can be empty)
+FAILS; folds that update on every step (takewhile/imap/nested) PASS.
+
+Refined root cause: NOT the predicate call — `FnHolder(iseven)`/`FnHolder(closure)` field-calls
+both compile + run correctly (hypothesis refuted). It's the `acc::Union{_InitialValue, T}`
+accumulator PHI when a fold step leaves `acc` unchanged (still `_InitialValue`): the union-acc phi
+across skip-steps collapses (acc stuck at `_InitialValue` → reducer → 0). Unfiltered folds work
+because the `_InitialValue→T` transition happens exactly once on step 1, never persisting across
+steps. ADJACENT to the F31 phi-store work (2c2c704) but in the fold-LOOP acc phi. Reduce/fold
+HOT-PATH — a wrong fix silently miscompiles ALL reductions → focused full-suite+diff-fuzz-gated fix,
+NOT a blind patch (the F3 hot-path attempt already regressed the lattice tests). **Flag for Dale:
+#1 correctness priority.** Diff-fuzzer should grow a `reduce/sum/prod/mapreduce(... if ...)` +
+`flatten` family so this class can't regress silently.
+
+## ✅ FIXED (2026-06-29 probe): sort(v, by=f) / sort(v, lt=cmp) silently dropped the comparator
+
+Another SILENT MISCOMPILE (common pattern): `sort(v, by=f)` returned the default-`isless` order
+(e.g. `sort([3,1,5,2], by=x->-x)[1]` → 1 instead of 5; `lt=` likewise). `rev=true` worked. Root:
+the non-mutating `Base.sort` overlay (`src/codegen/interpreter.jl`) did `sort!(result, rev=rev)` —
+forwarding ONLY `rev`, silently dropping `by`/`lt`/`order`. The `sort!` overlay body already honors
+lt/by/rev correctly; the bug was purely the forwarding. Fixed to forward all comparator kwargs.
+Backfill `test/sort_comparator_backfills.jl` (CI-wired shard 0). `sortperm` was ALSO wrong (no
+overlay → generic Base.sortperm mis-compiled to the IDENTITY permutation, silent-wrong) — FIXED
+with a sortperm overlay (stable insertion sort on the index vector comparing by v[idx], honors
+by/lt/rev), same backfill file.
+
+## ⛔ F3 (Core.Box mutable capture) — ATTEMPTED ×2, REVERTED both times (2026-06-29)
+
+Closures that MUTATE a captured var still emit invalid wasm — DEFERRED. A delegated agent's
+scalarization-rebox approach (rebox numeric→Any in `compile_statement`) passed its narrow backfill
+AND the full suite, but independent adversarial re-verification exposed it as fundamentally
+incomplete: two-closures-sharing-a-box → trap, conditional mutation `iseven(i)&&(c+=i)` → silently 0
+(new silent-wrong), read-after-mutate → trap, escaping closure → loud-reject, and returning a mutated
+capture without a `::T` annotation returns a boxed anyref (no return-unbox). It only handles trivial
+accumulator loops. Proper F3 = heap-`Core.Box`-as-struct + cross-closure box SHARING + conditional
+phi + return-unbox + escaping capture — a real feature, not a `compile_statement` rebox hack.
+
+## Parity probe sweep (2026-06-29) — surface is largely SOUND; remaining gaps triaged
+
+Two broad differential sweeps (~52 cases) across uint wraparound/overflow, bit-rotate,
+leading/trailing-zeros, div/rem/fld/cld/mod, gcd/lcm, Float NaN/Inf, f32 round, ldexp, modf,
+hypot, cbrt, expm1, Char, complex, rational, ranges, arrays (sum/sort/find/filter/map/reverse/
+comprehension/matmul), tuples, namedtuples, dict, set, and string ops — **all pass** except the
+documented deferred gaps. Net: WT's core+stdlib codegen is in strong shape; remaining gaps are
+niche features or stdlib-overlay candidates, none a silent miscompile.
+
+Triaged remaining gaps:
+  * Int128/UInt128 div/rem + bswap — loud-reject (F11b, fixed this session). Full impl deferred.
+  * Float16 arithmetic + fptrunc-to-f16 — invalid-wasm-at-validation; deferred feature (F26, above).
+  * `string(::String, ::Int)` and `repr(::Int)` — sound `unreachable` trap. `string(::Int)`,
+    `"$x"` interpolation, `string(::Float64)`, `string(::String,::String)` all WORK; only the
+    generic multi-arg-MIXED `print_to_string`/IOBuffer path traps. This is a **stdlib-overlay
+    candidate** (overlay `string`/`print` for mixed args, per [[wt-genericlinearalgebra-overlay-lever]]
+    pattern) → Dale's lane (#4 stdlib expansion), not the codegen-soundness lane.
+
 ## Remaining 16 gaps (the deep/feature long tail) — all root-caused & triaged for Part 2
 
 Every tractable gap is fixed (see "Fixed" below). The 16 that remain each need real

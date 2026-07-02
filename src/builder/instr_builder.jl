@@ -61,9 +61,13 @@ end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", strict::Bool=false)
+                      func_name::String="", strict::Bool=false, mod=nothing)
     locals = WasmValType[p for p in param_types]
-    v = WasmStackValidator(; enabled=true, func_name=func_name)
+    # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
+    # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
+    # ref-flowing builders); `nothing` for numeric-only emitters that never push a
+    # ConcreteRef, where the heap-kind branch is never reached.
+    v = WasmStackValidator(; enabled=true, func_name=func_name, mod=mod)
     # Seed the outermost label as a :block whose results are the function results,
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
@@ -88,13 +92,16 @@ set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
 """
     _wt_builder_strict() -> Bool
 
-Default strict-mode for migrated emitters. OFF by default (collect mode → the live
-operand-stack model tracks every op for diagnostics but never throws, so migration is
-regression-free), ON when `WT_BUILDER_STRICT` is set in the environment (turns the model
-into a hard gate that pinpoints the offending Julia statement + stack snapshot — the
-"tons of clarity" bug finder).
+Default strict-mode for emitters (parity M4 — dart wasm_builder instructions.dart:98:
+the builder is a type-checking abstract interpreter that THROWS on an ill-typed emit).
+**ON by default since 2026-07-01**, certified by a full capped `Pkg.test` + fuzz run under
+`WT_BUILDER_STRICT=1` (10 shards 2,681 + fuzz 293, zero failures). An ill-typed emission
+now fails AT THE EMIT SITE with the offending Julia statement + stack snapshot — valid by
+construction, beyond dart (whose checks are assert-gated). Escape hatch for debugging only:
+`WT_BUILDER_STRICT=0`. Builders constructed with an explicit per-builder
+opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until converted.
 """
-_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != ""
+_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
 set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
 
@@ -177,6 +184,16 @@ f64_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F64); _emit!(b, Inst
 # Generic numeric/comparison/conversion op (no immediates): reuse validate_instruction!.
 num!(b::InstrBuilder, op::UInt8) = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
 
+# Saturating truncation (FC-prefixed, sub-op 0x00–0x07): pop a float, push an int. The
+# sub-op encodes both: to = i32 (<0x04) or i64; from = f32 (0x00,0x01,0x04,0x05) or f64.
+function trunc_sat!(b::InstrBuilder, sub_op::UInt8)
+    to   = sub_op < 0x04 ? I32 : I64
+    from = (sub_op == 0x00 || sub_op == 0x01 || sub_op == 0x04 || sub_op == 0x05) ? F32 : F64
+    validate_pop!(b.v, from)
+    validate_push!(b.v, to)
+    _emit!(b, InstrIR.TruncSat(sub_op))
+end
+
 # ── Parametric ──────────────────────────────────────────────────────────────────
 drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
 select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
@@ -186,7 +203,16 @@ function local_get!(b::InstrBuilder, idx::Integer)
     validate_push!(b.v, (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef)
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
-local_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.LocalSet(UInt32(idx))))
+function local_set!(b::InstrBuilder, idx::Integer)
+    # dart parity: local.set validates the value against the LOCAL's type when known
+    # (a store is [local.type] → []; pop_any hid ill-typed stores until instantiation).
+    if (idx + 1) <= length(b.locals)
+        validate_pop!(b.v, b.locals[idx + 1])
+    else
+        validate_pop_any!(b.v)
+    end
+    _emit!(b, InstrIR.LocalSet(UInt32(idx)))
+end
 function local_tee!(b::InstrBuilder, idx::Integer)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
     lt = (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef

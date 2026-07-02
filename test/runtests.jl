@@ -36,16 +36,26 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
         # so its setup (~18s) and Node-pool boot hide entirely inside phase A.
         flf = joinpath(logdir, "fuzz.log")
         fp = _spawn(("WT_FUZZ" => "1", "WT_FUZZ_TIMEOUT" => "30"), flf)
-        # ── Codegen shards run CONCURRENTLY. Capture each worker to its own log (a
-        # shared stdout interleaves + buffers away on exit), so a failing shard's
-        # error is actually visible.
-        procs = map(0:nshards-1) do i
-            lf = joinpath(logdir, "shard_$i.log")
-            (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf))
-        end
+        # ── Codegen shards run concurrently, but the CONCURRENCY CAP is ALWAYS ON by
+        # default (Dale: "always always") so the whole fleet never gets jetsam-killed.
+        #   WT_TEST_CONCURRENCY unset → memory-aware default: ~1 worker per 3GB free RAM
+        #     (min 2) — a memory-pressured Mac self-caps to ~2, big-RAM CI still parallelizes.
+        #   WT_TEST_CONCURRENCY=K (K>0) → explicit cap of K shards at a time (+ overlapped fuzz).
+        #   WT_TEST_CONCURRENCY=0 → opt OUT to full all-at-once (only on a known-roomy box).
+        # Each shard captures to its own log (a shared stdout interleaves + buffers away on exit).
         phase_times = String[]   # "<secs>\t<name>" collected across all shard logs
-        codes = map(procs) do triple
-            i, lf, p = triple
+        maxconc = let m = tryparse(Int, get(ENV, "WT_TEST_CONCURRENCY", ""))
+            if m === nothing
+                min(nshards, max(2, Int(div(Sys.free_memory(), 3 * 1024^3))))  # memory-aware default
+            elseif m <= 0
+                nshards            # explicit opt-out → full parallel
+            else
+                m                  # explicit cap
+            end
+        end
+        @info "Test shard concurrency cap = $maxconc of $nshards (WT_TEST_CONCURRENCY=$(get(ENV, "WT_TEST_CONCURRENCY", "<auto>")); free RAM $(round(Sys.free_memory()/1024^3; digits=1))GB)"
+        codes = Int[]
+        _drain = function (i, lf, p)
             wait(p)
             lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
             if p.exitcode != 0
@@ -58,8 +68,18 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
                     startswith(ln, "WT_SETUP_TIME\t") && println("  shard $i setup: ", split(ln, '\t')[2], "s")
                 end
             end
-            p.exitcode
+            push!(codes, p.exitcode)
         end
+        batch = Tuple{Int,String,Any}[]
+        for i in 0:nshards-1
+            lf = joinpath(logdir, "shard_$i.log")
+            push!(batch, (i, lf, _spawn(("WT_SHARD" => "$i,$nshards",), lf)))
+            if length(batch) >= maxconc
+                for (j, jlf, jp) in batch; _drain(j, jlf, jp); end
+                empty!(batch)
+            end
+        end
+        for (j, jlf, jp) in batch; _drain(j, jlf, jp); end
         # Refresh the LPT-packing input (committed) on demand. sorted-by-name → stable diffs.
         if get(ENV, "WT_RECORD_TIMES", "") == "1" && !isempty(phase_times)
             open(joinpath(@__DIR__, "phase_times.tsv"), "w") do io
@@ -119,6 +139,40 @@ include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands isla
 # for every case the deleted passes addressed). See dev/cleanup_ledger.md.
 _wt_shard0() && include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
 _wt_shard0() && include("cleanup_loop1_backfills.jl")
+# Parity Loop A: the WasmGC subtype lattice (wasm_subtype) — supertype-chain + nullability aware,
+# mirroring dart2wasm HeapType.isSubtypeOf. See dev/PARITY_LEDGER.md (F4/P2/B6).
+_wt_shard0() && include("test_wasm_subtype_lattice.jl")
+# Parity Loop C: F31 heterogeneous-Union value extraction + F-i31 full-width int box (the
+# phi-store now CONSTRUCTS the tagged-union struct instead of dummying to ref.null, and ints
+# are boxed full-width, not via lossy i31). See dev/PARITY_LEDGER.md.
+_wt_shard0() && include("f31_union_value_backfills.jl")
+# Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
+# a single i64 op on a 128-bit value was invalid wasm). See dev/PARITY_LEDGER.md.
+_wt_shard0() && include("f11_int128_bitcount_backfills.jl")
+# Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
+# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
+_wt_shard0() && include("sort_comparator_backfills.jl")
+# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference (dormant analysis, byte-identical).
+_wt_shard0() && include("f3_box_capture_l0.jl")
+# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry (dormant).
+_wt_shard0() && include("f3_box_capture_l1.jl")
+# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass (dormant).
+_wt_shard0() && include("f3_box_capture_l2_prepass.jl")
+# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure (dormant).
+_wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
+# Loop C value channel: general numeric value-type propagation (Any-but-really-i64) (dormant).
+_wt_shard0() && include("value_channel_propagate.jl")
+# parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
+_wt_shard0() && include("m1_void_backfills.jl")
+# PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
+# completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
+if _wt_shard0()
+    ENV["WT_RATCHET_INCLUDED"] = "1"
+    include("parity_ratchet.jl")
+    @testset "parity ratchet (dev/PARITY_MASTER.md)" begin
+        @test ParityRatchet.run()
+    end
+end
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
@@ -170,6 +224,71 @@ _wt_htup(a::Int64)::Int64 = begin
         if v isa Int64; s += v; end
     end
     s
+end
+# WASMTARGET-FUZZ (Loop B/B1): a het-tuple field whose result-union maps to AnyRef
+# (Union{Int64,Float64} — all-numeric, NOT a registered tagged union) boxed the Int64
+# field via ref.i31, SILENTLY TRUNCATING any value ≥ 2^30. A field ≥ 2^40 came back
+# WRONG (the truncated box then failed `isa Int64` → -1). Now routed through the
+# full-width numeric box, exactly like the F64 field beside it. (i=1 → the Int64 element.)
+_wt_htup_i64f64_big(i::Int64)::Int64 = begin
+    t = ((Int64(1) << 40) + 7, 3.5)
+    v = t[i]
+    v isa Int64 ? v : Int64(-1)
+end
+# WASMTARGET-FUZZ (Loop B/F-ii): same-WASM-REP Union distinguishability via the single-
+# source classId funnel. A het-tuple of Bool/Int8/Int32 (all i32) indexed at runtime →
+# Union{Bool,Int8,Int32}; the value was COLLAPSED to a raw i32 local (unboxed), so every
+# `isa` mis-fired (Int8 & Int32 both matched `isa Bool`). Fixed by: needs_anyref_boxing now
+# boxes same-rep unions (value stays a boxed ref), emit_classid_box! stores the field's REAL
+# classId, and emit_isa_classid! reads the classId off the box (not ref.test of the shared
+# struct). i=1→Bool, 2→Int8, 3→Int32.
+_wt_htup_disc(i::Int64)::Int64 = begin
+    t = (true, Int8(7), Int32(9))
+    v = t[i]
+    v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
+end
+# WASMTARGET-FUZZ (Loop B/B4): same-WASM-REP Vector{Any} distinguishability. Bool/Int8
+# used a ref.i31 fast path (no classId struct) so isa on them returned false (the whole
+# chain fell through to 0). B4 removed i31 — Bool/Int8/UInt8 now box with their REAL
+# classId like everything else, and emit_isa_classid! distinguishes them. i=1→Bool,2→Int8,3→Int32.
+_wt_vany_disc(i::Int64)::Int64 = begin
+    a = Any[true, Int8(7), Int32(9)]
+    v = a[i]
+    v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
+end
+# WASMTARGET-FUZZ (Loop B/B4c): Char is i32-rep but NOT <:Number, so it was excluded from
+# both the boxing decision (needs_anyref_boxing required all(<:Number)) and the isa
+# discriminator (gated on check_type<:Number) → Union{Char,Int32} collapsed + isa Char
+# mis-fired. Both now key on the NUMERIC WASM REP (covers Char), so Char boxes w/ its
+# classId + distinguishes. i=1→Char, 2→Int32. (het-tuple form)
+_wt_char_disc(i::Int64)::Int64 = begin
+    t = (Char(65), Int32(9))
+    v = t[i]
+    v isa Char ? Int64(1) : v isa Int32 ? Int64(2) : Int64(0)
+end
+# WASMTARGET-FUZZ (Loop B/B4e): MIXED-WIDTH numeric union. Tuple{Int64,Bool} indexed at
+# runtime → Union{Int64,Bool} (i64 vs i32). It wasn't boxed (no int/float mix, no same-rep
+# collapse), so the getfield if/else read field 1 (i64) vs field 2 (i32) under a single i64
+# block result → INVALID WASM (wouldn't even compile). needs_anyref_boxing now boxes EVERY
+# multi-member numeric union, so it compiles + works. i=1→the Int64 (99); i=2→Bool→ -1.
+_wt_htup_mixwidth(i::Int64)::Int64 = begin
+    t = (Int64(99), true)
+    v = t[i]
+    v isa Int64 ? v : Int64(-1)
+end
+# WASMTARGET-FUZZ (Loop B/B4b): boxed-=== was a SILENT WRONG ANSWER. A boxed numeric (Any/
+# Union) compared via === to an unboxed numeric hit "ref vs non-ref ⇒ drop both, false", so
+# Any[true][1] === true returned FALSE. Now: a numeric box of the other's type+value ⇒ true
+# (classId+value compare via emit_egal_box_vs_num!); different type/value or a genuine
+# non-numeric ref ⇒ false. x>0 ⇒ a[1]=true. Returns: 1 if ===true, 2 if ===false, else 0.
+_wt_egal_boxed(x::Int64)::Int64 = begin
+    a = Any[x > 0, x < 0]
+    a[1] === true ? Int64(1) : a[1] === false ? Int64(2) : Int64(0)
+end
+# different-type === must be false (Bool box vs Int32): boxed Bool === Int32(1) → 0.
+_wt_egal_difftype(x::Int64)::Int64 = begin
+    a = Any[x > 0]
+    a[1] === Int32(1) ? Int64(1) : Int64(0)
 end
 _wt_anyvec_len(a::Int64)::Int64 = Int64(length(Any[a, "x", a]))
 # WASMTARGET-FUZZ: abstract/UnionAll `::Vector` struct FIELD (like
@@ -4100,39 +4219,24 @@ begin
             mod = WasmTarget.WasmModule()
             registry = WasmTarget.TypeRegistry()
 
-            # Test needs_tagged_union function
-            @test WasmTarget.needs_tagged_union(Union{Int32, Float64}) == true
-            @test WasmTarget.needs_tagged_union(Union{Int32, String, Bool}) == true
-            @test WasmTarget.needs_tagged_union(Union{Nothing, Int32}) == false
+            # M3 (dart2wasm parity): the {typeId,tag,value} tagged-union WRAPPER family is
+            # DELETED outright (needs_tagged_union / emit_wrap_union_value / emit_unwrap_union_value
+            # no longer exist — ratchet lock L5 enforces they never return). A Union value is JUST
+            # a boxed AnyRef discriminated by classId; a heterogeneous union maps to AnyRef.
+            @test !isdefined(WasmTarget, :needs_tagged_union)
+            @test !isdefined(WasmTarget, :emit_wrap_union_value)
+            @test !isdefined(WasmTarget, :emit_unwrap_union_value)
+            @test WasmTarget.get_concrete_wasm_type(Union{Int32, String}, mod, registry) === WasmTarget.AnyRef
 
             # Test get_nullable_inner_type function
             @test WasmTarget.get_nullable_inner_type(Union{Nothing, Int32}) === Int32
             @test WasmTarget.get_nullable_inner_type(Union{Nothing, String}) === String
             @test WasmTarget.get_nullable_inner_type(Union{Int32, String}) === nothing
 
-            # Test register_union_type!
-            union_type = Union{Int32, Float64}
-            info = WasmTarget.register_union_type!(mod, registry, union_type)
-            @test info isa WasmTarget.UnionInfo
-            @test info.julia_type === union_type
-            @test length(info.variant_types) == 2
-            @test Int32 in info.variant_types
-            @test Float64 in info.variant_types
-            @test haskey(info.tag_map, Int32)
-            @test haskey(info.tag_map, Float64)
-
-            # Test get_union_tag
-            tag_int32 = WasmTarget.get_union_tag(info, Int32)
-            tag_float64 = WasmTarget.get_union_tag(info, Float64)
-            @test tag_int32 >= 0
-            @test tag_float64 >= 0
-            @test tag_int32 != tag_float64
-
-            # Test union with Nothing
-            union_with_nothing = Union{Nothing, Int32, String}
-            info2 = WasmTarget.register_union_type!(mod, registry, union_with_nothing)
-            @test length(info2.variant_types) == 3
-            @test WasmTarget.get_union_tag(info2, Nothing) == Int32(0)  # Nothing always gets tag 0
+            # B4/U2 — dart2wasm parity: register_union_type! / UnionInfo / get_union_tag and the
+            # whole {typeId,tag,value} tagged-union wrapper scheme are DELETED. A Union value is a
+            # boxed AnyRef discriminated by classId; differential coverage of union compile+run is
+            # in the "Union parameter type" / het-tuple / distinguishability / boxed-=== testsets.
         end
 
         # Test 2: Function parameter with union type
@@ -4355,15 +4459,15 @@ begin
 
         @testset "externref-vs-anyref mismatch (PURE-323 pattern)" begin
             v = WasmStackValidator(func_name="test_externref_anyref")
-            # Push ExternRef (what codegen actually produces for Any-typed values)
+            # Push ExternRef (a live Any rep). A ref.cast to a GC struct is the PURE-323
+            # pattern: externref and the GC `any` hierarchy are DISJOINT tops, so the cast
+            # cannot be expressed — codegen must emit extern.convert_any FIRST (it does, at
+            # every real GC-cast site). Loop A/P13: the validator now CATCHES this
+            # cross-hierarchy cast (it used to be permissively — and wrongly — accepted).
             validate_push!(v, ExternRef)
-            # ref_cast expects anyref — this is the PURE-323 bug pattern:
-            # codegen emits externref but GC instructions need anyref
             validate_gc_instruction!(v, Opcode.REF_CAST, ConcreteRef(UInt32(5)))
-            # The ref_cast pops any ref (permissive) so it won't error on that,
-            # but the key test is that the validator tracks the type correctly
-            @test !has_errors(v)
-            @test stack_height(v) == 1
+            @test has_errors(v)          # P13: cross-hierarchy ref.cast is flagged
+            @test stack_height(v) == 1   # still pops the operand + pushes the target
 
             # Now test the REAL mismatch: push externref, try any_convert_extern
             # which expects externref (correct), then push result as anyref
@@ -5185,9 +5289,13 @@ begin
                     Float64(x)
                 end
             end
-            @test compare_julia_wasm(f_union_ret, Int64(5)).pass
-            @test compare_julia_wasm(f_union_ret, Int64(-3)).pass
-            @test compare_julia_wasm(f_union_ret, Int64(0)).pass
+            # Parity Loop B (dart2wasm union boxing): a numeric Union is now FAITHFULLY BOXED
+            # (classId-tagged {typeId,value}), not collapsed to a lossy f64. A bare boxed-union
+            # RETURN is therefore an anyref the Node harness can't marshal (like dart2wasm dynamic
+            # returns), so we assert it compiles to a VALID module here; value-faithfulness (the
+            # tag + numeric content, native-vs-wasm) is covered by the union-internal→primitive
+            # tests bu_*/bfu_* in test/cleanup_loop1_backfills.jl + the repro corpus p_unionvec.
+            @test (WasmTarget.compile(f_union_ret, (Int64,)); true)
         end
 
         # PURE-1102: try/catch with actual throw — NOW WORKING
@@ -7708,6 +7816,32 @@ console.log(JSON.stringify({
             # all-struct element union → StructRef canonical rep (not tagged union)
             @test compare_julia_wasm(_wt_anystruct, Int64(5)).pass   # 6+7+16 = 29
             @test compare_julia_wasm(_wt_anystruct, Int64(2)).pass
+            # Loop B/B1: an AnyRef-union (Union{Int64,Float64}) Int64 field ≥ 2^40 was
+            # i31-TRUNCATED → returned -1; now full-width numeric box → 2^40+7 exactly.
+            @test compare_julia_wasm(_wt_htup_i64f64_big, Int64(1)).pass  # = (1<<40)+7
+            # Loop B/F-ii: same-wasm-rep Union (Bool/Int8/Int32 all i32) — collapsed local
+            # made every isa match the first branch; now boxed w/ real classId + classId-read.
+            @test compare_julia_wasm(_wt_htup_disc, Int64(1)).pass  # Bool  → 1
+            @test compare_julia_wasm(_wt_htup_disc, Int64(2)).pass  # Int8  → 2
+            @test compare_julia_wasm(_wt_htup_disc, Int64(3)).pass  # Int32 → 3
+            # Loop B/B4: same-wasm-rep Vector{Any} — Bool/Int8 were i31'd (no classId) so isa
+            # → 0; i31 removed, now they box w/ real classId + distinguish.
+            @test compare_julia_wasm(_wt_vany_disc, Int64(1)).pass  # Bool  → 1
+            @test compare_julia_wasm(_wt_vany_disc, Int64(2)).pass  # Int8  → 2
+            @test compare_julia_wasm(_wt_vany_disc, Int64(3)).pass  # Int32 → 3
+            # Loop B/B4c: Char (i32-rep, NOT <:Number) — boxing + isa now key on the numeric
+            # wasm rep, so Char boxes w/ its classId + distinguishes from Int32.
+            @test compare_julia_wasm(_wt_char_disc, Int64(1)).pass  # Char  → 1
+            @test compare_julia_wasm(_wt_char_disc, Int64(2)).pass  # Int32 → 2
+            # Loop B/B4e: mixed-WIDTH numeric union (Int64 i64 vs Bool i32) was INVALID WASM
+            # (if/else read different-width fields under one block result); now boxed → compiles.
+            @test compare_julia_wasm(_wt_htup_mixwidth, Int64(1)).pass  # Int64 → 99
+            @test compare_julia_wasm(_wt_htup_mixwidth, Int64(2)).pass  # Bool  → -1
+            # Loop B/B4b: boxed-=== was a SILENT WRONG ANSWER (Any[true][1] === true → false);
+            # now classId+value compare → correct, incl. different-type === false.
+            @test compare_julia_wasm(_wt_egal_boxed, Int64(5)).pass      # a[1]=true === true → 1
+            @test compare_julia_wasm(_wt_egal_boxed, Int64(-5)).pass     # a[1]=false === false → 2
+            @test compare_julia_wasm(_wt_egal_difftype, Int64(5)).pass   # boxed Bool === Int32 → 0
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin

@@ -525,10 +525,9 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
                 else
                     wasm_vt = julia_to_wasm_type(ft)
                 end
-            elseif needs_tagged_union(ft)
-                union_info = register_union_type!(mod, registry, ft)
-                wasm_vt = ConcreteRef(union_info.wasm_type_idx, true)
             else
+                # B4/U2: a union-typed field is a boxed AnyRef discriminated by classId
+                # (julia_to_wasm_type(Union)→AnyRef) — the {typeId,tag,value} wrapper is retired.
                 wasm_vt = julia_to_wasm_type(ft)
             end
         elseif isconcretetype(ft) && isstructtype(ft)
@@ -720,11 +719,9 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
                 else
                     wasm_vt = julia_to_wasm_type(ft)
                 end
-            elseif needs_tagged_union(ft)
-                # Multi-variant union - use tagged union struct
-                union_info = register_union_type!(mod, registry, ft)
-                wasm_vt = ConcreteRef(union_info.wasm_type_idx, true)
             else
+                # B4/U2: a union-typed field is a boxed AnyRef discriminated by classId
+                # (julia_to_wasm_type(Union)→AnyRef) — the {typeId,tag,value} wrapper is retired.
                 wasm_vt = julia_to_wasm_type(ft)
             end
         elseif isconcretetype(ft) && isstructtype(ft)
