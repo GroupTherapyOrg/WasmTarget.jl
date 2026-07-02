@@ -130,6 +130,7 @@ using Dates: Dates, @dateformat_str
 # Package-level QA runs first so structural failures surface
 # before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
 _wt_shard0() && include("test_aqua.jl")
+_wt_shard0() && include("diagnostics_sink.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "pi_islands.jl"))  # PlutoIslands island fixtures

@@ -50,7 +50,9 @@ Carries the [`WasmDiagnostic`](@ref) so callers can inspect `.diag`.
 """
 struct WasmCompileError <: Exception
     diag::WasmDiagnostic
+    all::Vector{WasmDiagnostic}   # every diagnostic recorded before the fatal one (the full ledger)
 end
+WasmCompileError(diag::WasmDiagnostic) = WasmCompileError(diag, WasmDiagnostic[diag])
 
 function Base.showerror(io::IO, e::WasmCompileError)
     d = e.diag
@@ -147,6 +149,17 @@ end
 _paranoid_stubs() = get(ENV, "WT_PARANOID_STUBS", "0") != "0"
 
 """
+    DIAGNOSTICS_SINK
+
+When set (see `compile(...; diagnostics_sink=...)`), every `WasmDiagnostic` recorded by any
+compilation context — including non-fatal downgraded dependency stubs — is mirrored here.
+This is the caller-facing ledger: tools like PlutoIslands read it to explain *why* a
+compilation degraded, with source attribution per diagnostic.
+"""
+const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(nothing)
+
+
+"""
     record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=(kind===:value_stub)) -> Nothing
 
 Single funnel for "codegen cannot fully translate this". Always records a
@@ -174,6 +187,7 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail)
     push!(ctx.diagnostics, diag)
+    DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
     # P5-trim: the closed-world collection is MORE complete than legacy
     # discovery — it includes error-formatting dead paths (show/print
     # machinery) the whitelist never compiled. On DISCOVERED (non-entry)
@@ -200,7 +214,8 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
         end
     end
     if _fatal
-        throw(WasmCompileError(diag))
+        _sink = DIAGNOSTICS_SINK[]
+        throw(WasmCompileError(diag, _sink === nothing ? WasmDiagnostic[diag] : copy(_sink)))
     else
         @debug "WasmTarget stub: $diag"
     end

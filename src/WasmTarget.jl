@@ -104,12 +104,22 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
-                 strict::Bool=true, validate::Bool=_wt_default_validate())::Vector{UInt8}
+                 strict::Bool=true, validate::Bool=_wt_default_validate(),
+                 diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
 
-    # Compile to WasmModule (strict=true raises WasmCompileError on unsupported constructs)
-    mod = compile_function(f, arg_types, func_name; optimize_ir=optimize_ir, strict=strict)
+    # Caller-facing diagnostics ledger: mirror every recorded WasmDiagnostic (fatal AND
+    # non-fatal downgraded dependency stubs) into the caller's vector. On WasmCompileError
+    # the same ledger also rides the exception (`err.all`).
+    _prev_sink = DIAGNOSTICS_SINK[]
+    diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
+    mod = try
+        # Compile to WasmModule (strict=true raises WasmCompileError on unsupported constructs)
+        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir, strict=strict)
+    finally
+        DIAGNOSTICS_SINK[] = _prev_sink
+    end
 
     # Serialize to bytes
     bytes = to_bytes(mod)
@@ -150,10 +160,17 @@ Functions can call each other within the module.
 function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, strict::Bool=true, validate::Bool=_wt_default_validate(),
-                       discovery::Symbol=:trim)
-    result = compile_module(functions; stub_names=stub_names, return_registries=return_registries,
-                           optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
-                           discovery=discovery)
+                       discovery::Symbol=:trim,
+                       diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
+    _prev_sink = DIAGNOSTICS_SINK[]
+    diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
+    result = try
+        compile_module(functions; stub_names=stub_names, return_registries=return_registries,
+                       optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
+                       discovery=discovery)
+    finally
+        DIAGNOSTICS_SINK[] = _prev_sink
+    end
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
         bytes = to_bytes(mod)
