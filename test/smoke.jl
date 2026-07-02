@@ -126,6 +126,15 @@ _g("dispatch", Any[
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
 ])
 
+# ---- filtered folds (was the #1 SILENT MISCOMPILE: _InitialValue sentinel through
+# _foldl_impl + FilteringRF returned 0; healed by the M1-M4 structural work, certified
+# 2026-07-01 — these cases lock it fixed forever) ------------------------------
+_g("filtered_fold", Any[
+    ("range_filter_sum", (n::Int64) -> sum(x for x in 1:n if x % 2 == 0), Int64(10)),
+    ("vec_filter_sum", (n::Int64) -> (v = collect(1:n); sum(x for x in v if x % 2 == 0)), Int64(10)),
+    ("init_filter_sum", (n::Int64) -> sum(x for x in 1:n if x > 3; init=0), Int64(6)),
+])
+
 # ---- higher-order / reduce ------------------------------------------------
 _g("higherorder", Any[
     ("reduce_max", (n::Int64) -> reduce(max, 1:n), Int64(7)),
