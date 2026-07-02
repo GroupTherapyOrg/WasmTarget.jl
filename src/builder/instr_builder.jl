@@ -98,8 +98,8 @@ the builder is a type-checking abstract interpreter that THROWS on an ill-typed 
 `WT_BUILDER_STRICT=1` (10 shards 2,681 + fuzz 293, zero failures). An ill-typed emission
 now fails AT THE EMIT SITE with the offending Julia statement + stack snapshot — valid by
 construction, beyond dart (whose checks are assert-gated). Escape hatch for debugging only:
-`WT_BUILDER_STRICT=0`. Builders constructed with an explicit `strict=false` (the remaining
-M4 burn-down list, ratchet R6) still opt out until converted.
+`WT_BUILDER_STRICT=0`. Builders constructed with an explicit per-builder
+opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until converted.
 """
 _wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
