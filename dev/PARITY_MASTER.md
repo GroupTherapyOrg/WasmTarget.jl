@@ -130,9 +130,17 @@ Per-phase protocol, every loop, no exceptions:
   (a freshly typed region must immediately self-validate — I1 rides along), and carve its
   intrinsic arms toward a dart-style typed intrinsics table (starts the god-function
   decomposition of `compile_call`/`compile_invoke`, whose duplicated coercion collapses into
-  the funnel). Collapses the F3 stopgap analysis passes — delete as reached. EXIT LOCKS:
-  R1=0, R2=0, R3=0 + fn deleted, R4=0 + fn deleted, R5 at locked pre-emit floor, R7 at locked
-  intrinsic floor; duplicated `get_phi_edge_wasm_type` (flow.jl:268 / stackified.jl:708) = one.
+  the funnel). Collapses the F3 stopgap analysis passes — delete as reached.
+  **EXIT (honest revision 2026-07-01):** the wrap chokepoint installed and THE path everywhere
+  a type is CONSUMED — post-emission re-guessing DEAD (R4=0 → LOCK L4; `infer_value_wasm_type`
+  gone, the ~10 legit pre-emit deciders renamed `static_wasm_type` w/ pre-emit-ONLY contract =
+  dart intrinsics.dart:333); returns/phi-stores/field-stores/arg-coercions emit-typed through
+  `convert_type!`; byte-scanners read their producers' types. **R1/R2/R7 stay RATCHETS into
+  M4**: the residual untyped sites live inside the bytes-RETURNING god-functions — typing them
+  IS M4's builder-native decomposition (a strict builder cannot accept raw splices); R7's
+  remainder is dominantly intrinsic implementations whose lock lands with the dart-style typed
+  intrinsics table (M4). R3 (`infer_value_type`) is RECLASSIFIED, not deleted: dart's
+  `node.getStaticType` equivalent — consolidate + contract-document in M4.
 
 - **M3 — ONE DYNAMIC REP, finished (I4 completion)**. dart anchors: `translator.dart:855-870`,
   `class_info.dart:547-562`, `dynamic_forwarders.dart:250-259`. (a) Delete the union vestiges:
@@ -142,8 +150,11 @@ Per-phase protocol, every loop, no exceptions:
   over the existing `type_ranges`. (c) classId-0 completeness (size tuples/Vector headers).
   EXIT LOCKS: R9=0; abstract isa emits range checks; unions.jl reduced to re-exports or gone.
 
-- **M4 — VALID BY CONSTRUCTION, endgame (I1)**. dart anchor: `instructions.dart:98-294`.
-  After M2's per-file flips: thread `mod` through remaining builders (full subtype lattice
+- **M4 — VALID BY CONSTRUCTION, endgame (I1) + god-function decomposition**. dart anchors:
+  `instructions.dart:98-294`, `intrinsics.dart:28-71`. Make compile_call/compile_invoke/
+  compile_new BUILDER-NATIVE (bytes-returning today — home of ALL residual R1/R2 sites + the
+  R7 intrinsic ops; carve intrinsic arms into a dart-style typed table; R1=0/R2=0/R7-lock land
+  here by construction). Then thread `mod` through remaining builders (full subtype lattice
   everywhere), make `strict=true` the DEFAULT (rename to disambiguate from
   `compile_function(;strict)`), validator THROWS with emit-site trace (dart `ValidationError`
   shape), then demote `wasm-tools` to opt-in/CI double-check. WT goes beyond dart here: dart's
