@@ -3432,12 +3432,12 @@ and compile_statement for ReturnNode. For Expr :call statements with intrinsics,
 it uses compile_value for args and emits the intrinsic opcode + SSA local.set.
 
 Why this approach: compile_statement(::Expr, ...) has 25K stmts and fails WasmGC
-validation. But compile_value(::Argument/SSAValue/Int64, ...) validates at 24-47KB each,
+validation. But compile_value(::Argument/SSAValue/Int64, ...) validates at 24-47KB each,  # god-fn seam: typed when the caller goes builder-native (M4 tail)
 and compile_statement(::ReturnNode, ...) validates at 40KB. The intrinsic opcode
 selection (mul_int → I64_MUL, add_int → I64_ADD) is the only manual part.
 
-Module: [run_selfhost_v2, compile_value(Arg), compile_value(SSAValue),
-         compile_value(Int64), compile_statement(ReturnNode),
+Module: [run_selfhost_v2, compile_value(Arg), compile_value(SSAValue),  # god-fn seam: typed when the caller goes builder-native (M4 tail)
+         compile_value(Int64), compile_statement(ReturnNode),  # god-fn seam: typed when the caller goes builder-native (M4 tail)
          new_wasm_module, to_bytes_mvp, bytes_len, bytes_get]
 """
 function run_selfhost_v2()::Vector{UInt8}

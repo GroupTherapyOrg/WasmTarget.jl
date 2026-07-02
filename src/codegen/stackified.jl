@@ -647,7 +647,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type, edge_val_type, compile_value(val, ctx))
+                    local _ne_vb, _ne_vty = compile_value_typed(val, ctx)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
+                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_vb)
                         # Type mismatch with no conversion arm: emit a type-safe default.
                         emit_raw!(pvb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                     end

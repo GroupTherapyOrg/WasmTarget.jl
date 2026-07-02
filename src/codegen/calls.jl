@@ -836,60 +836,16 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
         # Special case: both args are Nothing-typed. Need to check actual Wasm representation
         # because Nothing can compile to either ref.null OR i32.const depending on context.
         if arg_type === Nothing && arg2_type === Nothing
-            # Re-compile to check Wasm types
-            local arg1_bytes_chk = compile_value(args[1], ctx)
-            local arg2_bytes_chk = compile_value(args[2], ctx)
-            local a1_is_ref = length(arg1_bytes_chk) >= 1 && (arg1_bytes_chk[1] == Opcode.REF_NULL ||
-                (arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2))
-            local a2_is_ref = length(arg2_bytes_chk) >= 1 && (arg2_bytes_chk[1] == Opcode.REF_NULL ||
-                (arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2))
-            local a1_is_anyref_fp = false
-            local a2_is_anyref_fp = false
-            local a1_is_externref_fp = false
-            local a2_is_externref_fp = false
-            # Check local types for LOCAL_GET
-            if arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2
-                local idx1 = 0
-                local sh1 = 0
-                local p1 = 2
-                while p1 <= length(arg1_bytes_chk)
-                    b = arg1_bytes_chk[p1]
-                    idx1 |= (Int(b & 0x7f) << sh1)
-                    sh1 += 7
-                    p1 += 1
-                    (b & 0x80) == 0 && break
-                end
-                local off1 = idx1 - ctx.n_params
-                if off1 >= 0 && off1 < length(ctx.locals)
-                    local lt1 = ctx.locals[off1 + 1]
-                    a1_is_ref = lt1 isa ConcreteRef || lt1 === StructRef || lt1 === ArrayRef || lt1 === ExternRef || lt1 === AnyRef
-                    a1_is_anyref_fp = (lt1 === AnyRef)
-                    a1_is_externref_fp = (lt1 === ExternRef)
-                else
-                    a1_is_ref = false
-                end
-            end
-            if arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2
-                local idx2 = 0
-                local sh2 = 0
-                local p2 = 2
-                while p2 <= length(arg2_bytes_chk)
-                    b = arg2_bytes_chk[p2]
-                    idx2 |= (Int(b & 0x7f) << sh2)
-                    sh2 += 7
-                    p2 += 1
-                    (b & 0x80) == 0 && break
-                end
-                local off2 = idx2 - ctx.n_params
-                if off2 >= 0 && off2 < length(ctx.locals)
-                    local lt2 = ctx.locals[off2 + 1]
-                    a2_is_ref = lt2 isa ConcreteRef || lt2 === StructRef || lt2 === ArrayRef || lt2 === ExternRef || lt2 === AnyRef
-                    a2_is_anyref_fp = (lt2 === AnyRef)
-                    a2_is_externref_fp = (lt2 === ExternRef)
-                else
-                    a2_is_ref = false
-                end
-            end
+            # typed channel: the emissions' own types replace the REF_NULL/LOCAL_GET
+            # first-byte checks + double LEB decode of local indices.
+            local arg1_bytes_chk, _a1_ty = compile_value_typed(args[1], ctx)
+            local arg2_bytes_chk, _a2_ty = compile_value_typed(args[2], ctx)
+            local a1_is_ref = _a1_ty !== nothing && _wt_is_ref(_a1_ty)
+            local a2_is_ref = _a2_ty !== nothing && _wt_is_ref(_a2_ty)
+            local a1_is_anyref_fp = (_a1_ty === AnyRef)
+            local a2_is_anyref_fp = (_a2_ty === AnyRef)
+            local a1_is_externref_fp = (_a1_ty === ExternRef)
+            local a2_is_externref_fp = (_a2_ty === ExternRef)
             # If Wasm types mismatch (one ref, one not), drop both and return false
             if a1_is_ref != a2_is_ref
                 drop!(bld)
@@ -1593,7 +1549,7 @@ Modifies `bytes` in-place.
 """
 function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext)::Nothing
     # Compile the argument — it's already a string array in WasmGC
-    append!(bytes, compile_value(args[1], ctx))
+    append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
     return nothing
 end
 
@@ -1785,7 +1741,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
            isconst(_gg_mod, _gg_name)
             _gg_val = getglobal(_gg_mod, _gg_name)
-            append!(bytes, compile_value(_gg_val, ctx))
+            append!(bytes, compile_value(_gg_val, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
     end
@@ -1966,7 +1922,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # NOT the redundant re-guess-at-emit the typed channel deletes.
         true_bytes, _true_ty = compile_value_typed(args[2], ctx)   # true_val
         false_bytes, _false_ty = compile_value_typed(args[3], ctx)  # false_val
-        cond_bytes = compile_value(args[1], ctx)   # cond
+        cond_bytes = compile_value(args[1], ctx)   # cond  # god-fn seam: typed when the caller goes builder-native (M4 tail)
 
         # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
         # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
@@ -2535,7 +2491,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                length(obj_type.parameters) >= 1 && obj_type.parameters[1] === UInt8
                 local _cu_field0 = field_ref isa QuoteNode ? field_ref.value : field_ref
                 if _cu_field0 === :s
-                    append!(bytes, compile_value(obj_arg, ctx))
+                    append!(bytes, compile_value(obj_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                     return bytes
                 end
             end
@@ -2571,7 +2527,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             if field_sym === :mem
                 # :mem returns the underlying Memory - in WasmGC this is the array itself
-                append!(bytes, compile_value(obj_arg, ctx))
+                append!(bytes, compile_value(obj_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                 return bytes
             elseif field_sym === :ptr_or_offset
                 # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
@@ -3290,7 +3246,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # In WasmGC, this is a no-op since Memory IS the array
     if is_func(func, :memoryref) && length(args) == 1
         # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
-        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         return bytes
     end
 
@@ -3301,7 +3257,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if length(args) == 1
             # Single arg: just wrapping a Memory - pass through the array reference
             # This is a "fresh" MemoryRef with offset 1
-            append!(bytes, compile_value(args[1], ctx))
+            append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         elseif length(args) >= 2
             base_ref = args[1]
@@ -3706,7 +3662,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # These are no-ops in Wasm since we don't need the sink pattern
         if obj_type <: Base.RefValue
             # Just push the value (setfield! returns the value)
-            append!(bytes, compile_value(value_arg, ctx))
+            append!(bytes, compile_value(value_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
         # Fall through for other struct types - will hit error
@@ -3724,7 +3680,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # compilerbarrier(kind, value) - first arg is a symbol, second is the value
         # We only want the value (second arg)
         if length(args) >= 2
-            append!(bytes, compile_value(args[2], ctx))
+            append!(bytes, compile_value(args[2], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         end
         return bytes
     end
@@ -3790,7 +3746,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # In Wasm we don't do runtime type checks, so just return the value
     if is_func(func, :typeassert)
         if length(args) >= 1
-            append!(bytes, compile_value(args[1], ctx))
+            append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         end
         return bytes
     end
@@ -3875,47 +3831,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Compile the non-nothing ref argument
             local val_bytes = UInt8[]
             if arg1_is_nothing
-                val_bytes = compile_value(args[2], ctx)
+                val_bytes, _nv_ty = compile_value_typed(args[2], ctx)
             else
-                val_bytes = compile_value(args[1], ctx)
+                val_bytes, _nv_ty = compile_value_typed(args[1], ctx)
             end
-            # Check if compile_value produced a numeric type (i32/i64/f32/f64)
-            # Numeric values can never be null, so short-circuit
-            local is_numeric_val = false
-            if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
-                # Decode local index and check its Wasm type
-                local src_idx = 0
-                local shift = 0
-                local pos = 2
-                while pos <= length(val_bytes)
-                    byt = val_bytes[pos]
-                    src_idx |= (Int(byt & 0x7f) << shift)
-                    shift += 7
-                    pos += 1
-                    (byt & 0x80) == 0 && break
-                end
-                # PURE-142: Fix indexing - src_idx is absolute local index (includes params),
-                # but ctx.locals only contains non-param locals. Must subtract n_params.
-                local local_offset = src_idx - ctx.n_params
-                if pos - 1 == length(val_bytes) && local_offset >= 0 && local_offset < length(ctx.locals)
-                    # dart2wasm carries the type with the value: a pure local.get is numeric
-                    # iff the inferred value type is numeric.
-                    local src_type = static_wasm_type(arg1_is_nothing ? args[2] : args[1], ctx)
-                    if src_type === I64 || src_type === I32 || src_type === F64 || src_type === F32
-                        is_numeric_val = true
-                    end
-                elseif pos - 1 == length(val_bytes) && src_idx < ctx.n_params
-                    # It's a parameter - check param types
-                    if src_idx < length(ctx.arg_types)
-                        param_type = ctx.arg_types[src_idx + 1]
-                        if param_type === I64 || param_type === I32 || param_type === F64 || param_type === F32
-                            is_numeric_val = true
-                        end
-                    end
-                end
-            elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
-                is_numeric_val = true
-            end
+            # typed channel: numeric values can never be null — the emission's own type
+            # answers (was a LOCAL_GET LEB decode + const first-byte scan + static re-guess).
+            local is_numeric_val = _nv_ty === I32 || _nv_ty === I64 || _nv_ty === F32 || _nv_ty === F64
             local _neqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             if is_numeric_val
                 # Numeric value can never be nothing
@@ -4000,7 +3922,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # pointer is compile-time host metadata; fold the whole load.
         local _pr_fold = _try_fold_layout_pointerref(ptr_arg, ctx)
         if _pr_fold !== nothing
-            append!(bytes, compile_value(_pr_fold, ctx))
+            append!(bytes, compile_value(_pr_fold, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
@@ -4474,13 +4396,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_type_arg && !is_equality_comparison
             continue
         end
-        append!(bytes, compile_value(arg, ctx))
-        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics.
-        # When is_32bit=true but the actual compiled value is i64 (e.g., from a phi
-        # node or SSA local allocated as i64), insert i32_wrap_i64 to match.
-        # Conversely, when is_32bit=false but value is i32, extend to i64.
+        local _ia_bytes, _ia_ty = compile_value_typed(arg, ctx)
+        append!(bytes, _ia_bytes)
+        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics — driven by the
+        # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
-            _actual_wasm = get_phi_edge_wasm_type(arg, ctx)
+            _actual_wasm = _ia_ty
             if is_32bit && _actual_wasm === I64
                 local _wb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_wb, Opcode.I32_WRAP_I64)
@@ -4534,35 +4455,17 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
     # (this catches cases where Julia type inference says Int64 but actual struct field is Any)
     if is_numeric_intrinsic && length(args) > 0
-        local arg1_bytes = compile_value(args[1], ctx)
-        # Check if arg1 compiles to struct_get that returns externref
-        # GC_PREFIX (0xFB) followed by STRUCT_GET (0x02) indicates struct field access
-        if length(arg1_bytes) >= 4 && arg1_bytes[1] == Opcode.GC_PREFIX && arg1_bytes[2] == 0x02
-            # Decode the struct type index from LEB128
-            local struct_idx = 0
-            local shift = 0
-            local pos = 3
-            while pos <= length(arg1_bytes)
-                b = arg1_bytes[pos]
-                struct_idx |= (Int(b & 0x7f) << shift)
-                shift += 7
-                pos += 1
-                (b & 0x80) == 0 && break
-            end
-            # Check if this struct type has the field as externref
-            # For now, conservatively check if the compiled bytes produce externref
-            # by checking if the SSA type is Any
+        # typed channel: a ref-typed emission feeding a numeric intrinsic = boxed/Any operand
+        # (was a GC_PREFIX+STRUCT_GET byte probe + LEB decode + SSA-type re-check).
+        local arg1_bytes, _p1_ty = compile_value_typed(args[1], ctx)
+        if _p1_ty !== nothing && (_p1_ty === ExternRef || _p1_ty === AnyRef)
             local arg1_ssa = args[1]
-            if arg1_ssa isa Core.SSAValue && haskey(ctx.ssa_types, arg1_ssa.id)
-                local ssa_type = ctx.ssa_types[arg1_ssa.id]
-                if ssa_type === Any
-                    # externref/Any operand in a numeric intrinsic (SSA type is Any) —
-                    # boxing / type instability. Loud reject.
-                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
-                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
-                        "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
-                    return bytes
-                end
+            if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
+                # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
+                bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                    "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
+                return bytes
             end
         end
         # Also check for local_get of externref-typed local.
@@ -4998,50 +4901,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
             if arg_type === Nothing && arg2_type_ne === Nothing
-                local arg1_bytes_ne_chk = compile_value(args[1], ctx)
-                local arg2_bytes_ne_chk = compile_value(args[2], ctx)
-                local a1_ref_ne = length(arg1_bytes_ne_chk) >= 1 && (arg1_bytes_ne_chk[1] == Opcode.REF_NULL ||
-                    (arg1_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_ne_chk) >= 2))
-                local a2_ref_ne = length(arg2_bytes_ne_chk) >= 1 && (arg2_bytes_ne_chk[1] == Opcode.REF_NULL ||
-                    (arg2_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_ne_chk) >= 2))
-                if arg1_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_ne_chk) >= 2
-                    local idx1_ne = 0
-                    local sh1_ne = 0
-                    local p1_ne = 2
-                    while p1_ne <= length(arg1_bytes_ne_chk)
-                        b = arg1_bytes_ne_chk[p1_ne]
-                        idx1_ne |= (Int(b & 0x7f) << sh1_ne)
-                        sh1_ne += 7
-                        p1_ne += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off1_ne = idx1_ne - ctx.n_params
-                    if off1_ne >= 0 && off1_ne < length(ctx.locals)
-                        local lt1_ne = ctx.locals[off1_ne + 1]
-                        a1_ref_ne = lt1_ne isa ConcreteRef || lt1_ne === StructRef || lt1_ne === ArrayRef || lt1_ne === ExternRef || lt1_ne === AnyRef
-                    else
-                        a1_ref_ne = false
-                    end
-                end
-                if arg2_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_ne_chk) >= 2
-                    local idx2_ne = 0
-                    local sh2_ne = 0
-                    local p2_ne = 2
-                    while p2_ne <= length(arg2_bytes_ne_chk)
-                        b = arg2_bytes_ne_chk[p2_ne]
-                        idx2_ne |= (Int(b & 0x7f) << sh2_ne)
-                        sh2_ne += 7
-                        p2_ne += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off2_ne = idx2_ne - ctx.n_params
-                    if off2_ne >= 0 && off2_ne < length(ctx.locals)
-                        local lt2_ne = ctx.locals[off2_ne + 1]
-                        a2_ref_ne = lt2_ne isa ConcreteRef || lt2_ne === StructRef || lt2_ne === ArrayRef || lt2_ne === ExternRef || lt2_ne === AnyRef
-                    else
-                        a2_ref_ne = false
-                    end
-                end
+                # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
+                local arg1_bytes_ne_chk, _a1ne_ty = compile_value_typed(args[1], ctx)
+                local arg2_bytes_ne_chk, _a2ne_ty = compile_value_typed(args[2], ctx)
+                local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
+                local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
                 # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
                 if a1_ref_ne != a2_ref_ne
                     local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
@@ -5997,7 +5861,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _gfc_val = try getfield(args[1].value, _gfc_fld) catch; nothing end
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
-                    append!(bytes, compile_value(_gfc_val, ctx))
+                    append!(bytes, compile_value(_gfc_val, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                     _gfc_done = true
                 end
             end
