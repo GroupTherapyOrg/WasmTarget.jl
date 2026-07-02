@@ -5446,11 +5446,13 @@ begin
             mod, type_registry, func_registry, dt_registry = compile_module(
                 all_functions; return_registries=true, overlay_entries=overlay_set)
 
-            # The overlay should have split the dispatch table:
-            # - Normal dispatch_registry should NOT contain disp_val (it's in overlay)
-            # - OR the overlay registry was built internally
-            # Check that we at least got a valid module
+            # parity(M8.4): overlays are ROWS in the one selector table, not a parallel
+            # apparatus — disp_val stays in the dispatch registry with 12 targets
+            # (10 base + 2 overlay structs), all selector-routed.
             @test mod isa WasmModule
+            @test haskey(dt_registry.tables, disp_val)
+            @test length(dt_registry.tables[disp_val].entries) == 12
+            @test haskey(dt_registry.selector_offset, disp_val)
             bytes = to_bytes(mod)
             @test length(bytes) > 0
         end
@@ -5523,14 +5525,12 @@ begin
             end
         end
 
-        @testset "FNV-1a hash overlay separation" begin
-            # Verify that overlay hash keys don't collide with base hash keys
-            # (since overlay and base tables are separate, collisions within each are handled by probing)
-            h_overlay1 = WasmTarget.fnv1a_hash(Int32[100])  # DispOverlay1 type ID
-            h_overlay2 = WasmTarget.fnv1a_hash(Int32[200])  # DispOverlay2 type ID
-            @test h_overlay1 != h_overlay2  # Different overlay types get different hashes
-            @test h_overlay1 != UInt32(0)   # Not the sentinel
-            @test h_overlay2 != UInt32(0)
+        @testset "the FNV hash-dispatch apparatus is DELETED (LOCK L10)" begin
+            # parity(M8.4): dispatch is dart's ONE selector table — classId + offset +
+            # call_indirect. The hash scheme must never reappear.
+            @test !isdefined(WasmTarget, :fnv1a_hash)
+            @test !isdefined(WasmTarget, :OverlayRegistry)
+            @test !isdefined(WasmTarget, :build_overlay_tables)
         end
 
     end
