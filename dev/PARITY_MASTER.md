@@ -292,3 +292,31 @@ closure; parent reads/writes go through the same cell the closure captured. Prom
 `compile_call`/`compile_invoke`/`compile_new` become builder-native; the annotated god-fn
 seams (L9) disappear; the dart-style intrinsics table lands. Ratchets R2 (~244) + R7 (~137)
 + R3/R5 → 0 → LOCKS.
+
+## M11 — IN FULL (Dale's directive 2026-07-03: "the single largest WIN — take it on headfirst")
+
+**The end-state:** compile_call / compile_invoke / compile_new rebuilt BUILDER-NATIVE —
+dart's code_generator.dart shape: per-expression-kind typed emitters writing into ONE
+builder, returning their ValueType; the declarative intrinsics table (intrinsics.dart:28-71)
+for numeric ops; ZERO bytes-returning interiors. Ratchets R2 (emit_raw seams) and R7 (raw
+coercion ops) → 0 → LOCKS. This is the largest remaining structural delta; multi-session;
+monotonic per-commit ratchet progress; never regressable.
+
+**The mechanical lever:** most seams have the shape
+`b = InstrBuilder(); …typed ops…; return builder_code(b)` + caller `emit_raw!(parent, …)`.
+Conversion = pass the PARENT builder in; delete the local builder + the splice. Family-by-
+family with the smoke/battery gate per batch. The HARD residue: byte-sniffing arms
+(stmt_bytes[end] checks) and the pre-push-args pattern (args stacked before the emitter
+runs — forces scratch juggles like M9's str_char); those get real redesign, not regex.
+
+**Slices:**
+- M11.1 THE INTRINSICS TABLE: `(lhsT, rhsT, op) → typed-emitter` Dict, dart-shaped; the
+  numeric if-elseif chains in calls.jl route through it. R7 falls with it.
+- M11.2 compile_call → `compile_call!(b, …)::WasmValType` builder-native; arms migrate in
+  clusters (R2 down per commit); the bytes shell shrinks to deletion.
+- M11.3 compile_invoke same (the str_* emitters already build typed — they just need the
+  parent builder instead of own-builder+bytes-return).
+- M11.4 compile_new + the foreigncall arms in statements.jl.
+- M11.5 R3/R5 static-query consolidation; R2/R7 → 0 → LOCKS L11_no_raw_seams /
+  L12_one_coercion_surface; R11 sediment sweep; the FRESH end-to-end certification
+  re-audit against the dart source closes the campaign.
