@@ -228,3 +228,58 @@ mislabeled "parity(Loop C)" → landed box work under I3/D5; remainder = M3 · U
 superseded by M2 (channel) + M6 (capture typing = the root) · Loop C → M2 · Loop D → M4+M5 ·
 Loop E → M6 · ledger B1–B17/F1–F31/P1–P22 → catalogue keys only. Dead code found by the
 census (`generate_linear_flow`) → deleted in M1. Commit convention: `parity(Mn): … [Rk a→b]`.
+
+---
+
+# THE SECOND MARCH — the object model (branch `wt-parity-object-model`, started 2026-07-02)
+
+The certified gaps of `dev/CERTIFICATION.md` §gaps, in dependency order. Scope boundary §5
+still governs (NO ffi/async/reified-generics/threads).
+
+## M8 — THE DISPATCH TABLE (dart dispatch_table.dart:391-458, code_generator.dart:2072-2125)
+
+**dart invariant:** ONE flat funcref table for the whole module. A selector (method name)
+gets an OFFSET via first-fit packing (sort weight = classIds.length*10+callCount, desc);
+a virtual call is `receiver.classId + selector.offset → call_indirect(selector.signature)`.
+Monomorphic selectors (targetCount==1) never enter the table — DIRECT call. needsDispatch =
+callCount>0 && targetCount>1.
+
+**WT disease (the deletion target):** PURE-9060/9062 — per-function FNV-1a HASH tables
+(≥9 uniform-arity specializations), keyed on the FULL argtype tuple, linear probing,
+keys/values/typeids i32-array globals, per-table funcref tables, per-entry anyref wrappers,
+a JSON serialization side-channel, and — the structural crime — `find_dispatch_call` scans
+each function body and REPLACES THE WHOLE BODY with a probe loop
+(`generate_dispatch_caller_body`, compile.jl:1713-1717). Overlays get a PARALLEL table
+apparatus checked before the base table.
+
+**Julia adaptation (multiple dispatch, honestly):** a selector = (generic function, arity).
+The DISPATCH AXIS = the first arg position whose registered specializations vary. Targets =
+Dict{classId(axis arg) → target}. Multi-axis selectors CASCADE: the axis-1 row target is a
+per-class trampoline dispatching axis-2 through the SAME mechanism (still the one table).
+Overlay methods MERGE into the selector's rows by Julia specificity — the parallel overlay
+tables die. Row miss = trap (the honest MethodError analog; loud, dart-legit posture).
+
+**Slices:** M8.1 SelectorInfo build (metadata only) + monomorphic devirtualization ·
+M8.2 the ONE table + first-fit packing + classId+offset caller bodies (single-axis) ·
+M8.3 the multi-axis cascade + overlay merge · M8.4 DELETE the FNV apparatus → LOCK
+`L10_no_fnv_dispatch`. Full capped gate at M8.4. Strings can't dispatch via classId until M9
+(documented exception: string-axis selectors keep direct/reject).
+
+## M9 — STRINGS JOIN THE CLASSID WORLD (dart: String IS a class, class_info.dart)
+
+Strings are bare `array<i32>` refs with no `$JlBase` header → invisible to classed isa +
+the M8 table. Re-rep as a classed struct (classId + data array). Promotes the
+`strings_lack_classid` xfail; removes M8's exception. BIG blast radius → full capped gate.
+
+## M10 — SHARED CONTEXT STRUCTS (dart closures.dart:970-1013)
+
+The escaping `Core.Box`: parent scalar-replaces while the closure mutates the real cell —
+two copies. dart materializes ONE Context struct; no scalar replacement across an escaping
+closure; parent reads/writes go through the same cell the closure captured. Promotes the two
+`F3_mutable_capture` xfails.
+
+## M11 — GOD-FN DECOMPOSITION + THE TYPED INTRINSICS TABLE (dart intrinsics.dart:28-71)
+
+`compile_call`/`compile_invoke`/`compile_new` become builder-native; the annotated god-fn
+seams (L9) disappear; the dart-style intrinsics table lands. Ratchets R2 (~244) + R7 (~137)
++ R3/R5 → 0 → LOCKS.
