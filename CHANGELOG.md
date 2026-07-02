@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.0...v0.4.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* **1.13-rc1 + windows:** actual-type egal guards · array-rep union join · path-safe ratchet ([10977c2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/10977c2c1461a2597347bd78dac0f58d33374bb7))
+
 ## [0.3.20](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.3.19...v0.3.20) (2026-06-26)
 
 
