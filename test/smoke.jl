@@ -120,7 +120,9 @@ _xf("F3_mutable_capture", Any[
 # Strings lack the $JlBase classId header (bare array<i32> refs), so abstract isa on a
 # heterogeneous element can't range-check them — pre-existing rep gap (strings dimension),
 # found while installing dart's dense-range isa (M3). Fix = class the string rep (M6/strings).
-_xf("strings_lack_classid", Any[
+# parity(M9) PROMOTED: strings are CLASSED ({classId, data} <: $JlBase, in the DFS
+# hierarchy) — `isa AbstractString` is the same dense-range check as everything else.
+_g("strings_classed", Any[
     ("isa_abstractstring_anyvec", (n::Int64) -> (v = Any[1, "a", 2]; c = 0; for e in v; e isa AbstractString && (c += 1); end; c + n), Int64(10)),
 ])
 

@@ -110,8 +110,8 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             end
             return static_wasm_type(inner, ctx)
         elseif val isa Symbol || val isa String
-            # PURE-043: Symbol/String compile to array_new_fixed (ConcreteRef)
-            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+            # parity(M9): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa Type
             # PURE-4155: Type values (like Bool, Int64) compile to global.get (DataType struct ref).
@@ -401,6 +401,30 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
+        # parity(M9): the STRING arms — the classed string {classId,data} vs its byte
+        # array. Ops consume/produce the array; values carry the class (dart: methods
+        # read the class's array field; convertType adjusts at every boundary).
+        local _ssi = ctx.type_registry.string_struct_idx
+        local _sai = ctx.type_registry.string_array_idx
+        if _ssi !== nothing && _sai !== nothing
+            local _to_is_sarr = to isa ConcreteRef && to.type_idx == _sai
+            local _to_is_sstr = to isa ConcreteRef && to.type_idx == _ssi
+            local _from_is_sarr = from isa ConcreteRef && from.type_idx == _sai
+            local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
+            if _to_is_sarr && !_from_is_sarr
+                # any string-ish ref → its data array: narrow to $JlString, read data
+                _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
+                struct_get!(b, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(_sai), true))
+                return b
+            elseif _from_is_sarr && !_to_is_sarr
+                # a bare data array flowing to a value position: WRAP (the one producer),
+                # then adjust the struct ref to `to` normally
+                emit_string_wrap!(b, ctx)
+                _to_is_sstr && return b
+                convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx)
+                return b
+            end
+        end
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
         if to === ExternRef && from !== ExternRef
             # any→extern at the JS boundary.
@@ -1043,27 +1067,21 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
     elseif val isa String
         # PURE-9013: String constant via passive data segment + array.new_data
-        # Much more compact than N × i32.const + array.new_fixed
+        # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         n_bytes = ncodeunits(val)
 
         if n_bytes == 0
-            # Empty string: use array.new_fixed with 0 elements (no data segment needed)
             array_new_fixed!(b, type_idx, 0, I32)
         else
-            # Create a passive data segment with UTF-8 bytes
             utf8_bytes = Vector{UInt8}(codeunits(val))
             seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
-
-            # array.new_data $type_idx $seg_idx : [offset, length] -> [(ref $type)]
             i32_const!(b, 0)              # offset 0 (start of segment)
-            # i32.const operands are SIGNED LEB128 — unsigned-encoding a length in
-            # [64,127] (and other bands) decodes negative → array.new_data with a
-            # huge unsigned length → "array too large" trap (medium-length string
-            # literals, e.g. admonition HTML).
+            # (signed-LEB length note preserved: see git history PURE-9013)
             i32_const!(b, Int32(n_bytes))  # length
             array_new_data!(b, type_idx, seg_idx)
         end
+        emit_string_wrap!(b, ctx)
 
     elseif val isa GlobalRef
         # Check if this GlobalRef is a module-level global (mutable struct instance)
@@ -1145,6 +1163,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             i32_const!(b, Int32(n_bytes))
             array_new_data!(b, type_idx, seg_idx)
         end
+        emit_string_wrap!(b, ctx)   # parity(M9): Symbols share the classed string rep
 
     elseif typeof(val) <: Tuple
         # Tuple constant - create it with struct.new

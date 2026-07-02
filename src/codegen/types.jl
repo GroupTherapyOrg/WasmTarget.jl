@@ -151,8 +151,10 @@ function assign_type_ids!(registry::TypeRegistry)
 
     # Also include primitive numeric types that may need boxing/dispatch
     # PURE-9028: Include Nothing for BoxedNothing typeId
+    # parity(M9): String + Symbol are CLASSED now — they join the hierarchy so
+    # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-              Float16, Float32, Float64, Nothing)
+              Float16, Float32, Float64, Nothing, String, Symbol)
         push!(concrete_types, T)
     end
 
@@ -1828,9 +1830,9 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         return ConcreteRef(dt_idx, true)
     end
     if T === String || T === Symbol
-        # Strings and Symbols are WasmGC arrays of bytes
-        # Symbol is represented as its name string (byte array)
-        type_idx = get_string_array_type!(mod, registry)
+        # parity(M9): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
+        # a class). Symbol shares the rep (its name string).
+        type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
     elseif is_closure_type(T)
         # Closure types are structs with captured variables

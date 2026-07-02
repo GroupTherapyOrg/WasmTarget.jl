@@ -25,7 +25,7 @@ function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store string reference
-    emit_value!(b, args[1], ctx)
+    emit_value!(b, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
     local_tee!(b, str_local)
 
     # Get length

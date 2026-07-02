@@ -115,7 +115,7 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)
         elseif ft === String || ft === Symbol
-            str_type_idx = get_string_array_type!(mod, registry)
+            str_type_idx = get_string_struct_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         else
             wasm_vt = julia_to_wasm_type(ft)
@@ -458,7 +458,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
             wasm_vt = ConcreteRef(array_type_idx, true)
         elseif ft === String || ft === Symbol
             # Strings and Symbols are WasmGC byte arrays
-            str_type_idx = get_string_array_type!(mod, registry)
+            str_type_idx = get_string_struct_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         elseif ft === Any
             # PURE-908/9064: Use AnyRef when JlType hierarchy is active
@@ -507,7 +507,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
                     wasm_vt = ConcreteRef(array_type_idx, true)
                 elseif inner_type === String || inner_type === Symbol
                     # Union{Nothing, String/Symbol} — nullable string array ref
-                    str_type_idx = get_string_array_type!(mod, registry)
+                    str_type_idx = get_string_struct_type!(mod, registry)
                     wasm_vt = ConcreteRef(str_type_idx, true)
                 elseif isconcretetype(inner_type) && isstructtype(inner_type)
                     if haskey(_registering_types, inner_type)
@@ -626,7 +626,7 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             wasm_vt = AnyRef
         elseif ft === String || ft === Symbol
             # Strings and Symbols are WasmGC byte arrays
-            str_type_idx = get_string_array_type!(mod, registry)
+            str_type_idx = get_string_struct_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         elseif ft === Any
             # Any type - map to externref (Julia 1.12 closures have Any fields)
@@ -700,7 +700,7 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
                     wasm_vt = ConcreteRef(array_type_idx, true)  # nullable
                 elseif inner_type === String || inner_type === Symbol
                     # Union{Nothing, String/Symbol} — nullable string array ref
-                    str_type_idx = get_string_array_type!(mod, registry)
+                    str_type_idx = get_string_struct_type!(mod, registry)
                     wasm_vt = ConcreteRef(str_type_idx, true)
                 elseif isconcretetype(inner_type) && isstructtype(inner_type)
                     # Union{Nothing, SomeStruct} - nullable struct ref
@@ -832,7 +832,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
         # This ensures consistency between struct field types and local variable types
         wasm_vt = if ft === String || ft === Symbol
             # String/Symbol fields need concrete string array type (array<i32>)
-            type_idx = get_string_array_type!(mod, registry)
+            type_idx = get_string_struct_type!(mod, registry)
             ConcreteRef(type_idx, true)
         elseif ft isa Type && ft <: Array
             # Vector/Array fields are wrapper structs with (data, size) layout

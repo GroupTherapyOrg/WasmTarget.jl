@@ -2045,7 +2045,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Nothing value (literal or SSA with Nothing type) - emit ref.null
                 elseif inner_type !== nothing && (inner_type === String || inner_type === Symbol)
                     # Nullable string/symbol — use string array type
-                    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                    str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                     ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
                 elseif inner_type !== nothing && isconcretetype(inner_type) && isstructtype(inner_type)
                     # Nullable struct ref - emit null reference
@@ -2074,7 +2074,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if inner_type !== nothing &&
                    (_cn_vty === I32 || _cn_vty === I64 || _cn_vty === F32 || _cn_vty === F64)
                     if inner_type === String || inner_type === Symbol
-                        str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                        str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                         ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
                     elseif inner_type <: AbstractVector
                         elem_type = eltype(inner_type)
@@ -2502,7 +2502,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 end
                 get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             elseif elem_type === String
-                get_string_array_type!(ctx.mod, ctx.type_registry)
+                get_string_struct_type!(ctx.mod, ctx.type_registry)
             else
                 get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             end
@@ -2915,7 +2915,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(ctx.locals, I32)
 
             # Store string ref
-            emit_value!(b, str_ssa, ctx)
+            emit_value!(b, str_ssa, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
             local_set!(b, str_local)
 
             # Store start_ptr (the ptr argument to memchr = 1-based position)

@@ -2063,6 +2063,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 any_convert_extern!(_szb)            # externref → anyref
                 ref_cast!(_szb, ArrayRef, true)      # anyref → (ref null array)
             end
+            # parity(M9): the classed string → its DATA array before array.len
+            convert_type!(_szb, AnyRef,
+                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
             array_len!(_szb)
             # array.len returns i32, extend to i64 for Julia's Int
             num!(_szb, Opcode.I64_EXTEND_I32_S)
@@ -2101,6 +2104,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 any_convert_extern!(_ncb)
                 ref_cast!(_ncb, ArrayRef, true)
             end
+            # parity(M9): the classed string → its DATA array before array.len
+            convert_type!(_ncb, AnyRef,
+                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
             array_len!(_ncb)
             # Return as Int (i64) to match Julia's ncodeunits return type
             num!(_ncb, Opcode.I64_EXTEND_I32_S)
@@ -2130,6 +2136,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
             end
+            # parity(M9): the classed string → its DATA array before array.len
+            convert_type!(_lnb, AnyRef,
+                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
             array_len!(_lnb)
             # array.len returns i32, extend to i64 for Julia's Int
             num!(_lnb, Opcode.I64_EXTEND_I32_S)
@@ -3934,12 +3943,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if str_info !== nothing
             str_ssa, idx_ssa = str_info
             local _prsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_value!(_prsb, str_ssa, ctx)
+            string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
+            # parity(M9): the classed string → its DATA array (the funnel adjusts)
+            emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
             emit_value!(_prsb, idx_ssa, ctx)
             num!(_prsb, Opcode.I32_WRAP_I64)
             i32_const!(_prsb, 1)
             num!(_prsb, Opcode.I32_SUB)
-            string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             array_get!(_prsb, string_arr_type, I32; signed=false)
             append!(bytes, builder_code(_prsb))
             return bytes
@@ -5718,7 +5728,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # String is array<i32> (type 1). Index is 1-based, array.get is 0-based.
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             local _prsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_value!(_prsb, str_ssa, ctx)
+            # parity(M9): the classed string → its DATA array (the funnel adjusts)
+            emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
             emit_value!(_prsb, idx_ssa, ctx)
             # Convert i64 index to i32 and subtract 1 for 0-based
             num!(_prsb, Opcode.I32_WRAP_I64)

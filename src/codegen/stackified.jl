@@ -713,9 +713,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         elseif val isa Float32
             return F32
         elseif val isa Symbol || val isa String
-            # PURE-036ba: Symbol and String compile to array<i32> (string array type)
-            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-            return ConcreteRef(str_type_idx, false)  # non-nullable since array.new_fixed produces non-nullable ref
+            # parity(M9): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
         elseif val isa QuoteNode
             # PURE-036bg: QuoteNode wraps a value - recursively determine its Wasm type
             return get_phi_edge_wasm_type(val.value)

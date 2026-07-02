@@ -397,8 +397,8 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
     if T === Union{}
         return I32
     elseif T === String || T === Symbol
-        # Strings and Symbols are WasmGC arrays of bytes (not structs)
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
         # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
@@ -543,8 +543,8 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             return ConcreteRef(info.wasm_type_idx, true)
         end
     elseif T === String
-        # Strings are WasmGC arrays of bytes
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T === Int128 || T === UInt128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
