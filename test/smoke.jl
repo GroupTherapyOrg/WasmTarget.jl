@@ -108,8 +108,14 @@ _g("closures", Any[
 # When one flips to passing, the smoke says so loudly (the loop that closes it is done).
 const XFAIL = Vector{Pair{String,Vector{Any}}}()
 _xf(name, cases) = push!(XFAIL, name => cases)
+# M6 progress (2026-07-02): the closure body now compiles VALID wasm (the self-box numeric
+# join types the capture cycle — f3_self_box_joins, dart Capture.type). The remaining gap is
+# SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
+# mutates the real one (two copies). Fix = dart Context structs (closures.dart:970): the
+# parent materializes ONE shared cell; no scalar replacement across an escaping closure.
 _xf("F3_mutable_capture", Any[
     ("mutate_capture", (n::Int64) -> (s = 0; foreach(i -> (s += i), 1:n); s), Int64(5)),
+    ("mutate_capture_typed", (n::Int64) -> (s = 0; foreach(i -> (s += i), 1:n); s)::Int64, Int64(5)),
 ])
 # Strings lack the $JlBase classId header (bare array<i32> refs), so abstract isa on a
 # heterogeneous element can't range-check them — pre-existing rep gap (strings dimension),

@@ -6483,6 +6483,22 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         ctx.last_stmt_was_stub = true  # PURE-908
     end
 
+    # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
+    # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
+    # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
+    if (@isdefined _arg_anyref) && (@isdefined is_numeric_intrinsic) && (@isdefined _generic_arith) &&
+       (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !ctx.last_stmt_was_stub
+        local _dl = get(ctx.ssa_locals, idx, nothing)
+        if _dl !== nothing
+            local _doff = _dl - ctx.n_params
+            if _doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef
+                local _rbx = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, nothing)
+                append!(bytes, builder_code(_rbx))
+            end
+        end
+    end
+
     return bytes
 end
 

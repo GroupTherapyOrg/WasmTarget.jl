@@ -287,11 +287,20 @@ its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass 
 whose operands don't ALL resolve numeric (so `φ(0,"x")` stays Any). Returns ssa_id → concrete numeric
 Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
 """
-function propagate_numeric_value_types(code, ssa_types)::Dict{Int,Type}
+function propagate_numeric_value_types(code, ssa_types;
+                                        argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
     out = Dict{Int,Type}()
-    _ssat(i) = (1 <= i <= length(ssa_types)) ? _F3_CC.widenconst(ssa_types[i]) : Any
+    _wc(t) = t isa Type ? _F3_CC.widenconst(t) : (t === nothing ? Any : try _F3_CC.widenconst(t) catch; Any end)
+    # ssa_types may be a Vector, a Dict, or WT's IntKeyMap (get-safe on all three).
+    _ssat(i) = _wc(try get(ssa_types, i, Any) catch
+                       (1 <= i <= length(ssa_types)) ? ssa_types[i] : Any
+                   end)
     _opT(a) = a isa Core.SSAValue ? (haskey(out, a.id) ? out[a.id] : _ssat(a.id)) :
-              a isa QuoteNode ? typeof(a.value) : (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
+              a isa QuoteNode ? typeof(a.value) :
+              a isa Core.Argument ? ((argtypes !== nothing && 1 <= a.n - self_shift <= length(argtypes) &&
+                                      argtypes[a.n - self_shift] isa Type) ?
+                                     argtypes[a.n - self_shift] : Any) :
+              (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
     # only consider SSAs Julia left as Any (don't override a known concrete type)
     pend = Int[i for (i, _) in enumerate(code) if _ssat(i) === Any]
     changed = true
@@ -313,12 +322,14 @@ function propagate_numeric_value_types(code, ssa_types)::Dict{Int,Type}
                         out[i] = j; changed = true
                     end
                 end
-            elseif stmt isa Expr && stmt.head === :call
-                op = stmt.args[1]
+            elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
+                # :invoke carries the MethodInstance first — the callee + operands follow.
+                _cargs = stmt.head === :invoke ? stmt.args[2:end] : stmt.args
+                op = _cargs[1]
                 f = op isa GlobalRef ? (isdefined(op.mod, op.name) ? getfield(op.mod, op.name) : nothing) :
                     (op isa Function ? op : nothing)
                 f === nothing && continue
-                ats = Any[_opT(a) for a in stmt.args[2:end]]
+                ats = Any[_opT(a) for a in _cargs[2:end]]
                 all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
                 rt = try _F3_CC.return_type(f, Tuple{ats...}) catch; Any end
                 if _f3_is_numeric_jl(rt)
@@ -341,6 +352,89 @@ function propagate_numeric_value_types(code, ssa_types)::Dict{Int,Type}
         end
     end
     return out
+end
+
+
+"""
+    f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift=1) -> Dict{Int,Type}
+
+parity(M6/F3) — the CLOSURE-LOCAL typed capture (dart `Capture.type`, closures.dart:1030):
+when the parent scalar-replaced the `Core.Box` (no `%new` to record) the closure body must
+solve its captured contents type ALONE. Optimistic-verify: (1) find the `getfield(#self#,
+boxfield)` box reads; (2) CANDIDATE contents type = the join of resolved-numeric OTHER
+operands in arithmetic that consumes the box's `:contents` reads (e.g. `contents + i::Int64`
+⇒ Int64); (3) seed `f3_box_value_types` with box-read → candidate; (4) VERIFY every
+`setfield!(box, :contents, v)` value resolves to a numeric ⊆ candidate — else return empty
+(anyref fallback, no unsoundness).
+"""
+function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    (selfT isa DataType && isstructtype(selfT)) || return out
+    boxfields = Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT)
+                            if fieldtype(selfT, i) === Core.Box)
+    isempty(boxfields) && return out
+    _wc(t) = t isa Type ? _F3_CC.widenconst(t) : (t === nothing ? Any : try _F3_CC.widenconst(t) catch; Any end)
+    # ssa_types may be a Vector, a Dict, or WT's IntKeyMap (get-safe on all three).
+    _ssat(i) = _wc(try get(ssa_types, i, Any) catch
+                       (1 <= i <= length(ssa_types)) ? ssa_types[i] : Any
+                   end)
+    _opT(a) = a isa Core.SSAValue ? _ssat(a.id) :
+              a isa QuoteNode ? typeof(a.value) :
+              a isa Core.Argument ? ((argtypes !== nothing && 1 <= a.n - self_shift <= length(argtypes) &&
+                                      argtypes[a.n - self_shift] isa Type) ?
+                                     argtypes[a.n - self_shift] : Any) :
+              (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
+    box_reads = Set{Int}()
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :getfield) || continue
+        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue
+        fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fldn in boxfields && push!(box_reads, i)
+    end
+    isempty(box_reads) && return out
+    contents_reads = Set{Int}()
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :getfield) || continue
+        (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fldn === :contents && push!(contents_reads, i)
+    end
+    isempty(contents_reads) && return out
+    cand = nothing
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)) || continue
+        _cargs = stmt.head === :invoke ? stmt.args[2:end] : stmt.args
+        any(a -> a isa Core.SSAValue && a.id in contents_reads, _cargs[2:end]) || continue
+        for a in _cargs[2:end]
+            (a isa Core.SSAValue && a.id in contents_reads) && continue
+            t = _opT(a)
+            if _f3_is_numeric_jl(t)
+                cand = cand === nothing ? t : Union{cand, t}
+            end
+        end
+    end
+    (cand isa Type && _f3_is_numeric_jl(cand)) || return out
+    seeds = Dict{Int,Type}(b => cand for b in box_reads)
+    _spec = argtypes === nothing ? nothing :
+            (self_shift == 1 ? Any[selfT; argtypes...] : Any[argtypes...])
+    joins = f3_box_value_types(code, ssa_types; extra_box_seeds=seeds, spectypes=_spec)
+    for c in contents_reads
+        joins[c] = cand
+    end
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 4) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :setfield!) || continue
+        (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        v = stmt.args[4]
+        vt = v isa Core.SSAValue ? get(joins, v.id, _ssat(v.id)) : _opT(v)
+        (_f3_is_numeric_jl(vt) && vt <: cand) || return Dict{Int,Type}()
+    end
+    return joins
 end
 
 # F3 L2b CLOSURE-BODY seed (dart2wasm `Capture.type = context.struct.fields[i].type`): in a closure

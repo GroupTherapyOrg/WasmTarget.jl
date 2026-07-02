@@ -2525,6 +2525,17 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
             end
 
+            # parity(M6/F3): numeric arith result → ref-typed SSA local ⇒ box through THE
+            # one producer (the scalar-replaced Core.Box cycle: unbox → op → box → store).
+            _f3_result_box! = () -> begin
+                local _dl = get(ctx.ssa_locals, idx, nothing)
+                _dl === nothing && return
+                local _doff = _dl - ctx.n_params
+                (_doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef) || return
+                local _rbx = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
+                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, nothing)
+                append!(bytes, builder_code(_rbx))
+            end
             if is_self_call
                 # Self-recursive call - emit call instruction
                 bsc2 = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
@@ -2557,6 +2568,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 badd = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
                 num!(badd, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
                 append!(bytes, builder_code(badd))
+                _f3_result_box!()
             elseif name === :- || name === :sub_int
                 if length(args) == 1
                     # WBUILD-3001: Unary negation -(x) → 0 - x
@@ -2566,6 +2578,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bsub3 = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
                 num!(bsub3, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
                 append!(bytes, builder_code(bsub3))
+                _f3_result_box!()
             elseif (name === :* || name === :mul_int) && length(args) == 2 &&
                    (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
                    (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
