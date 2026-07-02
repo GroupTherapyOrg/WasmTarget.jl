@@ -13,8 +13,8 @@ L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0
 
 [metrics]
-R11_patch_markers = 707
-R1_untyped_compile_value = 28
+R11_patch_markers = 706
+R1_untyped_compile_value = 23
 R2_emit_raw_bridges = 241
 R3_infer_value_type = 136
 R5_julia_type_reguess = 126

@@ -3831,47 +3831,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Compile the non-nothing ref argument
             local val_bytes = UInt8[]
             if arg1_is_nothing
-                val_bytes = compile_value(args[2], ctx)
+                val_bytes, _nv_ty = compile_value_typed(args[2], ctx)
             else
-                val_bytes = compile_value(args[1], ctx)
+                val_bytes, _nv_ty = compile_value_typed(args[1], ctx)
             end
-            # Check if compile_value produced a numeric type (i32/i64/f32/f64)
-            # Numeric values can never be null, so short-circuit
-            local is_numeric_val = false
-            if length(val_bytes) >= 2 && val_bytes[1] == Opcode.LOCAL_GET
-                # Decode local index and check its Wasm type
-                local src_idx = 0
-                local shift = 0
-                local pos = 2
-                while pos <= length(val_bytes)
-                    byt = val_bytes[pos]
-                    src_idx |= (Int(byt & 0x7f) << shift)
-                    shift += 7
-                    pos += 1
-                    (byt & 0x80) == 0 && break
-                end
-                # PURE-142: Fix indexing - src_idx is absolute local index (includes params),
-                # but ctx.locals only contains non-param locals. Must subtract n_params.
-                local local_offset = src_idx - ctx.n_params
-                if pos - 1 == length(val_bytes) && local_offset >= 0 && local_offset < length(ctx.locals)
-                    # dart2wasm carries the type with the value: a pure local.get is numeric
-                    # iff the inferred value type is numeric.
-                    local src_type = static_wasm_type(arg1_is_nothing ? args[2] : args[1], ctx)
-                    if src_type === I64 || src_type === I32 || src_type === F64 || src_type === F32
-                        is_numeric_val = true
-                    end
-                elseif pos - 1 == length(val_bytes) && src_idx < ctx.n_params
-                    # It's a parameter - check param types
-                    if src_idx < length(ctx.arg_types)
-                        param_type = ctx.arg_types[src_idx + 1]
-                        if param_type === I64 || param_type === I32 || param_type === F64 || param_type === F32
-                            is_numeric_val = true
-                        end
-                    end
-                end
-            elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
-                is_numeric_val = true
-            end
+            # typed channel: numeric values can never be null — the emission's own type
+            # answers (was a LOCAL_GET LEB decode + const first-byte scan + static re-guess).
+            local is_numeric_val = _nv_ty === I32 || _nv_ty === I64 || _nv_ty === F32 || _nv_ty === F64
             local _neqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             if is_numeric_val
                 # Numeric value can never be nothing
@@ -4430,13 +4396,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_type_arg && !is_equality_comparison
             continue
         end
-        append!(bytes, compile_value(arg, ctx))
-        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics.
-        # When is_32bit=true but the actual compiled value is i64 (e.g., from a phi
-        # node or SSA local allocated as i64), insert i32_wrap_i64 to match.
-        # Conversely, when is_32bit=false but value is i32, extend to i64.
+        local _ia_bytes, _ia_ty = compile_value_typed(arg, ctx)
+        append!(bytes, _ia_bytes)
+        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics — driven by the
+        # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
-            _actual_wasm = get_phi_edge_wasm_type(arg, ctx)
+            _actual_wasm = _ia_ty
             if is_32bit && _actual_wasm === I64
                 local _wb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_wb, Opcode.I32_WRAP_I64)
@@ -4490,35 +4455,17 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
     # (this catches cases where Julia type inference says Int64 but actual struct field is Any)
     if is_numeric_intrinsic && length(args) > 0
-        local arg1_bytes = compile_value(args[1], ctx)
-        # Check if arg1 compiles to struct_get that returns externref
-        # GC_PREFIX (0xFB) followed by STRUCT_GET (0x02) indicates struct field access
-        if length(arg1_bytes) >= 4 && arg1_bytes[1] == Opcode.GC_PREFIX && arg1_bytes[2] == 0x02
-            # Decode the struct type index from LEB128
-            local struct_idx = 0
-            local shift = 0
-            local pos = 3
-            while pos <= length(arg1_bytes)
-                b = arg1_bytes[pos]
-                struct_idx |= (Int(b & 0x7f) << shift)
-                shift += 7
-                pos += 1
-                (b & 0x80) == 0 && break
-            end
-            # Check if this struct type has the field as externref
-            # For now, conservatively check if the compiled bytes produce externref
-            # by checking if the SSA type is Any
+        # typed channel: a ref-typed emission feeding a numeric intrinsic = boxed/Any operand
+        # (was a GC_PREFIX+STRUCT_GET byte probe + LEB decode + SSA-type re-check).
+        local arg1_bytes, _p1_ty = compile_value_typed(args[1], ctx)
+        if _p1_ty !== nothing && (_p1_ty === ExternRef || _p1_ty === AnyRef)
             local arg1_ssa = args[1]
-            if arg1_ssa isa Core.SSAValue && haskey(ctx.ssa_types, arg1_ssa.id)
-                local ssa_type = ctx.ssa_types[arg1_ssa.id]
-                if ssa_type === Any
-                    # externref/Any operand in a numeric intrinsic (SSA type is Any) —
-                    # boxing / type instability. Loud reject.
-                    bytes = UInt8[]  # PURE-908: clear pre-pushed args
-                    emit_unsupported_stub!(ctx, bytes, :unsupported_method,
-                        "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
-                    return bytes
-                end
+            if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
+                # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
+                bytes = UInt8[]  # PURE-908: clear pre-pushed args
+                emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                    "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
+                return bytes
             end
         end
         # Also check for local_get of externref-typed local.
