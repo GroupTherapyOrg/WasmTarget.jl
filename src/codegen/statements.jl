@@ -517,8 +517,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # (can't determine source type) but the PiNode's target local is ref-typed.
                     elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef || pi_local_type === EqRef)
                         # dart2wasm carries the type with the value: the source is numeric
-                        # iff its inferred wasm type is not a ref (covers const and local.get).
-                        is_numeric_val = !isempty(val_bytes) && !_wt_is_ref(infer_value_wasm_type(stmt.val, ctx))
+                        # iff the EMISSION's own type (val_ty, from compile_value_typed above)
+                        # is not a ref — no re-guess needed.
+                        is_numeric_val = !isempty(val_bytes) && val_ty !== nothing && !_wt_is_ref(val_ty)
                         if is_numeric_val
                             # Replace with ref.null of the correct type
                             if pi_local_type isa ConcreteRef
@@ -1932,28 +1933,30 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         for (fi, val) in enumerate(field_values)
             _wfi = fi + Int(_exn_info.field_offset)
             _fwasm = _wfi <= length(_exn_def.fields) ? _exn_def.fields[_wfi].valtype : nothing
-            _vwasm = try infer_value_wasm_type(val, ctx) catch; nothing end
+            # typed channel: the emission's own type decides (re-guess + recompile deleted)
+            _vbytes, _vwasm = compile_value_typed(val, ctx)
+            _emit_v!() = emit_raw!(b, _vbytes; pushes=WasmValType[_vwasm])
             _emitted = false
             if _fwasm !== nothing && _vwasm !== nothing
                 if _fwasm === _vwasm
-                    emit_value!(b, val, ctx)
+                    _emit_v!()
                     _emitted = true
                 elseif _fwasm isa ConcreteRef && (_vwasm === StructRef || _vwasm === AnyRef || _vwasm === EqRef)
-                    emit_value!(b, val, ctx)
+                    _emit_v!()
                     ref_cast!(b, Int64(_fwasm.type_idx), true)
                     _emitted = true
                 elseif (_fwasm === AnyRef || _fwasm === EqRef) && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef)
-                    emit_value!(b, val, ctx)
+                    _emit_v!()
                     _emitted = true
                 elseif _fwasm === StructRef && _vwasm isa ConcreteRef
                     # Only struct-typed concrete refs subsume into structref (arrays don't)
                     _vdef = ctx.mod.types[_vwasm.type_idx + 1]
                     if _vdef isa StructType
-                        emit_value!(b, val, ctx)
+                        _emit_v!()
                         _emitted = true
                     end
                 elseif _fwasm === ExternRef && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef || _vwasm === AnyRef || _vwasm === EqRef)
-                    emit_value!(b, val, ctx)
+                    _emit_v!()
                     extern_convert_any!(b)
                     _emitted = true
                 end
@@ -2222,7 +2225,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 continue  # Skip to next field — ref.null already emitted
             end
 
-            field_bytes = compile_value(val, ctx)
+            field_bytes, field_ty = compile_value_typed(val, ctx)
             # Safety: if field_bytes is empty (SSA without local, not re-compilable)
             # and the field expects a ref type, emit ref.null of the correct type.
             if isempty(field_bytes) && actual_field_wasm !== nothing &&
@@ -2257,10 +2260,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # B4/U2: the union-field tagged-union-wrapper box-coercion is RETIRED — a union
             # field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper ConcreteRef, so the value flows in as an anyref subtype directly.
-            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                # dart2wasm carries the type with the value: derive the source's wasm type
-                # from the inferred value type rather than decoding the local index out of bytes.
-                src_type = infer_value_wasm_type(val, ctx)
+            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && !isempty(field_bytes)
+                # typed channel: the emission's own type (field_ty) — no re-guess, no byte gate.
+                src_type = field_ty
                 if src_type !== nothing && (src_type === I64 || src_type === I32 || src_type === F32 || src_type === F64)
                     # Source local is numeric but field expects ref — box or emit ref.null
                     # Use the ACTUAL field type from the struct definition
@@ -2339,7 +2341,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # externref fields and failed validation).
             if actual_field_wasm === ExternRef && !isempty(field_bytes) &&
                field_bytes[1] != 0x20 && field_bytes[1] != 0x23 && field_bytes[1] != 0xD0
-                _inline_vw = try infer_value_wasm_type(val, ctx) catch; nothing end
+                _inline_vw = field_ty
                 if _inline_vw !== nothing && (_inline_vw isa ConcreteRef || _inline_vw === StructRef ||
                                               _inline_vw === ArrayRef || _inline_vw === AnyRef || _inline_vw === EqRef)
                     emit_raw!(b, field_bytes)
@@ -2378,7 +2380,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if leb_end_906 == length(field_bytes)  # Pure local.get
                     # dart2wasm carries the type with the value: derive the source's wasm type
                     # from the inferred value type rather than decoding the local index.
-                    src_type_906 = infer_value_wasm_type(val, ctx)
+                    src_type_906 = field_ty
                     if src_type_906 !== nothing && (src_type_906 === ExternRef || src_type_906 === AnyRef || src_type_906 isa ConcreteRef || src_type_906 === StructRef)
                         # Source is ref-typed but field expects numeric — emit zero default
                         if actual_field_wasm === I32
@@ -2408,7 +2410,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 first_is_numeric = !isempty(field_bytes) &&
                                    (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
                                     field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
-                                   !_wt_is_ref(infer_value_wasm_type(val, ctx))
+                                   field_ty !== nothing && !_wt_is_ref(field_ty)
                 if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
                     emit_raw!(b, field_bytes)
                     extern_convert_any!(b)
