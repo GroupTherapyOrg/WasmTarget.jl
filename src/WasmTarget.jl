@@ -304,7 +304,7 @@ Optimized `Vector{UInt8}`.
 - Error if `wasm-opt` is not found (with install instructions)
 - Error if optimization or validation fails
 """
-function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=true)::Vector{UInt8}
+function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
     # Check wasm-opt availability
     wasm_opt = Sys.which("wasm-opt")
     if wasm_opt === nothing

@@ -115,8 +115,6 @@ const METRICS = [
             end
             n
         end),
-    "R12_wasmtools_crutch" => ("wasm-tools references in src/ (M4: demote from default-on gate to opt-in double-check)",
-        () -> count_sites(r"wasm-tools")),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
@@ -128,6 +126,8 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
+        () -> count_sites(r"validate::Bool\s*=\s*true")),
     "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs — ZERO: every builder is a hard type-checking gate, always-on (M4; locked 2026-07-01)",
         () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
