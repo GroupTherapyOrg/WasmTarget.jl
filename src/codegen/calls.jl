@@ -106,7 +106,7 @@ end
 function _emit_normalise_narrow_pair!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
                                       signed::Bool, julia_width::Int)
     julia_width < 32 || return bytes
-    bld = InstrBuilder(; func_name="_emit_normalise_narrow_pair!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_normalise_narrow_pair!", mod=ctx.mod)
     li = UInt32(allocate_local!(ctx, I32))
     function norm!()
         if signed
@@ -132,7 +132,7 @@ function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilatio
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-    bld = InstrBuilder(; func_name="_emit_throw_error_struct!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_throw_error_struct!", mod=ctx.mod)
     if info !== nothing
         tb = UInt8[]
         emit_type_id!(tb, ctx.type_registry, T)
@@ -164,7 +164,7 @@ function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
     weq    = is32 ? Opcode.I32_EQ : Opcode.I64_EQ
     la = UInt32(allocate_local!(ctx, lt))
     lb = UInt32(allocate_local!(ctx, lt))
-    bld = InstrBuilder(; func_name="_emit_div_guard!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_div_guard!", mod=ctx.mod)
     local_set!(bld, lb)  # [a]
     local_set!(bld, la)  # []
     # b == 0 → throw DivideError
@@ -240,7 +240,7 @@ function _emit_shift_guarded!(bytes::Vector{UInt8}, ctx::AbstractCompilationCont
     shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
              kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
                               (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
-    bld = InstrBuilder(; func_name="_emit_shift_guarded!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_shift_guarded!", mod=ctx.mod)
     _lset(op, i) = op === Opcode.LOCAL_SET ? local_set!(bld, i) :
                    op === Opcode.LOCAL_TEE ? local_tee!(bld, i) : local_get!(bld, i)
     _wc(v) = is32 ? i32_const!(bld, Int64(v)) : i64_const!(bld, Int64(v))
@@ -300,7 +300,7 @@ end
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
 function _emit_wrap_shift_amount_saturating!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, julia_width::Int)
     amt = UInt32(allocate_local!(ctx, I64))
-    bld = InstrBuilder(; func_name="_emit_wrap_shift_amount_saturating!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_wrap_shift_amount_saturating!", mod=ctx.mod)
     local_tee!(bld, amt)                         # [amount]
     i64_const!(bld, Int64(julia_width))          # [amount, jw]
     local_get!(bld, amt)                         # [amount, jw, amount]
@@ -578,7 +578,7 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
         local_result = allocate_local!(ctx, local_type)
-        bld = InstrBuilder(; func_name="_compile_call_checked_mul", strict=false)
+        bld = InstrBuilder(; func_name="_compile_call_checked_mul", mod=ctx.mod)
 
         # Save b, save a, compute a*b, save result
         local_set!(bld, local_b)
@@ -667,7 +667,7 @@ function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompila
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
 
-    bld = InstrBuilder(; func_name="_compile_call_flipsign", strict=false)
+    bld = InstrBuilder(; func_name="_compile_call_flipsign", mod=ctx.mod)
     if is_128bit
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
@@ -811,7 +811,7 @@ Extracted handler for :(===) identity comparison (the post-arg-push branch).
 Modifies `bytes` in-place.
 """
 function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
-    bld = InstrBuilder(; func_name="_compile_call_egaleq", strict=false)
+    bld = InstrBuilder(; func_name="_compile_call_egaleq", mod=ctx.mod)
     if is_128bit
         emit_raw!(bld, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
     elseif arg_type === Float64
@@ -1226,7 +1226,7 @@ function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::AbstractCompilatio
         # Stack: [i32 = Float16 bits]
         # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
 
-        bld = InstrBuilder(; func_name="_compile_call_fpext", strict=false)
+        bld = InstrBuilder(; func_name="_compile_call_fpext", mod=ctx.mod)
         # Save the Float16 bits to a temp local
         local_idx = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
@@ -1298,7 +1298,7 @@ function _compile_call_fpext(args, bytes::Vector{UInt8}, ctx::AbstractCompilatio
         append!(bytes, builder_code(bld))
     else
         # Float32 → Float64 (standard case)
-        let bld = InstrBuilder(; func_name="_compile_call_fpext", strict=false)
+        let bld = InstrBuilder(; func_name="_compile_call_fpext", mod=ctx.mod)
             num!(bld, 0xBB)  # f64.promote_f32
             append!(bytes, builder_code(bld))
         end
@@ -1330,7 +1330,7 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
     # Get the type of the value being checked (for detecting tagged unions)
     value_type = get_ssa_type(ctx, value_arg)
 
-    bld = InstrBuilder(; func_name="_compile_call_isa", strict=false)
+    bld = InstrBuilder(; func_name="_compile_call_isa", mod=ctx.mod)
 
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
@@ -1547,11 +1547,11 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 ref_test!(bld, Int64(_base_idx), false)  # ref.test (ref $JlBase)
                 num!(bld, Opcode.I32_EQZ)
                 # if NOT a $JlBase struct → push 0 (false)
-                local _isa_guard_b = InstrBuilder(; func_name="_compile_call_isa.guard", strict=false)
+                local _isa_guard_b = InstrBuilder(; func_name="_compile_call_isa.guard", mod=ctx.mod)
                 i32_const!(_isa_guard_b, 0)
                 local _isa_guard_block = builder_code(_isa_guard_b)
                 # else → do the DFS range check
-                local _isa_dfs_b = InstrBuilder(; func_name="_compile_call_isa.dfs", strict=false)
+                local _isa_dfs_b = InstrBuilder(; func_name="_compile_call_isa.dfs", mod=ctx.mod)
                 local_get!(_isa_dfs_b, _isa_guard_local)
                 let tb = UInt8[]
                     emit_typeof!(tb, _base_idx)
@@ -1676,7 +1676,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         end
     end
 
-    bld = InstrBuilder(; func_name="_try_inline_typeid_dispatch", strict=false)
+    bld = InstrBuilder(; func_name="_try_inline_typeid_dispatch", mod=ctx.mod)
     # Compile every arg into a local (reused across branches).
     arg_locals = Int[]
     for (j, arg) in enumerate(args)
@@ -1724,12 +1724,12 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         i32_const!(bld, Int64(tid))
         num!(bld, Opcode.I32_EQ)
         if_!(bld, result_wasm === nothing ? 0x40 : result_wasm)
-        local _bbr_b = InstrBuilder(; func_name="_try_inline_typeid_dispatch.branch", strict=false)
+        local _bbr_b = InstrBuilder(; func_name="_try_inline_typeid_dispatch.branch", mod=ctx.mod)
         emit_branch(_bbr_b, tid, cw, c)
         emit_raw!(bld, builder_code(_bbr_b); pushes=(result_wasm === nothing ? WasmValType[] : WasmValType[result_wasm]))
         else_!(bld)
     end
-    unreachable!(bld)
+    unreachable!(bld)  # structural trap (dart-legit dead path)
     for _ in 1:nb; end_block!(bld); end
     # Heuristic-safe tail: land result in a scratch local, end with local.get.
     if result_wasm !== nothing
@@ -1802,7 +1802,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # non-null fake: the inlined `dt.layout == C_NULL && throw(...)`
             # guard must not fire; the pointer is never dereferenced (loads
             # are folded).
-            local _layb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _layb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             i64_const!(_layb, 1)
             append!(bytes, builder_code(_layb))
             return bytes
@@ -1820,7 +1820,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
         if field_name === :value
             global_idx = ctx.signal_ssa_getters[idx]
-            local _sigb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _sigb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             global_get!(_sigb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
             append!(bytes, builder_code(_sigb))
             return bytes
@@ -1835,7 +1835,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # The value to write is the 3rd argument (args = [target, field, value])
         global_idx = ctx.signal_ssa_setters[idx]
         value_arg = args[3]
-        local _setb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _setb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_setb, value_arg, ctx)
         global_set!(_setb, global_idx)
 
@@ -1873,7 +1873,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Signal getter: no args, returns the signal value
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
             global_idx = ctx.signal_ssa_getters[ssa_id]
-            local _sggb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _sggb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             global_get!(_sggb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
             append!(bytes, builder_code(_sggb))
             return bytes
@@ -1881,7 +1881,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Signal setter: one arg, sets the signal value
         if haskey(ctx.signal_ssa_setters, ssa_id) && length(args) == 1
             global_idx = ctx.signal_ssa_setters[ssa_id]
-            local _ssgb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _ssgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # Compile the argument (the new value)
             emit_value!(_ssgb, args[1], ctx)
             # Store to global
@@ -1987,7 +1987,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             return bytes
         end
 
-        local _ieb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _ieb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         # If any compile_value returned empty, select would have insufficient operands.
         # Fall back to emitting just the true value (or a type-safe default).
         if isempty(true_bytes) || isempty(false_bytes) || isempty(cond_bytes)
@@ -2061,7 +2061,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         if arg_type === String || arg_type <: AbstractVector || arg_type === Any
             # For strings and arrays, sizeof is the array length
-            local _szb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _szb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_szb, arg, ctx)
             # If the value's wasm local is externref (either because arg_type is Any,
             # or because a String-typed value came from an Any-typed struct field),
@@ -2095,7 +2095,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         arg = args[1]
         arg_type = infer_value_type(arg, ctx)
         if arg_type === String || arg_type <: AbstractString
-            local _ncb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _ncb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_ncb, arg, ctx)
             # If value is in an externref or anyref local, cast to arrayref
             local _nc_needs_cast = false
@@ -2133,7 +2133,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         if arg_type === String
             # For strings, length is the array length (each char is one element)
-            local _lnb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _lnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_lnb, arg, ctx)
             # If the value's wasm local is externref (e.g. from an Any-typed struct field),
             # cast to arrayref before array.len
@@ -2160,7 +2160,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # to cross-function call handling so their specific length() methods compile.
             if haskey(ctx.type_registry.structs, arg_type)
                 info = ctx.type_registry.structs[arg_type]
-                local _lnb2 = InstrBuilder(; func_name="compile_call", strict=false)
+                local _lnb2 = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
 
                 # Get the vector struct
                 emit_value!(_lnb2, arg, ctx)
@@ -2235,7 +2235,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             vec_local = allocate_local!(ctx, vec_type)
             size_local = allocate_local!(ctx, Int64)
 
-            local _pshb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _pshb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # Store vec in local
             emit_value!(_pshb, vec_arg, ctx)
             local_tee!(_pshb, vec_local)
@@ -2355,7 +2355,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             size_local = allocate_local!(ctx, Int64)
             elem_local = allocate_local!(ctx, elem_type)
 
-            local _popb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _popb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # Store vec in local
             emit_value!(_popb, vec_arg, ctx)
             local_tee!(_popb, vec_local)
@@ -2437,7 +2437,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # The DataType is a compile-time constant, so we can emit the flags value directly.
         if field_sym === :flags && obj_arg isa DataType && isdefined(obj_arg, :flags)
             flags_val = obj_arg.flags
-            local _flb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _flb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             i32_const!(_flb, Int64(flags_val))
             append!(bytes, builder_code(_flb))
             return bytes
@@ -2458,7 +2458,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
             # Emit array.new_default with length 0
-            local _insb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _insb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             i32_const!(_insb, 0)  # length = 0
             array_new_default!(_insb, arr_type_idx)
             append!(bytes, builder_code(_insb))
@@ -2470,7 +2470,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
-                local _rngb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _rngb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 global_get!(_rngb, rng_global, ctx.mod.globals[rng_global + 1].valtype)
                 append!(bytes, builder_code(_rngb))
                 return bytes
@@ -2484,7 +2484,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Extract global index from type parameter
                 global_idx = get_wasm_global_idx(obj_arg, ctx)
                 if global_idx !== nothing
-                    local _wgb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _wgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     global_get!(_wgb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
                     append!(bytes, builder_code(_wgb))
                     return bytes
@@ -2503,7 +2503,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             if field_sym === :ref
                 # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
-                local _refb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _refb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_refb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
@@ -2516,7 +2516,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             elseif field_sym === :size
                 # :size returns a Tuple containing the dimensions (field 2 of struct; field 0 = typeId)
                 # For Vector: Tuple{Int64}, for Matrix: Tuple{Int64, Int64}, etc.
-                local _szfb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _szfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_szfb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
@@ -2550,7 +2550,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     info = ctx.type_registry.structs[obj_type]
                     field_idx = findfirst(==(field_sym), info.field_names)
                     if field_idx !== nothing
-                        local _sfb = InstrBuilder(; func_name="compile_call", strict=false)
+                        local _sfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         emit_value!(_sfb, obj_arg, ctx)
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                         append!(bytes, builder_code(_sfb))
@@ -2583,7 +2583,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
                     (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
                      obj_type.parameters[2] : obj_type.parameters[1]) : nothing
-                local _poob = InstrBuilder(; func_name="compile_call", strict=false)
+                local _poob = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 if _poo_idx !== nothing && _poo_el isa DataType && isbitstype(_poo_el)
                     emit_value!(_poob, _poo_idx, ctx)
                     local _poo_it = infer_value_type(_poo_idx, ctx)
@@ -2614,7 +2614,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             if field_sym === :length
                 # Return array length
-                local _mlb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _mlb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_mlb, obj_arg, ctx)
                 array_len!(_mlb)
                 num!(_mlb, Opcode.I64_EXTEND_I32_S)
@@ -2622,7 +2622,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             elseif field_sym === :ptr
                 # Not meaningful in WasmGC - return 0
-                local _mpb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _mpb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i64_const!(_mpb, 0)
                 append!(bytes, builder_code(_mpb))
                 return bytes
@@ -2650,7 +2650,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    local _clfb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _clfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_clfb, obj_arg, ctx)
                     struct_get!(_clfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append!(bytes, builder_code(_clfb))
@@ -2691,7 +2691,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
                 findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
-                local _sfgb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _sfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_sfgb, obj_arg, ctx)
                 # PURE-701: If obj_arg's local is structref (union of struct types),
                 # insert ref.cast null to narrow before struct_get
@@ -2758,7 +2758,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
                         # Compile the tuple as an array
                         # First compile the tuple value
-                        local _htb = InstrBuilder(; func_name="compile_call", strict=false)
+                        local _htb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         emit_value!(_htb, obj_arg, ctx)
 
                         # The struct is on the stack, we need to convert struct fields to array
@@ -2848,7 +2848,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # union value is an AnyRef classId box (the `else` branch below), never
                             # the {typeId,tag,value} wrapper.
 
-                            local _hetb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _hetb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             # tuple value → tuple_local
                             emit_value!(_hetb, obj_arg, ctx)
                             tuple_local = length(ctx.locals) + ctx.n_params
@@ -2911,7 +2911,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         end
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
-                    local _tfgb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _tfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_tfgb, obj_arg, ctx)
                     struct_get!(_tfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append!(bytes, builder_code(_tfgb))
@@ -2933,7 +2933,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
             (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
             # Compile ref_arg to push [array_ref, i32_index], then drop both
-            local _mrgn = InstrBuilder(; func_name="compile_call", strict=false)
+            local _mrgn = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_mrgn, ref_arg, ctx)
             drop!(_mrgn)  # drop i32_index
             drop!(_mrgn)  # drop array_ref
@@ -2982,7 +2982,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         # The ref SSA value from memoryrefnew will have compiled to [array_ref, i32_index]
         # We need to compile ref_arg which will leave [array_ref, i32_index] on stack
-        local _mrgb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _mrgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_mrgb, ref_arg, ctx)
 
         array_get!(_mrgb, array_type_idx, AnyRef; signed=(elem_type === UInt8 ? false : nothing))
@@ -3001,7 +3001,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         ref_arg = args[1]
 
         # Check if this ref came from a memoryrefnew with an index
-        local _mrob = InstrBuilder(; func_name="compile_call", strict=false)
+        local _mrob = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if ref_arg isa Core.SSAValue && haskey(ctx.memoryref_offsets, ref_arg.id)
             # This MemoryRef has a recorded offset - compile the index value
             index_val = ctx.memoryref_offsets[ref_arg.id]
@@ -3035,7 +3035,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if ref_type isa DataType && (
             (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
             (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
-            local _mrsn = InstrBuilder(; func_name="compile_call", strict=false)
+            local _mrsn = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_mrsn, ref_arg, ctx)
             drop!(_mrsn)  # drop i32_index
             drop!(_mrsn)  # drop array_ref
@@ -3078,7 +3078,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
         # Compile ref_arg which will leave [array_ref, i32_index] on stack
-        local _msb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _msb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_msb, ref_arg, ctx)
 
         # Compile the value to store - we need it twice (for array.set and return)
@@ -3261,7 +3261,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # (e.g., Vector{T}() which uses memorynew(Memory{T}, 0)) have room for
         # initial push! operations before needing the first growth.
         min_capacity = 16
-        local _mnb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _mnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if size_arg isa Int || size_arg isa Int64
             # Literal size - emit as i32 constant with minimum capacity
             actual_size = max(Int64(size_arg), min_capacity)
@@ -3338,7 +3338,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
 
             # Compile the base array reference
-            local _mrnb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _mrnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_mrnb, base_ref, ctx)
 
             # Compile and convert index to i32 (Julia uses 1-based Int64, Wasm uses 0-based i32)
@@ -3376,7 +3376,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             info = ctx.type_registry.structs[tuple_type]
 
             # Push typeId for tuple struct (field 0 = typeId)
-            local _tupb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _tupb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             i32_const!(_tupb, Int64(ensure_type_id!(ctx.type_registry, tuple_type)))  # real classId (M3)
 
             # Push all tuple elements with type safety for externref fields
@@ -3500,7 +3500,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
-                local _rsb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _rsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_rsb, value_arg, ctx)
                 global_set!(_rsb, rng_global)
                 append!(bytes, builder_code(_rsb))
@@ -3514,7 +3514,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Extract global index from type parameter
                 global_idx = get_wasm_global_idx(obj_arg, ctx)
                 if global_idx !== nothing
-                    local _wgsb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _wgsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     # Push the value to set
                     emit_value!(_wgsb, value_arg, ctx)
                     # Emit global.set
@@ -3545,7 +3545,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     info = ctx.type_registry.structs[obj_type]
                     value_type = infer_value_type(value_arg, ctx)
                     temp_local = allocate_local!(ctx, value_type)
-                    local _vrb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _vrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_vrb, value_arg, ctx)
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx)
@@ -3570,7 +3570,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Solution: compile value first, store in temp local, then compile ref.
                 value_type = infer_value_type(value_arg, ctx)
                 temp_local = allocate_local!(ctx, value_type)
-                local _vsb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _vsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
 
                 # Compile value and store in local (value may already be on stack from prev stmt)
                 emit_value!(_vsb, value_arg, ctx)
@@ -3607,7 +3607,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
 
                     # struct.set expects: [ref, value]
-                    local _sfsb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _sfsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_sfsb, obj_arg, ctx)
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
                     local _sfrc = UInt8[]; emit_ref_cast_if_structref!(_sfrc, obj_arg, info.wasm_type_idx, ctx)
@@ -3737,7 +3737,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         arg_type = infer_value_type(arg, ctx)
         has_lookup = ctx.type_registry.type_lookup_global !== nothing
 
-        local _tofb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _tofb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if has_lookup
             # PURE-9063: Return DataType struct ref from lookup table
             if arg_type !== nothing && isconcretetype(arg_type)
@@ -3802,7 +3802,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         arg1_type = infer_value_type(args[1], ctx)
         arg2_type = infer_value_type(args[2], ctx)
         if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
-            local _seqb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _seqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_raw!(_seqb, compile_string_equal(args[1], args[2], ctx); pushes=WasmValType[I32])
             if is_func(func, :(!==))
                 # Negate the result for !==
@@ -3822,7 +3822,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
            (arg2_is_typeof && arg1_is_type_const !== nothing)
-            local _toeqb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _toeqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             if has_lookup
                 # PURE-9063: Both sides become DataType struct refs, compared with ref.eq
                 if arg1_is_typeof
@@ -3916,7 +3916,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             elseif length(val_bytes) >= 1 && (val_bytes[1] == Opcode.I32_CONST || val_bytes[1] == Opcode.I64_CONST || val_bytes[1] == Opcode.F32_CONST || val_bytes[1] == Opcode.F64_CONST)
                 is_numeric_val = true
             end
-            local _neqb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _neqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             if is_numeric_val
                 # Numeric value can never be nothing
                 # === nothing → false (0), !== nothing → true (1)
@@ -3966,14 +3966,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # add_ptr, sub_ptr, and pointerref push their own args (or trace back to string ref),
     # so they must NOT have args pre-pushed by the generic loop below.
     if func isa GlobalRef && func.name === :add_ptr
-        local _apb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _apb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_apb, args[1], ctx)
         emit_value!(_apb, args[2], ctx)
         num!(_apb, Opcode.I64_ADD)
         append!(bytes, builder_code(_apb))
         return bytes
     elseif func isa GlobalRef && func.name === :sub_ptr
-        local _spb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _spb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_spb, args[1], ctx)
         emit_value!(_spb, args[2], ctx)
         num!(_spb, Opcode.I64_SUB)
@@ -3984,7 +3984,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
         if str_info !== nothing
             str_ssa, idx_ssa = str_info
-            local _prsb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _prsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_prsb, str_ssa, ctx)
             emit_value!(_prsb, idx_ssa, ctx)
             num!(_prsb, Opcode.I32_WRAP_I64)
@@ -4013,7 +4013,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
         if _pr_vec !== nothing && (_pr_tp0 === UInt8 || _pr_tp0 === Int8 || _pr_tp0 === Nothing || _pr_tp0 === nothing)
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            local _prvb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _prvb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             _emit_backing_array!(_prvb, _pr_vec, ctx, _pr_arr_t)
             emit_value!(_prvb, ptr_arg, ctx)
             if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
@@ -4040,7 +4040,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             push!(ctx.locals, ConcreteRef(_prw_arr, true))
             local _prw_lb = length(ctx.locals) + ctx.n_params
             push!(ctx.locals, I32)
-            local _prwb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _prwb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             _emit_backing_array!(_prwb, _pr_vec, ctx, _prw_arr)
             local_set!(_prwb, _prw_la)
             emit_value!(_prwb, ptr_arg, ctx)
@@ -4105,7 +4105,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # scratch: byte offset (i32)
             local _prb_lb = length(ctx.locals) + ctx.n_params
             push!(ctx.locals, I32)
-            local _prbb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _prbb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # byte offset = ptr + (i-1)   (pointer target is 1 byte wide)
             emit_value!(_prbb, ptr_arg, ctx)
             if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
@@ -4167,7 +4167,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     register_struct_type!(ctx.mod, ctx.type_registry, _prr_rt)
                 end
                 local _prr_info = ctx.type_registry.structs[_prr_rt]
-                local _prrb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _prrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_prrb, _prg_vec, ctx)
                 ref_cast!(_prrb, Int64(_prr_info.wasm_type_idx), true)
                 struct_get!(_prrb, _prr_info.wasm_type_idx, UInt32(1), julia_to_wasm_type(_prr_te))   # field 0 = typeId, 1 = x
@@ -4188,7 +4188,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local _prg_te = eltype(_prg_vt)
             if sizeof(_prg_te) == sizeof(_prg_tp) && sizeof(_prg_te) in (4, 8)
                 local _prg_arr = get_array_type!(ctx.mod, ctx.type_registry, _prg_te)
-                local _prgb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _prgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_prgb, _prg_vec, ctx)
                 local _prg_vinfo = ctx.type_registry.structs[_prg_vt]
                 struct_get!(_prgb, _prg_vinfo.wasm_type_idx, UInt32(1), ConcreteRef(_prg_arr, true))
@@ -4219,7 +4219,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             end
         end
-        let _prub = InstrBuilder(; func_name="compile_call", strict=false)
+        let _prub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            record_unsupported!(ctx, :unsupported_method, "un-lowerable popfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_prub); append!(bytes, builder_code(_prub))
         end
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -4233,7 +4234,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
         if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            local _psb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _psb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
             emit_value!(_psb, _ps_ptr, ctx)
             num!(_psb, Opcode.I32_WRAP_I64)
@@ -4266,7 +4267,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     register_struct_type!(ctx.mod, ctx.type_registry, _psr_rt)
                 end
                 local _psr_info = ctx.type_registry.structs[_psr_rt]
-                local _psrb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _psrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_psrb, _psg_vec, ctx)
                 ref_cast!(_psrb, Int64(_psr_info.wasm_type_idx), true)
                 emit_value!(_psrb, args[2], ctx)
@@ -4289,7 +4290,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local _psg_te = eltype(_psg_vt)
             if sizeof(_psg_te) == sizeof(_psg_tp) && sizeof(_psg_te) in (4, 8)
                 local _psg_arr = get_array_type!(ctx.mod, ctx.type_registry, _psg_te)
-                local _psgb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _psgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_value!(_psgb, _psg_vec, ctx)
                 # A Memory/GenericMemory value IS the raw data array (no vector-struct
                 # wrapper) — just cast it. A Vector is a {typeId, data-array, size}
@@ -4353,7 +4354,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 push!(ctx.locals, I32)
                 local _psw_lv = length(ctx.locals) + ctx.n_params
                 push!(ctx.locals, I64)
-                local _pswb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _pswb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 # array ref
                 _emit_backing_array!(_pswb, _psw_vec, ctx, _psw_arr)
                 local_set!(_pswb, _psw_la)
@@ -4395,7 +4396,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 return bytes
             end
         end
-        let _psub = InstrBuilder(; func_name="compile_call", strict=false)
+        let _psub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            record_unsupported!(ctx, :unsupported_method, "un-lowerable pushfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_psub); append!(bytes, builder_code(_psub))
         end
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -4480,11 +4482,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
             _actual_wasm = get_phi_edge_wasm_type(arg, ctx)
             if is_32bit && _actual_wasm === I64
-                local _wb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _wb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_wb, Opcode.I32_WRAP_I64)
                 append!(bytes, builder_code(_wb))
             elseif !is_32bit && !is_128bit && _actual_wasm === I32
-                local _wb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _wb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_wb, Opcode.I64_EXTEND_I32_S)
                 append!(bytes, builder_code(_wb))
             end
@@ -4513,7 +4515,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             func.name in (:+, :-, :*, :div, :rem, :mod)
         if (is_numeric_intrinsic || _generic_arith) && _arg_anyref
             local _aa_target = is_32bit ? I32 : I64
-            local _ub = InstrBuilder(; func_name="compile_call", strict=false)
+            local _ub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_classid_unbox!(_ub, ctx, _aa_target; nullable=true)
             append!(bytes, builder_code(_ub))
         end
@@ -4522,7 +4524,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
         if is_numeric_intrinsic && _is_externref_value(arg, ctx)
             target_wasm = is_32bit ? I32 : I64
-            local _eub = InstrBuilder(; func_name="compile_call", strict=false)
+            local _eub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             any_convert_extern!(_eub)
             emit_classid_unbox!(_eub, ctx, target_wasm; nullable=true)
             append!(bytes, builder_code(_eub))
@@ -4578,7 +4580,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Migration helper: emit ONE no-immediate numeric/cmp/conv op into `bytes`
     # via a scratch InstrBuilder (byte-identical to push!(bytes, op)).
     _op1! = function (op::UInt8)
-        local _ib = InstrBuilder(; func_name="compile_call", strict=false)
+        local _ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         num!(_ib, op)
         append!(bytes, builder_code(_ib))
     end
@@ -4629,7 +4631,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                        Opcode.I32_MUL
         _emit_normalise_narrow_pair!(bytes, ctx, _nc_signed, _ncw)
         local _nc_r = UInt32(allocate_local!(ctx, I32))
-        local _ncb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _ncb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         num!(_ncb, _nc_op)
         local_set!(_ncb, _nc_r)
         # helper: push wrapped-to-width copy of result
@@ -4673,7 +4675,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_a = allocate_local!(ctx, local_type)
             local_b = allocate_local!(ctx, local_type)
             local_result = allocate_local!(ctx, local_type)
-            local _caddb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _caddb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
 
             # Save b, save a, compute a+b, save result
             local_set!(_caddb, local_b)
@@ -4734,7 +4736,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_a = allocate_local!(ctx, local_type)
             local_b = allocate_local!(ctx, local_type)
             local_result = allocate_local!(ctx, local_type)
-            local _csubb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _csubb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
 
             # Save b, save a, compute a-b, save result
             local_set!(_csubb, local_b)
@@ -4869,7 +4871,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         elseif is_32bit
             # For simplicity, emit: i32.const -1, i32.xor, i32.const 1, i32.add
             # Which is equivalent to: ~x + 1 = -x
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i32_const!(ib, -1)  # -1 in signed LEB128
                 num!(ib, Opcode.I32_XOR)
                 i32_const!(ib, 1)
@@ -4877,7 +4879,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, builder_code(ib))
             end
         else
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i64_const!(ib, -1)  # -1 in signed LEB128
                 num!(ib, Opcode.I64_XOR)
                 i64_const!(ib, 1)
@@ -4973,11 +4975,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if is_128bit
             append!(bytes, emit_int128_ne(ctx, arg_type))
         elseif arg_type === Float64
-            local _nb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _nb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             num!(_nb, Opcode.F64_NE)
             append!(bytes, builder_code(_nb))
         elseif arg_type === Float32
-            local _nb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _nb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             num!(_nb, Opcode.F32_NE)
             append!(bytes, builder_code(_nb))
         else
@@ -4988,7 +4990,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
             # they can't be equal, so !== is always true. Drop both and return true.
             if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
-                local _db = InstrBuilder(; func_name="compile_call", strict=false)
+                local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 drop!(_db); drop!(_db); i32_const!(_db, 1)
                 append!(bytes, builder_code(_db))
                 return bytes
@@ -5042,13 +5044,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 end
                 # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
                 if a1_ref_ne != a2_ref_ne
-                    local _db = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     drop!(_db); drop!(_db); i32_const!(_db, 1)
                     append!(bytes, builder_code(_db))
                     return bytes
                 elseif a1_ref_ne && a2_ref_ne
                     # Both refs - use ref.eq then negate
-                    local _rb = InstrBuilder(; func_name="compile_call", strict=false)
+                    local _rb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     num!(_rb, Opcode.REF_EQ)
                     num!(_rb, Opcode.I32_EQZ)
                     append!(bytes, builder_code(_rb))
@@ -5080,7 +5082,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # BOTH args must be ref types to use ref.eq
             if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
                 # Convert externref → eqref before ref.eq (same pattern as === handler)
-                local _neb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _neb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 if arg1_is_externref_ne && arg2_is_externref_ne
                     local tmp_ne = allocate_local!(ctx, EqRef)
                     any_convert_extern!(_neb)
@@ -5104,27 +5106,27 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, builder_code(_neb))
             elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
                 # Comparing ref with non-ref: type mismatch, always not-equal
-                local _db = InstrBuilder(; func_name="compile_call", strict=false)
+                local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 drop!(_db); drop!(_db); i32_const!(_db, 1)
                 append!(bytes, builder_code(_db))
             elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
                 # Comparing non-ref with ref: type mismatch, always not-equal
-                local _db = InstrBuilder(; func_name="compile_call", strict=false)
+                local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 drop!(_db); drop!(_db); i32_const!(_db, 1)
                 append!(bytes, builder_code(_db))
             elseif !is_32bit && arg2_type_ne === Nothing
                 # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
-                local _xb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _xb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_xb, Opcode.I64_EXTEND_I32_S)
                 num!(_xb, Opcode.I64_NE)
                 append!(bytes, builder_code(_xb))
             elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
                 # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
-                local _db = InstrBuilder(; func_name="compile_call", strict=false)
+                local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 drop!(_db); drop!(_db); i32_const!(_db, 1)
                 append!(bytes, builder_code(_db))
             else
-                local _eb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _eb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 num!(_eb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
                 append!(bytes, builder_code(_eb))
             end
@@ -5164,7 +5166,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             append!(bytes, emit_int128_not(ctx, arg_type))
         else
             # Bitwise NOT: x xor -1
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 if is_32bit
                     i32_const!(ib, -1)  # -1
                     num!(ib, Opcode.I32_XOR)
@@ -5280,7 +5282,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Allocate a scratch local to hold the input value (need it 4 times)
         scratch_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
-        local _bswb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _bswb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         # Store input value
         local_set!(_bswb, scratch_local)
         if is_32bit
@@ -5376,7 +5378,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # have_fma: runtime FMA availability check. WASM has no scalar FMA,
     # so always return false. The type argument (Float64) is not on the stack.
     elseif is_func(func, :have_fma)
-        let ib = InstrBuilder(; func_name="compile_call", strict=false)
+        let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             i32_const!(ib, 0)  # false — WASM has no hardware FMA
             append!(bytes, builder_code(ib))
         end
@@ -5395,7 +5397,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         else
             target_type_ref
         end
-        local _sxb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _sxb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
@@ -5479,7 +5481,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
         _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
                    (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
-        local _zxb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _zxb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
@@ -5562,7 +5564,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                           target_type === Int8 || target_type === UInt8 ||
                           target_type === Bool || target_type === Char
 
-        local _trb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _trb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if source_type === Int128 || source_type === UInt128
             # Truncating from 128-bit - extract lo part
             source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
@@ -5759,7 +5761,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
         ensure_exception_tag!(ctx.mod)
         exn_global = ensure_exception_global!(ctx.mod)
-        local _thrb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _thrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         if length(args) >= 1
             # Check if the value is a QuoteNode containing a struct with undefined fields.
             # compile_value produces ref.null for such structs, but we need a non-null
@@ -5797,7 +5799,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # In WasmGC, pointers are i64, so this is just i64 add
     elseif func isa GlobalRef && func.name === :add_ptr
         # add_ptr(ptr, offset) -> ptr + offset
-        local _apb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _apb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_apb, args[1], ctx)
         emit_value!(_apb, args[2], ctx)
         num!(_apb, Opcode.I64_ADD)
@@ -5806,7 +5808,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # Base.sub_ptr - pointer subtraction
     elseif func isa GlobalRef && func.name === :sub_ptr
         # sub_ptr(ptr, offset) -> ptr - offset
-        local _spb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _spb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         emit_value!(_spb, args[1], ctx)
         emit_value!(_spb, args[2], ctx)
         num!(_spb, Opcode.I64_SUB)
@@ -5824,7 +5826,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Emit: array.get string_array (index - 1)
             # String is array<i32> (type 1). Index is 1-based, array.get is 0-based.
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            local _prsb = InstrBuilder(; func_name="compile_call", strict=false)
+            local _prsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_value!(_prsb, str_ssa, ctx)
             emit_value!(_prsb, idx_ssa, ctx)
             # Convert i64 index to i32 and subtract 1 for 0-based
@@ -5837,7 +5839,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         else
             # PURE-908: Clear pre-pushed args
             bytes = UInt8[]
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "call shape with un-lowerable arguments (args cleared, trap)"; idx=idx)
                 unreachable!(ib); append!(bytes, builder_code(ib))
             end
             ctx.last_stmt_was_stub = true  # PURE-908
@@ -5855,7 +5858,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     elseif func isa GlobalRef && func.name === :throw_methoderror
         bytes = UInt8[]
         ensure_exception_tag!(ctx.mod)
-        let ib = InstrBuilder(; func_name="compile_call", strict=false)
+        let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             throw_!(ib, 0)  # tag index 0
             append!(bytes, builder_code(ib))
         end
@@ -5871,12 +5874,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         local _svl = _try_host_svec(args[1], ctx)
         if _svl isa Core.SimpleVector
             bytes = UInt8[]   # discard pre-pushed placeholder
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i64_const!(ib, Int64(length(_svl)))
                 append!(bytes, builder_code(ib))
             end
         else
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 array_len!(ib)
                 # array.len returns i32 but Julia expects Int64
                 num!(ib, Opcode.I64_EXTEND_I32_U)
@@ -5894,7 +5897,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Get element from externref array
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
-        local _svrb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _svrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
         num!(_svrb, Opcode.I32_WRAP_I64)
         i32_const!(_svrb, 1)  # 1
@@ -5938,7 +5941,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
             tuple_empty_tid = ensure_type_id!(ctx.type_registry, Tuple{})
             # Emit: i32.const $typeId; struct.new $Tuple_empty_type_idx
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i32_const!(ib, Int64(tuple_empty_tid))
                 struct_new!(ib, info.wasm_type_idx, WasmValType[])
                 append!(bytes, builder_code(ib))
@@ -6008,7 +6011,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if _gfc_fld2 isa Symbol
                 local _gfc_v2 = try getfield(args[1].value, _gfc_fld2) catch; nothing end
                 if _gfc_v2 isa Core.SimpleVector
-                    let ib = InstrBuilder(; func_name="compile_call", strict=false)
+                    let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         ref_null!(ib, ArrayRef)
                         append!(bytes, builder_code(ib))
                     end
@@ -6017,7 +6020,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
         end
         if !_gfc_done
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "getfield call shape not lowerable"; idx=idx)
                 unreachable!(ib); append!(bytes, builder_code(ib))
             end
             ctx.last_stmt_was_stub = true  # PURE-908
@@ -6108,7 +6112,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                     pop!(bytes)
                                 end
                                 # Emit ref.null with the expected type
-                                local _rnb = InstrBuilder(; func_name="compile_call", strict=false)
+                                local _rnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                                 if expected_wasm isa ConcreteRef
                                     ref_null!(_rnb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                                 else
@@ -6123,18 +6127,18 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
                             if expected_wasm.type_idx != actual_wasm.type_idx
                                 # Different ref types — insert ref.cast null to expected type
-                                local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                                local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                                 ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
                                 append!(bytes, builder_code(_bb))
                             end
                         elseif expected_wasm isa ConcreteRef && (actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                             # Abstract ref to concrete ref — insert ref.cast null
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm isa ConcreteRef && actual_wasm === ExternRef
                             # PURE-036bj: externref to concrete ref — convert to anyref first, then cast
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             any_convert_extern!(_bb)                 # externref → anyref
                             ref_cast!(_bb, Int64(expected_wasm.type_idx), true)  # anyref → (ref null X)
                             append!(bytes, builder_code(_bb))
@@ -6146,29 +6150,29 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # with the real classId, then coerces to the expected ref; a genuine
                             # type mismatch traps LOUDLY (no silent truncation). (The dead
                             # tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false.)
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             convert_type!(_bb, actual_wasm, expected_wasm, ctx;
                                           from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                             # Concrete or abstract ref to externref — insert extern.convert_any
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             extern_convert_any!(_bb)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === AnyRef && actual_wasm === ExternRef
                             # PURE-9022: externref to anyref — insert any.convert_extern
                             # Occurs when JS import returns externref but internal code expects anyref
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             any_convert_extern!(_bb)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                             # PURE-9022: Numeric value (on the stack) to anyref via THE single box emitter.
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             emit_classid_box!(_bb, ctx, actual_wasm, nothing)
                             append!(bytes, builder_code(_bb))
                         elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
                             # PURE-6025: Numeric value to externref — box via the one emitter, then extern.convert_any.
-                            local _bb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             emit_classid_box!(_bb, ctx, actual_wasm, nothing)
                             extern_convert_any!(_bb)
                             append!(bytes, builder_code(_bb))
@@ -6181,7 +6185,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             for _ in 1:length(arg_bytes)
                                 pop!(bytes)
                             end
-                            local _zb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _zb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             if expected_wasm === I32
                                 i32_const!(_zb, 0)
                             elseif expected_wasm === I64
@@ -6202,7 +6206,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 actual_local_wasm = _cw_arg_ty
                                 if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
                                     # Actual local is a ref type but not externref — insert conversion
-                                    local _ecb = InstrBuilder(; func_name="compile_call", strict=false)
+                                    local _ecb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                                     extern_convert_any!(_ecb)
                                     append!(bytes, builder_code(_ecb))
                                 end
@@ -6211,13 +6215,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                 end
                 # Cross-function call - emit call instruction with target index
-                local _xcb = InstrBuilder(; func_name="compile_call", strict=false)
+                local _xcb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
                 # PURE-3111: If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
                 if target_info.return_type === Union{}
-                    unreachable!(_xcb)
+                    unreachable!(_xcb)  # structural trap (dart-legit dead path)
                     ctx.last_stmt_was_stub = true
                 # PURE-900: Bridge type gap between function's Wasm return type
                 # and the caller's SSA local type. Handles both directions:
@@ -6284,7 +6288,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     end
                     if _dq_all_ref
                         bytes = UInt8[]
-                        local _dqb = InstrBuilder(; func_name="compile_call", strict=false)
+                        local _dqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         for _dq_a in args
                             emit_value!(_dqb, _dq_a, ctx)
                             # unbox each boxed-i64 operand via THE single consumer, then compare
@@ -6328,8 +6332,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 bytes = UInt8[]  # PURE-908: clear pre-pushed args
                 if get(ctx.ssa_types, idx, Any) === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
-                    let ib = InstrBuilder(; func_name="compile_call", strict=false)
-                        unreachable!(ib); append!(bytes, builder_code(ib))
+                    let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                        unreachable!(ib); append!(bytes, builder_code(ib))  # structural trap (dart-legit dead path)
                     end
                     ctx.last_stmt_was_stub = true
                 else
@@ -6400,7 +6404,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         tuple_info = ctx.type_registry.structs[tuple_type]
 
                         if length(value_types) == length(names)
-                            local _ntb = InstrBuilder(; func_name="compile_call", strict=false)
+                            local _ntb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                             # Compile the tuple argument - this pushes the tuple struct
                             emit_value!(_ntb, tuple_arg, ctx)
                             # Create a temporary local to hold the tuple
@@ -6473,7 +6477,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Step 1: Compile head (Symbol = array<i32>) → local
             local (_head_bytes, _head_ty) = compile_value_typed(head_arg, ctx)
             head_local = allocate_local!(ctx, ConcreteRef(str_type_idx, true))
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_raw!(ib, _head_bytes; pushes=(_head_ty===nothing ? WasmValType[] : WasmValType[_head_ty]))
                 local_set!(ib, head_local)
                 append!(bytes, builder_code(ib))
@@ -6485,7 +6489,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
             is_anyref_array = (wasm_elem_type === AnyRef)
             if n_expr_args == 0
-                let ib = InstrBuilder(; func_name="compile_call", strict=false)
+                let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     i32_const!(ib, 0)
                     array_new_default!(ib, any_array_type_idx)
                     append!(bytes, builder_code(ib))
@@ -6512,7 +6516,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         # TRUE-INT-002-impl2-impl: compile_value returned empty bytes
                         # (e.g., QuoteNode wrapping an unserializable Core type).
                         # Push ref.null as placeholder to maintain array_new_fixed stack balance.
-                        local _pnb = InstrBuilder(; func_name="compile_call", strict=false)
+                        local _pnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         if is_anyref_array
                             ref_null!(_pnb, AnyRef)  # any heap type
                         else
@@ -6520,7 +6524,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                         end
                         append!(bytes, builder_code(_pnb))
                     elseif is_numeric
-                        local _pnb = InstrBuilder(; func_name="compile_call", strict=false)
+                        local _pnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                         if is_anyref_array
                             ref_null!(_pnb, AnyRef)  # any heap type
                         else
@@ -6539,7 +6543,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 is_extern = (_ea_ty === ExternRef)
                             end
                             if is_extern
-                                local _aceb = InstrBuilder(; func_name="compile_call", strict=false)
+                                local _aceb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                                 any_convert_extern!(_aceb)
                                 append!(bytes, builder_code(_aceb))
                             end
@@ -6552,20 +6556,20 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 is_extern = (_ea_ty === ExternRef)
                             end
                             if !is_extern
-                                local _ecab = InstrBuilder(; func_name="compile_call", strict=false)
+                                local _ecab = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                                 extern_convert_any!(_ecab)
                                 append!(bytes, builder_code(_ecab))
                             end
                         end
                     end
                 end
-                let ib = InstrBuilder(; func_name="compile_call", strict=false)
+                let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     array_new_fixed!(ib, any_array_type_idx, n_expr_args, AnyRef)
                     append!(bytes, builder_code(ib))
                 end
             end
             data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 local_set!(ib, data_arr_local)
 
                 # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
@@ -6575,7 +6579,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, builder_code(ib))
             end
             size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
-            let ib = InstrBuilder(; func_name="compile_call", strict=false)
+            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 local_set!(ib, size_local)
 
                 # Step 4: Assemble Expr struct
@@ -6608,7 +6612,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Unknown function call — emit unreachable (will trap at runtime)
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # PURE-908: Clear pre-pushed args before UNREACHABLE
-        local _urb = InstrBuilder(; func_name="compile_call", strict=false)
+        local _urb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)"; idx=idx)
         unreachable!(_urb)
         bytes = builder_code(_urb)
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -6666,10 +6671,11 @@ Allocates 5 temporary locals: vec_ref, arr_ref, len (i32), loop_i (i32), acc.
 """
 function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, container_type::DataType,
                                       elem_type::Type, reduce_op::UInt8, ctx)
-    bld = InstrBuilder(; func_name="_emit_apply_iterate_reduce!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_apply_iterate_reduce!", mod=ctx.mod)
     # Get WasmGC type indices for the vector struct and its fields
     vec_info = get(ctx.type_registry.structs, container_type, nothing)
     if vec_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector struct unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6680,6 +6686,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # Data array type index
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: data array type unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6689,6 +6696,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     size_tuple_type = Tuple{Int64}
     size_info = get(ctx.type_registry.structs, size_tuple_type, nothing)
     if size_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: size tuple type unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6797,8 +6805,9 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     elem_type = eltype(container_type)
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
-    bld = InstrBuilder(; func_name="_emit_apply_iterate_vect!", strict=false)
+    bld = InstrBuilder(; func_name="_emit_apply_iterate_vect!", mod=ctx.mod)
     if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector layout unavailable")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return

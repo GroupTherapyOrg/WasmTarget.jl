@@ -2041,7 +2041,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
                 get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
         end
     end
-    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", strict=false)
+    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", mod=ctx.mod)
     seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
@@ -2156,7 +2156,7 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
-        b = InstrBuilder(; func_name="_narrow_generic_local!", strict=false)
+        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
         seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
         if local_wasm_type === ExternRef
             # PURE-6025: ExternRef needs any_convert_extern before ref.cast

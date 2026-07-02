@@ -92,13 +92,16 @@ set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
 """
     _wt_builder_strict() -> Bool
 
-Default strict-mode for migrated emitters. OFF by default (collect mode → the live
-operand-stack model tracks every op for diagnostics but never throws, so migration is
-regression-free), ON when `WT_BUILDER_STRICT` is set in the environment (turns the model
-into a hard gate that pinpoints the offending Julia statement + stack snapshot — the
-"tons of clarity" bug finder).
+Default strict-mode for emitters (parity M4 — dart wasm_builder instructions.dart:98:
+the builder is a type-checking abstract interpreter that THROWS on an ill-typed emit).
+**ON by default since 2026-07-01**, certified by a full capped `Pkg.test` + fuzz run under
+`WT_BUILDER_STRICT=1` (10 shards 2,681 + fuzz 293, zero failures). An ill-typed emission
+now fails AT THE EMIT SITE with the offending Julia statement + stack snapshot — valid by
+construction, beyond dart (whose checks are assert-gated). Escape hatch for debugging only:
+`WT_BUILDER_STRICT=0`. Builders constructed with an explicit per-builder
+opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until converted.
 """
-_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != ""
+_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
 set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
 

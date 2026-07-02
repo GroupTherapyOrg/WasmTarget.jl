@@ -166,7 +166,14 @@ Per-phase protocol, every loop, no exceptions:
   over the existing `type_ranges`. (c) classId-0 completeness (size tuples/Vector headers).
   EXIT LOCKS: R9=0; abstract isa emits range checks; unions.jl reduced to re-exports or gone.
 
-- **M4 — VALID BY CONSTRUCTION, endgame (I1) + god-function decomposition**. dart anchors:
+- **🟢 M4 — VALID BY CONSTRUCTION: CORE DELIVERED + CERTIFIED (2026-07-01 phase gate: full
+  corpus, external validation OFF, zero failures).** Strict default ON (certified pre-flip by a
+  dedicated full gate under WT_BUILDER_STRICT=1) · ALL ~315 explicit opt-outs removed (R6=0 →
+  L6) · mod threaded into ~330 builders (full lattice gates every emission; closes Loop A's
+  deferred remainder) · wasm-tools DEMOTED to opt-in `WT_VALIDATE=1` (L7 — which caught
+  optimize()'s straggler default on its first run). SEVEN LOCKS. REMAINING TAIL (keeps M4
+  open): god-fn builder-native decomposition — R1=~38, R2=~244 → 0 + the dart-style intrinsics
+  table. Original plan: dart anchors:
   `instructions.dart:98-294`, `intrinsics.dart:28-71`. Make compile_call/compile_invoke/
   compile_new BUILDER-NATIVE (bytes-returning today — home of ALL residual R1/R2 sites + the
   R7 intrinsic ops; carve intrinsic arms into a dart-style typed table; R1=0/R2=0/R7-lock land

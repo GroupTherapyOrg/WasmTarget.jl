@@ -272,7 +272,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
-            b = InstrBuilder(; func_name="emit_dispatch_wrappers!", strict=false)
+            b = InstrBuilder(; func_name="emit_dispatch_wrappers!")
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
@@ -356,7 +356,7 @@ Uses array.new_fixed for small arrays, or array.new + array.set for larger ones.
 Returns bytecode WITHOUT the trailing END byte (add_global_ref! adds it).
 """
 function emit_i32_array_init(array_type_idx::UInt32, values::AbstractVector)::Vector{UInt8}
-    b = InstrBuilder(; func_name="emit_i32_array_init", strict=false)
+    b = InstrBuilder(; func_name="emit_i32_array_init")
     n = length(values)
 
     if n <= 128
@@ -419,7 +419,7 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
     key_local = extra_locals[arity + 3]
     func_idx_local = extra_locals[arity + 4]
 
-    b = InstrBuilder(; func_name="emit_dispatch_call!", strict=false)
+    b = InstrBuilder(; func_name="emit_dispatch_call!")
 
     # --- Step 1: Extract typeIds from arguments ---
     for (j, arg_local) in enumerate(arg_locals)
@@ -570,7 +570,7 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
 
     end_block!(b)  # end block $not_found
     # Dispatch failed — unreachable
-    unreachable!(b)
+    unreachable!(b)  # structural trap (dart-legit dead path)
 
     end_block!(b)  # end block $done
 
@@ -586,7 +586,7 @@ function generate_dispatch_caller_body(dt::DispatchTable,
                                         n_params::Int,
                                         base_struct_idx::UInt32,
                                         type_registry)
-    b = InstrBuilder(; func_name="generate_dispatch_caller_body", strict=false)
+    b = InstrBuilder(; func_name="generate_dispatch_caller_body")
     locals = WasmValType[]
     arity = Int(dt.arity)
 
@@ -934,7 +934,7 @@ function _emit_table_wrappers!(mod::WasmModule,
 
     wrapper_indices = UInt32[]
     for (entry_i, entry) in enumerate(dt.entries)
-        b = InstrBuilder(; func_name="_emit_table_wrappers!", strict=false)
+        b = InstrBuilder(; func_name="_emit_table_wrappers!")
 
         # For each parameter: local.get + unbox/cast to concrete type
         for (j, tid) in enumerate(entry.type_ids)
@@ -1043,7 +1043,7 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     key_local = extra_locals[arity + 3]
     func_idx_local = extra_locals[arity + 4]
 
-    b = InstrBuilder(; func_name="emit_overlay_dispatch_call!", strict=false)
+    b = InstrBuilder(; func_name="emit_overlay_dispatch_call!")
 
     # --- Step 1: Extract typeIds from arguments ---
     for (j, arg_local) in enumerate(arg_locals)
@@ -1142,7 +1142,7 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     end_block!(b)  # end block $base_miss
 
     # Both tables missed — unreachable
-    unreachable!(b)
+    unreachable!(b)  # structural trap (dart-legit dead path)
 
     end_block!(b)  # end block $done
 
@@ -1178,7 +1178,7 @@ function _emit_table_probe_body!(bytes::Vector{UInt8},
                                    arity::Int,
                                    br_done_depth::UInt32,
                                    br_miss_depth::UInt32)
-    b = InstrBuilder(; func_name="_emit_table_probe_body!", strict=false)
+    b = InstrBuilder(; func_name="_emit_table_probe_body!")
 
     # Load key at slot
     global_get!(b, dt.keys_global_idx, AnyRef)
@@ -1247,7 +1247,7 @@ end
 
 """Emit slot increment: slot = (slot + 1) & mask."""
 function _emit_next_slot!(bytes::Vector{UInt8}, slot_local::UInt32, mask::Int32)
-    b = InstrBuilder(; func_name="_emit_next_slot!", strict=false)
+    b = InstrBuilder(; func_name="_emit_next_slot!")
     local_get!(b, slot_local)
     i32_const!(b, 1)              # push!(I32_CONST); push!(0x01)
     num!(b, Opcode.I32_ADD)
@@ -1266,7 +1266,7 @@ function generate_overlay_dispatch_caller_body(overlay_dt::DispatchTable,
                                                 n_params::Int,
                                                 base_struct_idx::UInt32,
                                                 type_registry)
-    b = InstrBuilder(; func_name="generate_overlay_dispatch_caller_body", strict=false)
+    b = InstrBuilder(; func_name="generate_overlay_dispatch_caller_body")
     locals = WasmValType[]
     arity = Int(overlay_dt.arity)
 

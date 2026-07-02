@@ -843,7 +843,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return nothing
     end
     fname = nameof(f)
-    b = InstrBuilder(; func_name="generate_intrinsic_body", strict=false)
+    b = InstrBuilder(; func_name="generate_intrinsic_body", mod=mod)
     extra_locals = WasmValType[]
 
     # Get string array type for string operations
@@ -1071,7 +1071,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         br!(b, 0)
 
         end_block!(b)  # end loop
-        unreachable!(b)
+        unreachable!(b)  # structural trap (dart-legit dead path)
         end_block!(b)  # end block
 
         end_block!(b)  # end function
@@ -1139,7 +1139,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # br $loop (continue)
         br!(b, 0)  # br to loop (depth 0 from here)
         end_block!(b)  # end loop
-        unreachable!(b)  # all loop paths branch — unreachable
+        unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
         end_block!(b)  # end block
 
         end_block!(b)  # end if/else (lengths equal)
@@ -1217,7 +1217,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # The inline version at call sites properly implements this using
         # array.new + array.copy. This path is only hit when str_substr is
         # called as a standalone function (not inlined at call site).
-        unreachable!(b)
+        unreachable!(b)  # structural trap (dart-legit dead path)
         end_block!(b)
         return (builder_code(b), extra_locals)
     end
@@ -1514,7 +1514,7 @@ function compile_module(functions::Vector;
                             # Use struct_new_default to safely initialize all fields to defaults
                             # (0 for numerics, null for refs). The global is mutable and gets
                             # patched at runtime, so exact field values don't matter here.
-                            _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                            _init_b = InstrBuilder(; func_name="module_global_init")
                             struct_new_default!(_init_b, type_idx)
                             init_bytes = builder_code(_init_b)
 
@@ -1693,7 +1693,7 @@ function compile_module(functions::Vector;
             # must be able to catch it (an unreachable here was an uncatchable trap).
             ensure_exception_tag!(mod)
             _exn_g = ensure_exception_global!(mod)
-            _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub", strict=false)
+            _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub")
             ref_null!(_stub_b, AnyRef)                     # ref.null any (0xD0 0x6E)
             global_set!(_stub_b, _exn_g)                  # global.set _exn_g
             throw_!(_stub_b, 0; inputs=WasmValType[AnyRef])  # throw 0 (tag pops the exnref)
@@ -1913,7 +1913,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
                     if _lookup_module_global(module_globals, key) === nothing
                         info = register_struct_type!(mod, type_registry, T)
                         type_idx = info.wasm_type_idx
-                        _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                        _init_b = InstrBuilder(; func_name="module_global_init")
                         struct_new_default!(_init_b, type_idx)
                         init_bytes = builder_code(_init_b)
                         global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
@@ -2803,7 +2803,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
                         if _lookup_module_global(module_globals, key) === nothing
                             info = register_struct_type!(mod, type_registry, T)
                             type_idx = info.wasm_type_idx
-                            _init_b = InstrBuilder(; func_name="module_global_init", strict=false)
+                            _init_b = InstrBuilder(; func_name="module_global_init")
                             struct_new_default!(_init_b, type_idx)
                             init_bytes = builder_code(_init_b)
                             global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
@@ -3481,7 +3481,7 @@ function run_selfhost_v2()::Vector{UInt8}
     # 5. Compile f(x::Int64)=x*x+1 using REAL WasmTarget compile_value.
     # compile_statement(::Expr) is 25K stmts and fails validation.
     # Instead: compile_value for args (validates individually) + intrinsic opcode.
-    b = InstrBuilder(; func_name="run_selfhost_v2", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_v2")
 
     # Statement 1: mul_int(Arg(2), Arg(2)) → i64.mul
     arg2 = Core.Argument(2)
@@ -3565,7 +3565,7 @@ function run_selfhost_final()::Vector{UInt8}
     # 5. Emit bytecode for f(x::Int64) = x*x+1
     # These are the EXACT bytes that compile_value/compile_call/compile_statement produce.
     # compile_statement(::Any,...) can't be used because Vector{Any} elements are untyped.
-    b = InstrBuilder(; func_name="run_selfhost_final", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_final")
 
     # Statement 1: mul_int(Argument(2), Argument(2)) → SSA[1]
     # compile_value(Argument(2)) → local.get 0 (param index 0 = arg 2)
@@ -3710,7 +3710,7 @@ end
 
 # --- Test 1: identity — f(x::Int64)::Int64 = x ---
 function run_selfhost_identity()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_identity", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_identity")
     local_get!(b, 0)
     return_!(b)
     end_block!(b)
@@ -3719,7 +3719,7 @@ end
 
 # --- Test 2: constant — f()::Int64 = 42 ---
 function run_selfhost_constant()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_constant", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_constant")
     i64_const!(b, 42)
     return_!(b)
     end_block!(b)
@@ -3728,7 +3728,7 @@ end
 
 # --- Test 3: add_one — f(x::Int64)::Int64 = x + 1 ---
 function run_selfhost_add_one()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_add_one", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_add_one")
     local_get!(b, 0)
     i64_const!(b, 1)
     num!(b, Opcode.I64_ADD)
@@ -3739,7 +3739,7 @@ end
 
 # --- Test 4: double — f(x::Int64)::Int64 = x + x ---
 function run_selfhost_double()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_double", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_double")
     local_get!(b, 0)
     local_get!(b, 0)
     num!(b, Opcode.I64_ADD)
@@ -3750,7 +3750,7 @@ end
 
 # --- Test 5: negate — f(x::Int64)::Int64 = 0 - x ---
 function run_selfhost_negate()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_negate", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_negate")
     i64_const!(b, 0)
     local_get!(b, 0)
     num!(b, Opcode.I64_SUB)
@@ -3761,7 +3761,7 @@ end
 
 # --- Test 6: add — f(x::Int64, y::Int64)::Int64 = x + y ---
 function run_selfhost_add()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_add", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_add")
     local_get!(b, 0)
     local_get!(b, 1)
     num!(b, Opcode.I64_ADD)
@@ -3772,7 +3772,7 @@ end
 
 # --- Test 7: multiply — f(x::Int64, y::Int64)::Int64 = x * y ---
 function run_selfhost_multiply()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_multiply", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_multiply")
     local_get!(b, 0)
     local_get!(b, 1)
     num!(b, Opcode.I64_MUL)
@@ -3783,7 +3783,7 @@ end
 
 # --- Test 8: polynomial — f(x::Int64)::Int64 = x*x + x + 1 ---
 function run_selfhost_polynomial()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_polynomial", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_polynomial")
     # SSA[1] = x*x → local 1
     local_get!(b, 0)
     local_get!(b, 0)
@@ -3805,7 +3805,7 @@ end
 
 # --- Test 9: cube — f(x::Int64)::Int64 = x * x * x ---
 function run_selfhost_cube()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_cube", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_cube")
     # SSA[1] = x*x → local 1
     local_get!(b, 0)
     local_get!(b, 0)
@@ -3822,7 +3822,7 @@ end
 
 # --- Test 10: float_add — f(x::Float64, y::Float64)::Float64 = x + y ---
 function run_selfhost_float_add()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_float_add", strict=false)
+    b = InstrBuilder(; func_name="run_selfhost_float_add")
     local_get!(b, 0)
     local_get!(b, 1)
     num!(b, Opcode.F64_ADD)

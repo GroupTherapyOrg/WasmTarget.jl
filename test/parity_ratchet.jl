@@ -98,14 +98,9 @@ const METRICS = [
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
                           exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
-    "R6_strict_false_builders" => ("strict=false InstrBuilder surface (M4 → 0, strict default ON)",
-        () -> count_sites(r"strict\s*=\s*false")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),
-    "R10_silent_unreachable" => ("unreachable!( emissions in codegen (M5: silent stubs → loud reject; post-throw legit uses get annotated + excluded when M5 refines this)",
-        () -> count_sites(r"unreachable!\("; roots=[CODEGEN],
-                          exclude_line=r"function unreachable!")),
     "R11_patch_markers" => ("patch-tag comment sediment PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- (monotone down via root-fixes)",
         () -> begin  # markers live IN comments, so count comment lines too
             n = 0
@@ -117,8 +112,6 @@ const METRICS = [
             end
             n
         end),
-    "R12_wasmtools_crutch" => ("wasm-tools references in src/ (M4: demote from default-on gate to opt-in double-check)",
-        () -> count_sites(r"wasm-tools")),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
@@ -130,6 +123,27 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L8_no_silent_traps" => ("every unreachable! is record_unsupported!-routed OR an annotated structural trap — NO silent stubs (M5; locked 2026-07-01)",
+        () -> begin
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                prev = ""
+                for line in eachline(joinpath(dir, f))
+                    if occursin(r"unreachable!\(", line) && !occursin("function unreachable!", line) &&
+                       !startswith(lstrip(line), "#") &&
+                       !occursin("structural trap", line) && !occursin("record_unsupported!", prev)
+                        n += 1
+                    end
+                    prev = line
+                end
+            end
+            n
+        end),
+    "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
+        () -> count_sites(r"validate::Bool\s*=\s*true")),
+    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs — ZERO: every builder is a hard type-checking gate, always-on (M4; locked 2026-07-01)",
+        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
