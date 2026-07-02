@@ -1071,7 +1071,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         br!(b, 0)
 
         end_block!(b)  # end loop
-        unreachable!(b)
+        unreachable!(b)  # structural trap (dart-legit dead path)
         end_block!(b)  # end block
 
         end_block!(b)  # end function
@@ -1139,7 +1139,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # br $loop (continue)
         br!(b, 0)  # br to loop (depth 0 from here)
         end_block!(b)  # end loop
-        unreachable!(b)  # all loop paths branch — unreachable
+        unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
         end_block!(b)  # end block
 
         end_block!(b)  # end if/else (lengths equal)
@@ -1217,7 +1217,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # The inline version at call sites properly implements this using
         # array.new + array.copy. This path is only hit when str_substr is
         # called as a standalone function (not inlined at call site).
-        unreachable!(b)
+        unreachable!(b)  # structural trap (dart-legit dead path)
         end_block!(b)
         return (builder_code(b), extra_locals)
     end

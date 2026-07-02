@@ -1729,7 +1729,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         emit_raw!(bld, builder_code(_bbr_b); pushes=(result_wasm === nothing ? WasmValType[] : WasmValType[result_wasm]))
         else_!(bld)
     end
-    unreachable!(bld)
+    unreachable!(bld)  # structural trap (dart-legit dead path)
     for _ in 1:nb; end_block!(bld); end
     # Heuristic-safe tail: land result in a scratch local, end with local.get.
     if result_wasm !== nothing
@@ -4220,6 +4220,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
         end
         let _prub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            record_unsupported!(ctx, :unsupported_method, "un-lowerable popfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_prub); append!(bytes, builder_code(_prub))
         end
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -4396,6 +4397,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
         end
         let _psub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            record_unsupported!(ctx, :unsupported_method, "un-lowerable pushfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_psub); append!(bytes, builder_code(_psub))
         end
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -5838,6 +5840,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # PURE-908: Clear pre-pushed args
             bytes = UInt8[]
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "call shape with un-lowerable arguments (args cleared, trap)"; idx=idx)
                 unreachable!(ib); append!(bytes, builder_code(ib))
             end
             ctx.last_stmt_was_stub = true  # PURE-908
@@ -6018,6 +6021,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
         if !_gfc_done
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "getfield call shape not lowerable"; idx=idx)
                 unreachable!(ib); append!(bytes, builder_code(ib))
             end
             ctx.last_stmt_was_stub = true  # PURE-908
@@ -6217,7 +6221,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
                 if target_info.return_type === Union{}
-                    unreachable!(_xcb)
+                    unreachable!(_xcb)  # structural trap (dart-legit dead path)
                     ctx.last_stmt_was_stub = true
                 # PURE-900: Bridge type gap between function's Wasm return type
                 # and the caller's SSA local type. Handles both directions:
@@ -6329,7 +6333,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if get(ctx.ssa_types, idx, Any) === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
                     let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                        unreachable!(ib); append!(bytes, builder_code(ib))
+                        unreachable!(ib); append!(bytes, builder_code(ib))  # structural trap (dart-legit dead path)
                     end
                     ctx.last_stmt_was_stub = true
                 else
@@ -6609,6 +6613,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # PURE-908: Clear pre-pushed args before UNREACHABLE
         local _urb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)"; idx=idx)
         unreachable!(_urb)
         bytes = builder_code(_urb)
         ctx.last_stmt_was_stub = true  # PURE-908
@@ -6670,6 +6675,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # Get WasmGC type indices for the vector struct and its fields
     vec_info = get(ctx.type_registry.structs, container_type, nothing)
     if vec_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector struct unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6680,6 +6686,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     # Data array type index
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: data array type unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6689,6 +6696,7 @@ function _emit_apply_iterate_reduce!(bytes::Vector{UInt8}, container_arg, contai
     size_tuple_type = Tuple{Int64}
     size_info = get(ctx.type_registry.structs, size_tuple_type, nothing)
     if size_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: size tuple type unregistered")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return
@@ -6799,6 +6807,7 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
     bld = InstrBuilder(; func_name="_emit_apply_iterate_vect!", mod=ctx.mod)
     if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
+        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector layout unavailable")
         unreachable!(bld); append!(bytes, builder_code(bld))
         ctx.last_stmt_was_stub = true
         return

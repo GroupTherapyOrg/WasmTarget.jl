@@ -570,7 +570,7 @@ function emit_dispatch_call!(bytes::Vector{UInt8},
 
     end_block!(b)  # end block $not_found
     # Dispatch failed — unreachable
-    unreachable!(b)
+    unreachable!(b)  # structural trap (dart-legit dead path)
 
     end_block!(b)  # end block $done
 
@@ -1142,7 +1142,7 @@ function emit_overlay_dispatch_call!(bytes::Vector{UInt8},
     end_block!(b)  # end block $base_miss
 
     # Both tables missed — unreachable
-    unreachable!(b)
+    unreachable!(b)  # structural trap (dart-legit dead path)
 
     end_block!(b)  # end block $done
 

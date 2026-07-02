@@ -2478,7 +2478,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         # be Union{} (e.g., Any in unoptimized IR), so setting the flag would
                         # incorrectly trigger dead code detection and skip block structures.
                         if target_info.return_type === Union{}
-                            unreachable!(bcc)
+                            unreachable!(bcc)  # structural trap (dart-legit dead path)
                         end
                         # PURE-220: Unused cross-call return values are dropped by
                         # the stackifier (statement_produces_wasm_value + use_count==0).
@@ -3631,6 +3631,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # a code path assumes byte-level string access.
             elseif name === :getindex_continued
                 bgic = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
                 unreachable!(bgic)
                 append!(bytes, builder_code(bgic))
                 ctx.last_stmt_was_stub = true
@@ -3833,6 +3834,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 if vec_arg !== nothing
                     emit_value!(bsh, vec_arg, ctx)
                 else
+                    record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
                     unreachable!(bsh)
                 end
                 return builder_code(bsh)
@@ -3957,6 +3959,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 else
                     # Fallback: can't determine vector type — emit unreachable
                     bgrf = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
+                    record_unsupported!(ctx, :unsupported_method, "vector op: element type undeterminable"; idx=idx)
                     unreachable!(bgrf)
                     append!(bytes, builder_code(bgrf))
                     ctx.last_stmt_was_stub = true  # PURE-908
@@ -4096,6 +4099,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     record_unsupported!(ctx, :unsupported_type,
                         "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=expr)
                     bscnf = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
+                    record_unsupported!(ctx, :unsupported_method, "struct type registration failed (cannot lay out)"; idx=idx)
                     unreachable!(bscnf)
                     append!(bytes, builder_code(bscnf))
                     ctx.last_stmt_was_stub = true
@@ -4148,6 +4152,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=expr)
                 bunk = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
+                record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx)
                 unreachable!(bunk)
                 append!(bytes, builder_code(bunk))
                 ctx.last_stmt_was_stub = true  # PURE-908

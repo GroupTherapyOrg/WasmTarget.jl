@@ -604,7 +604,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
     needs_box = ty !== nothing && !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
     if ty === nothing || (!needs_box && !return_type_compatible(ty, func_ret_wasm))
         # dead/unsatisfiable path (unresolvable value or dead Union arm) — trap.
-        unreachable!(b)
+        unreachable!(b)  # structural trap (dart-legit dead path)
     else
         ty === func_ret_wasm || convert_type!(b, ty, func_ret_wasm, ctx)
         return_!(b)
@@ -773,7 +773,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
         haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
-        unreachable!(b)  # 0x00
+        unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
         return b
     end
 

@@ -10,9 +10,9 @@ L4_no_postemit_reguess = 0
 L5_no_tagged_union = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
+L8_no_silent_traps = 0
 
 [metrics]
-R10_silent_unreachable = 31
 R11_patch_markers = 707
 R1_untyped_compile_value = 35
 R2_emit_raw_bridges = 241

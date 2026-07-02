@@ -1346,7 +1346,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # to ensure br to the outermost block uses `return` instead of `br`.
     # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
     # of an exit-branch try/catch) opt out — for them this guard is live code.
-    trailing_unreachable && unreachable!(b)
+    trailing_unreachable && unreachable!(b)  # structural trap (dart-legit dead path)
 
     # P2-batch23: close the subset exit block — out-of-subset branches land
     # here, i.e. exactly at the caller's continuation.

@@ -1411,7 +1411,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
            !(length(stmt_bytes) >= 1 && stmt_bytes[end] == Opcode.UNREACHABLE)
             local _urb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-            unreachable!(_urb)
+            unreachable!(_urb)  # structural trap (dart-legit dead path)
             append!(bytes, builder_code(_urb))
         end
 
@@ -1918,6 +1918,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         _exn_info = get(ctx.type_registry.structs, struct_type, nothing)
         _exn_def = _exn_info === nothing ? nothing : ctx.mod.types[_exn_info.wasm_type_idx + 1]
         if _exn_info === nothing || !(_exn_def isa StructType)
+            record_unsupported!(ctx, :unsupported_method, "exception struct unregistered (cannot construct)"; idx=idx)
             unreachable!(b)
             return builder_code(b)
         end

@@ -579,7 +579,7 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
                 local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
                 br!(b, 0)
             end_block!(b)                                  # end loop
-            unreachable!(b)                                # loop never falls through
+            unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
         end_block!(b)                                      # end result block
     end_block!(b)                                          # end if-else
 
