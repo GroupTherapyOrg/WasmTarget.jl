@@ -528,6 +528,11 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             # Register Vector as a struct type with (ref, size) layout
             info = register_vector_type!(ctx.mod, ctx.type_registry, T)
             return ConcreteRef(info.wasm_type_idx, true)
+        elseif T <: AbstractVector && T isa DataType && !isconcretetype(T) && !isstructtype(T)
+            # 1.13-rc1: inference widens Memory-backed values to abstract vector supertypes
+            # (DenseVector{UInt8} etc.) — can hold a Vector struct OR a raw Memory array at
+            # runtime; the sound wasm join is AnyRef (register_struct_type! would THROW).
+            return AnyRef
         elseif T <: AbstractVector && T isa DataType
             # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
             info = register_struct_type!(ctx.mod, ctx.type_registry, T)
@@ -696,13 +701,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             end
         end
         _joins
-    catch _je
-        if haskey(ENV, "WT_DBG_JOIN")
-            println(stderr, "JOIN-ERR ", first(sprint(showerror, _je), 120))
-            for _fr in stacktrace(catch_backtrace())[1:min(end,4)]
-                println(stderr, "  @ ", _fr)
-            end
-        end
+    catch
         Dict{Int,Type}()
     end
 
@@ -930,13 +929,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             end
         end
         _joins
-    catch _je
-        if haskey(ENV, "WT_DBG_JOIN")
-            println(stderr, "JOIN-ERR ", first(sprint(showerror, _je), 120))
-            for _fr in stacktrace(catch_backtrace())[1:min(end,4)]
-                println(stderr, "  @ ", _fr)
-            end
-        end
+    catch
         Dict{Int,Type}()
     end
 

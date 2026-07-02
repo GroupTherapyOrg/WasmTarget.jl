@@ -1769,9 +1769,16 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
     if all(t -> t isa DataType && t <: Type, non_nothing) && registry.jl_datatype_idx !== nothing
         return ConcreteRef(registry.jl_datatype_idx, true)
     end
+    # WT reps Memory/MemoryRef as RAW WASM ARRAYS: isstructtype(Memory) is true in Julia,
+    # but the union of array-repped variants joins to ArrayRef, never StructRef (1.13-rc1's
+    # Memory-width unions — Union{Memory{UInt8},Memory{UInt16},...} — hit this).
+    _is_array_repped = t -> t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
+                                               t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef)
+    all(_is_array_repped, non_nothing) && return ArrayRef
     # all-struct union → the common struct supertype.
     is_all_struct = all(non_nothing) do t
-        (isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple
+        !_is_array_repped(t) &&
+        ((isconcretetype(t) && isstructtype(t) && t !== String && t !== Symbol) || t <: Tuple)
     end
     is_all_struct && return StructRef
     # heterogeneous union → the top type (dart topInfo.nullableType); value is a classId box.
@@ -1875,6 +1882,13 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
                 info = register_vector_type!(mod, registry, T)
                 return ConcreteRef(info.wasm_type_idx, true)
             end
+        elseif T <: AbstractVector && T isa DataType && !isconcretetype(T) && !isstructtype(T)
+            # 1.13-rc1: inference widens Memory-backed values to abstract vector supertypes
+            # (DenseVector{UInt8} etc.). Such an SSA can hold EITHER a Vector struct OR a raw
+            # Memory array at runtime — the sound wasm join is AnyRef (both subtype it);
+            # consumers narrow via the existing cast machinery. (register_struct_type! on a
+            # fieldless abstract DataType THROWS "no definite number of fields".)
+            return AnyRef
         elseif T <: AbstractVector && T isa DataType
             # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
             if haskey(registry.structs, T)

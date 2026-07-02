@@ -1079,20 +1079,47 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             # a genuine non-numeric ref ⇒ false (ref.test guards it). Was: always drop+false,
             # a SILENT WRONG ANSWER for e.g. Any[true][1] === true (returned false).
             local _a2w_eg = julia_to_wasm_type(arg2_type)
-            if (_a2w_eg === I32 || _a2w_eg === I64 || _a2w_eg === F32 || _a2w_eg === F64) && isconcretetype(arg2_type)
+            # dart parity: guard on the ACTUAL emitted type, not the static Julia type —
+            # 1.13 IR can source the "numeric" operand from an Any-typed (boxed) local, in
+            # which case its emission pushes a REF and the numeric save-local corrupts the
+            # stack (func-invalidating). Actual-numeric → the classId+value compare;
+            # actually-both-refs → eqref identity; else the old drop+false.
+            local _a2_act = static_wasm_type(args[2], ctx)
+            if (_a2w_eg === I32 || _a2w_eg === I64 || _a2w_eg === F32 || _a2w_eg === F64) &&
+               isconcretetype(arg2_type) && _a2_act === _a2w_eg
                 local _eg_num = allocate_local!(ctx, _a2w_eg); local_set!(bld, _eg_num)       # save arg2 (top)
                 local _eg_ref = allocate_local!(ctx, arg1_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref)
                 _emit_egal_box_vs_num!(bld, ctx, _eg_ref, arg1_is_externref, _eg_num, arg2_type)
+            elseif _wt_is_ref(_a2_act)
+                # both operands are ACTUALLY refs — eqref identity comparison
+                local _eg_t2 = allocate_local!(ctx, EqRef)
+                _a2_act === ExternRef && any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true); local_set!(bld, _eg_t2)
+                arg1_is_externref && any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, _eg_t2)
+                num!(bld, Opcode.REF_EQ)
             else
                 drop!(bld); drop!(bld); i32_const!(bld, 0)
             end
         elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
             # Mirror: arg2 is the ref (possibly a boxed numeric), arg1 an unboxed numeric.
             local _a1w_eg = julia_to_wasm_type(arg_type)
-            if (_a1w_eg === I32 || _a1w_eg === I64 || _a1w_eg === F32 || _a1w_eg === F64) && isconcretetype(arg_type)
+            local _a1_act = static_wasm_type(args[1], ctx)
+            if (_a1w_eg === I32 || _a1w_eg === I64 || _a1w_eg === F32 || _a1w_eg === F64) &&
+               isconcretetype(arg_type) && _a1_act === _a1w_eg
                 local _eg_ref2 = allocate_local!(ctx, arg2_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref2)  # save arg2 (ref, top)
                 local _eg_num2 = allocate_local!(ctx, _a1w_eg); local_set!(bld, _eg_num2)      # save arg1 (num)
                 _emit_egal_box_vs_num!(bld, ctx, _eg_ref2, arg2_is_externref, _eg_num2, arg_type)
+            elseif _wt_is_ref(_a1_act)
+                # both operands are ACTUALLY refs — eqref identity comparison
+                local _eg_t1 = allocate_local!(ctx, EqRef)
+                arg2_is_externref && any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true); local_set!(bld, _eg_t1)
+                _a1_act === ExternRef && any_convert_extern!(bld)
+                ref_cast!(bld, EqRef, true)
+                local_get!(bld, _eg_t1)
+                num!(bld, Opcode.REF_EQ)
             else
                 drop!(bld); drop!(bld); i32_const!(bld, 0)
             end
