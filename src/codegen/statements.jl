@@ -47,7 +47,7 @@ bytes; element index == byte offset only for elsize 1).
 # (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)
     vt = infer_value_type(vec, ctx)
-    emit_raw!(b, compile_value(vec, ctx))
+    emit_value!(b, vec, ctx)
     is_mem = vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory ||
                                  vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
     if !is_mem
@@ -237,7 +237,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             elseif func_ret_wasm === AnyRef && is_numeric_val
                 # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float}) via THE single
                 # box emitter (was a copy-pasted return box, same as flow.jl/conditionals.jl).
-                emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                emit_value!(b, stmt.val, ctx)
                 emit_classid_box!(b, ctx, val_wasm, nothing)
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
@@ -300,8 +300,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
                             # MIGRATED: compile_value bridges via emit_raw!; local.set typed.
-                            emit_raw!(b, compile_value(stmt.val, ctx);
-                                      pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                            emit_value!(b, stmt.val, ctx)
                             local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
                         end
@@ -363,26 +362,26 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # PURE-324: I64→I32 narrowing — PiNode narrows a widened phi (I64) to a
                     # smaller numeric type (I32). Emit the actual value with i32_wrap_i64.
                     if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[I64])
+                        emit_value!(b, stmt.val, ctx)
                         num!(b, Opcode.I32_WRAP_I64)
                     # PURE-9030: F64→I32 narrowing — PiNode narrows a widened phi (F64) to I32.
                     # Occurs in Union{Int32, Float64} dispatch where phi is F64 (widened).
                     elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I32
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F64])
+                        emit_value!(b, stmt.val, ctx)
                         num!(b, Opcode.I32_TRUNC_F64_S)
                     # PURE-9030: F64→I64 narrowing — PiNode narrows a widened phi (F64) to I64.
                     elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I64
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F64])
+                        emit_value!(b, stmt.val, ctx)
                         num!(b, Opcode.I64_TRUNC_F64_S)
                     # PURE-9030: F32→I32 narrowing — PiNode narrows a widened phi (F32) to I32.
                     elseif !is_multi_value_src && val_wasm_type === F32 && pi_local_type === I32
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[F32])
+                        emit_value!(b, stmt.val, ctx)
                         num!(b, Opcode.I32_TRUNC_F32_S)
                     # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
                     # The externref holds a boxed numeric value. Unbox via any_convert_extern +
                     # ref_cast to box type + struct_get field 0.
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
+                        emit_value!(b, stmt.val, ctx)
                         # externref holds a boxed numeric — extern→any, then unbox via the one consumer.
                         any_convert_extern!(b)
                         emit_classid_unbox!(b, ctx, pi_local_type; nullable=true)
@@ -391,37 +390,37 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # Unbox via ref.cast to box type + struct_get field 1.
                     # This handles Union{Int32, Float64} dispatch where the param is anyref.
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                        emit_value!(b, stmt.val, ctx)
                         # anyref holds a boxed numeric — unbox via THE single consumer (non-null: isa-guarded).
                         emit_classid_unbox!(b, ctx, pi_local_type)
                     # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
                     # Example: anyref → String, anyref → MyStruct
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
+                        emit_value!(b, stmt.val, ctx)
                         ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
                     # IS available as externref and just needs conversion (not ref.null).
                     # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
+                        emit_value!(b, stmt.val, ctx)
                         any_convert_extern!(b)
                         ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-9032: PiNode narrowing from ArrayRef → ConcreteRef.
                     # Example: arrayref (from struct field typed AbstractString) → (ref null $str_array)
                     # This occurs when getfield returns an abstract ref type but PiNode narrows it.
                     elseif !is_multi_value_src && val_wasm_type === ArrayRef && pi_local_type isa ConcreteRef
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ArrayRef])
+                        emit_value!(b, stmt.val, ctx)
                         ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-9032: PiNode narrowing from StructRef → ConcreteRef.
                     # Example: structref (from :the_exception with Union type) → concrete exception struct
                     elseif !is_multi_value_src && val_wasm_type === StructRef && pi_local_type isa ConcreteRef
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[StructRef])
+                        emit_value!(b, stmt.val, ctx)
                         ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # CG-003d: PiNode narrowing from EqRef → ConcreteRef.
                     # Example: Union{Nothing, TestNode} (eqref local) → TestNode after null check.
                     # This occurs because Union{Nothing, T} locals use EqRef (RC1 fix).
                     elseif !is_multi_value_src && val_wasm_type === EqRef && pi_local_type isa ConcreteRef
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[EqRef])
+                        emit_value!(b, stmt.val, ctx)
                         ref_cast!(b, Int64(pi_local_type.type_idx), true)
                     # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
                     # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
@@ -437,7 +436,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             end
                         end
                         if src_julia_type isa Union && needs_tagged_union(src_julia_type)
-                            emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
+                            emit_value!(b, stmt.val, ctx)
                             emit_raw!(b, emit_unwrap_union_value(ctx, src_julia_type, stmt.typ);
                                       pops=1, pushes=(pi_local_type === nothing ? WasmValType[] : WasmValType[pi_local_type]))
                         elseif pi_local_type isa ConcreteRef
@@ -518,8 +517,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # (can't determine source type) but the PiNode's target local is ref-typed.
                     elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef || pi_local_type === EqRef)
                         # dart2wasm carries the type with the value: the source is numeric
-                        # iff its inferred wasm type is not a ref (covers const and local.get).
-                        is_numeric_val = !isempty(val_bytes) && !_wt_is_ref(infer_value_wasm_type(stmt.val, ctx))
+                        # iff the EMISSION's own type (val_ty, from compile_value_typed above)
+                        # is not a ref — no re-guess needed.
+                        is_numeric_val = !isempty(val_bytes) && val_ty !== nothing && !_wt_is_ref(val_ty)
                         if is_numeric_val
                             # Replace with ref.null of the correct type
                             if pi_local_type isa ConcreteRef
@@ -1687,7 +1687,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     if struct_type isa DataType && struct_type.name.name === :CodeUnits &&
        length(struct_type.parameters) >= 1 && struct_type.parameters[1] === UInt8 &&
        length(field_values) >= 1
-        emit_raw!(b, compile_value(field_values[1], ctx))
+        emit_value!(b, field_values[1], ctx)
         return builder_code(b)
     end
 
@@ -1871,7 +1871,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # PURE-9024: Push typeId first, then compute i64 value
             i32_const!(b, 0)  # typeId = 0
             # Push array ref again for array.len
-            emit_raw!(b, compile_value(field_values[1], ctx))
+            emit_value!(b, field_values[1], ctx)
             array_len!(b)
             num!(b, Opcode.I64_EXTEND_I32_S)
             struct_new!(b, size_info.wasm_type_idx, WasmValType[])
@@ -1888,7 +1888,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     if struct_type isa DataType && struct_type.name.name in (:MemoryRef, :GenericMemoryRef)
         # MemoryRef{T} — field_values[1] is the Memory (= our array ref), field_values[2] is offset
         if length(field_values) >= 1
-            emit_raw!(b, compile_value(field_values[1], ctx))
+            emit_value!(b, field_values[1], ctx)
         else
             elem_type = struct_type.name.name === :GenericMemoryRef ? struct_type.parameters[2] : struct_type.parameters[1]
             array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
@@ -1933,28 +1933,30 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         for (fi, val) in enumerate(field_values)
             _wfi = fi + Int(_exn_info.field_offset)
             _fwasm = _wfi <= length(_exn_def.fields) ? _exn_def.fields[_wfi].valtype : nothing
-            _vwasm = try infer_value_wasm_type(val, ctx) catch; nothing end
+            # typed channel: the emission's own type decides (re-guess + recompile deleted)
+            _vbytes, _vwasm = compile_value_typed(val, ctx)
+            _emit_v!() = emit_raw!(b, _vbytes; pushes=WasmValType[_vwasm])
             _emitted = false
             if _fwasm !== nothing && _vwasm !== nothing
                 if _fwasm === _vwasm
-                    emit_raw!(b, compile_value(val, ctx))
+                    _emit_v!()
                     _emitted = true
                 elseif _fwasm isa ConcreteRef && (_vwasm === StructRef || _vwasm === AnyRef || _vwasm === EqRef)
-                    emit_raw!(b, compile_value(val, ctx))
+                    _emit_v!()
                     ref_cast!(b, Int64(_fwasm.type_idx), true)
                     _emitted = true
                 elseif (_fwasm === AnyRef || _fwasm === EqRef) && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef)
-                    emit_raw!(b, compile_value(val, ctx))
+                    _emit_v!()
                     _emitted = true
                 elseif _fwasm === StructRef && _vwasm isa ConcreteRef
                     # Only struct-typed concrete refs subsume into structref (arrays don't)
                     _vdef = ctx.mod.types[_vwasm.type_idx + 1]
                     if _vdef isa StructType
-                        emit_raw!(b, compile_value(val, ctx))
+                        _emit_v!()
                         _emitted = true
                     end
                 elseif _fwasm === ExternRef && (_vwasm isa ConcreteRef || _vwasm === StructRef || _vwasm === ArrayRef || _vwasm === AnyRef || _vwasm === EqRef)
-                    emit_raw!(b, compile_value(val, ctx))
+                    _emit_v!()
                     extern_convert_any!(b)
                     _emitted = true
                 end
@@ -2015,7 +2017,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             end
 
             # Compile the value first
-            emit_raw!(b, compile_value(val, ctx))
+            emit_value!(b, val, ctx)
 
             # If val_type is already a union (tagged union struct on stack), don't re-wrap
             if !(val_type isa Union && val_type <: field_type)
@@ -2087,48 +2089,28 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     ref_null!(b, StructRef)
                 end
             else
-                # Non-null value - compile with type safety check
-                val_bytes = compile_value(val, ctx)
-                # Safety: if compile_value produced a numeric local.get but the field
-                # expects a ref type (Union{Nothing, String} field = ref null array),
-                # emit ref.null of the correct type instead.
-                is_numeric_for_ref = false
-                if inner_type !== nothing && length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                    src_idx = 0; shift = 0; leb_end = 0
-                    for bi in 2:length(val_bytes)
-                        byt = val_bytes[bi]
-                        src_idx |= (Int(byt & 0x7f) << shift)
-                        shift += 7
-                        if (byt & 0x80) == 0
-                            leb_end = bi
-                            break
-                        end
+                # Non-null value — typed channel: the emission's own type replaces the pure-
+                # local.get LEB scan + infer_value_wasm_type re-guess. A NUMERIC value into a
+                # ref-typed Union field is an ill-typed store (bad upstream inference); keep
+                # the type-correct null so the module validates (M5 turns this loud).
+                val_bytes, _cn_vty = compile_value_typed(val, ctx)
+                if inner_type !== nothing &&
+                   (_cn_vty === I32 || _cn_vty === I64 || _cn_vty === F32 || _cn_vty === F64)
+                    if inner_type === String || inner_type === Symbol
+                        str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                        ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
+                    elseif inner_type <: AbstractVector
+                        elem_type = eltype(inner_type)
+                        arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                        ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
+                    elseif haskey(ctx.type_registry.structs, inner_type)
+                        inner_info = ctx.type_registry.structs[inner_type]
+                        ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
+                    else
+                        ref_null!(b, StructRef)
                     end
-                    if leb_end == length(val_bytes)  # Pure local.get
-                        # dart2wasm carries the type with the value: derive the source's
-                        # wasm type from the inferred value type rather than the local index.
-                        src_type = infer_value_wasm_type(val, ctx)
-                        if src_type !== nothing && (src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64)
-                            # Numeric local used for ref-typed Union field — emit ref.null
-                            if inner_type === String || inner_type === Symbol
-                                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                                ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
-                            elseif inner_type <: AbstractVector
-                                elem_type = eltype(inner_type)
-                                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-                                ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
-                            elseif haskey(ctx.type_registry.structs, inner_type)
-                                inner_info = ctx.type_registry.structs[inner_type]
-                                ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
-                            else
-                                ref_null!(b, StructRef)
-                            end
-                            is_numeric_for_ref = true
-                        end
-                    end
-                end
-                if !is_numeric_for_ref
-                    emit_raw!(b, val_bytes)
+                else
+                    emit_raw!(b, val_bytes; pushes=(_cn_vty === nothing ? WasmValType[] : WasmValType[_cn_vty]))
                 end
             end
         elseif field_type === Any
@@ -2175,64 +2157,20 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     emit_numeric_to_anyref!(_n2a, val, val_wasm_type, ctx)
                     emit_raw!(b, _n2a)
                 else
-                    emit_raw!(b, compile_value(val, ctx))
+                    emit_value!(b, val, ctx)
                     if val_wasm_type === ExternRef
                         any_convert_extern!(b)
                     end
                 end
             else
-                # Legacy ExternRef path
-                val_bytes = compile_value(val, ctx)
-                is_numeric_local = false
-                ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(val, ctx))
-                if length(val_bytes) >= 1 && (val_bytes[1] == 0x41 || val_bytes[1] == 0x42) && !ends_with_ref_producing_gc
-                    is_numeric_local = true
-                elseif length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                    src_idx = 0; shift = 0; leb_end = 0
-                    for bi in 2:length(val_bytes)
-                        byt = val_bytes[bi]
-                        src_idx |= (Int(byt & 0x7f) << shift)
-                        shift += 7
-                        if (byt & 0x80) == 0
-                            leb_end = bi
-                            break
-                        end
-                    end
-                    if leb_end == length(val_bytes)
-                        # dart2wasm carries the type with the value: a pure local.get is
-                        # numeric iff the inferred value type is not a ref.
-                        local src_type = infer_value_wasm_type(val, ctx)
-                        if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                            is_numeric_local = true
-                        end
-                    end
-                end
-                if is_numeric_local
-                    ref_null!(b, ExternRef)
-                else
-                    emit_raw!(b, val_bytes)
-                    is_already_externref = false
-                    if length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                        src_idx2 = 0; shift2 = 0; leb_end2 = 0
-                        for bi in 2:length(val_bytes)
-                            byt = val_bytes[bi]
-                            src_idx2 |= (Int(byt & 0x7f) << shift2)
-                            shift2 += 7
-                            if (byt & 0x80) == 0
-                                leb_end2 = bi
-                                break
-                            end
-                        end
-                        if leb_end2 == length(val_bytes)
-                            # dart2wasm carries the type with the value: a pure local.get is
-                            # already externref iff the inferred value type is externref.
-                            is_already_externref = (infer_value_wasm_type(val, ctx) === ExternRef)
-                        end
-                    end
-                    if !is_already_externref
-                        extern_convert_any!(b)
-                    end
-                end
+                # Legacy ExternRef path — THE wrap chokepoint: emit typed, coerce to externref
+                # through the ONE funnel (numeric → classId box → extern_convert_any; GC ref →
+                # extern_convert_any; already-externref → no-op). Replaces 50 lines of
+                # first-byte scans (0x41/0x42 const, 0x20 local.get + LEB decode) + 3
+                # infer_value_wasm_type re-guesses + a ref.null-extern SILENT VALUE DROP for
+                # numerics (now boxed properly — dart convertType) + a latent double
+                # extern-convert on compound externref expressions.
+                emit_value!(b, val, ctx, ExternRef)
             end
         else
             # Regular field - compile value directly
@@ -2287,7 +2225,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 continue  # Skip to next field — ref.null already emitted
             end
 
-            field_bytes = compile_value(val, ctx)
+            field_bytes, field_ty = compile_value_typed(val, ctx)
             # Safety: if field_bytes is empty (SSA without local, not re-compilable)
             # and the field expects a ref type, emit ref.null of the correct type.
             if isempty(field_bytes) && actual_field_wasm !== nothing &&
@@ -2322,10 +2260,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # B4/U2: the union-field tagged-union-wrapper box-coercion is RETIRED — a union
             # field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper ConcreteRef, so the value flows in as an anyref subtype directly.
-            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                # dart2wasm carries the type with the value: derive the source's wasm type
-                # from the inferred value type rather than decoding the local index out of bytes.
-                src_type = infer_value_wasm_type(val, ctx)
+            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && !isempty(field_bytes)
+                # typed channel: the emission's own type (field_ty) — no re-guess, no byte gate.
+                src_type = field_ty
                 if src_type !== nothing && (src_type === I64 || src_type === I32 || src_type === F32 || src_type === F64)
                     # Source local is numeric but field expects ref — box or emit ref.null
                     # Use the ACTUAL field type from the struct definition
@@ -2404,7 +2341,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             # externref fields and failed validation).
             if actual_field_wasm === ExternRef && !isempty(field_bytes) &&
                field_bytes[1] != 0x20 && field_bytes[1] != 0x23 && field_bytes[1] != 0xD0
-                _inline_vw = try infer_value_wasm_type(val, ctx) catch; nothing end
+                _inline_vw = field_ty
                 if _inline_vw !== nothing && (_inline_vw isa ConcreteRef || _inline_vw === StructRef ||
                                               _inline_vw === ArrayRef || _inline_vw === AnyRef || _inline_vw === EqRef)
                     emit_raw!(b, field_bytes)
@@ -2443,7 +2380,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if leb_end_906 == length(field_bytes)  # Pure local.get
                     # dart2wasm carries the type with the value: derive the source's wasm type
                     # from the inferred value type rather than decoding the local index.
-                    src_type_906 = infer_value_wasm_type(val, ctx)
+                    src_type_906 = field_ty
                     if src_type_906 !== nothing && (src_type_906 === ExternRef || src_type_906 === AnyRef || src_type_906 isa ConcreteRef || src_type_906 === StructRef)
                         # Source is ref-typed but field expects numeric — emit zero default
                         if actual_field_wasm === I32
@@ -2473,7 +2410,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 first_is_numeric = !isempty(field_bytes) &&
                                    (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
                                     field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
-                                   !_wt_is_ref(infer_value_wasm_type(val, ctx))
+                                   field_ty !== nothing && !_wt_is_ref(field_ty)
                 if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
                     emit_raw!(b, field_bytes)
                     extern_convert_any!(b)
@@ -2595,7 +2532,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
             # Compile length argument
             if len_arg !== nothing
-                emit_raw!(b, compile_value(len_arg, ctx))
+                emit_value!(b, len_arg, ctx)
                 len_type = infer_value_type(len_arg, ctx)
                 if len_type === Int64 || len_type === Int
                     num!(b, Opcode.I32_WRAP_I64)
@@ -2630,7 +2567,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # reachable block `end` closed over the orphan (P2-batch23, gaps
             # 4be58371947f / 203da15d789c).
             if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
-                emit_raw!(b, compile_value(expr.args[6], ctx))
+                emit_value!(b, expr.args[6], ctx)
             end
             return builder_code(b)
         elseif name === :jl_types_equal
@@ -2668,7 +2605,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # The string argument is at args[6]
             if length(expr.args) >= 6
                 str_arg = expr.args[6]
-                emit_raw!(b, compile_value(str_arg, ctx))
+                emit_value!(b, str_arg, ctx)
             end
 
             return builder_code(b)
@@ -2679,7 +2616,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             if length(expr.args) >= 6
                 size_arg = expr.args[6]
-                emit_raw!(b, compile_value(size_arg, ctx))
+                emit_value!(b, size_arg, ctx)
                 size_type = infer_value_type(size_arg, ctx)
                 if size_type === Int64 || size_type === Int || size_type === UInt64
                     num!(b, Opcode.I32_WRAP_I64)
@@ -2713,20 +2650,20 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 # Check ASCII vs non-ASCII
                 # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
-                emit_raw!(b, compile_value(cp_arg, ctx))  # [c]
+                emit_value!(b, cp_arg, ctx)  # [c]
                 i32_const!(b, 128)
                 num!(b, Opcode.I32_LT_U)  # c < 128?
 
                 if_!(b, 0x7F; results=WasmValType[I32])  # result type: i32
 
                 # ASCII path: (c - 65) < 26 || (c - 97) < 26 || c == 95
-                emit_raw!(b, compile_value(cp_arg, ctx))  # [c]
+                emit_value!(b, cp_arg, ctx)  # [c]
                 i32_const!(b, 65)
                 num!(b, Opcode.I32_SUB)
                 i32_const!(b, 26)
                 num!(b, Opcode.I32_LT_U)  # (c - 65) < 26  [A-Z]
 
-                emit_raw!(b, compile_value(cp_arg, ctx))  # [c]
+                emit_value!(b, cp_arg, ctx)  # [c]
                 i32_const!(b, 97)
                 num!(b, Opcode.I32_SUB)
                 i32_const!(b, 26)
@@ -2734,7 +2671,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 num!(b, Opcode.I32_OR)
 
-                emit_raw!(b, compile_value(cp_arg, ctx))  # [c]
+                emit_value!(b, cp_arg, ctx)  # [c]
                 i32_const!(b, 95)
                 num!(b, Opcode.I32_EQ)  # c == 95  [_]
 
@@ -2759,7 +2696,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 # Check ASCII vs non-ASCII
                 # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
-                emit_raw!(b, compile_value(cp_arg, ctx))  # [c]
+                emit_value!(b, cp_arg, ctx)  # [c]
                 i32_const!(b, 128)
                 num!(b, Opcode.I32_LT_U)  # c < 128?
 
@@ -2767,13 +2704,13 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 # ASCII path: letter || digit || _ || !
                 # (c - 65) < 26 || (c - 97) < 26 || (c - 48) < 10 || c == 95 || c == 33
-                emit_raw!(b, compile_value(cp_arg, ctx))
+                emit_value!(b, cp_arg, ctx)
                 i32_const!(b, 65)
                 num!(b, Opcode.I32_SUB)
                 i32_const!(b, 26)
                 num!(b, Opcode.I32_LT_U)  # [A-Z]
 
-                emit_raw!(b, compile_value(cp_arg, ctx))
+                emit_value!(b, cp_arg, ctx)
                 i32_const!(b, 97)
                 num!(b, Opcode.I32_SUB)
                 i32_const!(b, 26)
@@ -2781,7 +2718,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 num!(b, Opcode.I32_OR)
 
-                emit_raw!(b, compile_value(cp_arg, ctx))
+                emit_value!(b, cp_arg, ctx)
                 i32_const!(b, 48)
                 num!(b, Opcode.I32_SUB)
                 i32_const!(b, 10)
@@ -2789,13 +2726,13 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 num!(b, Opcode.I32_OR)
 
-                emit_raw!(b, compile_value(cp_arg, ctx))
+                emit_value!(b, cp_arg, ctx)
                 i32_const!(b, 95)
                 num!(b, Opcode.I32_EQ)  # _
 
                 num!(b, Opcode.I32_OR)
 
-                emit_raw!(b, compile_value(cp_arg, ctx))
+                emit_value!(b, cp_arg, ctx)
                 i32_const!(b, 33)
                 num!(b, Opcode.I32_EQ)  # !
 
@@ -2817,7 +2754,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # For ASCII/UTF-8 source code, the codepoint values equal the byte values.
             if length(expr.args) >= 6
                 str_arg = expr.args[6]
-                emit_raw!(b, compile_value(str_arg, ctx))
+                emit_value!(b, str_arg, ctx)
             end
             return builder_code(b)
         elseif name === :jl_genericmemory_to_string
@@ -2838,7 +2775,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 push!(ctx.locals, I32)
 
                 # Compile n and convert to i32
-                emit_raw!(b, compile_value(len_arg, ctx))
+                emit_value!(b, len_arg, ctx)
                 len_type = infer_value_type(len_arg, ctx)
                 if len_type === Int64 || len_type === Int || len_type === UInt64
                     num!(b, Opcode.I32_WRAP_I64)
@@ -2851,7 +2788,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                 # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
                 i32_const!(b, 0)  # dest offset
-                emit_raw!(b, compile_value(mem_arg, ctx))  # src array
+                emit_value!(b, mem_arg, ctx)  # src array
                 i32_const!(b, 0)  # src offset
                 local_get!(b, len_local)  # count
                 array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
@@ -2861,7 +2798,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             elseif length(expr.args) >= 6
                 # Fallback: no length arg, just pass through
                 mem_arg = expr.args[6]
-                emit_raw!(b, compile_value(mem_arg, ctx))
+                emit_value!(b, mem_arg, ctx)
             end
             return builder_code(b)
         elseif name === :jl_pchar_to_string
@@ -2882,7 +2819,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     push!(ctx.locals, I32)
 
                     # Compile n and convert to i32
-                    emit_raw!(b, compile_value(len_arg, ctx))
+                    emit_value!(b, len_arg, ctx)
                     len_type = infer_value_type(len_arg, ctx)
                     if len_type === Int64 || len_type === Int || len_type === UInt64
                         num!(b, Opcode.I32_WRAP_I64)
@@ -2895,7 +2832,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
                     # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
                     i32_const!(b, 0)  # dest offset
-                    emit_raw!(b, compile_value(data_ssa, ctx))  # src array
+                    emit_value!(b, data_ssa, ctx)  # src array
                     i32_const!(b, 0)  # src offset
                     local_get!(b, len_local)  # count
                     array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
@@ -2905,10 +2842,10 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     return builder_code(b)
                 end
                 # Fallback: the pointer might be directly compilable as a ref
-                emit_raw!(b, compile_value(ptr_arg, ctx))
+                emit_value!(b, ptr_arg, ctx)
             elseif length(expr.args) >= 6
                 ptr_arg = expr.args[6]
-                emit_raw!(b, compile_value(ptr_arg, ctx))
+                emit_value!(b, ptr_arg, ctx)
             end
             return builder_code(b)
         elseif name === :utf8proc_grapheme_break_stateful
@@ -2947,12 +2884,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     # PURE-9024: Push typeId for Vector struct
                     i32_const!(b, 0)  # typeId = 0
                     # 1. Push data array ref
-                    emit_raw!(b, compile_value(data_source, ctx))
+                    emit_value!(b, data_source, ctx)
                     # 2. Push typeId + length as i64 for size tuple, then struct.new Tuple{Int64}
                     # PURE-9024: Push typeId for Tuple{Int64} struct
                     i32_const!(b, 0)  # typeId = 0
                     if len_arg !== nothing
-                        emit_raw!(b, compile_value(len_arg, ctx))
+                        emit_value!(b, len_arg, ctx)
                         len_type = infer_value_type(len_arg, ctx)
                         if len_type === UInt64
                             # UInt64 → i64 is already i64, but need signed interpretation
@@ -3001,20 +2938,20 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             push!(ctx.locals, I32)
 
             # Store string ref
-            emit_raw!(b, compile_value(str_ssa, ctx))
+            emit_value!(b, str_ssa, ctx)
             local_set!(b, str_local)
 
             # Store start_ptr (the ptr argument to memchr = 1-based position)
-            emit_raw!(b, compile_value(ptr_arg, ctx))
+            emit_value!(b, ptr_arg, ctx)
             local_set!(b, current_local)
 
             # Store byte
-            emit_raw!(b, compile_value(byte_arg, ctx))
+            emit_value!(b, byte_arg, ctx)
             local_set!(b, byte_local)
 
             # Compute end = start + count
             local_get!(b, current_local)
-            emit_raw!(b, compile_value(count_arg, ctx))
+            emit_value!(b, count_arg, ctx)
             num!(b, Opcode.I64_ADD)
             local_set!(b, end_local)
 
@@ -3100,7 +3037,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     _emit_backing_array!(b, vec, ctx, _mmv_arr)
                 end
                 local _mmv_emit_off = a -> begin
-                    emit_raw!(b, compile_value(a, ctx))
+                    emit_value!(b, a, ctx)
                     num!(b, Opcode.I32_WRAP_I64)
                     i32_const!(b, Int64(_mmv_sh))
                     num!(b, Opcode.I32_SHR_U)
@@ -3137,23 +3074,23 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 # The compiled pointer SSA value is the offset.
                 arr_copy_type = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
                 # Dest array
-                emit_raw!(b, compile_value(arr_ssa, ctx))
+                emit_value!(b, arr_ssa, ctx)
                 # Dest offset: compile pointer value as i64, wrap to i32
-                emit_raw!(b, compile_value(dest_ptr_arg, ctx))
+                emit_value!(b, dest_ptr_arg, ctx)
                 _dest_type = infer_value_type(dest_ptr_arg, ctx)
                 if _dest_type === Int64 || _dest_type === Int || _dest_type === UInt64 || _dest_type <: Ptr
                     num!(b, Opcode.I32_WRAP_I64)
                 end
                 # Src array (same array)
-                emit_raw!(b, compile_value(arr_ssa, ctx))
+                emit_value!(b, arr_ssa, ctx)
                 # Src offset: compile pointer value as i64, wrap to i32
-                emit_raw!(b, compile_value(src_ptr_arg, ctx))
+                emit_value!(b, src_ptr_arg, ctx)
                 _src_type = infer_value_type(src_ptr_arg, ctx)
                 if _src_type === Int64 || _src_type === Int || _src_type === UInt64 || _src_type <: Ptr
                     num!(b, Opcode.I32_WRAP_I64)
                 end
                 # Length
-                emit_raw!(b, compile_value(nbytes_arg, ctx))
+                emit_value!(b, nbytes_arg, ctx)
                 _nbytes_type = infer_value_type(nbytes_arg, ctx)
                 if _nbytes_type === Int64 || _nbytes_type === Int || _nbytes_type === UInt64
                     num!(b, Opcode.I32_WRAP_I64)
@@ -3182,12 +3119,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
             # array.copy: dest_arr, dest_offset, src_arr, src_offset, count
             # dest array
-            emit_raw!(b, compile_value(dest_arr_ssa, ctx))
+            emit_value!(b, dest_arr_ssa, ctx)
             # dest offset (0-based: memoryrefnew offset is 1-based, subtract 1)
             if dest_offset_ssa === nothing
                 i32_const!(b, 0)
             else
-                emit_raw!(b, compile_value(dest_offset_ssa, ctx))
+                emit_value!(b, dest_offset_ssa, ctx)
                 dest_offset_type = infer_value_type(dest_offset_ssa, ctx)
                 if dest_offset_type === Int64 || dest_offset_type === Int
                     num!(b, Opcode.I32_WRAP_I64)
@@ -3196,12 +3133,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 num!(b, Opcode.I32_SUB)
             end
             # src array
-            emit_raw!(b, compile_value(src_arr_ssa, ctx))
+            emit_value!(b, src_arr_ssa, ctx)
             # src offset (0-based)
             if src_offset_ssa === nothing
                 i32_const!(b, 0)
             else
-                emit_raw!(b, compile_value(src_offset_ssa, ctx))
+                emit_value!(b, src_offset_ssa, ctx)
                 src_offset_type = infer_value_type(src_offset_ssa, ctx)
                 if src_offset_type === Int64 || src_offset_type === Int
                     num!(b, Opcode.I32_WRAP_I64)
@@ -3230,7 +3167,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     try; _elem_size = sizeof(_el_type); catch; end
                 end
             end
-            emit_raw!(b, compile_value(nbytes_arg, ctx))
+            emit_value!(b, nbytes_arg, ctx)
             nbytes_type = infer_value_type(nbytes_arg, ctx)
             if nbytes_type === Int64 || nbytes_type === Int || nbytes_type === UInt64
                 num!(b, Opcode.I32_WRAP_I64)
@@ -3253,7 +3190,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # The GC root argument (expr.args[8]) is the original String — just return it.
         if length(expr.args) >= 8
             gc_root = expr.args[8]
-            emit_raw!(b, compile_value(gc_root, ctx))
+            emit_value!(b, gc_root, ctx)
             return builder_code(b)
         end
     end
@@ -3295,12 +3232,12 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             end
             _mm_emit_ptr_off! = function (ptr_arg)
                 # fake base pointer compiles to 0 → pointer value == byte offset
-                emit_raw!(b, compile_value(ptr_arg, ctx))
+                emit_value!(b, ptr_arg, ctx)
                 num!(b, Opcode.I32_WRAP_I64)
             end
             _mm_emit_arr!(_mm_d); _mm_emit_ptr_off!(expr.args[6])
             _mm_emit_arr!(_mm_s); _mm_emit_ptr_off!(expr.args[7])
-            emit_raw!(b, compile_value(expr.args[8], ctx))
+            emit_value!(b, expr.args[8], ctx)
             local _mm_nt = infer_value_type(expr.args[8], ctx)
             (_mm_nt === UInt64 || _mm_nt === Int64 || _mm_nt === Int) &&
                 num!(b, Opcode.I32_WRAP_I64)
@@ -3334,16 +3271,16 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # Get or create the string hash helper function
             hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
             # Push args: string array ref, length (i64), seed (i32)
-            emit_raw!(b, compile_value(str_arg, ctx))  # string array ref
+            emit_value!(b, str_arg, ctx)  # string array ref
             if length(expr.args) >= 7
                 len_arg = expr.args[7]
-                emit_raw!(b, compile_value(len_arg, ctx))  # length as i64
+                emit_value!(b, len_arg, ctx)  # length as i64
             else
                 i64_const!(b, 0)
             end
             if length(expr.args) >= 8
                 seed_arg = expr.args[8]
-                emit_raw!(b, compile_value(seed_arg, ctx))  # seed as i32
+                emit_value!(b, seed_arg, ctx)  # seed as i32
                 # seed may be i64 from SSA — wrap to i32
                 seed_type = infer_value_type(seed_arg, ctx)
                 if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
@@ -3371,20 +3308,20 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
             local _gmc_sh = trailing_zeros(sizeof(_gmc_te))
             local _gmc_off = a -> begin
-                emit_raw!(b, compile_value(a, ctx))
+                emit_value!(b, a, ctx)
                 num!(b, Opcode.I32_WRAP_I64)
                 if _gmc_sh > 0
                     i32_const!(b, Int64(_gmc_sh))
                     num!(b, Opcode.I32_SHR_U)
                 end
             end
-            emit_raw!(b, compile_value(expr.args[6], ctx))
+            emit_value!(b, expr.args[6], ctx)
             ref_cast!(b, Int64(_gmc_arr), true)
             _gmc_off(expr.args[7])
-            emit_raw!(b, compile_value(expr.args[8], ctx))
+            emit_value!(b, expr.args[8], ctx)
             ref_cast!(b, Int64(_gmc_arr), true)
             _gmc_off(expr.args[9])
-            emit_raw!(b, compile_value(expr.args[10], ctx))
+            emit_value!(b, expr.args[10], ctx)
             if infer_value_type(expr.args[10], ctx) in (Int64, UInt64, Int)
                 num!(b, Opcode.I32_WRAP_I64)
             end
@@ -3416,7 +3353,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if _ti_a isa Type && _ti_b isa Type
             local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
             if _ti_r !== nothing
-                emit_raw!(b, compile_value(_ti_r, ctx))
+                emit_value!(b, _ti_r, ctx)
                 return builder_code(b)
             end
         end

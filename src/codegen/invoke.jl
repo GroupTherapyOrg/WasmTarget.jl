@@ -2014,7 +2014,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             ref_null!(_nb2, AnyRef)
             append!(bytes, builder_code(_nb2))
         else
-            arg_bytes = compile_value(arg, ctx)
+            arg_bytes, arg_ty = compile_value_typed(arg, ctx)
             # P6-ioprint: function/type singleton args compile to EMPTY bytes, but
             # trim-collected callees keep the param in their wasm signature (legacy
             # discovery skipped such functions entirely, so this never fired before).
@@ -2188,10 +2188,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         # Wasm local might be a ConcreteRef. Check if arg_bytes is local.get of a
                         # non-externref local and insert extern.convert_any if needed.
                         if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20  # LOCAL_GET opcode
-                            # dart2wasm carries the type with the value: derive the actual
-                            # wasm type from the inferred value type rather than decoding the
-                            # local index out of the emitted bytes.
-                            actual_local_wasm = infer_value_wasm_type(arg, ctx)
+                            # typed channel: the emission's own type (arg_ty) — no re-guess.
+                            actual_local_wasm = arg_ty
                             if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
                                 # Actual local is a ref type but not externref — insert conversion
                                 local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
@@ -2215,9 +2213,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Check if we pushed a non-externref value that needs conversion
                     # PURE-036z: Skip if extern.convert_any was already emitted to avoid double conversion
                     if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20  # LOCAL_GET
-                        # dart2wasm carries the type with the value: derive the actual wasm
-                        # type from the inferred value type rather than decoding the local index.
-                        actual_local_wasm = infer_value_wasm_type(arg, ctx)
+                        # typed channel: the emission's own type (arg_ty) — no re-guess.
+                        actual_local_wasm = arg_ty
                         if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
                             local _eca = InstrBuilder(; func_name="compile_invoke", strict=false)
                             extern_convert_any!(_eca)
@@ -3097,9 +3094,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 local (val_bytes, val_ty) = compile_value_typed(args[3], ctx)
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
-                    # Determine source value's wasm type to decide conversion.
-                    # dart2wasm carries the type with the value rather than scanning bytes.
-                    local arrset_src_wasm = infer_value_wasm_type(args[3], ctx)
+                    # typed channel: the emission's own type (val_ty from the producer above).
+                    local arrset_src_wasm = val_ty
                     local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
                     local is_already_externref_val = arrset_src_wasm === ExternRef
                     if is_numeric_val
@@ -3265,7 +3261,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     for fi in 1:nfields
                         if fi <= length(args)
                             local _ft_ctor = fieldtype(_ctor_type, fi)
-                            local _val_wasm = infer_value_wasm_type(args[fi], ctx)
+                            local _val_wasm = compile_value_typed(args[fi], ctx)[2]
                             local _is_numeric_val = _val_wasm === I32 || _val_wasm === I64 || _val_wasm === F32 || _val_wasm === F64
                             # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
                             if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
@@ -3275,7 +3271,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                     extern_convert_any!(bec)
                                 end
                             else
-                                emit_raw!(bec, compile_value(args[fi], ctx); pushes=WasmValType[_val_wasm])
+                                emit_value!(bec, args[fi], ctx)
                                 # WASMMAKIE E-003: Any fields map to EXTERNREF — a
                                 # concrete ref (e.g. BoundsError(LinearIndices(...), i)
                                 # in wilkinson's range indexing) fails struct.new
@@ -4088,7 +4084,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Compile each constructor argument as a struct field value
                     for _fi in 1:length(args)
                         local _ftype = _fi <= length(_ctor_sinfo.field_types) ? _ctor_sinfo.field_types[_fi] : Any
-                        local _fval_wasm = infer_value_wasm_type(args[_fi], ctx)
+                        local _fval_wasm = compile_value_typed(args[_fi], ctx)[2]
                         local _fval_numeric = _fval_wasm === I32 || _fval_wasm === I64 || _fval_wasm === F32 || _fval_wasm === F64
                         if _fval_numeric && (_ftype === Any || isabstracttype(_ftype))
                             emit_numeric_to_anyref!(bytes, args[_fi], _fval_wasm, ctx)

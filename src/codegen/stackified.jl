@@ -59,7 +59,7 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
     # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
+    emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
     append!(target_bytes, builder_code(b))
@@ -86,7 +86,7 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
+    emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     append!(target_bytes, builder_code(b))
     return  # No extern_convert_any — struct ref is already anyref
@@ -513,12 +513,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Helper to compile a value, ensuring it actually produces bytes
     # For SSAValues without locals, we need to recompute the value
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
-    function compile_phi_value(val, phi_idx::Int)::Vector{UInt8}
-        # MIGRATED to InstrBuilder: pure straight-line emission into `pvb` (no self-
-        # inspection; the OUTPUT is byte-inspected by callers, byte-identity preserved by
-        # builder_code). Recursive emitters (compile_value/compile_statement) + buffer
-        # helpers (emit_box_type_id!/emit_phi_type_default) bridge via emit_raw!. strict=false.
+    function compile_phi_value(val, phi_idx::Int,
+                               temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{Vector{UInt8},Union{WasmValType,Nothing},Int}
+        # parity(M2) typed channel: emits into `pvb`, returns (bytes, pushed_type, npushed) —
+        # the type is the emission BYPRODUCT (pvb.v.stack), so callers wrap+store through
+        # convert_type! instead of byte-sniffing the output. `temp_map` substitutes circular-
+        # phi temp locals at the plain local.get branches (replaces the callers' byte-REWRITE
+        # of pure local.get outputs, PURE-1001).
         pvb = InstrBuilder(; func_name="compile_phi_value", strict=false)
+        _seed_builder_locals!(pvb, ctx)
+        _cpv_ret() = (builder_code(pvb),
+                      isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
+                      length(pvb.v.stack))
         if val isa Core.SSAValue
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
@@ -536,7 +542,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
                     if phi_local_wasm_type === I64 && ssa_local_type === I32
                         # PURE-313: Return i32 local.get — caller handles i64 widening
-                        local_get!(pvb, local_idx)
+                        local_get!(pvb, get(temp_map, local_idx, local_idx))
                     else
                         # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
                         # converter (source = local.get of the SSA local). The unbox arm is
@@ -544,11 +550,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
-                            emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                            emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
                         end
                     end
                 else
-                    local_get!(pvb, local_idx)
+                    local_get!(pvb, get(temp_map, local_idx, local_idx))
                 end
             elseif haskey(ctx.phi_locals, val.id)
                 local_idx = ctx.phi_locals[val.id]
@@ -559,18 +565,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
                     end
                 else
-                    local_get!(pvb, local_idx)
+                    local_get!(pvb, get(temp_map, local_idx, local_idx))
                 end
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
-                    return builder_code(pvb)
+                    emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                    return _cpv_ret()
                 end
                 stmt = code[val.id]
                 # PURE-036bg: Check type compatibility for recomputed SSA values
@@ -584,21 +590,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if stmt !== nothing && !(stmt isa Core.PhiNode)
                         emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
                     else
-                        emit_raw!(_sb, compile_value(val, ctx))
+                        emit_value!(_sb, val, ctx)
                     end
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
-                    emit_raw!(pvb, compile_value(val, ctx))
+                    emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
+                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])
                 else
                     # Can't recompute - try compile_value as fallback
-                    emit_raw!(pvb, compile_value(val, ctx))
+                    emit_value!(pvb, val, ctx)
                 end
             end
         elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
@@ -643,14 +649,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type, edge_val_type, compile_value(val, ctx))
                         # Type mismatch with no conversion arm: emit a type-safe default.
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_type))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                     end
-                    return builder_code(pvb)
+                    return _cpv_ret()
                 end
             end
-            emit_raw!(pvb, compile_value(val, ctx))
+            emit_value!(pvb, val, ctx)
         end
-        return builder_code(pvb)
+        return _cpv_ret()
     end
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
@@ -853,230 +859,23 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # Check type compatibility before emitting local.set
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-                                edge_val_type = get_phi_edge_wasm_type(val)
-
-
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                                        # PURE-325: Box numeric phi edge for ExternRef local
-                                        _pvb2 = compile_phi_value(val, i)
-                                        if !isempty(_pvb2)
-                                            _pvb2_boxed = length(_pvb2) >= 2 && _pvb2[end-1] == Opcode.GC_PREFIX && _pvb2[end] == Opcode.EXTERN_CONVERT_ANY
-                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
-                                            _pvb2_is_ref_null = length(_pvb2) >= 1 && _pvb2[1] == Opcode.REF_NULL
-                                            if !_pvb2_boxed && !_pvb2_is_ref_null
-                                                # Box the numeric phi edge → externref via THE single box emitter.
-                                                emit_raw!(b, _pvb2; pushes=WasmValType[edge_val_type])
-                                                emit_classid_box!(b, ctx, edge_val_type, nothing)
-                                                extern_convert_any!(b)
-                                            else
-                                                emit_raw!(b, _pvb2; pushes=WasmValType[ExternRef])
-                                            end
-                                            local_set!(b, local_idx)
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
-                                    if phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                                        # F1: Box numeric phi edge for AnyRef local (numeric Union,
-                                        # e.g. φ(1::Int64, 2.5::Float64)::Union{Int64,Float64}).
-                                        # compile_phi_value's AnyRef branches already wrap a numeric
-                                        # value in the classId-tagged {typeId,value} box (typeId +
-                                        # value + struct.new, no extern_convert_any) — the SAME box
-                                        # compile_value reads back via ref.cast $BoxedT + struct.get.
-                                        # Emit it as-is (do NOT re-box, or the typeId is pushed twice).
-                                        _pvb_any = compile_phi_value(val, i)
-                                        if !isempty(_pvb_any)
-                                            emit_raw!(b, _pvb_any; pushes=WasmValType[AnyRef])
-                                            local_set!(b, local_idx)
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
-                                    if phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
-                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
-                                        _pvb3 = compile_phi_value(val, i)
-                                        if !isempty(_pvb3)
-                                            _pvb3_has_ecv = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
-                                            # PURE-803: compile_phi_value may return ref.null extern for type-mismatch fallback
-                                            # ref.null extern is already externref — extern_convert_any expects anyref input
-                                            _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
-                                            emit_raw!(b, _pvb3; pushes=WasmValType[edge_val_type])
-                                            if !_pvb3_has_ecv && !_pvb3_is_ref_null
-                                                extern_convert_any!(b)
-                                            end
-                                            local_set!(b, local_idx)
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
-                                    if (phi_local_type === I64 || phi_local_type === I32 || phi_local_type === F64 || phi_local_type === F32) &&
-                                       (edge_val_type === AnyRef || edge_val_type === EqRef || edge_val_type === StructRef || edge_val_type === ExternRef || edge_val_type isa ConcreteRef)
-                                        # Loop C flow/phi dedup: numeric phi local ← classId-box edge.
-                                        # compile_phi_value ALREADY unboxes (shared converter at the
-                                        # SSA-with-local branch), so use its output directly — do NOT
-                                        # re-unbox here (that double-casts the i64). This is the arm that
-                                        # was missing → i64.const 0, the Any[1,2,3][i] → 0 miscompile.
-                                        _pvbu = compile_phi_value(val, i)
-                                        if !isempty(_pvbu)
-                                            emit_raw!(b, _pvbu; pushes=WasmValType[phi_local_type])
-                                            local_set!(b, local_idx)
-                                            phi_count += 1
-                                            found_edge = true
-                                            break
-                                        end
-                                    end
-                                    # (B4/U2: the tagged-union phi-wrap path is retired — union
-                                    # phi-locals are AnyRef classId boxes.)
-                                    # Type mismatch: emit type-safe default
+                                # parity(M2) wrap+store: typed compile_phi_value → THE
+                                # convert_type! funnel → local.set. Replaces the arm-chain +
+                                # END-byte sniffing + LEB re-decode + temp byte-rewrite
+                                # (cpv takes needs_temp) + the "safety check" re-derivation.
+                                pv_bytes, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
+                                if pv_n >= 2
+                                    # multi-value emission can't feed one local.set — type-safe default
                                     emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                     local_set!(b, local_idx)
                                     phi_count += 1
-                                    found_edge = true
-                                    break
-                                end
-
-                                phi_value_bytes = compile_phi_value(val, i)
-                                # PURE-1001: If phi value reads from a remapped phi local, use temp
-                                if !isempty(needs_temp) && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
-                                    _got_idx = 0; _shift = 0
-                                    for bi in 2:length(phi_value_bytes)
-                                        byt = phi_value_bytes[bi]
-                                        _got_idx |= (Int(byt & 0x7f) << _shift)
-                                        _shift += 7
-                                        if (byt & 0x80) == 0; break; end
+                                elseif !isempty(pv_bytes)
+                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[] : WasmValType[pv_ty]))
+                                    if pv_ty !== nothing
+                                        pv_ty === phi_local_type || convert_type!(b, pv_ty, phi_local_type, ctx)
+                                        local_set!(b, local_idx)
+                                        phi_count += 1
                                     end
-                                    if haskey(needs_temp, _got_idx)
-                                        phi_value_bytes = UInt8[Opcode.LOCAL_GET]
-                                        append!(phi_value_bytes, encode_leb128_unsigned(needs_temp[_got_idx]))
-                                    end
-                                end
-                                # Detect multi-value bytes (all local_gets, N>=2).
-                                # local_set only consumes 1, so N-1 would be orphaned.
-                                if length(phi_value_bytes) >= 4
-                                    _pv_all2 = true; _pv_n2 = 0; _pv_p2 = 1
-                                    while _pv_p2 <= length(phi_value_bytes)
-                                        if phi_value_bytes[_pv_p2] != 0x20; _pv_all2 = false; break; end
-                                        _pv_n2 += 1; _pv_p2 += 1
-                                        while _pv_p2 <= length(phi_value_bytes) && (phi_value_bytes[_pv_p2] & 0x80) != 0; _pv_p2 += 1; end
-                                        _pv_p2 += 1
-                                    end
-                                    if _pv_all2 && _pv_p2 > length(phi_value_bytes) && _pv_n2 >= 2
-                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
-                                    end
-                                end
-                                # Only emit local_set if we actually have a value on the stack
-                                if !isempty(phi_value_bytes)
-                                    # Safety check: if compile_phi_value produced a local.get,
-                                    # verify the local's actual type matches the phi local type.
-                                    # This catches cases where get_phi_edge_wasm_type reports compatible
-                                    # (from Julia type inference) but the actual local has a different type
-                                    # (e.g., externref from Any-typed struct field overrides).
-                                    # PURE-325: If compile_phi_value already boxed, skip safety check
-                                    _already_boxed2 = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                                    actual_val_type = edge_val_type
-                                    if !_already_boxed2 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
-                                        # Decode the local index from unsigned LEB128
-                                        got_local_idx = 0
-                                        shift = 0
-                                        for bi in 2:length(phi_value_bytes)
-                                            byt = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(byt & 0x7f) << shift)
-                                            shift += 7
-                                            if (byt & 0x80) == 0
-                                                break
-                                            end
-                                        end
-                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
-                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
-                                            actual_val_type = ctx.locals[got_local_array_idx]
-                                        elseif got_local_idx < ctx.n_params
-                                            # It's a parameter - get Wasm type from arg_types
-                                            param_julia_type = ctx.arg_types[got_local_idx + 1]  # Julia is 1-indexed
-                                            actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
-                                        end
-                                    end
-                                    if _already_boxed2
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[ExternRef])
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
-                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
-                                        # wrap with extern_convert_any instead of null default
-                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
-                                            emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
-                                            _is_ref_null2 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
-                                            if !_is_ref_null2
-                                                extern_convert_any!(b)
-                                            end
-                                        elseif phi_local_type isa ConcreteRef && (actual_val_type === AnyRef || actual_val_type === EqRef || actual_val_type === StructRef || actual_val_type === ArrayRef)
-                                            # AnyRef/EqRef/StructRef/ArrayRef → ConcreteRef: narrow with ref.cast_nullable
-                                            _is_ref_null_cast = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
-                                            if _is_ref_null_cast
-                                                # ref.null can't be cast — emit type-appropriate null instead
-                                                emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
-                                            else
-                                                emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                                # BRIDGE: original used encode_leb128_UNSIGNED for the
-                                                # ref.cast_null type index (ref_cast!/RefCastConcrete
-                                                # would emit signed LEB128 — differs for type_idx>=64).
-                                                # Preserve exact bytes via emit_raw!.
-                                                _rcb = UInt8[Opcode.GC_PREFIX, Opcode.REF_CAST_NULL]
-                                                append!(_rcb, encode_leb128_unsigned(phi_local_type.type_idx))
-                                                emit_raw!(b, _rcb; pops=1, pushes=WasmValType[phi_local_type])
-                                            end
-                                        else
-                                            # Type mismatch detected at emit point: replace with default
-                                            emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
-                                        # Numeric widening: i32 value into i64 local
-                                        # PURE-324: Skip extend if compiled bytes are already i64
-                                        # (happens when compile_phi_value emitted an i64 default)
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
-                                            num!(b, Opcode.I64_EXTEND_I32_S)
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(b, Opcode.F64_CONVERT_I64_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(b, Opcode.F64_CONVERT_I32_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(b, Opcode.F64_PROMOTE_F32)
-                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
-                                        emit_raw!(b, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(b, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
-                                    else
-                                        # PURE-6025: Final safety net — detect numeric constants
-                                        # being stored to ref-typed locals. This happens when
-                                        # get_phi_edge_wasm_type returns ConcreteRef (from Julia
-                                        # type inference of a Union type) but compile_phi_value
-                                        # actually emits a numeric constant (e.g., UInt8 literal
-                                        # like ExternRef=0x6f=111). The LOCAL_GET check above
-                                        # doesn't catch this because the value is a recomputed
-                                        # statement, not a local.get.
-                                        phi_is_ref = phi_local_type isa ConcreteRef || phi_local_type === StructRef || phi_local_type === ArrayRef || phi_local_type === AnyRef || phi_local_type === ExternRef
-                                        phi_val_is_numeric = !isempty(phi_value_bytes) && (phi_value_bytes[1] == Opcode.I32_CONST || phi_value_bytes[1] == Opcode.I64_CONST || phi_value_bytes[1] == Opcode.F32_CONST || phi_value_bytes[1] == Opcode.F64_CONST)
-                                        # PURE-6025b: Don't treat as numeric if the bytes contain
-                                        # a GC instruction (e.g., array.new_data for Symbol constants
-                                        # starts with i32.const for the offset argument but produces
-                                        # a ref-typed value, not a numeric one).
-                                        if phi_val_is_numeric && any(byt == Opcode.GC_PREFIX for byt in phi_value_bytes)
-                                            phi_val_is_numeric = false
-                                        end
-                                        if phi_is_ref && phi_val_is_numeric
-                                            emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
-                                        else
-                                            emit_raw!(b, phi_value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
-                                        end
-                                    end
-                                    local_set!(b, local_idx)
-                                    phi_count += 1
                                 end
                             end
                             found_edge = true
@@ -1197,12 +996,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
             if stmt isa Core.ReturnNode
                 if isdefined(stmt, :val)
-                    val_wasm_type = infer_value_wasm_type(stmt.val, ctx)
-                    ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                    # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
-                    is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                    is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
+                    # THE single return-coercion path (dead pre-emit type locals deleted).
                     bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
                     return_!(bb)
@@ -1226,110 +1020,17 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # Check type compatibility before storing
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-                                edge_val_type = get_phi_edge_wasm_type(val)
-                                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
-                                    if phi_local_type === ExternRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
-                                        # PURE-325: Box numeric phi edge for ExternRef local
-                                        _pvb3 = compile_phi_value(val, i)
-                                        if !isempty(_pvb3)
-                                            _pvb3_boxed = length(_pvb3) >= 2 && _pvb3[end-1] == Opcode.GC_PREFIX && _pvb3[end] == Opcode.EXTERN_CONVERT_ANY
-                                            # PURE-602: compile_phi_value may return ref.null extern for nothing values
-                                            _pvb3_is_ref_null = length(_pvb3) >= 1 && _pvb3[1] == Opcode.REF_NULL
-                                            if !_pvb3_boxed && !_pvb3_is_ref_null
-                                                # Box the numeric phi edge → externref via THE single box emitter.
-                                                emit_raw!(bb, _pvb3; pushes=WasmValType[edge_val_type])
-                                                emit_classid_box!(bb, ctx, edge_val_type, nothing)
-                                                extern_convert_any!(bb)
-                                            else
-                                                emit_raw!(bb, _pvb3; pushes=WasmValType[ExternRef])
-                                            end
-                                            local_set!(bb, local_idx)
-                                            break
-                                        end
-                                    end
-                                    # Type mismatch: emit type-safe default
+                                # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
+                                pv_bytes2, pv_ty2, pv_n2 = compile_phi_value(val, i)
+                                if pv_n2 >= 2
                                     emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                     local_set!(bb, local_idx)
-                                    break
-                                end
-                                phi_value_bytes = compile_phi_value(val, i)
-                                # Detect multi-value bytes (all local_gets, N>=2).
-                                # local_set only consumes 1 value, so N-1 would be orphaned.
-                                if length(phi_value_bytes) >= 4
-                                    _pv_all = true; _pv_n = 0; _pv_p = 1
-                                    while _pv_p <= length(phi_value_bytes)
-                                        if phi_value_bytes[_pv_p] != 0x20; _pv_all = false; break; end
-                                        _pv_n += 1; _pv_p += 1
-                                        while _pv_p <= length(phi_value_bytes) && (phi_value_bytes[_pv_p] & 0x80) != 0; _pv_p += 1; end
-                                        _pv_p += 1
+                                elseif !isempty(pv_bytes2)
+                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[] : WasmValType[pv_ty2]))
+                                    if pv_ty2 !== nothing
+                                        pv_ty2 === phi_local_type || convert_type!(bb, pv_ty2, phi_local_type, ctx)
+                                        local_set!(bb, local_idx)
                                     end
-                                    if _pv_all && _pv_p > length(phi_value_bytes) && _pv_n >= 2
-                                        # Multi-value: replace with type-safe default
-                                        phi_value_bytes = emit_phi_type_default(phi_local_type)
-                                    end
-                                end
-                                if !isempty(phi_value_bytes)
-                                    # PURE-325: If compile_phi_value already boxed, skip safety check
-                                    _already_boxed3 = length(phi_value_bytes) >= 2 && phi_value_bytes[end-1] == Opcode.GC_PREFIX && phi_value_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                                    # Safety check: verify actual local.get type matches phi local
-                                    actual_val_type = edge_val_type
-                                    if !_already_boxed3 && length(phi_value_bytes) >= 2 && phi_value_bytes[1] == Opcode.LOCAL_GET
-                                        got_local_idx = 0
-                                        shift = 0
-                                        for bi in 2:length(phi_value_bytes)
-                                            byt = phi_value_bytes[bi]
-                                            got_local_idx |= (Int(byt & 0x7f) << shift)
-                                            shift += 7
-                                            if (byt & 0x80) == 0
-                                                break
-                                            end
-                                        end
-                                        got_local_array_idx = got_local_idx - ctx.n_params + 1
-                                        if got_local_array_idx >= 1 && got_local_array_idx <= length(ctx.locals)
-                                            actual_val_type = ctx.locals[got_local_array_idx]
-                                        elseif got_local_idx < ctx.n_params
-                                            # It's a parameter - get Wasm type from arg_types
-                                            param_julia_type = ctx.arg_types[got_local_idx + 1]  # Julia is 1-indexed
-                                            actual_val_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
-                                        end
-                                    end
-
-                                    if _already_boxed3
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[ExternRef])
-                                    elseif actual_val_type !== nothing && !wasm_types_compatible(phi_local_type, actual_val_type) && !(phi_local_type === I64 && actual_val_type === I32) && !(phi_local_type === F64 && (actual_val_type === I64 || actual_val_type === I32 || actual_val_type === F32)) && !(phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32))
-                                        # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef:
-                                        # wrap with extern_convert_any instead of null default
-                                        if phi_local_type === ExternRef && (actual_val_type isa ConcreteRef || actual_val_type === StructRef || actual_val_type === ArrayRef || actual_val_type === AnyRef)
-                                            emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                            # PURE-803: ref.null extern is already externref — don't wrap with extern_convert_any
-                                            _is_ref_null3 = length(phi_value_bytes) >= 1 && phi_value_bytes[1] == Opcode.REF_NULL
-                                            if !_is_ref_null3
-                                                extern_convert_any!(bb)
-                                            end
-                                        else
-                                            emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === I64 && actual_val_type === I32
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        if isempty(phi_value_bytes) || phi_value_bytes[1] != Opcode.I64_CONST
-                                            num!(bb, Opcode.I64_EXTEND_I32_S)
-                                        end
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I64
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(bb, Opcode.F64_CONVERT_I64_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === I32
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(bb, Opcode.F64_CONVERT_I32_S)
-                                    elseif actual_val_type !== nothing && phi_local_type === F64 && actual_val_type === F32
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(bb, Opcode.F64_PROMOTE_F32)
-                                    elseif actual_val_type !== nothing && phi_local_type === F32 && (actual_val_type === I64 || actual_val_type === I32)
-                                        emit_raw!(bb, phi_value_bytes; pushes=WasmValType[actual_val_type])
-                                        num!(bb, actual_val_type === I64 ? Opcode.F32_CONVERT_I64_S : Opcode.F32_CONVERT_I32_S)
-                                    else
-                                        emit_raw!(bb, phi_value_bytes; pushes=(actual_val_type === nothing ? WasmValType[] : WasmValType[actual_val_type]))
-                                    end
-                                    local_set!(bb, local_idx)
                                 end
                             end
                             break
@@ -1411,87 +1112,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(isdefined(term,:val) ? term.val : :undef)"
             end
             if isdefined(term, :val)
-                val_wasm_type = infer_value_wasm_type(term.val, ctx)
-                ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-                func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                if _debug_stackified
-                    @warn "  RETURN types: val_wasm=$val_wasm_type, ret_wasm=$ret_wasm_type, func_ret=$func_ret_wasm, compatible=$(return_type_compatible(val_wasm_type, func_ret_wasm))"
-                end
-                # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
-                is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        _eb = UInt8[]; emit_numeric_to_externref!(_eb, term.val, val_wasm_type, ctx)
-                        emit_raw!(b, _eb; pushes=WasmValType[ExternRef])
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                # PURE-6024: Use func_ret_wasm (actual WASM function signature type) for
-                # return type compatibility, not ret_wasm_type (julia_to_wasm_type_concrete).
-                # These disagree for Union types like Union{Int128, Int64, BigInt} where
-                # func_ret_wasm=I64 but ret_wasm_type=ConcreteRef(tagged_union).
-                # The phi local is correctly overridden to I64 (line 5196), so the value
-                # on the stack IS I64, but checking against ConcreteRef incorrectly fails.
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    val_bytes = compile_value(term.val, ctx)
-                    emit_raw!(b, val_bytes; pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        is_externref_local = false
-                        if length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                            src_idx = 0; shift = 0; leb_end = 0
-                            for bi in 2:length(val_bytes)
-                                byt = val_bytes[bi]
-                                src_idx |= (Int(byt & 0x7f) << shift)
-                                shift += 7
-                                if (byt & 0x80) == 0
-                                    leb_end = bi
-                                    break
-                                end
-                            end
-                            if leb_end == length(val_bytes)
-                                if src_idx < ctx.n_params
-                                    if src_idx + 1 <= length(ctx.arg_types)
-                                        src_type = ctx.arg_types[src_idx + 1]
-                                        is_externref_local = src_type === ExternRef
-                                    end
-                                else
-                                    arr_idx = src_idx - ctx.n_params + 1
-                                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                                        src_type = ctx.locals[arr_idx]
-                                        is_externref_local = src_type === ExternRef
-                                    end
-                                end
-                            end
-                        end
-                        if !is_externref_local
-                            extern_convert_any!(b)
-                        end
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    # WBUILD-4000: Cast EqRef/StructRef to ConcreteRef for return
-                    elseif (val_wasm_type === EqRef || val_wasm_type === StructRef || val_wasm_type === AnyRef) && func_ret_wasm isa ConcreteRef
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
-                    elseif val_wasm_type isa ConcreteRef && func_ret_wasm isa ConcreteRef && val_wasm_type != func_ret_wasm
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
-                    end
-                    return_!(b)
-                end
+                # parity(M2): THE single return-coercion path (emit_return_coerced!, same as
+                # the block-statement ReturnNode site) — deletes this duplicated ladder
+                # (byte-scanned externref check + hand widening/casts + a numeric→ConcreteRef
+                # ref.null VALUE DROP; the single source boxes/converts properly).
+                b = emit_return_coerced!(b, term.val, ctx)
             else
                 return_!(b)
             end

@@ -3485,16 +3485,16 @@ function run_selfhost_v2()::Vector{UInt8}
 
     # Statement 1: mul_int(Arg(2), Arg(2)) → i64.mul
     arg2 = Core.Argument(2)
-    emit_raw!(b, compile_value(arg2, ctx); pushes=WasmValType[I64])  # REAL compile_value → local.get 0
-    emit_raw!(b, compile_value(arg2, ctx); pushes=WasmValType[I64])  # REAL compile_value → local.get 0
+    emit_value!(b, arg2, ctx)  # REAL compile_value → local.get 0
+    emit_value!(b, arg2, ctx)  # REAL compile_value → local.get 0
     num!(b, Opcode.I64_MUL)
     local_set!(b, ctx.ssa_locals[1])
 
     # Statement 2: add_int(SSA(1), Int64(1)) → i64.add
     ssa1 = Core.SSAValue(1)
     lit1 = Int64(1)
-    emit_raw!(b, compile_value(ssa1, ctx); pushes=WasmValType[I64])   # REAL compile_value → local.get 1
-    emit_raw!(b, compile_value(lit1, ctx); pushes=WasmValType[I64])   # REAL compile_value → i64.const 1
+    emit_value!(b, ssa1, ctx)   # REAL compile_value → local.get 1
+    emit_value!(b, lit1, ctx)   # REAL compile_value → i64.const 1
     num!(b, Opcode.I64_ADD)
     local_set!(b, ctx.ssa_locals[2])
 

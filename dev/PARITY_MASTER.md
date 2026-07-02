@@ -92,9 +92,11 @@ pattern in the script:
 Per-phase protocol, every loop, no exceptions:
 1. **Re-read the dart anchor** for the invariant being installed.
 2. Implement the smallest coherent slice; DELETE the patchwork it obsoletes in the same commit.
-3. Gate: ratchet + smoke (`test/smoke.jl`, ~23s) every step; full
-   `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` at phase boundaries
-   and for every wide-blast-radius change (the capped form ALWAYS — never unbounded).
+3. Gate (Dale's speed directive 2026-07-01): ratchet + smoke (~30s total) EVERY commit,
+   targeted backfills when touching their area; the full capped gate
+   (`WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'`) runs ONCE per
+   M-phase, at its completion boundary — not per batch. Per-commit history keeps any
+   phase-gate failure bisectable.
 4. Commit green with metric deltas in the message (`parity(M2): … [R2 581→512]`).
 
 - **M0 — ENFORCEMENT HARNESS** *(this session)*: this doc + `test/parity_ratchet.jl` +
@@ -116,7 +118,17 @@ Per-phase protocol, every loop, no exceptions:
   already handles the complex shapes; full gate at the flip. EXIT LOCKS: R8=0 (family
   deleted); routing heuristic gone (one call site, no strategy choice).
 
-- **M2 — THE WRAP CHANNEL (I2+I3 fused; the keystone)**. dart anchors:
+- **✅ M2 — THE WRAP CHANNEL: COMPLETE (2026-07-01, certified by its full capped gate — 10
+  shards 2,681/2,681 + fuzz 293/293).** The wrap chokepoint (`emit_value!(b,val,ctx,expected)`)
+  is installed and is THE path everywhere a type is consumed: post-emission re-guessing DEAD
+  (R4=0, LOCK L4 — `infer_value_wasm_type` gone, pre-emit deciders → `static_wasm_type` w/
+  contract); returns (`emit_return_coerced!`) + phi stores (`emit_phi_local_set!` 366→36,
+  stackified clusters) + field/arg stores all emit-typed through `convert_type!`; byte-scanners
+  read their producers' types; `_seed_builder_locals!` makes emission types truthful (locals
+  known); the ONE box emitter declares its true stack effect. En-route correctness fixes: the
+  externref-store silent VALUE DROP, the return ConcreteRef null-drop, the double
+  extern-convert, the unsigned-LEB ref.cast bridge. R1 219→~38 · R2 581→~244 · R7 157→~137
+  ratchet into M4 (god-fn decomposition). Original plan: dart anchors:
   `code_generator.dart:879-888`, `translator.dart:828-875`, `intrinsics.dart:28-71`. Finish
   WT's `wrap`: ONE chokepoint `emit_value!(b, val, ctx, expected)::WasmValType` = emit → actual
   (already true: the type comes off the validator's stack, dart-style) → `convert_type!`
@@ -128,9 +140,17 @@ Per-phase protocol, every loop, no exceptions:
   (a freshly typed region must immediately self-validate — I1 rides along), and carve its
   intrinsic arms toward a dart-style typed intrinsics table (starts the god-function
   decomposition of `compile_call`/`compile_invoke`, whose duplicated coercion collapses into
-  the funnel). Collapses the F3 stopgap analysis passes — delete as reached. EXIT LOCKS:
-  R1=0, R2=0, R3=0 + fn deleted, R4=0 + fn deleted, R5 at locked pre-emit floor, R7 at locked
-  intrinsic floor; duplicated `get_phi_edge_wasm_type` (flow.jl:268 / stackified.jl:708) = one.
+  the funnel). Collapses the F3 stopgap analysis passes — delete as reached.
+  **EXIT (honest revision 2026-07-01):** the wrap chokepoint installed and THE path everywhere
+  a type is CONSUMED — post-emission re-guessing DEAD (R4=0 → LOCK L4; `infer_value_wasm_type`
+  gone, the ~10 legit pre-emit deciders renamed `static_wasm_type` w/ pre-emit-ONLY contract =
+  dart intrinsics.dart:333); returns/phi-stores/field-stores/arg-coercions emit-typed through
+  `convert_type!`; byte-scanners read their producers' types. **R1/R2/R7 stay RATCHETS into
+  M4**: the residual untyped sites live inside the bytes-RETURNING god-functions — typing them
+  IS M4's builder-native decomposition (a strict builder cannot accept raw splices); R7's
+  remainder is dominantly intrinsic implementations whose lock lands with the dart-style typed
+  intrinsics table (M4). R3 (`infer_value_type`) is RECLASSIFIED, not deleted: dart's
+  `node.getStaticType` equivalent — consolidate + contract-document in M4.
 
 - **M3 — ONE DYNAMIC REP, finished (I4 completion)**. dart anchors: `translator.dart:855-870`,
   `class_info.dart:547-562`, `dynamic_forwarders.dart:250-259`. (a) Delete the union vestiges:
@@ -140,8 +160,11 @@ Per-phase protocol, every loop, no exceptions:
   over the existing `type_ranges`. (c) classId-0 completeness (size tuples/Vector headers).
   EXIT LOCKS: R9=0; abstract isa emits range checks; unions.jl reduced to re-exports or gone.
 
-- **M4 — VALID BY CONSTRUCTION, endgame (I1)**. dart anchor: `instructions.dart:98-294`.
-  After M2's per-file flips: thread `mod` through remaining builders (full subtype lattice
+- **M4 — VALID BY CONSTRUCTION, endgame (I1) + god-function decomposition**. dart anchors:
+  `instructions.dart:98-294`, `intrinsics.dart:28-71`. Make compile_call/compile_invoke/
+  compile_new BUILDER-NATIVE (bytes-returning today — home of ALL residual R1/R2 sites + the
+  R7 intrinsic ops; carve intrinsic arms into a dart-style typed table; R1=0/R2=0/R7-lock land
+  here by construction). Then thread `mod` through remaining builders (full subtype lattice
   everywhere), make `strict=true` the DEFAULT (rename to disambiguate from
   `compile_function(;strict)`), validator THROWS with emit-site trace (dart `ValidationError`
   shape), then demote `wasm-tools` to opt-in/CI double-check. WT goes beyond dart here: dart's
