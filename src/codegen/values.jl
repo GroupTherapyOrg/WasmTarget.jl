@@ -571,15 +571,10 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         return b
     end
     ty = emit_value!(b, val, ctx)
-    if ty === nothing
-        # value compiler produced no single result (dead/unresolvable path)
-        unreachable!(b)
-    elseif !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
-        # numeric → ref return (PURE-315 precedence): the funnel boxes/converts.
-        convert_type!(b, ty, func_ret_wasm, ctx)
-        return_!(b)
-    elseif !return_type_compatible(ty, func_ret_wasm)
-        # genuinely unsatisfiable (dead Union arm) — trap, matching the old posture.
+    # numeric→ref precedence (boxing) is checked before compatibility, as before.
+    needs_box = ty !== nothing && !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
+    if ty === nothing || (!needs_box && !return_type_compatible(ty, func_ret_wasm))
+        # dead/unsatisfiable path (unresolvable value or dead Union arm) — trap.
         unreachable!(b)
     else
         ty === func_ret_wasm || convert_type!(b, ty, func_ret_wasm, ctx)
