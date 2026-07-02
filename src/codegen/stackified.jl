@@ -47,7 +47,7 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
     # local builder, then append its code to the caller-supplied buffer (byte-identical).
     # compile_value / emit_box_type_id! splices bridge in via emit_raw!. strict=false.
-    b = InstrBuilder(; func_name="emit_numeric_to_externref!", strict=false)
+    b = InstrBuilder(; func_name="emit_numeric_to_externref!")
     if is_nothing_value(val, ctx)
         # return nothing → ref.null extern
         ref_null!(b, ExternRef)
@@ -75,7 +75,7 @@ Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
 function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
     # local builder, then append its code to the caller-supplied buffer (byte-identical).
-    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", strict=false)
+    b = InstrBuilder(; func_name="emit_numeric_to_anyref!")
     if is_nothing_value(val, ctx)
         ref_null!(b, AnyRef)  # any heap type (0x6E)
         append!(target_bytes, builder_code(b))
@@ -285,7 +285,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
+    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
@@ -483,7 +483,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
         # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
         # strict=false; byte-identical to the prior raw emission.
-        tb = InstrBuilder(; func_name="emit_phi_type_default", strict=false)
+        tb = InstrBuilder(; func_name="emit_phi_type_default")
         if wasm_type isa ConcreteRef
             ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         elseif wasm_type === StructRef
@@ -520,7 +520,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # convert_type! instead of byte-sniffing the output. `temp_map` substitutes circular-
         # phi temp locals at the plain local.get branches (replaces the callers' byte-REWRITE
         # of pure local.get outputs, PURE-1001).
-        pvb = InstrBuilder(; func_name="compile_phi_value", strict=false)
+        pvb = InstrBuilder(; func_name="compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = (builder_code(pvb),
                       isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
@@ -547,7 +547,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
                         # converter (source = local.get of the SSA local). The unbox arm is
                         # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
-                        local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                        local _srcb = InstrBuilder(; func_name="phi_edge_src")
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
                             emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
@@ -562,7 +562,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
                     # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
-                    local _srcb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                    local _srcb = InstrBuilder(; func_name="phi_edge_src")
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
@@ -586,7 +586,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     # Loop C flow/phi dedup: box / cast / UNBOX (recomputed SSA) via the single
                     # helper. Source = the recomputed statement (or compile_value fallback).
-                    local _sb = InstrBuilder(; func_name="phi_edge_src", strict=false)
+                    local _sb = InstrBuilder(; func_name="phi_edge_src")
                     if stmt !== nothing && !(stmt isa Core.PhiNode)
                         emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
                     else
@@ -965,7 +965,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # MIGRATED: block_bytes is now a sub-builder `bb`; straight-line emission uses
         # typed methods, recursive sub-results (stmt_bytes/phi_value_bytes) bridge via
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
-        bb = InstrBuilder(; func_name="generate_stackified_flow.block", strict=false)
+        bb = InstrBuilder(; func_name="generate_stackified_flow.block")
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on

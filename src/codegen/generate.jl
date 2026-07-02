@@ -804,7 +804,7 @@ PURE-9036: Emit capture_stack() + global.set at a throw site.
 Call this before emitting the `throw` instruction to capture the stack trace.
 """
 function emit_capture_stack!(bytes::Vector{UInt8}, capture_import_idx::UInt32, trace_global_idx::UInt32)
-    b = InstrBuilder(; func_name="emit_capture_stack!", strict=false)
+    b = InstrBuilder(; func_name="emit_capture_stack!")
     # capture_stack() -> externref-on-stack; global.set consumes it. Emitted
     # mid-stream into a caller buffer, so build into a local builder then splice.
     call!(b, capture_import_idx, WasmValType[], WasmValType[ExternRef])
@@ -834,7 +834,7 @@ Structure:
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
-    b = InstrBuilder(; func_name="_compile_catch_region!", strict=false)
+    b = InstrBuilder(; func_name="_compile_catch_region!")
     i = from
     while i <= to
         stmt = code[i]
@@ -882,7 +882,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
 end
 
 function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_try_catch_stackified", strict=false)
+    bb = InstrBuilder(; func_name="generate_try_catch_stackified")
     catch_dest = region.catch_dest
 
     # P2-batch16: merge-phi structure (port of PURE-9031 from the simple
@@ -1178,7 +1178,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
                                    branch_idx::Int)::Vector{UInt8}
-    b = InstrBuilder(; func_name="generate_branch_split_try", strict=false)
+    b = InstrBuilder(; func_name="generate_branch_split_try")
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     else_start = (code[branch_idx]::Core.GotoIfNot).dest
@@ -1246,7 +1246,7 @@ end
 function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, outer::TryRegion, arm_regions::Vector{TryRegion},
                                   branch_idx::Int)::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_catch_arm_split", strict=false)
+    bb = InstrBuilder(; func_name="generate_catch_arm_split")
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -1307,7 +1307,7 @@ end
 function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, outer::TryRegion, inner::TryRegion,
                                        gin_idx::Int, skip_idx::Int, merge_idx::Int)::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_catch_arm_skip_merge", strict=false)
+    bb = InstrBuilder(; func_name="generate_catch_arm_skip_merge")
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -1454,7 +1454,7 @@ end
 
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, chain::Vector{TryRegion})::Vector{UInt8}
-    b = InstrBuilder(; func_name="generate_catch_try_chain", strict=false)
+    b = InstrBuilder(; func_name="generate_catch_try_chain")
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
 
@@ -1544,7 +1544,7 @@ end
 # return-style block and recurses into its catch arm.
 function generate_catch_try_chain_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                         code, chain::Vector{TryRegion})::Vector{UInt8}
-    b = InstrBuilder(; func_name="generate_catch_try_chain_merge", strict=false)
+    b = InstrBuilder(; func_name="generate_catch_try_chain_merge")
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     _emit_merge_chain_level!(b, ctx, blocks, code, chain, 1, 1, length(code))
@@ -1681,7 +1681,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
 end
 
 function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_try_catch", strict=false)
+    bb = InstrBuilder(; func_name="generate_try_catch")
     regions = find_try_regions(code)
 
     if isempty(regions)
@@ -2310,7 +2310,7 @@ end
 # Example: two sequential try/catch blocks in one function.
 function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, regions::Vector{TryRegion})::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_sequential_try_catch", strict=false)
+    bb = InstrBuilder(; func_name="generate_sequential_try_catch")
 
     # Ensure exception infrastructure
     ensure_exception_tag!(ctx.mod)
@@ -2558,7 +2558,7 @@ end
 #
 function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                      code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
-    bb = InstrBuilder(; func_name="generate_nested_try_catch_2", strict=false)
+    bb = InstrBuilder(; func_name="generate_nested_try_catch_2")
 
     # Ensure exception infrastructure
     ensure_exception_tag!(ctx.mod)
@@ -2807,7 +2807,7 @@ end
 
 # PURE-9031: Helper — compile a GotoIfNot inside the try body
 function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", strict=false)
+    b = InstrBuilder(; func_name="_compile_try_body_gotoifnot")
     else_target = stmt.dest
 
     emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])

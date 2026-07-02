@@ -98,8 +98,6 @@ const METRICS = [
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
                           exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
-    "R6_strict_false_builders" => ("explicit InstrBuilder strict opt-outs (M4 → 0; pattern scoped to constructions — comments/strings about compile_function's UNRELATED loud-reject kwarg don't count)",
-        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),
@@ -130,6 +128,8 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs — ZERO: every builder is a hard type-checking gate, always-on (M4; locked 2026-07-01)",
+        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
