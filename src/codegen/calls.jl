@@ -1551,20 +1551,15 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 i32_const!(_isa_guard_b, 0)
                 local _isa_guard_block = builder_code(_isa_guard_b)
                 # else → do the DFS range check
-                local _tid_local2 = allocate_local!(ctx, I32)
                 local _isa_dfs_b = InstrBuilder(; func_name="_compile_call_isa.dfs", strict=false)
                 local_get!(_isa_dfs_b, _isa_guard_local)
                 let tb = UInt8[]
                     emit_typeof!(tb, _base_idx)
                     emit_raw!(_isa_dfs_b, tb; pops=1, pushes=WasmValType[I32])
                 end
-                local_tee!(_isa_dfs_b, _tid_local2)
-                i32_const!(_isa_dfs_b, Int64(_low))
-                num!(_isa_dfs_b, Opcode.I32_GE_S)
-                local_get!(_isa_dfs_b, _tid_local2)
-                i32_const!(_isa_dfs_b, Int64(_high))
-                num!(_isa_dfs_b, Opcode.I32_LE_S)
-                num!(_isa_dfs_b, Opcode.I32_AND)
+                # dart's 3-instruction unsigned window via THE single range discriminator
+                # (was tee + ge_s/le_s/and with a temp local).
+                emit_classid_range_check!(_isa_dfs_b, _low, _high)
                 local _isa_dfs_block = builder_code(_isa_dfs_b)
                 # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
                 if_!(bld, I32)  # i32 result type

@@ -525,6 +525,28 @@ function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeReg
 end
 
 """
+    emit_classid_range_check!(b, low, high)
+
+dart's `emitClassIdRangeCheck` (code_generator.dart:3847-3884), THE single abstract-type
+discriminator: with the classId (i32) on the stack, a single id lowers to `i32.const id;
+i32.eq`; a dense DFS range lowers to the 3-instruction unsigned window
+`i32.const low; i32.sub; i32.const (high-low); i32.le_u` (an id below `low` wraps to a huge
+unsigned value, so one comparison covers both bounds — no temp local, no i32.and).
+"""
+function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
+    if low == high
+        i32_const!(b, Int64(low))
+        num!(b, Opcode.I32_EQ)
+    else
+        i32_const!(b, Int64(low))
+        num!(b, Opcode.I32_SUB)
+        i32_const!(b, Int64(high - low))
+        num!(b, Opcode.I32_LE_U)
+    end
+    return b
+end
+
+"""
     emit_isa_classid!(b, ctx, box_idx, check_type)
 
 `isa`/`typeof`/`===` discriminator for a boxed numeric: is the value the box AND is its
