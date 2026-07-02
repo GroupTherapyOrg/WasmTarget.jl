@@ -588,7 +588,7 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
         local_set!(bld, local_result)
 
         # Push typeId for Tuple struct (field 0 = typeId)
-        i32_const!(bld, 0)  # typeId
+        i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
         # Push result back for tuple field 1
         local_get!(bld, local_result)
 
@@ -1551,20 +1551,15 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 i32_const!(_isa_guard_b, 0)
                 local _isa_guard_block = builder_code(_isa_guard_b)
                 # else → do the DFS range check
-                local _tid_local2 = allocate_local!(ctx, I32)
                 local _isa_dfs_b = InstrBuilder(; func_name="_compile_call_isa.dfs", strict=false)
                 local_get!(_isa_dfs_b, _isa_guard_local)
                 let tb = UInt8[]
                     emit_typeof!(tb, _base_idx)
                     emit_raw!(_isa_dfs_b, tb; pops=1, pushes=WasmValType[I32])
                 end
-                local_tee!(_isa_dfs_b, _tid_local2)
-                i32_const!(_isa_dfs_b, Int64(_low))
-                num!(_isa_dfs_b, Opcode.I32_GE_S)
-                local_get!(_isa_dfs_b, _tid_local2)
-                i32_const!(_isa_dfs_b, Int64(_high))
-                num!(_isa_dfs_b, Opcode.I32_LE_S)
-                num!(_isa_dfs_b, Opcode.I32_AND)
+                # dart's 3-instruction unsigned window via THE single range discriminator
+                # (was tee + ge_s/le_s/and with a temp local).
+                emit_classid_range_check!(_isa_dfs_b, _low, _high)
                 local _isa_dfs_block = builder_code(_isa_dfs_b)
                 # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
                 if_!(bld, I32)  # i32 result type
@@ -2260,7 +2255,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Create new size tuple with new_size
             # struct.new for Tuple{Int64} (typeId=0, then value)
-            i32_const!(_pshb, 0)  # typeId
+            i32_const!(_pshb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_pshb, size_local)
             struct_new!(_pshb, size_info.wasm_type_idx, WasmValType[])
 
@@ -2401,7 +2396,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_popb, _pop_newsize_local)
 
             # Create new size tuple (typeId=0, then value)
-            i32_const!(_popb, 0)  # typeId
+            i32_const!(_popb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_popb, _pop_newsize_local)
             struct_new!(_popb, size_info.wasm_type_idx, WasmValType[])
 
@@ -2852,7 +2847,6 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # B4/U2: the tagged-union wrapper is retired — a het-tuple field's
                             # union value is an AnyRef classId box (the `else` branch below), never
                             # the {typeId,tag,value} wrapper.
-                            is_tagged_union = false
 
                             local _hetb = InstrBuilder(; func_name="compile_call", strict=false)
                             # tuple value → tuple_local
@@ -2874,27 +2868,20 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             emit_field_wrap = i -> begin
                                 local_get!(_hetb, tuple_local)
                                 struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
-                                if is_tagged_union
-                                    emit_raw!(_hetb, emit_wrap_union_value(ctx, elem_types[i + 1], Ueff); pops=1, pushes=(union_wasm === nothing ? WasmValType[] : WasmValType[union_wasm]))
-                                else
-                                    # Coerce the raw field value to U's canonical wasm rep.
-                                    fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
-                                    if union_wasm === AnyRef
-                                        if fw === I64 || fw === I32 || fw === F32 || fw === F64
-                                            # F-ii: route through the SINGLE-SOURCE box producer
-                                            # (was an inline numeric box w/ a literal-0 typeId). B1
-                                            # already killed the lossy ref.i31 here; now the box also
-                                            # stores the field's REAL classId so same-wasm-rep members
-                                            # (Bool/Int8/Int32 all i32) stay distinguishable on isa.
-                                            emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
-                                        elseif fw === ExternRef
-                                            any_convert_extern!(_hetb)
-                                        end
-                                        # ConcreteRef/StructRef field is already anyref-compatible
+                                # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
+                                # Coerce the raw field value to U's canonical wasm rep.
+                                fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
+                                if union_wasm === AnyRef
+                                    if fw === I64 || fw === I32 || fw === F32 || fw === F64
+                                        # THE single-source box producer with the field's REAL classId
+                                        # (same-wasm-rep members Bool/Int8/Int32 stay isa-distinguishable).
+                                        emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
+                                    elseif fw === ExternRef
+                                        any_convert_extern!(_hetb)
                                     end
-                                    # union_wasm === StructRef / numeric: the raw field value
-                                    # is already a subtype / the right type — push as-is.
+                                    # ConcreteRef/StructRef field is already anyref-compatible
                                 end
+                                # union_wasm === StructRef / numeric: push as-is.
                             end
                             # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
                             for i in 0:(n_fields - 2)
@@ -3390,7 +3377,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Push typeId for tuple struct (field 0 = typeId)
             local _tupb = InstrBuilder(; func_name="compile_call", strict=false)
-            i32_const!(_tupb, 0)  # typeId
+            i32_const!(_tupb, Int64(ensure_type_id!(ctx.type_registry, tuple_type)))  # real classId (M3)
 
             # Push all tuple elements with type safety for externref fields
             # PURE-142: Core.tuple args may be phi locals typed as i64 but
@@ -4696,7 +4683,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_caddb, local_result)
 
             # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_caddb, 0)  # typeId
+            i32_const!(_caddb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
             # Push result back for tuple field 1
             local_get!(_caddb, local_result)
 
@@ -4757,7 +4744,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_csubb, local_result)
 
             # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_csubb, 0)  # typeId
+            i32_const!(_csubb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
             # Push result back for tuple field 1
             local_get!(_csubb, local_result)
 
@@ -5460,7 +5447,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_sxb, scratch2_idx)
 
             # Stack: [] — push in struct field order: typeId, lo, hi
-            i32_const!(_sxb, 0)  # typeId
+            i32_const!(_sxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
             local_get!(_sxb, scratch_idx)
             local_get!(_sxb, scratch2_idx)
 
@@ -5533,7 +5520,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             _zext_scratch = length(ctx.locals) + ctx.n_params
             push!(ctx.locals, I64)
             local_set!(_zxb, _zext_scratch)
-            i32_const!(_zxb, 0)  # typeId
+            i32_const!(_zxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
             local_get!(_zxb, _zext_scratch)
             # Push 0 for hi part
             i64_const!(_zxb, 0)
@@ -6155,21 +6142,14 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
                             # This happens when a function expects a Union param (represented as tagged union struct)
                             # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
-                            if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
-                                append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
-                            else
-                                # B4: numeric → a non-union ConcreteRef. Route through the
-                                # single-source funnel (box arm) instead of the old
-                                # ref.i31-then-ref.cast, which TRUNCATED I64 and ALWAYS trapped
-                                # (an i31 is never a subtype of the target struct). convert_type!
-                                # boxes the numeric (real classId), then coerces to the expected
-                                # ref: if it's the numeric box it matches; otherwise the cast
-                                # traps LOUDLY on a genuine type mismatch (no silent truncation).
-                                local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
-                                convert_type!(_bb, actual_wasm, expected_wasm, ctx;
-                                              from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                                append!(bytes, builder_code(_bb))
-                            end
+                            # B4/M3: numeric → ref. THE single-source funnel (box arm) — boxes
+                            # with the real classId, then coerces to the expected ref; a genuine
+                            # type mismatch traps LOUDLY (no silent truncation). (The dead
+                            # tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false.)
+                            local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
+                            convert_type!(_bb, actual_wasm, expected_wasm, ctx;
+                                          from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
+                            append!(bytes, builder_code(_bb))
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
                             # Concrete or abstract ref to externref — insert extern.convert_any
                             local _bb = InstrBuilder(; func_name="compile_call", strict=false)
@@ -6428,7 +6408,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             local_set!(_ntb, tuple_local)
 
                             # Push typeId for NamedTuple struct (field 0 = typeId)
-                            i32_const!(_ntb, 0)  # typeId
+                            i32_const!(_ntb, Int64(ensure_type_id!(ctx.type_registry, nt_type)))  # real classId (M3)
 
                             # Extract each field from tuple and push for struct.new
                             for (i, (name, vtype)) in enumerate(zip(names, value_types))
@@ -6589,7 +6569,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local_set!(ib, data_arr_local)
 
                 # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
-                i32_const!(ib, 0)  # typeId
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
                 i64_const!(ib, Int64(n_expr_args))
                 struct_new!(ib, size_tuple_info.wasm_type_idx, WasmValType[])
                 append!(bytes, builder_code(ib))
@@ -6600,11 +6580,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
                 # Step 4: Assemble Expr struct
                 # Push typeId for Expr struct (field 0 = typeId)
-                i32_const!(ib, 0)  # typeId
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Expr)))  # real classId (M3)
                 # Push head (Expr field 1)
                 local_get!(ib, head_local)
                 # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
-                i32_const!(ib, 0)  # typeId for Vector{Any}
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Vector{Any})))  # real classId (M3)
                 local_get!(ib, data_arr_local)
                 local_get!(ib, size_local)
                 struct_new!(ib, vec_any_info.wasm_type_idx, WasmValType[])

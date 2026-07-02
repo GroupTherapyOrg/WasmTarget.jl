@@ -152,7 +152,13 @@ Per-phase protocol, every loop, no exceptions:
   intrinsics table (M4). R3 (`infer_value_type`) is RECLASSIFIED, not deleted: dart's
   `node.getStaticType` equivalent — consolidate + contract-document in M4.
 
-- **M3 — ONE DYNAMIC REP, finished (I4 completion)**. dart anchors: `translator.dart:855-870`,
+- **✅ M3 — ONE DYNAMIC REP: COMPLETE (2026-07-01, phase gate green — 10 shards incl.
+  shard-7 re-run 515/515 + fuzz 293/293).** (a) tagged-union wrapper family DELETED + L5
+  LOCKED (unions.jl 156→91; the runtests assertion that pinned the vestige now asserts
+  !isdefined). (b) dart's dense-range isa: `emit_classid_range_check!` (values.jl) = the
+  3-instruction unsigned window; PRE-EXISTING find: strings lack the $JlBase classId header →
+  xfail strings_lack_classid (fix = class the string rep, M6/strings). (c) ZERO placeholder
+  headers remain — all 15 typeId=0 sites push real classIds. Original plan: dart anchors: `translator.dart:855-870`,
   `class_info.dart:547-562`, `dynamic_forwarders.dart:250-259`. (a) Delete the union vestiges:
   the 4 dead `needs_tagged_union` branches, `emit_wrap/unwrap_union_value` adapters, the
   `{typeId,tag,value}` struct + tag_map (census: rep already retired — this is deletion, not

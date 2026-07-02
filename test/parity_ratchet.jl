@@ -103,9 +103,6 @@ const METRICS = [
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),
-    "R9_union_vestiges" => ("tagged-union vestiges: needs_tagged_union/emit_(un)wrap_union_value callers (M3 → 0, DELETED)",
-        () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(";
-                          exclude_line=r"function (needs_tagged_union|emit_wrap_union_value|emit_unwrap_union_value)\(")),
     "R10_silent_unreachable" => ("unreachable!( emissions in codegen (M5: silent stubs → loud reject; post-throw legit uses get annotated + excluded when M5 refines this)",
         () -> count_sites(r"unreachable!\("; roots=[CODEGEN],
                           exclude_line=r"function unreachable!")),
@@ -133,6 +130,8 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
+        () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
         () -> count_sites(r"infer_value_wasm_type\(")),
     "L3_legacy_flow_family" => ("ALL legacy lowering strategies — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow/loop_code/branched_loops/complex_flow router (M1 COMPLETE: ONE lowering = the stackifier; DELETED + locked 2026-07-01)",
