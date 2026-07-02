@@ -836,60 +836,16 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
         # Special case: both args are Nothing-typed. Need to check actual Wasm representation
         # because Nothing can compile to either ref.null OR i32.const depending on context.
         if arg_type === Nothing && arg2_type === Nothing
-            # Re-compile to check Wasm types
-            local arg1_bytes_chk = compile_value(args[1], ctx)
-            local arg2_bytes_chk = compile_value(args[2], ctx)
-            local a1_is_ref = length(arg1_bytes_chk) >= 1 && (arg1_bytes_chk[1] == Opcode.REF_NULL ||
-                (arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2))
-            local a2_is_ref = length(arg2_bytes_chk) >= 1 && (arg2_bytes_chk[1] == Opcode.REF_NULL ||
-                (arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2))
-            local a1_is_anyref_fp = false
-            local a2_is_anyref_fp = false
-            local a1_is_externref_fp = false
-            local a2_is_externref_fp = false
-            # Check local types for LOCAL_GET
-            if arg1_bytes_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_chk) >= 2
-                local idx1 = 0
-                local sh1 = 0
-                local p1 = 2
-                while p1 <= length(arg1_bytes_chk)
-                    b = arg1_bytes_chk[p1]
-                    idx1 |= (Int(b & 0x7f) << sh1)
-                    sh1 += 7
-                    p1 += 1
-                    (b & 0x80) == 0 && break
-                end
-                local off1 = idx1 - ctx.n_params
-                if off1 >= 0 && off1 < length(ctx.locals)
-                    local lt1 = ctx.locals[off1 + 1]
-                    a1_is_ref = lt1 isa ConcreteRef || lt1 === StructRef || lt1 === ArrayRef || lt1 === ExternRef || lt1 === AnyRef
-                    a1_is_anyref_fp = (lt1 === AnyRef)
-                    a1_is_externref_fp = (lt1 === ExternRef)
-                else
-                    a1_is_ref = false
-                end
-            end
-            if arg2_bytes_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_chk) >= 2
-                local idx2 = 0
-                local sh2 = 0
-                local p2 = 2
-                while p2 <= length(arg2_bytes_chk)
-                    b = arg2_bytes_chk[p2]
-                    idx2 |= (Int(b & 0x7f) << sh2)
-                    sh2 += 7
-                    p2 += 1
-                    (b & 0x80) == 0 && break
-                end
-                local off2 = idx2 - ctx.n_params
-                if off2 >= 0 && off2 < length(ctx.locals)
-                    local lt2 = ctx.locals[off2 + 1]
-                    a2_is_ref = lt2 isa ConcreteRef || lt2 === StructRef || lt2 === ArrayRef || lt2 === ExternRef || lt2 === AnyRef
-                    a2_is_anyref_fp = (lt2 === AnyRef)
-                    a2_is_externref_fp = (lt2 === ExternRef)
-                else
-                    a2_is_ref = false
-                end
-            end
+            # typed channel: the emissions' own types replace the REF_NULL/LOCAL_GET
+            # first-byte checks + double LEB decode of local indices.
+            local arg1_bytes_chk, _a1_ty = compile_value_typed(args[1], ctx)
+            local arg2_bytes_chk, _a2_ty = compile_value_typed(args[2], ctx)
+            local a1_is_ref = _a1_ty !== nothing && _wt_is_ref(_a1_ty)
+            local a2_is_ref = _a2_ty !== nothing && _wt_is_ref(_a2_ty)
+            local a1_is_anyref_fp = (_a1_ty === AnyRef)
+            local a2_is_anyref_fp = (_a2_ty === AnyRef)
+            local a1_is_externref_fp = (_a1_ty === ExternRef)
+            local a2_is_externref_fp = (_a2_ty === ExternRef)
             # If Wasm types mismatch (one ref, one not), drop both and return false
             if a1_is_ref != a2_is_ref
                 drop!(bld)
@@ -4998,50 +4954,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
             if arg_type === Nothing && arg2_type_ne === Nothing
-                local arg1_bytes_ne_chk = compile_value(args[1], ctx)
-                local arg2_bytes_ne_chk = compile_value(args[2], ctx)
-                local a1_ref_ne = length(arg1_bytes_ne_chk) >= 1 && (arg1_bytes_ne_chk[1] == Opcode.REF_NULL ||
-                    (arg1_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_ne_chk) >= 2))
-                local a2_ref_ne = length(arg2_bytes_ne_chk) >= 1 && (arg2_bytes_ne_chk[1] == Opcode.REF_NULL ||
-                    (arg2_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_ne_chk) >= 2))
-                if arg1_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg1_bytes_ne_chk) >= 2
-                    local idx1_ne = 0
-                    local sh1_ne = 0
-                    local p1_ne = 2
-                    while p1_ne <= length(arg1_bytes_ne_chk)
-                        b = arg1_bytes_ne_chk[p1_ne]
-                        idx1_ne |= (Int(b & 0x7f) << sh1_ne)
-                        sh1_ne += 7
-                        p1_ne += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off1_ne = idx1_ne - ctx.n_params
-                    if off1_ne >= 0 && off1_ne < length(ctx.locals)
-                        local lt1_ne = ctx.locals[off1_ne + 1]
-                        a1_ref_ne = lt1_ne isa ConcreteRef || lt1_ne === StructRef || lt1_ne === ArrayRef || lt1_ne === ExternRef || lt1_ne === AnyRef
-                    else
-                        a1_ref_ne = false
-                    end
-                end
-                if arg2_bytes_ne_chk[1] == Opcode.LOCAL_GET && length(arg2_bytes_ne_chk) >= 2
-                    local idx2_ne = 0
-                    local sh2_ne = 0
-                    local p2_ne = 2
-                    while p2_ne <= length(arg2_bytes_ne_chk)
-                        b = arg2_bytes_ne_chk[p2_ne]
-                        idx2_ne |= (Int(b & 0x7f) << sh2_ne)
-                        sh2_ne += 7
-                        p2_ne += 1
-                        (b & 0x80) == 0 && break
-                    end
-                    local off2_ne = idx2_ne - ctx.n_params
-                    if off2_ne >= 0 && off2_ne < length(ctx.locals)
-                        local lt2_ne = ctx.locals[off2_ne + 1]
-                        a2_ref_ne = lt2_ne isa ConcreteRef || lt2_ne === StructRef || lt2_ne === ArrayRef || lt2_ne === ExternRef || lt2_ne === AnyRef
-                    else
-                        a2_ref_ne = false
-                    end
-                end
+                # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
+                local arg1_bytes_ne_chk, _a1ne_ty = compile_value_typed(args[1], ctx)
+                local arg2_bytes_ne_chk, _a2ne_ty = compile_value_typed(args[2], ctx)
+                local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
+                local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
                 # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
                 if a1_ref_ne != a2_ref_ne
                     local _db = InstrBuilder(; func_name="compile_call", mod=ctx.mod)

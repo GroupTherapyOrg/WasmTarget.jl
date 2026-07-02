@@ -1333,15 +1333,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             end
             if needs_extern_convert
                 elem_val = val[i]
-                elem_bytes = compile_value(elem_val, ctx)
-                # Check if elem_bytes is a plain numeric value (no GC_PREFIX = not a struct/array).
-                # IntrinsicFunction and other primitives compile to i32_const/i64_const.
-                # These cannot be passed to extern_convert_any (which expects anyref),
-                # so we must box them via struct_new first using emit_numeric_to_externref!.
-                has_gc_prefix = any(byt == Opcode.GC_PREFIX for byt in elem_bytes)
-                is_numeric_elem = !has_gc_prefix && length(elem_bytes) >= 1 &&
-                                  (elem_bytes[1] == Opcode.I32_CONST || elem_bytes[1] == Opcode.I64_CONST ||
-                                   elem_bytes[1] == Opcode.F32_CONST || elem_bytes[1] == Opcode.F64_CONST)
+                # typed channel: the emission's own type replaces the GC_PREFIX/const-first-byte scans.
+                elem_bytes, _el_ty = compile_value_typed(elem_val, ctx)
+                is_numeric_elem = _el_ty === I32 || _el_ty === I64 || _el_ty === F32 || _el_ty === F64
                 if is_numeric_elem
                     # Box numeric value into a struct then convert to externref
                     val_wasm_elem = elem_bytes[1] == Opcode.I32_CONST ? I32 :
@@ -1358,7 +1352,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     extern_convert_any!(b)
                 end
             else
-                elem_bytes_plain = compile_value(val[i], ctx)
+                elem_bytes_plain, _elp_ty = compile_value_typed(val[i], ctx)
                 if isempty(elem_bytes_plain)
                     # TRUE-INT-002-impl2-impl: compile_value returned empty bytes.
                     # Push ref.null as placeholder to maintain array_new_fixed stack balance.
@@ -1412,7 +1406,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 el_bytes = UInt8[]
                 defined = isassigned(mem, i)
                 if defined
-                    el_bytes = compile_value(mem[i], ctx)
+                    el_bytes, _ = compile_value_typed(mem[i], ctx)
                 end
                 if !defined || isempty(el_bytes)
                     # undef slot (or uncompilable element) — type-correct default.
