@@ -210,10 +210,8 @@ function generate_void_flow(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                 elseif func_ret_wasm === AnyRef && is_numeric_val
                     # PURE-9030: Box numeric value for AnyRef return
-                    local _ret_box_c1 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                    tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
-                    struct_new!(b, _ret_box_c1, WasmValType[])
+                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                    emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                     ref_null!(b, func_ret_wasm)
@@ -1799,10 +1797,8 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                         ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                     elseif func_ret_wasm === AnyRef && is_numeric_val
                         # PURE-9030: Box numeric value for AnyRef return
-                        local _ret_box_c2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                        tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(b, tb; pushes=WasmValType[I32])
-                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
-                        struct_new!(b, _ret_box_c2, WasmValType[])
+                        emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                        emit_classid_box!(b, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                         ref_null!(b, func_ret_wasm)
@@ -1920,10 +1916,8 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                 ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                             elseif func_ret_wasm === AnyRef && is_numeric_val
                                 # PURE-9030: Box numeric value for AnyRef return
-                                local _ret_box_c3 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
-                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                                struct_new!(ib, _ret_box_c3, WasmValType[])
+                                emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                                emit_classid_box!(ib, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                 ref_null!(ib, func_ret_wasm)
@@ -1981,10 +1975,8 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                     ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                                 elseif func_ret_wasm === AnyRef && is_numeric_val
                                     # PURE-9030: Box numeric value for AnyRef return
-                                    local _ret_box_c4 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                    tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
-                                    emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                                    struct_new!(ib, _ret_box_c4, WasmValType[])
+                                    emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                                    emit_classid_box!(ib, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                                 elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                     # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                     ref_null!(ib, func_ret_wasm)
@@ -2513,10 +2505,8 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                                         ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                                     elseif func_ret_wasm === AnyRef && is_numeric_val
                                         # PURE-9030: Box numeric value for AnyRef return
-                                        local _ret_box_c5 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                                        tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
-                                        emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                                        struct_new!(ib, _ret_box_c5, WasmValType[])
+                                        emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                                        emit_classid_box!(ib, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                                     elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                                         # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                                         ref_null!(ib, func_ret_wasm)
@@ -2860,10 +2850,8 @@ function generate_nested_conditionals(ctx::AbstractCompilationContext, blocks, c
                             ref_null!(ib, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
                         elseif func_ret_wasm === AnyRef && is_numeric_val
                             # PURE-9030: Box numeric value for AnyRef return
-                            local _ret_box_c6 = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                            tb = UInt8[]; emit_box_type_id!(tb, ctx.type_registry, val_wasm); emit_raw!(ib, tb; pushes=WasmValType[I32])
-                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                            struct_new!(ib, _ret_box_c6, WasmValType[])
+                            emit_raw!(ib, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                            emit_classid_box!(ib, ctx, val_wasm, nothing)   # THE single box emitter (was a copy-pasted return box)
                         elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                             # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                             ref_null!(ib, func_ret_wasm)

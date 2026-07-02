@@ -209,7 +209,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
        !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
         if haskey(ctx.slot_locals, _slot_assign_id)
             # MIGRATED: compile_value bridges via emit_raw!; slot local.set typed on `b`.
-            emit_raw!(b, compile_value(stmt, ctx); pushes=WasmValType[infer_value_wasm_type(stmt, ctx)])
+            emit_value!(b, stmt, ctx)
             local_set!(b, ctx.slot_locals[_slot_assign_id])
         end
         emit_raw!(b, bytes)
@@ -235,13 +235,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
             elseif func_ret_wasm === AnyRef && is_numeric_val
-                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float} return type).
-                # Push typeId, push value, struct.new BoxedXxx → anyref.
-                local _ret_box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-                _bb = UInt8[]; emit_box_type_id!(_bb, ctx.type_registry, val_wasm)
-                emit_raw!(b, _bb; pushes=WasmValType[I32])
-                emit_raw!(b, compile_value(stmt.val, ctx); pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
-                struct_new!(b, _ret_box_idx, WasmValType[])
+                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float}) via THE single
+                # box emitter (was a copy-pasted return box, same as flow.jl/conditionals.jl).
+                emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[val_wasm])
+                emit_classid_box!(b, ctx, val_wasm, nothing)
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
@@ -386,20 +383,17 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # ref_cast to box type + struct_get field 0.
                     elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[ExternRef])
-                        local box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
+                        # externref holds a boxed numeric — extern→any, then unbox via the one consumer.
                         any_convert_extern!(b)
-                        ref_cast!(b, Int64(box_type_idx), true)
-                        struct_get!(b, box_type_idx, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
+                        emit_classid_unbox!(b, ctx, pi_local_type; nullable=true)
                     # PURE-9030: PiNode narrowing from AnyRef → numeric (I64/I32/F64/F32).
                     # The anyref holds a boxed numeric value (WasmGC struct with typeId + value).
                     # Unbox via ref.cast to box type + struct_get field 1.
                     # This handles Union{Int32, Float64} dispatch where the param is anyref.
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
                         emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[AnyRef])
-                        local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, pi_local_type)
-                        # anyref → ref.cast (ref $BoxedXxx) → struct.get field 1
-                        ref_cast!(b, Int64(box_type_idx_any), false)  # non-null cast (inside isa-guarded branch)
-                        struct_get!(b, box_type_idx_any, UInt32(1), pi_local_type)  # field 1 (0=typeId, 1=value)
+                        # anyref holds a boxed numeric — unbox via THE single consumer (non-null: isa-guarded).
+                        emit_classid_unbox!(b, ctx, pi_local_type)
                     # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
                     # Example: anyref → String, anyref → MyStruct
                     elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef
@@ -471,7 +465,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         i32_const!(b, 0)
                     end
                 else
-                    val_bytes = compile_value(stmt.val, ctx)
+                    val_bytes, val_ty = compile_value_typed(stmt.val, ctx)
                     # Safety: check if val_bytes pushes multiple values (all local_gets, N>=2).
                     # local_set only consumes 1, so N-1 would be orphaned.
                     is_multi_value_bytes = false
@@ -543,10 +537,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 ref_null!(b, StructRef)
                             end
                         else
-                            emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                            emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                         end
                     else
-                        emit_raw!(b, val_bytes; pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                        emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                     end
                 end
             end
@@ -590,7 +584,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # This handles things like Main.SLOT_EMPTY that are module-level constants
             try
                 val = getfield(stmt.mod, stmt.name)
-                value_bytes = compile_value(val, ctx)
+                value_bytes, value_ty = compile_value_typed(val, ctx)
 
                 # CG-003d: Safety check for Nothing/numeric values stored to ref-typed locals.
                 # compile_value(nothing) → i32_const 0, which is incompatible with ref locals
@@ -616,7 +610,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     end
                 end
 
-                emit_raw!(b, value_bytes; pushes=(isempty(value_bytes) ? WasmValType[] : WasmValType[infer_value_wasm_type(val, ctx)]))
+                emit_raw!(b, value_bytes; pushes=(value_ty===nothing ? WasmValType[] : WasmValType[value_ty]))
 
                 # If this SSA value needs a local, store it (only if we actually pushed a value)
                 # compile_value returns empty bytes for Functions, Types, etc.
@@ -2340,23 +2334,13 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     elseif actual_field_wasm === ArrayRef
                         ref_null!(b, ArrayRef)
                     elseif actual_field_wasm === AnyRef
-                        # Box numeric local → struct_new for anyref field
-                        _btid = UInt8[]
-                        emit_box_type_id!(_btid, ctx.type_registry, src_type)
-                        emit_raw!(b, _btid)
-                        emit_raw!(b, field_bytes)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
-                        struct_new!(b, _box_t, WasmValType[])
+                        # Box numeric local for anyref field via THE single box emitter.
+                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        emit_classid_box!(b, ctx, src_type, nothing)
                     elseif actual_field_wasm === ExternRef
-                        # PURE-6024: Box numeric local → struct_new → extern_convert_any
-                        # (was: emit_numeric_to_externref! with undefined vars stmt/val_wasm)
-                        # PURE-9028: Push correct DFS typeId before the numeric value for box struct
-                        _btid = UInt8[]
-                        emit_box_type_id!(_btid, ctx.type_registry, src_type)
-                        emit_raw!(b, _btid)
-                        emit_raw!(b, field_bytes)
-                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_type)
-                        struct_new!(b, _box_t, WasmValType[])
+                        # PURE-6024: Box numeric local → box struct → extern_convert_any via the one emitter.
+                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        emit_classid_box!(b, ctx, src_type, nothing)
                         extern_convert_any!(b)
                     else
                         ref_null!(b, StructRef)

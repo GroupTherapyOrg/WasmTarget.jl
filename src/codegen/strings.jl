@@ -491,9 +491,9 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     builder_set_local_type!(b, len1_local, I32)
 
     # Store str1, str2
-    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    emit_value!(b, str1, ctx)
     local_set!(b, str1_local)
-    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    emit_value!(b, str2, ctx)
     local_set!(b, str2_local)
 
     # len1 = str1.len (stored); len2 = str2.len (left on stack)
@@ -545,9 +545,9 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, i_local, I32)
 
     # Store str1 and str2
-    emit_raw!(b, compile_value(str1, ctx); pushes=WasmValType[infer_value_wasm_type(str1, ctx)])
+    emit_value!(b, str1, ctx)
     local_set!(b, str1_local)
-    emit_raw!(b, compile_value(str2, ctx); pushes=WasmValType[infer_value_wasm_type(str2, ctx)])
+    emit_value!(b, str2, ctx)
     local_set!(b, str2_local)
 
     # len1 = str1.len (tee into len_local); compare with len2

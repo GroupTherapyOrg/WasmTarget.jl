@@ -90,8 +90,11 @@ Approach A (typed contents) SIDESTEPS B1 entirely: the field is i64, the value i
 
 ## Discipline
 Commit GREEN each loop / never revert the whole effort (fix forward within a loop). Root-fix at the
-emit site. Run `Pkg.test` not `runtests.jl`; background suites with no inner `&`; never edit src/
-while a suite runs. After each behavior-changing loop, run the FULL adversarial set independently.
+emit site. **VERIFY TIER ([[wt-fast-testing-loop]]):** inner loop `julia --project=. test/smoke.jl` (~23s;
+the F3 case is an XFAIL — it flips to PASSING when L2 lands, promote it then); commit gate
+`WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` (OOM-safe). Background suites with no
+inner `&`; never edit src/ while a suite runs. After each behavior-changing loop, run the FULL adversarial
+set independently — the suite has blind spots (it missed a prior silently-wrong F3 attempt + the fold/sort).
 
 ## Adversarial set (the L3/L4 gate — `::Int64`/`::Float64` return narrowing so values marshal)
 counter (loop) · accumulator (`s+=i`) · two-closures-SHARING-one-box (`inc;dec` share `c`) ·

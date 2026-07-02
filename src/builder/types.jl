@@ -403,12 +403,14 @@ function resolve_union_type(T::Union)::WasmValType
         # Union{Nothing, T} -> T
         return julia_to_wasm_type(non_nothing[1])
     else
-        # Multiple non-Nothing types - find common numeric type
-        # NOTE: For Union{Int128, Int64, BigInt}, this returns I64.
-        # Int128/BigInt are WasmGC structs, but the phi local uses I64 because:
-        # 1. The Int64 path is the common case (small numbers)
-        # 2. Int128/BigInt paths store i64.const 0 (type-safe default) in the phi
-        # 3. The caller discriminates via isa() checks and handles each branch
+        # Multi-variant: box mixed-CATEGORY numeric (int/float — Union{Int64,Float64}) behind
+        # AnyRef. Collapsing to the widest primitive is LOSSY (Int 1 / Float 1.0 become the same
+        # f64, tag gone). The SAME needs_anyref_boxing decision the codegen resolver uses
+        # (_resolve_multivariant_union) — so the builder + codegen layers AGREE on one boxing rule.
+        # Same-category numeric (all-int / all-float) → widest primitive (find_common_wasm_type).
+        # NOTE: Union{Int128,Int64,BigInt} → I64 (Int128/BigInt store i64.const 0 defaults; the
+        # caller discriminates via isa()).
+        needs_anyref_boxing(T) && return AnyRef
         return find_common_wasm_type(non_nothing)
     end
 end

@@ -454,9 +454,12 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 # Single-source classId box/unbox/discriminate (Loop B funnel — dev/LOOP_B_DESIGN.md).
 # dart2wasm's convertType boxing: a dynamic value is a {classId:i32@0, value@1} struct
 # subtyping the Top struct ($JlBase); type-tests read classId off the box. These are the
-# ONE producer + ONE consumer that ALL boxing/discrimination routes through (replacing the
-# ~41 scattered emit_box_type_id!+struct_new sites + the inlined isa copies). Added DORMANT
-# in F-i (byte-identical); wired via convert_type!'s box/unbox arms + the isa sites in F-ii.
+# ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41
+# scattered emit_box_type_id!+struct_new ladders (flow/conditionals/statements return boxes,
+# stackified phi-edge boxes, calls/invoke arg+ret boxes, tuple-field boxes) have ALL been
+# collapsed onto this producer; emit_box_type_id! survives only as this producer's private
+# wasm-rep classId fallback (values.jl below). Added DORMANT in F-i (byte-identical); wired via
+# convert_type!'s box/unbox arms + the isa sites in F-ii; the site sweep finished in Loop C.
 # ============================================================================
 
 """
@@ -492,11 +495,21 @@ end
     emit_classid_unbox!(b, ctx, to_wasm)
 
 Unbox: the boxed ref is on the stack; narrow to the `to_wasm` numeric box and read its
-value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm).
+value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm). `nullable`
+selects the ref.cast form: `false` (default) traps on a null ref — correct inside an isa/ref.test
+guard; `true` permits null (the permissive external/dynamic call boundary). An extern→any prefix
+(`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
 """
-function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType)
-    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, to_wasm)
-    ref_cast!(b, Int64(box_idx), false)
+function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
+                             nullable::Bool=false)
+    return emit_classid_unbox!(b, ctx.mod, ctx.type_registry, to_wasm; nullable=nullable)
+end
+# Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
+# codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
+function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                             to_wasm::WasmValType; nullable::Bool=false)
+    box_idx = get_numeric_box_type!(mod, registry, to_wasm)
+    ref_cast!(b, Int64(box_idx), nullable)
     struct_get!(b, UInt32(box_idx), UInt32(1), to_wasm)
     return b
 end
@@ -581,7 +594,7 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
     b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
     set_context!(b, "GotoIfNot cond → i32")
     # bridge the (still-raw) compile_value with its known pushed type
-    emit_raw!(b, compile_value(cond, ctx); pushes=WasmValType[infer_value_wasm_type(cond, ctx)])
+    emit_value!(b, cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
@@ -593,11 +606,9 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             if local_offset >= 0 && local_offset < length(ctx.locals)
                 local_type = ctx.locals[local_offset + 1]
                 if local_type === AnyRef || local_type === ExternRef
-                    # Value is anyref/externref but should be i32 (Bool). Unbox.
+                    # Value is anyref/externref but should be i32 (Bool). Unbox via the one consumer.
                     local_type === ExternRef && any_convert_extern!(b)
-                    box_type_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, I32)
-                    ref_cast!(b, box_type_idx, true)
-                    struct_get!(b, box_type_idx, 1, I32)  # field 1 (0=typeId, 1=value)
+                    emit_classid_unbox!(b, ctx, I32; nullable=true)
                 elseif local_type isa ConcreteRef
                     # PURE-6025: tagged-union concrete ref → extract i32 tag from field 1.
                     type_idx = local_type.type_idx
@@ -626,7 +637,46 @@ Compile a value reference (SSA, Argument, or Literal).
 # object-identity stack for struct-constant compilation (cycle/depth guard)
 const _VALUE_COMPILE_STACK = Vector{Any}()
 
+# B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
+# code_generator.dart:879): the body builds into the typed InstrBuilder `b`, so the type it
+# pushes IS a byproduct of emission = `b.v.stack[end]`. `_compile_value_b` returns that
+# builder; `compile_value` is the byte-only wrapper (back-compat for the 410 raw callers);
+# `compile_value_typed` returns (bytes, pushed-type) so callers stop RE-GUESSING via
+# infer_value_wasm_type (265 sites — the north-star deletion).
 function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
+    return builder_code(_compile_value_b(val, ctx))
+end
+
+"""
+    compile_value_typed(val, ctx) -> (bytes::Vector{UInt8}, pushed_type::Union{WasmValType,Nothing})
+
+dart2wasm-faithful: compile `val` and RETURN the wasm type it left on the stack (the
+emission byproduct), not a re-guess. `pushed_type` is `b.v.stack[end]` (or `nothing` when
+the emit produced no single result — e.g. an unreachable/dead path). Callers coerce via
+`convert_type!` (dart `wrap`), deleting their `infer_value_wasm_type` call.
+"""
+function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
+    b = _compile_value_b(val, ctx)
+    return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
+end
+
+"""
+    emit_value!(b, val, ctx) -> Union{WasmValType,Nothing}
+
+Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
+emission ACTUALLY pushed (`compile_value_typed`'s byproduct) — NOT a re-guess via
+`infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value(v,ctx);
+pushes=WasmValType[infer_value_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
+Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
+validator's stack type is now the truth instead of a re-derivation).
+"""
+function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
+    bytes, ty = compile_value_typed(val, ctx)
+    emit_raw!(b, bytes; pushes=(ty === nothing ? WasmValType[] : WasmValType[ty]))
+    return ty
+end
+
+function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
@@ -642,14 +692,14 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
     if ctx.last_stmt_was_stub
         haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
         unreachable!(b)  # 0x00
-        return builder_code(b)
+        return b
     end
 
     # Handle nothing explicitly - it's the Julia singleton
     if val === nothing
         # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
         i32_const!(b, 0)
-        return builder_code(b)
+        return b
     end
 
     if val isa Core.SSAValue
@@ -670,7 +720,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
             # PURE-6021: Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
             # that appear as constant literals in IR of compiler functions like construct_ssa!)
             if val.id < 1 || val.id > length(ctx.code_info.code)
-                return builder_code(b)  # Dead code - sentinel SSAValue with invalid id
+                return b  # Dead code - sentinel SSAValue with invalid id
             end
             stmt = ctx.code_info.code[val.id]
             if stmt isa Core.PiNode
@@ -698,7 +748,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_raw!(b, compile_value(stmt.val, ctx); pushes=WasmValType[infer_value_wasm_type(stmt.val, ctx)])
+                    emit_value!(b, stmt.val, ctx)
                     # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
@@ -731,10 +781,8 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
                             end
                         end
                         if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
-                            # Value is boxed in anyref — unbox via ref.cast + struct.get
-                            local _box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, _pi_target_wasm)
-                            ref_cast!(b, Int64(_box_idx), false)  # non-null cast (inside isa-guarded branch)
-                            struct_get!(b, _box_idx, 1, _pi_target_wasm)  # field 1 = value (field 0 = typeId)
+                            # Value is boxed in anyref — unbox via THE single consumer (non-null: isa-guarded).
+                            emit_classid_unbox!(b, ctx, _pi_target_wasm)
                         end
                     else
                         # CG-003d: PiNode narrows to a struct/ref type (not numeric).
@@ -1062,7 +1110,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
             ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return builder_code(b)
+            return b
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -1341,7 +1389,7 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         if n_undefined == length(fieldnames(T))
             # Fully undefined struct - emit ref.null
             ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return builder_code(b)
+            return b
         end
 
         # Push field values with type safety checks
@@ -1525,6 +1573,6 @@ function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
         end
     end
 
-    return builder_code(b)
+    return b
 end
 

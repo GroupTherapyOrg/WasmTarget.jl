@@ -2098,7 +2098,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     # This edge comes from the try-exit path
                     phi_val = phi_stmt.values[ei]
                     phi_local = ctx.phi_locals[phi_idx]
-                    emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                    emit_value!(bb, phi_val, ctx)
                     local_set!(bb, phi_local)
                     break
                 end
@@ -2131,7 +2131,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     # This edge comes from the catch path
                     phi_val = phi_stmt.values[ei]
                     phi_local = ctx.phi_locals[phi_idx]
-                    emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                    emit_value!(bb, phi_val, ctx)
                     local_set!(bb, phi_local)
                     break
                 end
@@ -2386,7 +2386,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if edge_ssa in try_exit_range
                         phi_val = phi_stmt.values[ei]
                         phi_local = ctx.phi_locals[phi_idx]
-                        emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                        emit_value!(bb, phi_val, ctx)
                         local_set!(bb, phi_local)
                         break
                     end
@@ -2421,7 +2421,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if edge_ssa >= catch_dest && edge_ssa < merge_start
                         phi_val = phi_stmt.values[ei]
                         phi_local = ctx.phi_locals[phi_idx]
-                        emit_raw!(bb, compile_value(phi_val, ctx); pushes=WasmValType[infer_value_wasm_type(phi_val, ctx)])
+                        emit_value!(bb, phi_val, ctx)
                         local_set!(bb, phi_local)
                         break
                     end

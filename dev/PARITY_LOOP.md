@@ -14,6 +14,11 @@
 Branch `wt-dart2wasm-parity` (off main @ v0.4.0). Mission: **full 1:1 dart2wasm production-readiness
 parity, no gaps.** Autonomous, aggressive, undoable (isolated branch). Driven by Dale 2026-06-29.
 
+## ★ VERIFY TIER (every loop — see [[wt-fast-testing-loop]])
+INNER LOOP (~23s, after every edit): `julia --project=. test/smoke.jl` (48 differential cases + xfail lane).
+COMMIT GATE (OOM-safe, rule-#0 soundness): `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'`.
+NEVER the unbounded-parallel or monolithic `WT_NO_SHARD=1` full run (both jetsam-killed under memory pressure).
+
 ## Two oracles (every change)
 - **dart2wasm = HOW** (`/Users/daleblack/Documents/sdk` pkg/{wasm_builder,dart2wasm}): the design oracle
   for the right shape (convertType, isSubtypeOf, classId+offset dispatch, typed Instruction hierarchy).

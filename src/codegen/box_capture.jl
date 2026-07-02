@@ -89,9 +89,8 @@ end
 # Retrieve the typed IR + specTypes of each closure invoked in `code` that captures `box_id`
 # (via the `invoke`'s CodeInstance/MethodInstance — the robust, non-guessing way). The box writes
 # live in these bodies. Returns Vector{(code, ssavaluetypes, spectypes)}.
-function _f3_capturing_closure_bodies(code, box_id::Int)
-    out = Tuple{Vector{Any}, Vector{Any}, Any}[]
-    # closure types that capture this box (from %new(clo, …, box, …))
+# The set of closure types that capture the box at SSA index `box_id` (from `%new(clo, …, box, …)`).
+function _f3_box_captors(code, box_id::Int)::Set{Type}
     captors = Set{Type}()
     for stmt in code
         stmt isa Expr && stmt.head === :new && length(stmt.args) >= 2 || continue
@@ -101,6 +100,12 @@ function _f3_capturing_closure_bodies(code, box_id::Int)
              (a1 isa Type ? a1 : nothing)
         ty isa Type && ty !== Core.Box && push!(captors, ty)
     end
+    return captors
+end
+
+function _f3_capturing_closure_bodies(code, box_id::Int)
+    out = Tuple{Vector{Any}, Vector{Any}, Any}[]
+    captors = _f3_box_captors(code, box_id)
     isempty(captors) && return out
     # find the invokes of those closures → their MethodInstance.specTypes → typed IR
     for stmt in code
@@ -170,4 +175,217 @@ function find_box_news(code)::Vector{Int}
         end
     end
     return out
+end
+
+# Result type of one call stmt with box-derived operands typed by `out` (propagated) — the engine
+# of f3_box_value_types. A `getfield(box,:contents)` read → the box's contents type; any other call
+# → `return_type` with each SSA operand typed by `out[id]` if propagated, else its inferred type.
+function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Type}, ssa_types, spectypes)
+    op = stmt.args[1]
+    if op isa GlobalRef && op.name === :getfield && length(stmt.args) >= 3 &&
+       stmt.args[3] isa QuoteNode && stmt.args[3].value === :contents
+        boxref = stmt.args[2]
+        for (bid, T) in boxT
+            _f3_refers_to_box(boxref, bid, code) && return T
+        end
+        return nothing
+    end
+    f = op isa GlobalRef ? (isdefined(op.mod, op.name) ? getfield(op.mod, op.name) : nothing) :
+        (op isa Function ? op : nothing)
+    f === nothing && return nothing
+    argtypes = Any[]
+    uses_box = false   # only propagate through ops that actually CONSUME a box-derived value
+    for a in stmt.args[2:end]
+        if a isa Core.SSAValue && haskey(out, a.id)
+            push!(argtypes, out[a.id]); uses_box = true
+        elseif a isa Core.SSAValue && 1 <= a.id <= length(ssa_types)
+            push!(argtypes, _F3_CC.widenconst(ssa_types[a.id]))
+        elseif a isa Core.Argument
+            # resolve closure/fn arguments (e.g. the closure's `i`) via slottypes/specTypes
+            push!(argtypes, (spectypes !== nothing && 1 <= a.n <= length(spectypes)) ?
+                  _F3_CC.widenconst(spectypes[a.n]) : Any)
+        elseif a isa QuoteNode
+            push!(argtypes, typeof(a.value))
+        else
+            push!(argtypes, a isa Type ? Type : typeof(a))
+        end
+    end
+    uses_box || return nothing
+    return try _F3_CC.return_type(f, Tuple{argtypes...}) catch; nothing end
+end
+
+"""
+    f3_box_value_types(code, ssa_types) -> Dict{Int,Type}
+
+F3 L2b — the VALUE-TYPE PROPAGATION past Julia's `Box{Any}` erasure (the F3 L2 unblocker the L2
+attempt surfaced; dart2wasm `node.accept1 → ValueType`). Forward fixed-point: each `%new(Core.Box)`
+with CONCRETE contents T seeds box-reads of it → T; any op over already-propagated SSAs → its
+computed result type (`return_type` with propagated operand types). Returns ssa_id → concrete Julia
+type for box-DERIVED values (the getfield result, the `s+i` arithmetic) — these are inferred `Any`
+by Julia (the dynamic `+`) but compute at a concrete width, so without this they get anyref locals
+the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
+it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/F3_LOOP.md.
+"""
+function f3_box_value_types(code, ssa_types; extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(), spectypes=nothing)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    boxT = Dict{Int,Type}(extra_box_seeds)
+    for bid in find_box_news(code)
+        t = box_contents_type(code, ssa_types, bid)
+        t !== nothing && (boxT[bid] = t)
+    end
+    isempty(boxT) && return out
+    changed = true
+    while changed
+        changed = false
+        for (i, stmt) in enumerate(code)
+            haskey(out, i) && continue
+            # Propagate through PiNode narrowings + φ nodes (the isa-split that narrows a box read
+            # to its concrete type) so an op CONSUMING the narrowed value still sees a box-derived
+            # operand — else the `s+=i` add over the read keeps its anyref-from-erasure.
+            if stmt isa Core.PiNode && stmt.val isa Core.SSAValue && haskey(out, stmt.val.id)
+                out[i] = out[stmt.val.id]; changed = true; continue
+            end
+            if stmt isa Core.PhiNode
+                vts = Type[]; nssa = 0
+                for v in stmt.values
+                    v isa Core.SSAValue || continue
+                    nssa += 1
+                    haskey(out, v.id) && push!(vts, out[v.id])
+                end
+                if !isempty(vts) && length(vts) == nssa
+                    j = reduce((a, b) -> Union{a, b}, vts)
+                    if j isa DataType && isconcretetype(j)
+                        out[i] = j; changed = true; continue
+                    end
+                end
+            end
+            (stmt isa Expr && stmt.head === :call) || continue
+            ft = _f3_call_result_type(stmt, code, out, boxT, ssa_types, spectypes)
+            if ft isa DataType && isconcretetype(ft) && ft !== Core.Box
+                out[i] = ft
+                changed = true
+            end
+        end
+    end
+    return out
+end
+
+# Is `T` one of WT's concrete numeric wasm-representable scalar types?
+_f3_is_numeric_jl(T) = T isa DataType && isconcretetype(T) &&
+    (T <: Integer || T <: AbstractFloat) && T !== Bool && sizeof(T) <= 8 && !(T <: BigInt)
+
+"""
+    propagate_numeric_value_types(code, ssa_types) -> Dict{Int,Type}
+
+Loop C value channel (dart2wasm `node.accept1 → ValueType` — the type is a byproduct of emission).
+Julia erases a mutated capture to `Any` even after the WT interpreter inlines + scalar-replaces the
+`Core.Box` away, leaving an `Any`-typed numeric phi-accumulator computing concrete values (e.g.
+`%acc = φ(0::Int64, %add)::Any; %add = %acc + i::Any`). Those `Any` SSAs get anyref locals the i64
+value can't fill. This recovers the concrete type: anchor on already-concrete-numeric SSAs, then a
+fixed point that types an `Any` numeric op / phi by its operands (OPTIMISTICALLY seeding a phi from
+its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass that drops any phi
+whose operands don't ALL resolve numeric (so `φ(0,"x")` stays Any). Returns ssa_id → concrete numeric
+Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
+"""
+function propagate_numeric_value_types(code, ssa_types)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    _ssat(i) = (1 <= i <= length(ssa_types)) ? _F3_CC.widenconst(ssa_types[i]) : Any
+    _opT(a) = a isa Core.SSAValue ? (haskey(out, a.id) ? out[a.id] : _ssat(a.id)) :
+              a isa QuoteNode ? typeof(a.value) : (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
+    # only consider SSAs Julia left as Any (don't override a known concrete type)
+    pend = Int[i for (i, _) in enumerate(code) if _ssat(i) === Any]
+    changed = true
+    while changed
+        changed = false
+        for i in pend
+            haskey(out, i) && continue
+            stmt = code[i]
+            if stmt isa Core.PhiNode
+                ts = Type[]; have_concrete = false
+                for v in stmt.values
+                    t = _opT(v)
+                    _f3_is_numeric_jl(t) && (push!(ts, t); have_concrete = true)
+                end
+                # optimistic: a phi with ≥1 resolved-numeric operand seeds to their join (cycle break)
+                if have_concrete
+                    j = reduce((a, b) -> Union{a, b}, ts)
+                    if _f3_is_numeric_jl(j)
+                        out[i] = j; changed = true
+                    end
+                end
+            elseif stmt isa Expr && stmt.head === :call
+                op = stmt.args[1]
+                f = op isa GlobalRef ? (isdefined(op.mod, op.name) ? getfield(op.mod, op.name) : nothing) :
+                    (op isa Function ? op : nothing)
+                f === nothing && continue
+                ats = Any[_opT(a) for a in stmt.args[2:end]]
+                all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
+                rt = try _F3_CC.return_type(f, Tuple{ats...}) catch; Any end
+                if _f3_is_numeric_jl(rt)
+                    out[i] = rt; changed = true
+                end
+            end
+        end
+    end
+    # VERIFY: drop any phi we optimistically typed whose operands don't ALL resolve numeric.
+    verifying = true
+    while verifying
+        verifying = false
+        for (i, _) in collect(out)
+            stmt = code[i]
+            stmt isa Core.PhiNode || continue
+            ok = all(v -> _f3_is_numeric_jl(_opT(v)), stmt.values)
+            if !ok
+                delete!(out, i); verifying = true
+            end
+        end
+    end
+    return out
+end
+
+# F3 L2b CLOSURE-BODY seed (dart2wasm `Capture.type = context.struct.fields[i].type`): in a closure
+# BODY there is no %new(Core.Box) to seed from — the box arrives as `getfield(#self#, boxfield)` where
+# `boxfield` is a Core.Box field of the closure type `selfT`. Map each such read → the box's contents
+# type (`contents_T`, recovered from the enclosing fn's L2a side-table), so the body's box-derived
+# arithmetic types past Box{Any} erasure exactly like dart reads its typed context field directly.
+function f3_closure_box_seeds(code, selfT, contents_T)::Dict{Int,Type}
+    out = Dict{Int,Type}()
+    (selfT isa DataType && isstructtype(selfT) && contents_T isa Type) || return out
+    boxfields = Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT) if fieldtype(selfT, i) === Core.Box)
+    isempty(boxfields) && return out
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :getfield) || continue
+        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue   # #self#
+        fld = stmt.args[3]
+        fldn = fld isa QuoteNode ? fld.value : fld
+        fldn in boxfields && (out[i] = contents_T)
+    end
+    return out
+end
+
+"""
+    populate_box_field_types!(mod, registry, code, ssa_types)
+
+F3 L2 cross-function glue (pre-pass over an enclosing fn's typed IR). For each `%new(Core.Box)`
+whose contents type is CONCRETE (`box_contents_type`), map every closure type that captures it →
+the box's contents WASM type, into `registry.box_contents_types`. `register_closure_type!` then
+types the captured-box field as a typed `Box{contents}` instead of anyref. Dynamic-contents boxes
+(`box_contents_type` ⇒ `nothing`) get NO entry → anyref fallback (current behavior, no regression).
+
+DORMANT until the L2 wiring consults the side-table + types box SSAs (context.jl SSA-type pass);
+adding entries to a dict that nothing reads is byte-identical. See dev/F3_LOOP.md.
+"""
+function populate_box_field_types!(mod, registry, code, ssa_types)
+    registry.box_contents_types === nothing && return registry.box_contents_types
+    for box_id in find_box_news(code)
+        bt = box_contents_type(code, ssa_types, box_id)
+        bt === nothing && continue                       # dynamic contents → anyref fallback
+        contents_wasm = get_concrete_wasm_type(bt, mod, registry)
+        for clo_T in _f3_box_captors(code, box_id)
+            registry.box_contents_types[clo_T] = contents_wasm
+        end
+    end
+    return registry.box_contents_types
 end

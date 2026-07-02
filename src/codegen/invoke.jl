@@ -25,7 +25,7 @@ function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store string reference
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, str_local)
 
     # Get length
@@ -125,13 +125,13 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -298,13 +298,13 @@ function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -453,13 +453,13 @@ function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store prefix
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     local_tee!(b, prefix_local)
     array_len!(b)
     local_set!(b, prefix_len_local)
@@ -558,13 +558,13 @@ function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store suffix
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     local_tee!(b, suffix_local)
     array_len!(b)
     local_set!(b, suffix_len_local)
@@ -666,13 +666,13 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
@@ -764,13 +764,13 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
@@ -785,7 +785,7 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
         i32_const!(b, Int32(UInt32(char_arg)))
     else
         # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
-        emit_raw!(b, compile_value(char_arg, ctx); pushes=WasmValType[infer_value_wasm_type(char_arg, ctx)])
+        emit_value!(b, char_arg, ctx)
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
@@ -867,13 +867,13 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get its length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_raw!(b, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
@@ -885,7 +885,7 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
     if char_arg isa Char
         i32_const!(b, Int32(UInt32(char_arg)))
     else
-        emit_raw!(b, compile_value(char_arg, ctx); pushes=WasmValType[infer_value_wasm_type(char_arg, ctx)])
+        emit_value!(b, char_arg, ctx)
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
@@ -959,7 +959,7 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1058,7 +1058,7 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1163,7 +1163,7 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_raw!(b, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+    emit_value!(b, args[1], ctx)
     local_tee!(b, s_local)
     array_len!(b)
     local_tee!(b, len_local)
@@ -1361,28 +1361,28 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
             if arg_type === String || arg_type === Symbol
                 # String: compile value, convert to JS string via decoder, call write_string
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 # Need a temp local for tee
                 tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
                 # (ref extern) is subtype of externref — no conversion needed
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Int32
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 num!(b, Opcode.I64_EXTEND_I32_S)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Float64
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Float32
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 num!(b, Opcode.F64_PROMOTE_F32)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
                 call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
             elseif arg_type === Nothing
                 # PURE-9041: println(nothing) → write "nothing"
@@ -1397,7 +1397,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
                 # Compile the vector value onto stack
-                emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                emit_value!(b, arg, ctx)
 
                 # Allocate locals: vec_ref, data_arr, len, i, tmp_str
                 vec_local = UInt32(allocate_local!(ctx, ConcreteRef(vec_type_idx, true)))
@@ -1420,7 +1420,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 local_set!(b, len_local)
 
                 # Write "["
-                emit_raw!(b, compile_value("[", ctx); pushes=WasmValType[infer_value_wasm_type("[", ctx)])
+                emit_value!(b, "[", ctx)
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, str_tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
@@ -1443,7 +1443,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 i32_const!(b, 0)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)  # void
-                emit_raw!(b, compile_value(", ", ctx); pushes=WasmValType[infer_value_wasm_type(", ", ctx)])
+                emit_value!(b, ", ", ctx)
                 _sb2 = UInt8[]; emit_jl_string_to_js!(_sb2, io.decode_idx, str_tmp_local); emit_raw!(b, _sb2; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end_block!(b)  # end if
@@ -1471,7 +1471,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 else
                     # Unsupported element type — just write "?"
                     drop!(b)
-                    emit_raw!(b, compile_value("?", ctx); pushes=WasmValType[infer_value_wasm_type("?", ctx)])
+                    emit_value!(b, "?", ctx)
                     _sb3 = UInt8[]; emit_jl_string_to_js!(_sb3, io.decode_idx, str_tmp_local); emit_raw!(b, _sb3; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end
@@ -1489,7 +1489,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 end_block!(b)  # end block
 
                 # Write "]"
-                emit_raw!(b, compile_value("]", ctx); pushes=WasmValType[infer_value_wasm_type("]", ctx)])
+                emit_value!(b, "]", ctx)
                 _sb4 = UInt8[]; emit_jl_string_to_js!(_sb4, io.decode_idx, str_tmp_local); emit_raw!(b, _sb4; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
@@ -1500,20 +1500,20 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                     elem_types = arg_type.parameters
 
                     # Compile tuple value and store in local
-                    emit_raw!(b, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                    emit_value!(b, arg, ctx)
                     tup_local = UInt32(allocate_local!(ctx, ConcreteRef(tuple_type_idx, true)))
                     str_tmp_local2 = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                     local_set!(b, tup_local)
 
                     # Write "("
-                    emit_raw!(b, compile_value("(", ctx); pushes=WasmValType[infer_value_wasm_type("(", ctx)])
+                    emit_value!(b, "(", ctx)
                     _tb1 = UInt8[]; emit_jl_string_to_js!(_tb1, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb1; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                     for (fi, et) in enumerate(elem_types)
                         # Write ", " separator (after first element)
                         if fi > 1
-                            emit_raw!(b, compile_value(", ", ctx); pushes=WasmValType[infer_value_wasm_type(", ", ctx)])
+                            emit_value!(b, ", ", ctx)
                             _tb2 = UInt8[]; emit_jl_string_to_js!(_tb2, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb2; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1539,7 +1539,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                             call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                         else
                             drop!(b)
-                            emit_raw!(b, compile_value("?", ctx); pushes=WasmValType[infer_value_wasm_type("?", ctx)])
+                            emit_value!(b, "?", ctx)
                             _tb3 = UInt8[]; emit_jl_string_to_js!(_tb3, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb3; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1547,13 +1547,13 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
                     # Single-element tuple gets trailing comma: (1,)
                     if length(elem_types) == 1
-                        emit_raw!(b, compile_value(",", ctx); pushes=WasmValType[infer_value_wasm_type(",", ctx)])
+                        emit_value!(b, ",", ctx)
                         _tb4 = UInt8[]; emit_jl_string_to_js!(_tb4, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb4; pops=1, pushes=WasmValType[ExternRef])
                         call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                     end
 
                     # Write ")"
-                    emit_raw!(b, compile_value(")", ctx); pushes=WasmValType[infer_value_wasm_type(")", ctx)])
+                    emit_value!(b, ")", ctx)
                     _tb5 = UInt8[]; emit_jl_string_to_js!(_tb5, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb5; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
@@ -1616,7 +1616,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             global_idx = ctx.signal_ssa_setters[ssa_id]
             bss2 = InstrBuilder(; func_name="compile_invoke", strict=false)
             # Compile the argument (the new value)
-            emit_raw!(bss2, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+            emit_value!(bss2, args[1], ctx)
             # Store to global
             global_set!(bss2, global_idx)
 
@@ -1872,20 +1872,20 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     _x = args[4]  # the integer value
 
                     # Push abs(x) as I64 (same bits as UInt64): select(x, -x, x >= 0)
-                    emit_raw!(bd, compile_value(_x, ctx); pushes=WasmValType[infer_value_wasm_type(_x, ctx)])  # x (true branch)
+                    emit_value!(bd, _x, ctx)  # x (true branch)
                     i64_const!(bd, 0)                                   # 0
-                    emit_raw!(bd, compile_value(_x, ctx); pushes=WasmValType[infer_value_wasm_type(_x, ctx)])  # x
+                    emit_value!(bd, _x, ctx)  # x
                     num!(bd, Opcode.I64_SUB)                            # -x (false branch)
-                    emit_raw!(bd, compile_value(_x, ctx); pushes=WasmValType[infer_value_wasm_type(_x, ctx)])  # x
+                    emit_value!(bd, _x, ctx)  # x
                     i64_const!(bd, 0)                                   # 0
                     num!(bd, Opcode.I64_GE_S)                           # x >= 0 (i32 condition)
                     select!(bd)                                         # abs(x)
 
                     # Push pad (arg 2)
-                    emit_raw!(bd, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                    emit_value!(bd, args[2], ctx)
 
                     # Push x < 0 as i32 Bool
-                    emit_raw!(bd, compile_value(_x, ctx); pushes=WasmValType[infer_value_wasm_type(_x, ctx)])
+                    emit_value!(bd, _x, ctx)
                     i64_const!(bd, 0)
                     num!(bd, Opcode.I64_LT_S)
 
@@ -1924,10 +1924,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 if _rep_at === Char
                     br = InstrBuilder(; func_name="compile_invoke", strict=false)
                     str_t = get_string_array_type!(ctx.mod, ctx.type_registry)
-                    emit_raw!(br, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])  # char i32 (left-packed)
+                    emit_value!(br, args[1], ctx)  # char i32 (left-packed)
                     i32_const!(br, 24)
                     num!(br, Opcode.I32_SHR_U)                    # utf8 byte
-                    emit_raw!(br, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])  # count i64
+                    emit_value!(br, args[2], ctx)  # count i64
                     num!(br, Opcode.I32_WRAP_I64)
                     array_new!(br, str_t, I32)                    # fill (value, len)
                     return builder_code(br)
@@ -2142,9 +2142,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if actual_wasm === ExternRef
                             any_convert_extern!(_cvb)
                         end
-                        local _ub_box = get_numeric_box_type!(ctx.mod, ctx.type_registry, expected_wasm)
-                        ref_cast!(_cvb, Int64(_ub_box), true)
-                        struct_get!(_cvb, _ub_box, UInt32(1), expected_wasm)  # field 1 = value
+                        emit_classid_unbox!(_cvb, ctx, expected_wasm; nullable=true)
                         append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === I32 && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef)
                         # ref to i32 — drop and push 0 (type mismatch, likely dead code)
@@ -2172,26 +2170,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         any_convert_extern!(_cvb)
                         append!(bytes, builder_code(_cvb))
                     elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                        # PURE-9022: Numeric value to anyref — box via struct_new (no extern.convert needed)
-                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
-                        local box_insert_pos_any = length(bytes) - length(arg_bytes) + 1
-                        local _tid_bytes_any = UInt8[]
-                        emit_box_type_id!(_tid_bytes_any, ctx.type_registry, actual_wasm)
-                        splice!(bytes, box_insert_pos_any:box_insert_pos_any-1, _tid_bytes_any)
-                        local box_type_idx_any = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                        # PURE-9022: Numeric value (on the stack) to anyref via THE single box emitter.
+                        # (The emitter saves the value to a local + rebuilds {classId, value}, so no
+                        # raw splice into `bytes` is needed — deletes the old insert-typeId hack.)
                         local _bxa = InstrBuilder(; func_name="compile_invoke", strict=false)
-                        struct_new!(_bxa, box_type_idx_any, WasmValType[])
+                        emit_classid_box!(_bxa, ctx, actual_wasm, nothing)
                         append!(bytes, builder_code(_bxa))
                     elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                        # PURE-6025: Numeric value to externref — box via struct_new then extern.convert_any.
-                        # PURE-9028: Insert correct DFS typeId before the value already on the stack
-                        local box_insert_pos_inv = length(bytes) - length(arg_bytes) + 1
-                        local _tid_bytes_inv = UInt8[]
-                        emit_box_type_id!(_tid_bytes_inv, ctx.type_registry, actual_wasm)
-                        splice!(bytes, box_insert_pos_inv:box_insert_pos_inv-1, _tid_bytes_inv)
-                        local box_type_idx_inv = get_numeric_box_type!(ctx.mod, ctx.type_registry, actual_wasm)
+                        # PURE-6025: Numeric value to externref — box via the one emitter, then extern.convert_any.
                         local _bxi = InstrBuilder(; func_name="compile_invoke", strict=false)
-                        struct_new!(_bxi, box_type_idx_inv, WasmValType[])
+                        emit_classid_box!(_bxi, ctx, actual_wasm, nothing)
                         extern_convert_any!(_bxi)
                         append!(bytes, builder_code(_bxi))
                         extern_convert_emitted = true
@@ -2646,9 +2634,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             # First arg is f32, need to insert promotion before second arg
                             # This is tricky with stack order. For now, just promote both
                             bpow = InstrBuilder(; func_name="compile_invoke", strict=false)  # Reset
-                            emit_raw!(bpow, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                            emit_value!(bpow, args[1], ctx)
                             num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
-                            emit_raw!(bpow, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                            emit_value!(bpow, args[2], ctx)
                             if arg2_type === Float32
                                 num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
                             end
@@ -2836,10 +2824,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bsc = InstrBuilder(; func_name="compile_invoke", strict=false)
 
                 # Compile string
-                emit_raw!(bsc, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                emit_value!(bsc, args[1], ctx)
 
                 # Compile index and convert to 0-based
-                emit_raw!(bsc, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_value!(bsc, args[2], ctx)
                 idx_type = infer_value_type(args[2], ctx)
                 if idx_type === Int64 || idx_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
@@ -2848,7 +2836,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bsc, Opcode.I32_SUB)
 
                 # Compile char value
-                emit_raw!(bsc, compile_value(args[3], ctx); pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                emit_value!(bsc, args[3], ctx)
                 char_type = infer_value_type(args[3], ctx)
                 if char_type === Int64 || char_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
@@ -2892,9 +2880,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bcp = InstrBuilder(; func_name="compile_invoke", strict=false)
 
                 # dst array
-                emit_raw!(bcp, compile_value(args[3], ctx); pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                emit_value!(bcp, args[3], ctx)
                 # dst offset (0-based)
-                emit_raw!(bcp, compile_value(args[4], ctx); pushes=WasmValType[infer_value_wasm_type(args[4], ctx)])
+                emit_value!(bcp, args[4], ctx)
                 dst_idx_type = infer_value_type(args[4], ctx)
                 if dst_idx_type === Int64 || dst_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
@@ -2903,9 +2891,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bcp, Opcode.I32_SUB)
 
                 # src array
-                emit_raw!(bcp, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                emit_value!(bcp, args[1], ctx)
                 # src offset (0-based)
-                emit_raw!(bcp, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_value!(bcp, args[2], ctx)
                 src_idx_type = infer_value_type(args[2], ctx)
                 if src_idx_type === Int64 || src_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
@@ -2914,7 +2902,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bcp, Opcode.I32_SUB)
 
                 # length
-                emit_raw!(bcp, compile_value(args[5], ctx); pushes=WasmValType[infer_value_wasm_type(args[5], ctx)])
+                emit_value!(bcp, args[5], ctx)
                 len_type = infer_value_type(args[5], ctx)
                 if len_type === Int64 || len_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
@@ -2939,11 +2927,11 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bss = InstrBuilder(; func_name="compile_invoke", strict=false)
 
                 # Store source string
-                emit_raw!(bss, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                emit_value!(bss, args[1], ctx)
                 local_set!(bss, src_local)
 
                 # Create new string of specified length
-                emit_raw!(bss, compile_value(args[3], ctx); pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])  # len
+                emit_value!(bss, args[3], ctx)  # len
                 len_type = infer_value_type(args[3], ctx)
                 if len_type === Int64 || len_type === Int
                     num!(bss, Opcode.I32_WRAP_I64)
@@ -2959,7 +2947,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 local_get!(bss, src_local)
 
                 # src_off = start - 1 (convert to 0-based)
-                emit_raw!(bss, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_value!(bss, args[2], ctx)
                 start_type = infer_value_type(args[2], ctx)
                 if start_type === Int64 || start_type === Int
                     num!(bss, Opcode.I32_WRAP_I64)
@@ -2968,7 +2956,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bss, Opcode.I32_SUB)
 
                 # len
-                emit_raw!(bss, compile_value(args[3], ctx); pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                emit_value!(bss, args[3], ctx)
                 len_type2 = infer_value_type(args[3], ctx)
                 if len_type2 === Int64 || len_type2 === Int
                     num!(bss, Opcode.I32_WRAP_I64)
@@ -3051,7 +3039,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 ban = InstrBuilder(; func_name="compile_invoke", strict=false)
 
                 # Compile length arg
-                emit_raw!(ban, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_value!(ban, args[2], ctx)
                 len_type = infer_value_type(args[2], ctx)
                 if len_type === Int64 || len_type === Int
                     num!(ban, Opcode.I32_WRAP_I64)
@@ -3094,10 +3082,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
 
                 # Array ref
-                emit_raw!(bas, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                emit_value!(bas, args[1], ctx)
 
                 # Index (convert to 0-based)
-                emit_raw!(bas, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                emit_value!(bas, args[2], ctx)
                 idx_type = infer_value_type(args[2], ctx)
                 if idx_type === Int64 || idx_type === Int
                     num!(bas, Opcode.I32_WRAP_I64)
@@ -3106,7 +3094,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 num!(bas, Opcode.I32_SUB)
 
                 # Value
-                local val_bytes = compile_value(args[3], ctx)
+                local (val_bytes, val_ty) = compile_value_typed(args[3], ctx)
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
                     # Determine source value's wasm type to decide conversion.
@@ -3118,14 +3106,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
                         emit_raw!(bas, _n2e; pushes=WasmValType[ExternRef])
                     else
-                        emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                        emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                         # PURE-048: Skip extern_convert_any if value is already externref
                         if !is_already_externref_val
                             extern_convert_any!(bas)
                         end
                     end
                 else
-                    emit_raw!(bas, val_bytes; pushes=WasmValType[infer_value_wasm_type(args[3], ctx)])
+                    emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
                 end
 
                 # array.set
@@ -3193,7 +3181,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     if int_to_string_info !== nothing
                         # int_to_string is in registry - call it
                         # Compile the value argument, converting to Int32 if needed
-                        emit_raw!(bis, compile_value(value_arg, ctx); pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
+                        emit_value!(bis, value_arg, ctx)
 
                         # Convert to Int32 if needed
                         if value_type === Int64
@@ -3231,7 +3219,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # In WasmGC, Memory and MemoryRef are both the array reference
                 # Clear args bytes (already pushed) and re-compile just the memory arg
                 bmr = InstrBuilder(; func_name="compile_invoke", strict=false)
-                emit_raw!(bmr, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                emit_value!(bmr, args[1], ctx)
                 return builder_code(bmr)
 
             # ================================================================
@@ -3345,14 +3333,14 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Field 0: typeId = 0
                     i32_const!(bsub2, 0)
                     # Field 1: string (ref null array<i32>)
-                    emit_raw!(bsub2, compile_value(str_arg, ctx); pushes=WasmValType[infer_value_wasm_type(str_arg, ctx)])
+                    emit_value!(bsub2, str_arg, ctx)
                     # Field 2: offset = start - 1
-                    emit_raw!(bsub2, compile_value(start_arg, ctx); pushes=WasmValType[infer_value_wasm_type(start_arg, ctx)])
+                    emit_value!(bsub2, start_arg, ctx)
                     i64_const!(bsub2, 1)
                     num!(bsub2, Opcode.I64_SUB)
                     # Field 3: ncodeunits = stop - start + 1
-                    emit_raw!(bsub2, compile_value(stop_arg, ctx); pushes=WasmValType[infer_value_wasm_type(stop_arg, ctx)])
-                    emit_raw!(bsub2, compile_value(start_arg, ctx); pushes=WasmValType[infer_value_wasm_type(start_arg, ctx)])
+                    emit_value!(bsub2, stop_arg, ctx)
+                    emit_value!(bsub2, start_arg, ctx)
                     num!(bsub2, Opcode.I64_SUB)
                     i64_const!(bsub2, 1)
                     num!(bsub2, Opcode.I64_ADD)
@@ -3366,10 +3354,10 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     str_arg = args[1]
                     # Field 0: typeId = 0
                     i32_const!(bsub2, 0)
-                    emit_raw!(bsub2, compile_value(str_arg, ctx); pushes=WasmValType[infer_value_wasm_type(str_arg, ctx)])
+                    emit_value!(bsub2, str_arg, ctx)
                     i64_const!(bsub2, 0)  # offset = 0
                     # ncodeunits = array.len(str)
-                    emit_raw!(bsub2, compile_value(str_arg, ctx); pushes=WasmValType[infer_value_wasm_type(str_arg, ctx)])
+                    emit_value!(bsub2, str_arg, ctx)
                     array_len!(bsub2)
                     num!(bsub2, Opcode.I64_EXTEND_I32_S)
                     # Emit struct.new
@@ -3389,9 +3377,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bti = InstrBuilder(; func_name="compile_invoke", strict=false)
                 # Closure form: (closure, string, index, len) → return index
                 if length(args) >= 3
-                    emit_raw!(bti, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                    emit_value!(bti, args[2], ctx)
                 else
-                    emit_raw!(bti, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                    emit_value!(bti, args[1], ctx)
                 end
                 return builder_code(bti)
 
@@ -3399,9 +3387,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 bni = InstrBuilder(; func_name="compile_invoke", strict=false)
                 # nextind(s, i) = i + 1 in WasmGC
                 if length(args) >= 3
-                    emit_raw!(bni, compile_value(args[2], ctx); pushes=WasmValType[infer_value_wasm_type(args[2], ctx)])
+                    emit_value!(bni, args[2], ctx)
                 else
-                    emit_raw!(bni, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                    emit_value!(bni, args[1], ctx)
                 end
                 i64_const!(bni, 1)
                 num!(bni, Opcode.I64_ADD)
@@ -3432,7 +3420,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                     # Step 1: Compile each arg and store in locals
                     for i in 1:n
-                        emit_raw!(bms, compile_value(args[i], ctx); pushes=WasmValType[infer_value_wasm_type(args[i], ctx)])
+                        emit_value!(bms, args[i], ctx)
                         local_set!(bms, str_locals[i])
                     end
 
@@ -3511,7 +3499,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     end
 
                     if int_to_string_info !== nothing
-                        emit_raw!(bis1, compile_value(value_arg, ctx); pushes=WasmValType[infer_value_wasm_type(value_arg, ctx)])
+                        emit_value!(bis1, value_arg, ctx)
 
                         # Convert to Int32 if needed
                         if value_type === Int64
@@ -3601,28 +3589,28 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             # show(nothing) → write "nothing"
                             call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
                         elseif arg_type === String || arg_type === Symbol
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                             local _tb_js = UInt8[]
                             emit_jl_string_to_js!(_tb_js, io.decode_idx, tmp_local)
                             emit_raw!(bsh2, _tb_js; pops=1, pushes=WasmValType[ExternRef])
                             call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Int32
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             num!(bsh2, Opcode.I64_EXTEND_I32_S)
                             call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Float64
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Float32
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             num!(bsh2, Opcode.F64_PROMOTE_F32)
                             call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Bool
-                            emit_raw!(bsh2, compile_value(arg, ctx); pushes=WasmValType[infer_value_wasm_type(arg, ctx)])
+                            emit_value!(bsh2, arg, ctx)
                             call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
                         else
                             @debug "show: unsupported argument type $arg_type, skipping"
@@ -3677,7 +3665,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         arg_type = infer_value_type(args[i], ctx)
                         if arg_type === String || arg_type === Symbol
                             # Already a string — just compile it
-                            emit_raw!(bpts, compile_value(args[i], ctx); pushes=WasmValType[infer_value_wasm_type(args[i], ctx)])
+                            emit_value!(bpts, args[i], ctx)
                         elseif arg_type === Int32 || arg_type === Int64 ||
                                arg_type === UInt32 || arg_type === UInt64 ||
                                arg_type === Int16 || arg_type === UInt16 ||
@@ -3691,7 +3679,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                                 catch; end
                             end
                             if int_to_string_info_pt !== nothing
-                                emit_raw!(bpts, compile_value(args[i], ctx); pushes=WasmValType[infer_value_wasm_type(args[i], ctx)])
+                                emit_value!(bpts, args[i], ctx)
                                 if arg_type === Int64 || arg_type === UInt64
                                     num!(bpts, Opcode.I32_WRAP_I64)
                                 end
@@ -3771,7 +3759,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     emit_raw!(berr, _tid_err; pushes=WasmValType[I32])
                     # Field 1: msg (ArrayRef for AbstractString)
                     if length(args) >= 1
-                        emit_raw!(berr, compile_value(args[1], ctx); pushes=WasmValType[infer_value_wasm_type(args[1], ctx)])
+                        emit_value!(berr, args[1], ctx)
                     else
                         ref_null!(berr, ArrayRef)
                     end
@@ -3831,7 +3819,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Discard accumulated argument bytes and re-compile just src (arg 2)
                 bua = InstrBuilder(; func_name="compile_invoke", strict=false)
                 src_arg = expr.args[4]  # args: [mi, func_ref, dest, src]
-                emit_raw!(bua, compile_value(src_arg, ctx); pushes=WasmValType[infer_value_wasm_type(src_arg, ctx)])
+                emit_value!(bua, src_arg, ctx)
                 return builder_code(bua)
 
             # Handle push!/pop! growth closures from Base (_growend!)
@@ -3852,7 +3840,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
                           (length(args) >= 4 ? args[4] : nothing)
                 if vec_arg !== nothing
-                    emit_raw!(bsh, compile_value(vec_arg, ctx); pushes=WasmValType[infer_value_wasm_type(vec_arg, ctx)])
+                    emit_value!(bsh, vec_arg, ctx)
                 else
                     unreachable!(bsh)
                 end
@@ -3910,7 +3898,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     bgr = InstrBuilder(; func_name="compile_invoke", strict=false)
 
                     # 1. Get the vector and store in local
-                    emit_raw!(bgr, compile_value(vec_arg, ctx); pushes=WasmValType[infer_value_wasm_type(vec_arg, ctx)])
+                    emit_value!(bgr, vec_arg, ctx)
                     # PURE-045: heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(vec_type_idx), true)
                     local_set!(bgr, vec_scratch_local)
@@ -4031,16 +4019,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
                 if str_arg !== nothing
                     hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-                    emit_raw!(bhb, compile_value(str_arg, ctx); pushes=WasmValType[infer_value_wasm_type(str_arg, ctx)])  # string array ref
+                    emit_value!(bhb, str_arg, ctx)  # string array ref
                     # len arg
                     if length(expr.args) >= 4
-                        emit_raw!(bhb, compile_value(expr.args[4], ctx); pushes=WasmValType[infer_value_wasm_type(expr.args[4], ctx)])  # length i64
+                        emit_value!(bhb, expr.args[4], ctx)  # length i64
                     else
                         i64_const!(bhb, 0)
                     end
                     # seed arg (UInt64 → i32)
                     if length(expr.args) >= 5
-                        emit_raw!(bhb, compile_value(expr.args[5], ctx); pushes=WasmValType[infer_value_wasm_type(expr.args[5], ctx)])
+                        emit_value!(bhb, expr.args[5], ctx)
                         seed_type = infer_value_type(expr.args[5], ctx)
                         if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
                             num!(bhb, Opcode.I32_WRAP_I64)

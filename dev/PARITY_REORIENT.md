@@ -11,6 +11,47 @@
 > 5. **EVERY future loop edit/creation MUST carry this gate.** differential+Pkg.test = "is it SOUND?" · dart2wasm =
 >    "is it PARITY?" · BOTH required; NEVER substitute one for the other.
 
+## ★ VERIFY TIER — EVERY loop uses this (NOT the OOM-prone full serial). See [[wt-fast-testing-loop]].
+> - **INNER LOOP (after every edit, ~23s):** `julia --project=. test/smoke.jl` — 48 native-vs-wasm
+>   differential cases across all dimensions; xfail lane tracks known-pending gaps (a now-PASSING xfail =
+>   that loop landed → promote it out). Fast pre-filter, NOT a soundness substitute.
+> - **COMMIT GATE (OOM-safe):** `WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'` —
+>   caps concurrent shards so jetsam can't kill the ~4GB full-parallel fleet (the old bottleneck). This is
+>   the rule-#0 SOUNDNESS gate. NEVER launch the unbounded-parallel or monolithic `WT_NO_SHARD=1` full run.
+> - Background long gates with NO inner `&`; never edit `src/` while a suite runs. A jetsam-killed run that
+>   reached main-suite 2681/2681 green is strong evidence for a narrow additive change.
+
+## ★ SCOPE BOUNDARY + COMPLETENESS — what "full structural parity" MEANS (so "done" is PROVABLE, not vibes)
+"Full structural parity" = WT matches dart2wasm's design across the **12 IN-SCOPE structural dimensions** —
+the `PARITY_LEDGER.md` axes: Boxing/dynamic · Closures · Type-lattice · Exceptions · Validation · Strings ·
+Numerics · Dynamic-dispatch · GC-structs/arrays · Instruction-IR · Control-flow · Coercion (+ Diagnostics).
+Every gap on those axes is ENUMERATED (F1-F31 · B1-B17 · P1-P22) and each maps to a loop below, so the loop
+set is **CLOSED over the in-scope surface** — finishing the loops = parity on everything WT actually compiles.
+Re-audited against dart2wasm's `lib/` file set: class_info / closures / code_generator / constants /
+dispatch_table / dynamic_forwarders / functions / intrinsics / translator / types / records+record_class_generator /
+param_info / globals / list_factory each land on an in-scope axis (records+constants+globals → GC-structs/Coercion;
+dynamic_forwarders → Dynamic-dispatch; intrinsics → Numerics/Instruction-IR). **No 13th hidden dimension.**
+
+**INTENTIONALLY OUT OF SCOPE** (dart2wasm subsystems WT does NOT replicate — the Julia/wasm-GC subset genuinely
+differs; these are NOT gaps, and "parity" must NOT be read to include them):
+  • **async/await · state_machine · await_transformer · sync_star** (~100K lines of dart2wasm). Julia concurrency
+    (Tasks + a runtime scheduler) is NOT a compile-time CPS/state-machine transform → there is no analog to build;
+    WT compiles type-stable SYNCHRONOUS IR. Out of subset, not a gap.
+  • **FFI / `ccall` (ffi_native_transformer) + the whole linear-memory family (F30).** wasm-GC has no native
+    libraries; WT shims specific foreigncalls as intrinsics (memmove, jl_value_ptr…) and loud-rejects the rest.
+    → This is the **JLL INTEGRATION track** (per-`ccall` intrinsic / JS-import shims), a SEPARATE workstream from
+    structural parity — NOT a structural loop. Expect most JLL ccalls to hit the unknown-foreigncall reject until
+    each is shimmed; that is by-design, not a parity regression.
+  • **Runtime reified generics / first-class runtime Type-argument vectors** (the dynamic half of types.dart).
+    Julia's AbstractInterpreter MONOMORPHIZES; WT compiles concrete instantiations. The runtime type machinery WT
+    *does* need — classId, `typeof`, `isa` on concrete values — IS in scope (Loop B box classId + Loop E class-info).
+
+**COMPLETENESS CLAIM (the definition of DONE):** when Loops **B → B′ → F3-L2 → C → D → E** AND the deferred-but-
+REQUIRED items (strings i16 · EH catchable driver · Float16 · Int128 full div/rem) all land, AND every F/B/P
+ledger row is closed, WT is at **full structural parity with dart2wasm over the Julia/wasm-GC subset**. The
+out-of-scope list above is the remainder of dart2wasm, justified-excluded. That conjunction — *all loops + all
+deferred-required + all ledger rows closed* — is the exact, testable meaning of "done." Nothing else is owed.
+
 Output of a 15-agent reorientation swarm (13 per-dimension WT-vs-dart2wasm audits + synthesis +
 adversarial critique). Supersedes the old `Loop 0/A/B/C/D/E` order in `PARITY_LOOP.md`. The ETHOS
 (`[[feedback-pure-dart2wasm-ethos]]`): every loop = ADOPT one dart principled design + DELETE the WT
