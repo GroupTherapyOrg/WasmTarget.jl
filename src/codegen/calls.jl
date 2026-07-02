@@ -1455,8 +1455,8 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
             elseif check_type === String || check_type === Symbol || check_type <: AbstractString
-                # String/Symbol: test against the string array type
-                local _str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                # parity(M9): strings are CLASSED — isa tests the string struct
+                local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                 ref_test!(bld, Int64(_str_idx), false)
             else
                 # Unknown concrete type — can't test, return false
@@ -6378,7 +6378,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Step 1: Compile head (Symbol = array<i32>) → local
             local (_head_bytes, _head_ty) = compile_value_typed(head_arg, ctx)
-            head_local = allocate_local!(ctx, ConcreteRef(str_type_idx, true))
+            # parity(M9): the head Symbol is a CLASSED string value
+            head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 emit_raw!(ib, _head_bytes; pushes=(_head_ty===nothing ? WasmValType[] : WasmValType[_head_ty]))
                 local_set!(ib, head_local)

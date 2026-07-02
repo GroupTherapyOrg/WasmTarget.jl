@@ -321,10 +321,9 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # JS values are held as externref
         return ExternRef
     elseif T === String || T === Symbol || T <: AbstractString
-        # Strings and Symbols are represented as WasmGC byte arrays
-        # Symbol is stored as its name string
-        # AbstractString maps to String representation (concrete in WasmGC)
-        return ArrayRef
+        # parity(M9): strings are CLASSED — {classId, data} <: $JlBase. The abstract
+        # (module-less) rep is StructRef; concrete mappers give the $JlString ref.
+        return StructRef
     elseif T <: Tuple
         # Tuples map to WasmGC structs
         return StructRef
