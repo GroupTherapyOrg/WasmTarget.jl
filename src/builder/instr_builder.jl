@@ -61,9 +61,13 @@ end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", strict::Bool=false)
+                      func_name::String="", strict::Bool=false, mod=nothing)
     locals = WasmValType[p for p in param_types]
-    v = WasmStackValidator(; enabled=true, func_name=func_name)
+    # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
+    # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
+    # ref-flowing builders); `nothing` for numeric-only emitters that never push a
+    # ConcreteRef, where the heap-kind branch is never reached.
+    v = WasmStackValidator(; enabled=true, func_name=func_name, mod=mod)
     # Seed the outermost label as a :block whose results are the function results,
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
@@ -176,6 +180,16 @@ f32_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F32); _emit!(b, Inst
 f64_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F64); _emit!(b, InstrIR.F64Const(Float64(x))))
 # Generic numeric/comparison/conversion op (no immediates): reuse validate_instruction!.
 num!(b::InstrBuilder, op::UInt8) = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
+
+# Saturating truncation (FC-prefixed, sub-op 0x00–0x07): pop a float, push an int. The
+# sub-op encodes both: to = i32 (<0x04) or i64; from = f32 (0x00,0x01,0x04,0x05) or f64.
+function trunc_sat!(b::InstrBuilder, sub_op::UInt8)
+    to   = sub_op < 0x04 ? I32 : I64
+    from = (sub_op == 0x00 || sub_op == 0x01 || sub_op == 0x04 || sub_op == 0x05) ? F32 : F64
+    validate_pop!(b.v, from)
+    validate_push!(b.v, to)
+    _emit!(b, InstrIR.TruncSat(sub_op))
+end
 
 # ── Parametric ──────────────────────────────────────────────────────────────────
 drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))

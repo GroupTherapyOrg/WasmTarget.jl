@@ -575,7 +575,19 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
                 wt === I32 || wt === I64 || wt === F32 || wt === F64
             end
             if all_numeric_u
-                # Numeric-only union: use widest numeric type (no struct boxing needed).
+                # F1/P1: a numeric Union spanning incompatible Wasm categories (int vs
+                # float) MUST be boxed (classId-tagged {typeId,value} struct behind
+                # AnyRef) — collapsing to the widest primitive is lossy (Int 1 / Float
+                # 1.0 indistinguishable). MUST agree with get_concrete_wasm_type's
+                # all-numeric-Union branch (the value-type resolver): if the two
+                # disagree, the SSA store sees a false type mismatch and DROPs the value.
+                # AnyRef (NOT ExternRef) so the PiNode/condition unbox paths — which
+                # ref.cast $BoxedT + struct.get on AnyRef/StructRef sources — match.
+                if T isa Union && needs_anyref_boxing(T)
+                    return AnyRef
+                end
+                # Same-category numeric union (all-int or all-float): widest numeric type
+                # (no struct boxing needed — no int/float tag to lose).
                 # PURE-325: resolve_union_type handles Int128/BigInt/UInt128 unions correctly.
                 result = julia_to_wasm_type(T)
                 # PURE-908/9064: Never return AnyRef for locals unless JlType hierarchy active
@@ -610,10 +622,9 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
                 if is_all_struct
                     return StructRef
                 else
-                    # PURE-6021b: Heterogeneous non-numeric union uses a tagged-union struct.
-                    # The local must be ConcreteRef to the tagged union type, NOT ExternRef.
-                    union_info = get_union_type!(ctx.mod, ctx.type_registry, T)
-                    return ConcreteRef(union_info.wasm_type_idx, true)
+                    # B4/U2 — dart2wasm parity: a heterogeneous Union value is JUST a boxed
+                    # AnyRef discriminated by classId, NOT a {typeId,tag,value} wrapper struct.
+                    return AnyRef
                 end
             end
         end

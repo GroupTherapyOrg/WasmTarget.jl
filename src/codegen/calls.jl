@@ -762,6 +762,48 @@ function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompila
     return nothing
 end
 
+_egal_num_eqop(w::WasmValType)::UInt8 =
+    w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
+
+"""
+    _emit_egal_box_vs_num!(bld, ctx, ref_local, ref_is_extern, num_local, num_type)
+
+`===` between a BOXED-NUMERIC ref operand (saved in `ref_local`) and an UNBOXED numeric
+operand (saved in `num_local`, Julia type `num_type`). Julia `===` requires the same type
+AND value, so this is `isa(ref, num_type) && unbox(ref) == num`: the box's classId (field 0)
+must equal `num_type`'s DFS id AND its value (field 1) must equal `num`. Guarded by `ref.test`
+so a genuine non-numeric ref (struct/string/array) yields false — no trap, no regression
+(matches the old "ref vs numeric ⇒ false" for those). Pushes i32 (0/1). Single source for
+both arg orderings. (The boxed numeric value rep is the same `get_numeric_box_type!` the
+classId funnel boxes into.)
+"""
+function _emit_egal_box_vs_num!(bld::InstrBuilder, ctx::AbstractCompilationContext,
+                                ref_local::Integer, ref_is_extern::Bool,
+                                num_local::Integer, num_type::Type)
+    num_wasm = julia_to_wasm_type(num_type)
+    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, num_wasm)
+    tid = ensure_type_id!(ctx.type_registry, num_type)
+    local _anytmp = allocate_local!(ctx, AnyRef)
+    local_get!(bld, ref_local)
+    ref_is_extern && any_convert_extern!(bld)
+    local_tee!(bld, _anytmp)
+    ref_test!(bld, Int64(box_idx), false)            # is it this numeric box?
+    if_!(bld, I32)
+    # classId (field 0) == num_type's id?
+    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
+    struct_get!(bld, UInt32(box_idx), UInt32(0), I32)
+    i32_const!(bld, Int64(tid)); num!(bld, Opcode.I32_EQ)
+    # && value (field 1) == num?
+    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
+    struct_get!(bld, UInt32(box_idx), UInt32(1), num_wasm)
+    local_get!(bld, num_local); num!(bld, _egal_num_eqop(num_wasm))
+    num!(bld, Opcode.I32_AND)
+    else_!(bld)
+    i32_const!(bld, 0)
+    end_block!(bld)
+    return bld
+end
+
 """
     _compile_call_egaleq(args, bytes, ctx, is_128bit, is_32bit, arg_type)
 
@@ -1076,15 +1118,28 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
                 num!(bld, Opcode.REF_EQ)
             end
         elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
-            # Comparing ref with non-ref: type mismatch, drop both and push false
-            drop!(bld)
-            drop!(bld)
-            i32_const!(bld, 0)
+            # arg1 is a ref (possibly a BOXED NUMERIC), arg2 an unboxed numeric. Julia ===
+            # needs same type+value: a numeric box of arg2's type with arg2's value ⇒ true;
+            # a genuine non-numeric ref ⇒ false (ref.test guards it). Was: always drop+false,
+            # a SILENT WRONG ANSWER for e.g. Any[true][1] === true (returned false).
+            local _a2w_eg = julia_to_wasm_type(arg2_type)
+            if (_a2w_eg === I32 || _a2w_eg === I64 || _a2w_eg === F32 || _a2w_eg === F64) && isconcretetype(arg2_type)
+                local _eg_num = allocate_local!(ctx, _a2w_eg); local_set!(bld, _eg_num)       # save arg2 (top)
+                local _eg_ref = allocate_local!(ctx, arg1_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref)
+                _emit_egal_box_vs_num!(bld, ctx, _eg_ref, arg1_is_externref, _eg_num, arg2_type)
+            else
+                drop!(bld); drop!(bld); i32_const!(bld, 0)
+            end
         elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
-            # Comparing non-ref with ref: type mismatch, drop both and push false
-            drop!(bld)
-            drop!(bld)
-            i32_const!(bld, 0)
+            # Mirror: arg2 is the ref (possibly a boxed numeric), arg1 an unboxed numeric.
+            local _a1w_eg = julia_to_wasm_type(arg_type)
+            if (_a1w_eg === I32 || _a1w_eg === I64 || _a1w_eg === F32 || _a1w_eg === F64) && isconcretetype(arg_type)
+                local _eg_ref2 = allocate_local!(ctx, arg2_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref2)  # save arg2 (ref, top)
+                local _eg_num2 = allocate_local!(ctx, _a1w_eg); local_set!(bld, _eg_num2)      # save arg1 (num)
+                _emit_egal_box_vs_num!(bld, ctx, _eg_ref2, arg2_is_externref, _eg_num2, arg_type)
+            else
+                drop!(bld); drop!(bld); i32_const!(bld, 0)
+            end
         else
             # Both args are numeric. Check actual Wasm types to select correct opcode.
             # Julia type inference (is_32bit) may differ from actual Wasm local types.
@@ -1279,27 +1334,10 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
 
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
-    if value_type isa Union && needs_tagged_union(value_type) && haskey(ctx.type_registry.unions, value_type)
-        # Tagged union: check the tag field
-        union_info = ctx.type_registry.unions[value_type]
-        expected_tag = get(union_info.tag_map, check_type, Int32(-1))
-
-        if expected_tag >= 0
-            # Value is already on stack (tagged union struct)
-            # PURE-701: Value may be structref if from a union-typed local.
-            # Insert ref.cast null to narrow before struct_get.
-            ref_cast!(bld, Int64(union_info.wasm_type_idx), true)
-            # Get the tag field (PURE-9024: field 1 due to typeId at field 0)
-            struct_get!(bld, union_info.wasm_type_idx, 1, I32)  # field 1 is tag (0=typeId, 1=tag, 2=value)
-            # Compare tag to expected value
-            i32_const!(bld, Int64(expected_tag))
-            num!(bld, Opcode.I32_EQ)
-        else
-            # Type not in this union - drop value and return false
-            drop!(bld)
-            i32_const!(bld, 0)
-        end
-    elseif check_type === Nothing
+    # B4/U2: the tagged-union isa branch (struct.get tag) is RETIRED — a Union value is a
+    # boxed AnyRef discriminated by classId, so isa flows through the AnyRef path below
+    # (emit_isa_classid! / ref.test on the classId box & struct refs).
+    if check_type === Nothing
         # isa(x, Nothing) -> ref.is_null
         # Value is already on stack — check if it's actually a ref type
         local isa_val_wasm = nothing
@@ -1375,8 +1413,11 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                     ref_test!(bld, Int64(target_wasm.type_idx), false)
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
+                    # F-ii: route through the SINGLE-SOURCE discriminator (was ref.test of the
+                    # box struct, which can't distinguish same-wasm-rep types that share it —
+                    # emit_isa_classid! reads the classId field instead).
                     any_convert_extern!(bld)
-                    ref_test!(bld, Int64(box_type_idx), false)
+                    emit_isa_classid!(bld, ctx, box_type_idx, check_type)
                 else
                     # Fallback: non-null check for non-concrete wasm types
                     ref_is_null!(bld)
@@ -1387,17 +1428,16 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-            if check_type <: Number && !(check_type <: Int128) && !(check_type <: UInt128)
-                # Numeric type: test against the numeric box struct
-                local _box_wasm = julia_to_wasm_type(check_type)
-                if haskey(ctx.type_registry.numeric_boxes, _box_wasm)
-                    local _box_idx = ctx.type_registry.numeric_boxes[_box_wasm]
-                    ref_test!(bld, Int64(_box_idx), false)
-                else
-                    # Box type not registered yet — register it
-                    local _box_idx2 = get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm)
-                    ref_test!(bld, Int64(_box_idx2), false)
-                end
+            local _ck_box_wasm = julia_to_wasm_type(check_type)
+            if (_ck_box_wasm === I32 || _ck_box_wasm === I64 || _ck_box_wasm === F32 || _ck_box_wasm === F64) &&
+               !(check_type <: Int128) && !(check_type <: UInt128)
+                # Numeric-box rep (Number subtypes AND Char etc.): route through the SINGLE-SOURCE
+                # discriminator (was ref.test of the box struct, which same-wasm-rep types share —
+                # emit_isa_classid! reads the classId field to distinguish Bool/Int8/Int16/Int32/Char).
+                local _box_wasm = _ck_box_wasm
+                local _box_idx = get(ctx.type_registry.numeric_boxes, _box_wasm,
+                                     get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm))
+                emit_isa_classid!(bld, ctx, _box_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
                 # E2E-001: When multiple Julia types share the same WasmGC type index
@@ -2816,10 +2856,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
                                 Ueff = U
                             end
-                            is_tagged_union = union_wasm isa ConcreteRef &&
-                                Ueff isa Union &&
-                                haskey(ctx.type_registry.unions, Ueff) &&
-                                union_wasm.type_idx == ctx.type_registry.unions[Ueff].wasm_type_idx
+                            # B4/U2: the tagged-union wrapper is retired — a het-tuple field's
+                            # union value is an AnyRef classId box (the `else` branch below), never
+                            # the {typeId,tag,value} wrapper.
+                            is_tagged_union = false
 
                             local _hetb = InstrBuilder(; func_name="compile_call", strict=false)
                             # tuple value → tuple_local
@@ -2847,18 +2887,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                     # Coerce the raw field value to U's canonical wasm rep.
                                     fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
                                     if union_wasm === AnyRef
-                                        if fw === I64
-                                            num!(_hetb, Opcode.I32_WRAP_I64); ref_i31!(_hetb)
-                                        elseif fw === I32
-                                            ref_i31!(_hetb)
-                                        elseif fw === F32 || fw === F64
-                                            box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, fw)
-                                            sc = length(ctx.locals) + ctx.n_params
-                                            push!(ctx.locals, fw)
-                                            local_set!(_hetb, sc)
-                                            i32_const!(_hetb, 0)
-                                            local_get!(_hetb, sc)
-                                            struct_new!(_hetb, box_idx, WasmValType[])
+                                        if fw === I64 || fw === I32 || fw === F32 || fw === F64
+                                            # F-ii: route through the SINGLE-SOURCE box producer
+                                            # (was an inline numeric box w/ a literal-0 typeId). B1
+                                            # already killed the lossy ref.i31 here; now the box also
+                                            # stores the field's REAL classId so same-wasm-rep members
+                                            # (Bool/Int8/Int32 all i32) stay distinguishable on isa.
+                                            emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
                                         elseif fw === ExternRef
                                             any_convert_extern!(_hetb)
                                         end
@@ -4397,6 +4432,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
+             :checked_srem_int, :checked_urem_int,
              :sdiv_int, :udiv_int, :srem_int, :urem_int)
         # 128-bit checked/div/rem arithmetic unsupported. Loud reject (returns a value natively).
         emit_unsupported_stub!(ctx, bytes, :unsupported_method,
@@ -5151,6 +5187,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if length(args) == 1 && is_boolean_value(args[1], ctx)
             # Boolean NOT: eqz turns 0->1, 1->0
             _op1!(Opcode.I32_EQZ)
+        elseif is_128bit
+            # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
+            # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
+            append!(bytes, emit_int128_not(ctx, arg_type))
         else
             # Bitwise NOT: x xor -1
             let ib = InstrBuilder(; func_name="compile_call", strict=false)
@@ -5240,15 +5280,32 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         end
 
     elseif is_func(func, :cttz_int)
-        _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
+        if is_128bit
+            append!(bytes, emit_int128_cttz(ctx, arg_type))
+        else
+            _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
+        end
 
     # PURE-9004: Population count (number of set bits)
     elseif is_func(func, :ctpop_int)
-        _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
+        if is_128bit
+            append!(bytes, emit_int128_ctpop(ctx, arg_type))
+        else
+            _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
+        end
 
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
     elseif is_func(func, :bswap_int)
+        if is_128bit
+            # 128-bit byte-swap is unsupported: the i64 reversal sequence below would run on a
+            # struct value → invalid wasm. Loud-reject (sound trap / strict reject) like the
+            # Int128 div/rem guard, rather than emitting an invalid module. (Full impl = reverse
+            # 16 bytes = bswap each i64 limb + swap lo/hi; deferred — niche op.)
+            emit_unsupported_stub!(ctx, bytes, :unsupported_method,
+                "128-bit byte-swap (Int128/UInt128)"; idx=idx)
+            return bytes
+        end
         # Allocate a scratch local to hold the input value (need it 4 times)
         scratch_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
@@ -6117,16 +6174,16 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if expected_julia_type isa Union && needs_tagged_union(expected_julia_type)
                                 append!(bytes, emit_wrap_union_value(ctx, actual_julia_type, expected_julia_type))
                             else
-                                # ConcreteRef expected but not a union — box numeric to ref via ref.i31
-                                local _bb = InstrBuilder(; func_name="compile_call", strict=false)
-                                if actual_wasm === I32
-                                    ref_i31!(_bb)
-                                elseif actual_wasm === I64
-                                    num!(_bb, Opcode.I32_WRAP_I64)
-                                    ref_i31!(_bb)
-                                end
-                                # Cast to expected concrete ref type
-                                ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
+                                # B4: numeric → a non-union ConcreteRef. Route through the
+                                # single-source funnel (box arm) instead of the old
+                                # ref.i31-then-ref.cast, which TRUNCATED I64 and ALWAYS trapped
+                                # (an i31 is never a subtype of the target struct). convert_type!
+                                # boxes the numeric (real classId), then coerces to the expected
+                                # ref: if it's the numeric box it matches; otherwise the cast
+                                # traps LOUDLY on a genuine type mismatch (no silent truncation).
+                                local _bb = InstrBuilder(; func_name="compile_call", strict=false, mod=ctx.mod)
+                                convert_type!(_bb, actual_wasm, expected_wasm, ctx;
+                                              from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                                 append!(bytes, builder_code(_bb))
                             end
                         elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)

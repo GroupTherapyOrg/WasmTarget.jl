@@ -1,5 +1,14 @@
 # WasmTarget → dart2wasm-style typed instruction builder — migration plan
 
+> **▶▶ COMPLETE + SHIPPED, then FOLDED INTO the dart2wasm-parity march (2026-06-29).** The migration
+> is DONE + validated (see "✅ MIGRATION COMPLETE + VALIDATED" below) and the typed InstrBuilder
+> shipped in **v0.4.0** (FULLY LANDED: General registry + git tag + GH release). The "NEXT: the cleanup
+> loops" list at the end of this file (strict-on, fix_* deletion, flow-generator collapse,
+> return_type_compatible → WasmGC lattice, loud-reject diagnostics) is now pursued inside the active
+> dart2wasm production-parity march — authoritative plan = `dev/PARITY_LEDGER.md` + `dev/PARITY_LOOP.md`
+> (dart2wasm = HOW oracle; real Julia compiler = verification). This file is the historical migration
+> record + architecture rationale.
+
 **Branch:** `wt-wasm-builder`  ·  **Goal:** replace WT's emergent/heuristic operand-stack
 management with **one** explicit, self-validating instruction builder mirroring
 dart2wasm's `pkg/wasm_builder` (both target WasmGC). **This is a REPLACEMENT, not an

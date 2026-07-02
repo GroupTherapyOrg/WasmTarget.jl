@@ -482,16 +482,17 @@ function needs_anyref_boxing(T::Union)::Bool
     types = Base.uniontypes(T)
     non_nothing = filter(t -> t !== Nothing, types)
     length(non_nothing) < 2 && return false
-    # Check if all are numeric
-    all(t -> t <: Number, non_nothing) || return false
-    # Check if they have mixed Wasm categories (int vs float)
-    wasm_types = Set{WasmValType}()
-    for t in non_nothing
-        push!(wasm_types, julia_to_wasm_type(t))
-    end
-    has_int = any(w -> w === I32 || w === I64, wasm_types)
-    has_float = any(w -> w === F32 || w === F64, wasm_types)
-    return has_int && has_float
+    # Box iff EVERY member boxes as a NUMERIC value (i32/i64/f32/f64) — covers Number
+    # subtypes AND Char/other numeric-rep primitives, excluding struct/string/ref members
+    # (those use their own ConcreteRef/tagged rep).
+    wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
+    all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
+    # ANY multi-member numeric union must box (dart2wasm boxes every dynamic value): members
+    # with DIFFERENT wasm reps (e.g. Int64 i64 vs Bool i32, or int vs float) can't collapse to
+    # one faithful primitive — the het-tuple/phi if-else would read different-width fields under
+    # a single block result type → INVALID wasm; members SHARING a rep (Bool/Int8/Int32 all i32)
+    # lose their type tag on collapse → isa/typeof mis-fire. Either way: box, keep the classId.
+    return true
 end
 
 """

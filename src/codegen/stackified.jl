@@ -6,7 +6,7 @@ function generate_complex_flow(ctx::AbstractCompilationContext, blocks::Vector{B
     # MIGRATED to InstrBuilder: this fn only splices whole-body sub-emitters via emit_raw!.
     # strict=false (collect mode): the sub-emitters are full control-flow bodies whose
     # operand-stack effect the fragment model can't track precisely, so we never gate.
-    b = InstrBuilder(; func_name="generate_complex_flow", strict=false)
+    b = InstrBuilder(; func_name="generate_complex_flow", strict=false, mod=ctx.mod)
 
     # For void return types WITHOUT loops (like event handlers), use a simpler approach:
     # just execute all statements in order and return at the end.
@@ -80,6 +80,20 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 
 `target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
 """
+# The value's static Julia type for boxing (SSA inferred / Bool literal / argument type),
+# or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
+# decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
+function _value_julia_type(val, ctx::AbstractCompilationContext)
+    if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
+        return ctx.ssa_types[val.id]
+    elseif val isa Bool
+        return Bool
+    elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
+        return ctx.arg_types[val.n]
+    end
+    return nothing
+end
+
 function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
     # local builder, then append its code to the caller-supplied buffer (byte-identical).
@@ -91,33 +105,13 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
         append!(target_bytes, builder_code(b))
         return
     end
-    # PURE-9029: Check if this value should use ref.i31 (Bool, Int8, UInt8)
-    # ref.i31 is zero-allocation and makes ref.eq work correctly for ===
-    if val_wasm === I32
-        local _jl_type = nothing
-        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-            _jl_type = ctx.ssa_types[val.id]
-        elseif val isa Bool
-            _jl_type = Bool
-        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-            _jl_type = ctx.arg_types[val.n]
-        end
-        if _jl_type !== nothing && should_use_i31(_jl_type)
-            # ref.i31 path: compile i32 value → ref.i31 → extern.convert_any
-            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-            ref_i31!(b)
-            extern_convert_any!(b)
-            append!(target_bytes, builder_code(b))
-            return
-        end
-    end
-    # Box: compile value → struct_new(box_type) → extern_convert_any
-    # PURE-9028: Push correct DFS typeId as field 0 before the value
-    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
-    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    # The value's static Julia type (for the box's real classId).
+    local _jl_type = _value_julia_type(val, ctx)
+    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
+    # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
+    # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
-    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    struct_new!(b, box_type, WasmValType[])
+    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
     append!(target_bytes, builder_code(b))
     return
@@ -138,29 +132,13 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
         append!(target_bytes, builder_code(b))
         return
     end
-    # ref.i31 path for Bool/Int8/UInt8 — ref.i31 is already a subtype of anyref
-    if val_wasm === I32
-        local _jl_type = nothing
-        if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-            _jl_type = ctx.ssa_types[val.id]
-        elseif val isa Bool
-            _jl_type = Bool
-        elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-            _jl_type = ctx.arg_types[val.n]
-        end
-        if _jl_type !== nothing && should_use_i31(_jl_type)
-            emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[I32])
-            ref_i31!(b)
-            append!(target_bytes, builder_code(b))
-            return  # ref.i31 is already anyref — no conversion needed
-        end
-    end
-    # Box: compile value → struct_new(box_type) — struct ref is already a subtype of anyref
-    _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, val_wasm)
-    emit_raw!(b, _tid; pushes=WasmValType[I32])
+    # The value's static Julia type (for the box's real classId).
+    local _jl_type = _value_julia_type(val, ctx)
+    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
+    # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
+    # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_raw!(b, compile_value(val, ctx); pushes=WasmValType[val_wasm])
-    box_type = get_numeric_box_type!(ctx.mod, ctx.type_registry, val_wasm)
-    struct_new!(b, box_type, WasmValType[])
+    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     append!(target_bytes, builder_code(b))
     return  # No extern_convert_any — struct ref is already anyref
 end
@@ -358,7 +336,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false)
+    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
@@ -619,12 +597,22 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
                         struct_new!(pvb, _box_t, WasmValType[])
                         extern_convert_any!(pvb)
+                    elseif phi_local_wasm_type === AnyRef && (ssa_local_type === I32 || ssa_local_type === I64 || ssa_local_type === F32 || ssa_local_type === F64)
+                        # F1: Box numeric local for AnyRef phi (numeric Union). Same
+                        # classId-tagged box as ExternRef, minus extern_convert_any.
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_local_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        local_get!(pvb, local_idx)
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_local_type)
+                        struct_new!(pvb, _box_t, WasmValType[])
                     elseif phi_local_wasm_type === ExternRef && (ssa_local_type isa ConcreteRef || ssa_local_type === StructRef || ssa_local_type === ArrayRef || ssa_local_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
                         local_get!(pvb, local_idx)
                         extern_convert_any!(pvb)
                     else
-                        # Type mismatch: emit type-safe default for the phi local's type
+                        # Type mismatch: emit type-safe default for the phi local's type.
+                        # (B4/U2: the tagged-union phi-wrap path is retired — union phi-locals are
+                        # AnyRef classId boxes, so phi_tagged_union_wrap never fired here.)
                         emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type))
                     end
                 else
@@ -644,6 +632,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
                         struct_new!(pvb, _box_t, WasmValType[])
                         extern_convert_any!(pvb)
+                    elseif phi_local_wasm_type === AnyRef && (src_local_type === I32 || src_local_type === I64 || src_local_type === F32 || src_local_type === F64)
+                        # F1: Box numeric phi-to-phi for AnyRef phi (numeric Union).
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, src_local_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        local_get!(pvb, local_idx)
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, src_local_type)
+                        struct_new!(pvb, _box_t, WasmValType[])
                     elseif phi_local_wasm_type === ExternRef && (src_local_type isa ConcreteRef || src_local_type === StructRef || src_local_type === ArrayRef || src_local_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion (phi-to-phi)
                         local_get!(pvb, local_idx)
@@ -681,6 +676,17 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
                         struct_new!(pvb, _box_t, WasmValType[])
                         extern_convert_any!(pvb)
+                    elseif phi_local_wasm_type === AnyRef && (ssa_wasm_type === I32 || ssa_wasm_type === I64 || ssa_wasm_type === F32 || ssa_wasm_type === F64)
+                        # F1: Box recomputed numeric SSA for AnyRef phi (numeric Union).
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, ssa_wasm_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        if stmt !== nothing && !(stmt isa Core.PhiNode)
+                            emit_raw!(pvb, compile_statement(stmt, val.id, ctx))
+                        else
+                            emit_raw!(pvb, compile_value(val, ctx))
+                        end
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, ssa_wasm_type)
+                        struct_new!(pvb, _box_t, WasmValType[])
                     elseif phi_local_wasm_type === ExternRef && (ssa_wasm_type isa ConcreteRef || ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef || ssa_wasm_type === AnyRef)
                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion.
                         # PiNode narrows Any→Expr (ExternRef→ConcreteRef). Compile the value
@@ -758,6 +764,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         struct_new!(pvb, _box_t, WasmValType[])
                         extern_convert_any!(pvb)
                         return builder_code(pvb)
+                    elseif phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                        # F1: Box numeric non-SSA value for AnyRef phi (numeric Union, e.g.
+                        # φ(1::Int64, 2.5::Float64)::Union{Int64,Float64} → AnyRef). Same
+                        # classId-tagged {typeId,value} box as ExternRef, minus the
+                        # extern_convert_any (a struct ref is already a subtype of anyref).
+                        # The PiNode/condition unbox reads it via ref.cast $BoxedT + struct.get.
+                        _tid = UInt8[]; emit_box_type_id!(_tid, ctx.type_registry, edge_val_type)
+                        emit_raw!(pvb, _tid; pushes=WasmValType[I32])
+                        emit_raw!(pvb, compile_value(val, ctx))
+                        _box_t = get_numeric_box_type!(ctx.mod, ctx.type_registry, edge_val_type)
+                        struct_new!(pvb, _box_t, WasmValType[])
+                        return builder_code(pvb)
                     elseif phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
                         # PURE-4151: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef for non-SSA phi edges
                         # (e.g., Union{} literal in phi node produces global.get of DataType struct,
@@ -766,7 +784,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         extern_convert_any!(pvb)
                         return builder_code(pvb)
                     end
-                    # Type mismatch: emit type-safe default instead
+                    # Type mismatch: emit type-safe default (B4/U2: the tagged-union phi-wrap is
+                    # retired — union phi-locals are AnyRef classId boxes).
                     emit_raw!(pvb, emit_phi_type_default(phi_local_type))
                     return builder_code(pvb)
                 end
@@ -1004,6 +1023,23 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             break
                                         end
                                     end
+                                    if phi_local_type === AnyRef && (edge_val_type === I32 || edge_val_type === I64 || edge_val_type === F32 || edge_val_type === F64)
+                                        # F1: Box numeric phi edge for AnyRef local (numeric Union,
+                                        # e.g. φ(1::Int64, 2.5::Float64)::Union{Int64,Float64}).
+                                        # compile_phi_value's AnyRef branches already wrap a numeric
+                                        # value in the classId-tagged {typeId,value} box (typeId +
+                                        # value + struct.new, no extern_convert_any) — the SAME box
+                                        # compile_value reads back via ref.cast $BoxedT + struct.get.
+                                        # Emit it as-is (do NOT re-box, or the typeId is pushed twice).
+                                        _pvb_any = compile_phi_value(val, i)
+                                        if !isempty(_pvb_any)
+                                            emit_raw!(b, _pvb_any; pushes=WasmValType[AnyRef])
+                                            local_set!(b, local_idx)
+                                            phi_count += 1
+                                            found_edge = true
+                                            break
+                                        end
+                                    end
                                     if phi_local_type === ExternRef && (edge_val_type isa ConcreteRef || edge_val_type === StructRef || edge_val_type === ArrayRef || edge_val_type === AnyRef)
                                         # PURE-325: ConcreteRef/StructRef/ArrayRef/AnyRef → ExternRef conversion
                                         _pvb3 = compile_phi_value(val, i)
@@ -1022,6 +1058,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             break
                                         end
                                     end
+                                    # (B4/U2: the tagged-union phi-wrap path is retired — union
+                                    # phi-locals are AnyRef classId boxes.)
                                     # Type mismatch: emit type-safe default
                                     emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                     local_set!(b, local_idx)
@@ -1749,15 +1787,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_arr = Int(ret_local) - ctx.n_params + 1
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
-                                if _rl_wasm === I32 && func_ret_wasm === I64
-                                    num!(b, Opcode.I64_EXTEND_I32_S)
-                                elseif _rl_wasm === I64 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_CONVERT_I64_S)
-                                elseif _rl_wasm === I32 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_CONVERT_I32_S)
-                                elseif _rl_wasm === F32 && func_ret_wasm === F64
-                                    num!(b, Opcode.F64_PROMOTE_F32)
-                                end
+                                convert_type!(b, _rl_wasm, func_ret_wasm, ctx)
                             end
                             return_!(b)
                         else

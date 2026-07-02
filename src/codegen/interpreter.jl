@@ -101,8 +101,37 @@ end
         alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
         order::Base.Order.Ordering=Base.Order.Forward)
     result = copy(v)
-    sort!(result, rev=rev)
+    # SILENT-WRONG FIX: forward ALL comparator kwargs to sort!, not just `rev` — the
+    # previous `sort!(result, rev=rev)` silently dropped `by`/`lt`/`order`, so
+    # `sort(v, by=f)` / `sort(v, lt=cmp)` returned the DEFAULT-`isless` order (the
+    # sort! overlay's body already honors lt/by/rev correctly).
+    sort!(result; lt=lt, by=by, rev=rev, alg=alg, order=order)
     return result
+end
+
+# ─── sortperm Overlay ──────────────────────────────────────────────────────
+# Why: generic Base.sortperm dispatches through deep Ordering/algorithm chains that WT
+#      mis-compiled to a no-op → it returned the IDENTITY permutation (silent-wrong),
+#      and loud-rejected with kwargs. Stable insertion sort on the index vector, comparing
+#      by v[index], mirroring the sort! overlay. Strict `lt` only → stable (ties keep order).
+@overlay WASM_METHOD_TABLE function Base.sortperm(v::AbstractVector;
+        lt=isless, by=identity, rev::Bool=false,
+        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
+        order::Base.Order.Ordering=Base.Order.Forward)
+    n = length(v)
+    p = collect(1:n)
+    for i in 2:n
+        key = p[i]
+        j = i - 1
+        while j >= 1
+            should_shift = rev ? lt(by(v[p[j]]), by(v[key])) : lt(by(v[key]), by(v[p[j]]))
+            !should_shift && break
+            p[j + 1] = p[j]
+            j -= 1
+        end
+        p[j + 1] = key
+    end
+    return p
 end
 
 # ─── String Concatenation Overlays ────────────────────────────────────────
