@@ -286,6 +286,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
     b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
@@ -971,6 +972,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # typed methods, recursive sub-results (stmt_bytes/phi_value_bytes) bridge via
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
         bb = InstrBuilder(; func_name="generate_stackified_flow.block", mod=ctx.mod)
+        _seed_builder_locals!(bb, ctx)
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on

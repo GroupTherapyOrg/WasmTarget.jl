@@ -73,7 +73,9 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
         for (dir, _, files) in walkdir(root), f in files
             endswith(f, ".jl") || continue
             path = joinpath(dir, f)
-            any(x -> endswith(path, x), exclude_files) && continue
+            # Windows: normalize separators so "codegen/values.jl" excludes match D:\...\codegen\values.jl
+            _npath = replace(path, '\\' => '/')
+            any(x -> endswith(_npath, x), exclude_files) && continue
             for line in eachline(path)
                 _iscomment(line) && continue
                 occursin(rx, line) || continue
