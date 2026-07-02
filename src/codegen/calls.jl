@@ -588,7 +588,7 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
         local_set!(bld, local_result)
 
         # Push typeId for Tuple struct (field 0 = typeId)
-        i32_const!(bld, 0)  # typeId
+        i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
         # Push result back for tuple field 1
         local_get!(bld, local_result)
 
@@ -2255,7 +2255,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Create new size tuple with new_size
             # struct.new for Tuple{Int64} (typeId=0, then value)
-            i32_const!(_pshb, 0)  # typeId
+            i32_const!(_pshb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_pshb, size_local)
             struct_new!(_pshb, size_info.wasm_type_idx, WasmValType[])
 
@@ -2396,7 +2396,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_popb, _pop_newsize_local)
 
             # Create new size tuple (typeId=0, then value)
-            i32_const!(_popb, 0)  # typeId
+            i32_const!(_popb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_popb, _pop_newsize_local)
             struct_new!(_popb, size_info.wasm_type_idx, WasmValType[])
 
@@ -3377,7 +3377,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Push typeId for tuple struct (field 0 = typeId)
             local _tupb = InstrBuilder(; func_name="compile_call", strict=false)
-            i32_const!(_tupb, 0)  # typeId
+            i32_const!(_tupb, Int64(ensure_type_id!(ctx.type_registry, tuple_type)))  # real classId (M3)
 
             # Push all tuple elements with type safety for externref fields
             # PURE-142: Core.tuple args may be phi locals typed as i64 but
@@ -4683,7 +4683,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_caddb, local_result)
 
             # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_caddb, 0)  # typeId
+            i32_const!(_caddb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
             # Push result back for tuple field 1
             local_get!(_caddb, local_result)
 
@@ -4744,7 +4744,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_csubb, local_result)
 
             # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_csubb, 0)  # typeId
+            i32_const!(_csubb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
             # Push result back for tuple field 1
             local_get!(_csubb, local_result)
 
@@ -5447,7 +5447,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local_set!(_sxb, scratch2_idx)
 
             # Stack: [] — push in struct field order: typeId, lo, hi
-            i32_const!(_sxb, 0)  # typeId
+            i32_const!(_sxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
             local_get!(_sxb, scratch_idx)
             local_get!(_sxb, scratch2_idx)
 
@@ -5520,7 +5520,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             _zext_scratch = length(ctx.locals) + ctx.n_params
             push!(ctx.locals, I64)
             local_set!(_zxb, _zext_scratch)
-            i32_const!(_zxb, 0)  # typeId
+            i32_const!(_zxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
             local_get!(_zxb, _zext_scratch)
             # Push 0 for hi part
             i64_const!(_zxb, 0)
@@ -6408,7 +6408,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             local_set!(_ntb, tuple_local)
 
                             # Push typeId for NamedTuple struct (field 0 = typeId)
-                            i32_const!(_ntb, 0)  # typeId
+                            i32_const!(_ntb, Int64(ensure_type_id!(ctx.type_registry, nt_type)))  # real classId (M3)
 
                             # Extract each field from tuple and push for struct.new
                             for (i, (name, vtype)) in enumerate(zip(names, value_types))
@@ -6569,7 +6569,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local_set!(ib, data_arr_local)
 
                 # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
-                i32_const!(ib, 0)  # typeId
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
                 i64_const!(ib, Int64(n_expr_args))
                 struct_new!(ib, size_tuple_info.wasm_type_idx, WasmValType[])
                 append!(bytes, builder_code(ib))
@@ -6580,11 +6580,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
                 # Step 4: Assemble Expr struct
                 # Push typeId for Expr struct (field 0 = typeId)
-                i32_const!(ib, 0)  # typeId
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Expr)))  # real classId (M3)
                 # Push head (Expr field 1)
                 local_get!(ib, head_local)
                 # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
-                i32_const!(ib, 0)  # typeId for Vector{Any}
+                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Vector{Any})))  # real classId (M3)
                 local_get!(ib, data_arr_local)
                 local_get!(ib, size_local)
                 struct_new!(ib, vec_any_info.wasm_type_idx, WasmValType[])

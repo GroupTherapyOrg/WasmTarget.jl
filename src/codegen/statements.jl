@@ -1864,8 +1864,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
             end
             size_info = ctx.type_registry.structs[size_tuple_type]
-            # PURE-9024: Push typeId first, then compute i64 value
-            i32_const!(b, 0)  # typeId = 0
+            # M3: real classId for the size tuple header
+            i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, size_tuple_type)))
             # Push array ref again for array.len
             emit_value!(b, field_values[1], ctx)
             array_len!(b)
@@ -2855,13 +2855,13 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     size_info = ctx.type_registry.structs[size_tuple_type]
 
                     # Stack: [typeId, data_array_ref, size_tuple_ref] for struct.new Vector
-                    # PURE-9024: Push typeId for Vector struct
-                    i32_const!(b, 0)  # typeId = 0
+                    # M3: real classId for the Vector struct header
+                    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, ret_type)))
                     # 1. Push data array ref
                     emit_value!(b, data_source, ctx)
                     # 2. Push typeId + length as i64 for size tuple, then struct.new Tuple{Int64}
-                    # PURE-9024: Push typeId for Tuple{Int64} struct
-                    i32_const!(b, 0)  # typeId = 0
+                    # M3: real classId for the Tuple{Int64} size header
+                    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, size_tuple_type)))
                     if len_arg !== nothing
                         emit_value!(b, len_arg, ctx)
                         len_type = infer_value_type(len_arg, ctx)
