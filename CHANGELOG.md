@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.1...v0.4.2) (2026-07-02)
+
+
+### Features
+
+* caller-facing diagnostics ledger — compile(...; diagnostics_sink=...) + WasmCompileError.all ([399ad9c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/399ad9cfc63961f5df55a54e9a023b9ca547f35e))
+* caller-facing diagnostics ledger (diagnostics_sink + WasmCompileError.all) ([0b40aaa](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0b40aaa92e3862c9c44d32d3c92525a88f76d1b0))
+
+
+### Bug Fixes
+
+* **ci:** docs build — update the cached General registry ([119f77d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/119f77d85a29596550a4f6f0230d73ffc4bc1784))
+* **ci:** docs build — update the cached General registry, not just add it ([7983c26](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/7983c26e33ae2981223c6e88c86a229ab7019b53))
+
 ## [0.4.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.0...v0.4.1) (2026-07-02)
 
 
