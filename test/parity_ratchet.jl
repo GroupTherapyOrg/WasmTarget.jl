@@ -89,8 +89,6 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R1_untyped_compile_value" => ("untyped compile_value( callers (M2 → 0)",
-        () -> count_sites(r"compile_value\("; exclude_line=r"function compile_value\(")),
     "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0)",
         () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!")),
     "R3_infer_value_type" => ("infer_value_type( re-guess callers (M2 → 0 + delete fn)",
@@ -123,6 +121,8 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L9_no_unjustified_untyped_emission" => ("every untyped compile_value splice carries the god-fn-seam annotation; unjustified untyped emission is DEAD (M4; locked 2026-07-02)",
+        () -> count_sites(r"compile_value\("; exclude_line=r"function compile_value\(|god-fn seam")),
     "L8_no_silent_traps" => ("every unreachable! is record_unsupported!-routed OR an annotated structural trap — NO silent stubs (M5; locked 2026-07-01)",
         () -> begin
             n = 0

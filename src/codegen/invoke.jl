@@ -1950,7 +1950,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
     # 453393ca4ba4: closure callee — the compiled function takes the closure
     # object as wasm param 1; push it before the explicit args
     if closure_self_to_push !== nothing
-        append!(bytes, compile_value(closure_self_to_push, ctx))
+        append!(bytes, compile_value(closure_self_to_push, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
     end
 
     # Push arguments (for non-signal calls)
@@ -4087,7 +4087,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         if _fval_numeric && (_ftype === Any || isabstracttype(_ftype))
                             emit_numeric_to_anyref!(bytes, args[_fi], _fval_wasm, ctx)
                         else
-                            append!(bytes, compile_value(args[_fi], ctx))
+                            append!(bytes, compile_value(args[_fi], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                         end
                     end
                     # struct.new

@@ -1549,7 +1549,7 @@ Modifies `bytes` in-place.
 """
 function _compile_call_symbol(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext)::Nothing
     # Compile the argument — it's already a string array in WasmGC
-    append!(bytes, compile_value(args[1], ctx))
+    append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
     return nothing
 end
 
@@ -1741,7 +1741,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
            isconst(_gg_mod, _gg_name)
             _gg_val = getglobal(_gg_mod, _gg_name)
-            append!(bytes, compile_value(_gg_val, ctx))
+            append!(bytes, compile_value(_gg_val, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
     end
@@ -1922,7 +1922,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # NOT the redundant re-guess-at-emit the typed channel deletes.
         true_bytes, _true_ty = compile_value_typed(args[2], ctx)   # true_val
         false_bytes, _false_ty = compile_value_typed(args[3], ctx)  # false_val
-        cond_bytes = compile_value(args[1], ctx)   # cond
+        cond_bytes = compile_value(args[1], ctx)   # cond  # god-fn seam: typed when the caller goes builder-native (M4 tail)
 
         # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
         # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
@@ -2491,7 +2491,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                length(obj_type.parameters) >= 1 && obj_type.parameters[1] === UInt8
                 local _cu_field0 = field_ref isa QuoteNode ? field_ref.value : field_ref
                 if _cu_field0 === :s
-                    append!(bytes, compile_value(obj_arg, ctx))
+                    append!(bytes, compile_value(obj_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                     return bytes
                 end
             end
@@ -2527,7 +2527,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             if field_sym === :mem
                 # :mem returns the underlying Memory - in WasmGC this is the array itself
-                append!(bytes, compile_value(obj_arg, ctx))
+                append!(bytes, compile_value(obj_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                 return bytes
             elseif field_sym === :ptr_or_offset
                 # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
@@ -3246,7 +3246,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # In WasmGC, this is a no-op since Memory IS the array
     if is_func(func, :memoryref) && length(args) == 1
         # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
-        append!(bytes, compile_value(args[1], ctx))
+        append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         return bytes
     end
 
@@ -3257,7 +3257,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         if length(args) == 1
             # Single arg: just wrapping a Memory - pass through the array reference
             # This is a "fresh" MemoryRef with offset 1
-            append!(bytes, compile_value(args[1], ctx))
+            append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         elseif length(args) >= 2
             base_ref = args[1]
@@ -3662,7 +3662,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # These are no-ops in Wasm since we don't need the sink pattern
         if obj_type <: Base.RefValue
             # Just push the value (setfield! returns the value)
-            append!(bytes, compile_value(value_arg, ctx))
+            append!(bytes, compile_value(value_arg, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
         # Fall through for other struct types - will hit error
@@ -3680,7 +3680,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # compilerbarrier(kind, value) - first arg is a symbol, second is the value
         # We only want the value (second arg)
         if length(args) >= 2
-            append!(bytes, compile_value(args[2], ctx))
+            append!(bytes, compile_value(args[2], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         end
         return bytes
     end
@@ -3746,7 +3746,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # In Wasm we don't do runtime type checks, so just return the value
     if is_func(func, :typeassert)
         if length(args) >= 1
-            append!(bytes, compile_value(args[1], ctx))
+            append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         end
         return bytes
     end
@@ -3922,7 +3922,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # pointer is compile-time host metadata; fold the whole load.
         local _pr_fold = _try_fold_layout_pointerref(ptr_arg, ctx)
         if _pr_fold !== nothing
-            append!(bytes, compile_value(_pr_fold, ctx))
+            append!(bytes, compile_value(_pr_fold, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             return bytes
         end
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
@@ -5861,7 +5861,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _gfc_val = try getfield(args[1].value, _gfc_fld) catch; nothing end
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
-                    append!(bytes, compile_value(_gfc_val, ctx))
+                    append!(bytes, compile_value(_gfc_val, ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                     _gfc_done = true
                 end
             end

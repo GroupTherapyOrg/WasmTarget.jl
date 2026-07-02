@@ -702,7 +702,7 @@ end
 
 Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
 emission ACTUALLY pushed (`compile_value_typed`'s byproduct) — NOT a re-guess via
-`infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value(v,ctx);
+`infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value;
 pushes=WasmValType[static_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
 validator's stack type is now the truth instead of a re-derivation).
@@ -719,7 +719,7 @@ end
 THE wrap chokepoint (dart `CodeGenerator.wrap`, code_generator.dart:879-888): emit `val`, take
 the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
 `convert_type!` funnel (dart `convertType`), and return `expected`. This is the M2 primitive
-that replaces the `emit_raw!(b, compile_value(v,ctx); pushes=[re-guess])` + hand-rolled
+that replaces the `emit_raw!(b, compile_value; pushes=[re-guess])` + hand-rolled
 coercion-ladder anti-pattern — the type is never re-derived after emission.
 
 `from_julia` (when the caller knows the value's Julia type) lets the boxing arm stamp the REAL

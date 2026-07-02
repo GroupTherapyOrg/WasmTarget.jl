@@ -243,7 +243,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
             else
-                val_bytes = compile_value(stmt.val, ctx)
+                val_bytes = compile_value(stmt.val, ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                 if isempty(val_bytes)
                     # TRUE-INT-002: compile_value produced empty bytes (stubbed SSA value on dead path).
                     # Push a type-correct default so `return` has a value on the stack.
@@ -1776,7 +1776,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                                       length(src_stmt.args) >= 4)
             end
         end
-        field0_bytes = compile_value(field_values[1], ctx)
+        field0_bytes = compile_value(field_values[1], ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
         if is_multi_arg_memref
             # Multi-arg memoryrefnew pushed [array_ref, i32_index] — drop the i32 index
             push!(field0_bytes, Opcode.DROP)
@@ -1812,7 +1812,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         end
                         # Also check if source is a PiNode wrapping a memoryrefnew
                         if !recompiled && src_stmt_f0 isa Core.PiNode
-                            field0_bytes = compile_value(src_stmt_f0.val, ctx)
+                            field0_bytes = compile_value(src_stmt_f0.val, ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
                             recompiled = true
                         end
                     end
@@ -1830,7 +1830,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
 
         # Compile field 2: the size tuple (field 0=typeId, field 1=array_ref, field 2=size_tuple)
         if length(field_values) >= 2
-            field1_bytes = compile_value(field_values[2], ctx)
+            field1_bytes = compile_value(field_values[2], ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
             if length(field1_bytes) >= 2 && field1_bytes[1] == Opcode.LOCAL_GET
                 src_idx = 0; shift = 0
                 for bi in 2:length(field1_bytes)
