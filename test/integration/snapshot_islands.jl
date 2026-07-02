@@ -1,16 +1,16 @@
 # ============================================================================
-# In-WT PlutoIslands integration fixtures — real island cells, status-locked
+# In-WT Snapshot.jl integration fixtures — real island cells, status-locked
 # ============================================================================
 #
-# These fixtures are REAL PlutoIslands featured-corpus island cells, harvested
-# from PI's live Pluto env by `PlutoIslands.jl/tools/harvest_wt_fixtures.jl` into
-# `pi_island_fixtures.json` (vendored — no PI/Pluto dependency here). Each record
+# These fixtures are REAL Snapshot.jl featured-corpus island cells, harvested
+# from PI's live Pluto env by `Snapshot.jl/tools/harvest_wt_fixtures.jl` into
+# `snapshot_island_fixtures.json` (vendored — no PI/Pluto dependency here). Each record
 # carries the cell's synthesized fn source, its group preamble, arg types, sample
 # bond inputs, and the GOLDEN native (Pluto) output.
 #
 # Every piece is tested directly against WT codegen via the in-package bit-exact
 # bridge (`compare_julia_wasm_bridge`). A per-piece STATUS LOCK
-# (`pi_island_status.json`) records each piece's expected status, so the suite
+# (`snapshot_island_status.json`) records each piece's expected status, so the suite
 # catches regressions in BOTH directions:
 #   * a `green` piece that breaks  → suite FAILS (codegen regression)
 #   * a failing piece that goes green → suite FAILS ("promote me" — your fix landed)
@@ -24,21 +24,21 @@
 
 using JSON
 
-const PI_FIX  = joinpath(@__DIR__, "pi_island_fixtures.json")
-const PI_LOCK = joinpath(@__DIR__, "pi_island_status.json")
+const SNAP_FIX  = joinpath(@__DIR__, "snapshot_island_fixtures.json")
+const SNAP_LOCK = joinpath(@__DIR__, "snapshot_island_status.json")
 
 # arg types compare_julia_wasm_bridge can marshal today (scalar bridge args).
 # Non-scalar bond inputs (String/Bool/DateTime/struct) need bridge_run_args-style
 # arg bridging — tracked as `nonscalar_args` until that lands. Compared by NAME
 # (string), not by eval'd Type, so classification is deterministic even when an
 # exotic argtype (e.g. Dates.DateTime) can't be resolved in the sandbox.
-# Faithful vendored copy of PI's cell-body renderers (PlutoIslands.jl/src/extract.jl
-# `_plain_body`/`_html_body`) so harvested cells that call `PlutoIslands._plain_body`
+# Faithful vendored copy of PI's cell-body renderers (Snapshot.jl/src/extract.jl
+# `_plain_body`/`_html_body`) so harvested cells that call `Snapshot._plain_body`
 # resolve WITHOUT a PI/Pluto dependency. Quoted Expr (not a string) to avoid escape
 # hell. If PI ever changes these, the golden-drift guard in pi_classify (vendored-fn
 # output vs captured native golden) fires.
 const _PI_SHIM = :(
-    module PlutoIslands
+    module Snapshot
     _html_body(v::Base.Docs.HTML{String})::String = v.content
     _html_body(v::AbstractString)::String = String(v)
     _html_body(v) = error("text/html rendering of $(typeof(v)) unsupported")
@@ -50,7 +50,7 @@ const _PI_SHIM = :(
 # Classify ONE harvested cell against current WT codegen → (status, detail).
 # Kept free of @test so the lock generator and the testset share identical logic.
 # WasmMakie viz markers. A cell that constructs a Figure or calls a `!`-plotter
-# produces canvas commands, verified by PlutoIslands' OWN `differential_oracle`
+# produces canvas commands, verified by Snapshot.jl's OWN `differential_oracle`
 # (which runs where WasmMakie is loaded) — NOT by this scalar bridge (WasmTarget
 # can't depend on WasmMakie). Scalar/string island cells never contain these.
 const _WM_VIZ_MARKERS = (
@@ -66,13 +66,13 @@ function pi_classify(group, cell)
     fn_src = get(cell, "fn_src", nothing)
     fn_src === nothing && return ("extract_fail", join(get(cell, "reasons", String[]), "; "))
     haskey(cell, "eval_err") && return ("harvest_eval_fail", String(cell["eval_err"]))
-    # WasmMakie islands ARE compiled by WT — they're just verified by PlutoIslands'
+    # WasmMakie islands ARE compiled by WT — they're just verified by Snapshot.jl'
     # canvas oracle (`differential_oracle`, where WasmMakie is a dep) rather than by
     # this scalar bridge (WT's test env can't import WasmMakie — circular dep). Bucket
     # them as `wasmmakie_island` so `native_err` counts only real scalar-codegen
     # failures, not supported viz islands verified elsewhere.
     _is_viz_cell(cell) && return ("wasmmakie_island",
-        "WasmMakie island — compiled by WT, verified by PlutoIslands' canvas oracle (not the scalar bridge)")
+        "WasmMakie island — compiled by WT, verified by Snapshot.jl's canvas oracle (not the scalar bridge)")
     # Decide nonscalar_args from the ACTUAL bridge descriptor (not a scalar name
     # list) so bridgeable parametric bonds — Vector{String}, @NamedTuple{…},
     # ComplexF64 — are tested too. argtypes are eval'd in `Main` (which reliably has
@@ -91,7 +91,7 @@ function pi_classify(group, cell)
     sb = Module(gensym(:pi))
     try Core.eval(sb, :(import Markdown)) catch end
     try Core.eval(sb, :(import Dates)) catch end
-    try Core.eval(sb, _PI_SHIM) catch end   # vendored PlutoIslands._plain_body/_html_body
+    try Core.eval(sb, _PI_SHIM) catch end   # vendored Snapshot._plain_body/_html_body
     for ex in get(group, "preamble", String[])
         try Core.eval(sb, Meta.parse(ex)) catch end
     end
@@ -145,7 +145,7 @@ pi_key(group, cell) = string(get(group, "notebook", "?"), "#",
                              get(group, "group", 0), "#", get(cell, "cell_id", "?"))
 
 # Classify every harvested piece → Vector{(key, status, detail, notebook, rettype)}.
-function pi_all_statuses(; fixtures = PI_FIX)
+function pi_all_statuses(; fixtures = SNAP_FIX)
     recs = JSON.parsefile(fixtures)
     out = NamedTuple[]
     for g in recs
@@ -162,8 +162,8 @@ end
 
 # Regenerate the status lock from current codegen. Run after a harvest or after a
 # codegen fix that legitimately changes a piece's status:
-#   julia --project=. test/integration/regen_pi_lock.jl
-function regenerate_pi_lock!(; fixtures = PI_FIX, lockfile = PI_LOCK)
+#   julia --project=. test/integration/regen_snapshot_lock.jl
+function regenerate_snapshot_lock!(; fixtures = SNAP_FIX, lockfile = SNAP_LOCK)
     sts = pi_all_statuses(; fixtures = fixtures)
     lock = Dict(s.key => Dict("status" => s.status, "notebook" => s.notebook) for s in sts)
     open(lockfile, "w") do io

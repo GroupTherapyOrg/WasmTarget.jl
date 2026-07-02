@@ -53,7 +53,7 @@ R5 pre-emit julia-type queries · R7 raw coercion ops · R11 patch-tag sediment.
 ## Soundness certification
 
 Every phase closed with its own full capped gate (`WT_TEST_CONCURRENCY=2 Pkg.test`): 10
-process shards (~2,690 tests incl. Aqua + all regression backfills + the PI-islands
+process shards (~2,690 tests incl. Aqua + all regression backfills + the Snapshot-islands
 integration) + 9 differential fuzz suites (293 property tests over LinearAlgebra/Dates/
 Random/Statistics/SparseArrays/ForwardDiff/StaticArrays/SimpleDiffEq). The M7 closing matrix
 ran the full corpus twice: once with external validation OFF (the builder is the gate) and

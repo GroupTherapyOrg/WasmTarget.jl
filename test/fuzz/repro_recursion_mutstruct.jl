@@ -4,7 +4,7 @@
 # one. The SAME struct ops in a LINEAR loop compile + run correctly, so the
 # trigger is recursion-specific, NOT the struct/NTuple/Vector ops themselves.
 #
-# Discovered reframing the PlutoIslands "turtles-art" L-system fractal
+# Discovered reframing the Snapshot.jl "turtles-art" L-system fractal
 # (`lindenmayer`, a binary recursion that save/restores the turtle's pos+heading).
 # The notebook was reframed to an iterative explicit-stack version (which compiles
 # — see `run_linear` below); this repro keeps the recursive form for the WT loop.

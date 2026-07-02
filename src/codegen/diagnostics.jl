@@ -153,7 +153,7 @@ _paranoid_stubs() = get(ENV, "WT_PARANOID_STUBS", "0") != "0"
 
 When set (see `compile(...; diagnostics_sink=...)`), every `WasmDiagnostic` recorded by any
 compilation context — including non-fatal downgraded dependency stubs — is mirrored here.
-This is the caller-facing ledger: tools like PlutoIslands read it to explain *why* a
+This is the caller-facing ledger: tools like Snapshot.jl read it to explain *why* a
 compilation degraded, with source attribution per diagnostic.
 """
 const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(nothing)
