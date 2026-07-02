@@ -95,8 +95,6 @@ const METRICS = [
         () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!")),
     "R3_infer_value_type" => ("infer_value_type( re-guess callers (M2 → 0 + delete fn)",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R4_infer_value_wasm_type" => ("infer_value_wasm_type( re-guess callers (M2 → 0 + delete fn)",
-        () -> count_sites(r"infer_value_wasm_type\("; exclude_line=r"function infer_value_wasm_type\(")),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
                           exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
@@ -135,6 +133,8 @@ const LOCKS = [
     "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
         () -> count_sites(r"ref_i31!\(";
                           exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
+        () -> count_sites(r"infer_value_wasm_type\(")),
     "L3_legacy_flow_family" => ("ALL legacy lowering strategies — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow/loop_code/branched_loops/complex_flow router (M1 COMPLETE: ONE lowering = the stackifier; DELETED + locked 2026-07-01)",
         () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(|generate_loop_code\(|generate_branched_loops\(|generate_complex_flow\(";
                           exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow|generate_loop_code|generate_branched_loops|generate_complex_flow)\(")),

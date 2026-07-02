@@ -3,10 +3,17 @@
 # ============================================================================
 
 """
-Get the Wasm type that compile_value will push on the stack for a given value.
-Used to detect type mismatches at return sites.
+    static_wasm_type(val, ctx) -> WasmValType
+
+THE single PRE-EMISSION static-type query (dart2wasm's `translateType(node.getStaticType())`,
+intrinsics.dart:333): what wasm type WOULD `val` push, derived from locals/ssa_types/literals.
+CONTRACT: use ONLY to make decisions BEFORE emitting (opcode/width selection, path choice) —
+NEVER to describe a value that has already been emitted; the emission's own returned type
+(`compile_value_typed`/`emit_value!`) is the truth there. The old name `infer_value_wasm_type`
+(the post-emission re-guess anti-pattern, once ~265 callers) is retired and LOCKED at zero by
+test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
 """
-function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
+function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
     # PURE-036af: Handle nothing specially - compile_value(nothing) produces i32_const 0
     if val === nothing
         return I32
@@ -21,7 +28,7 @@ function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValTyp
         # Resolve the GlobalRef to get the actual value
         try
             actual_val = getfield(val.mod, val.name)
-            return infer_value_wasm_type(actual_val, ctx)
+            return static_wasm_type(actual_val, ctx)
         catch
             # If we can't resolve, fall back to AnyRef (internal polymorphic type)
             return AnyRef
@@ -101,7 +108,7 @@ function infer_value_wasm_type(val, ctx::AbstractCompilationContext)::WasmValTyp
                 info = register_struct_type!(ctx.mod, ctx.type_registry, T)
                 return ConcreteRef(info.wasm_type_idx, false)
             end
-            return infer_value_wasm_type(inner, ctx)
+            return static_wasm_type(inner, ctx)
         elseif val isa Symbol || val isa String
             # PURE-043: Symbol/String compile to array_new_fixed (ConcreteRef)
             str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -674,7 +681,7 @@ end
 Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
 emission ACTUALLY pushed (`compile_value_typed`'s byproduct) — NOT a re-guess via
 `infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value(v,ctx);
-pushes=WasmValType[infer_value_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
+pushes=WasmValType[static_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
 validator's stack type is now the truth instead of a re-derivation).
 """
@@ -870,7 +877,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     # Re-compile the expression to produce its value on the stack.
                     # Call the specific compiler directly to avoid compile_statement's
                     # orphan-prevention skip for multi-arg memoryrefnew.
-                    local _ssa_t = WasmValType[infer_value_wasm_type(val, ctx)]
+                    local _ssa_t = WasmValType[static_wasm_type(val, ctx)]
                     if stmt.head === :call
                         emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)
                     elseif stmt.head === :invoke
@@ -1485,7 +1492,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 continue
             end
             field_val = getfield(val, field_name)
-            field_val_bytes = compile_value(field_val, ctx)
+            field_val_bytes, _fv_ty = compile_value_typed(field_val, ctx)
             # B4/U2: the union-typed-field tagged-union-wrapper box-coercion is RETIRED — a
             # union field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper, so the constant's field value (a ref) is already anyref-compatible.
@@ -1552,13 +1559,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
                         # String constants start with i32.const (char 1) but end with array.new_fixed.
                         first_byte = field_val_bytes[1]
-                        ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(field_val, ctx))
+                        ends_with_ref_producing_gc = _fv_ty !== nothing && _wt_is_ref(_fv_ty)
                         if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
                             need_replace = true
                         elseif first_byte == 0x20  # LOCAL_GET
                             # dart2wasm carries the type with the value: derive the source's
                             # wasm type from the inferred value type rather than decoding the local.
-                            local src_type = infer_value_wasm_type(field_val, ctx)
+                            local src_type = _fv_ty
                             if src_type === I64 || src_type === I32
                                 need_replace = true
                             end
@@ -1591,7 +1598,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     already_extern = length(field_val_bytes) >= 2 &&
                                      field_val_bytes[end-1] == 0xFB &&
                                      field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                    if !already_extern && _wt_is_ref(infer_value_wasm_type(field_val, ctx))
+                    if !already_extern && _fv_ty !== nothing && _wt_is_ref(_fv_ty)
                         extern_convert_any!(b)
                     elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
                         # PURE-6025: global.get produces a concrete ref (e.g., Type constant)

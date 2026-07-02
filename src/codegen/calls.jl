@@ -979,7 +979,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
                 # `nothing` is treated as a ref (may compile to ref.null).
-                local _a1_wt = infer_value_wasm_type(args[1], ctx)
+                local _a1_wt = static_wasm_type(args[1], ctx)
                 arg1_wasm_is_ref = is_nothing_value(args[1], ctx) || _wt_is_ref(_a1_wt)
                 arg1_is_externref = (_a1_wt === ExternRef)
                 # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
@@ -994,7 +994,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
-                local _a2_wt = infer_value_wasm_type(args[2], ctx)
+                local _a2_wt = static_wasm_type(args[2], ctx)
                 arg2_wasm_is_ref = is_nothing_value(args[2], ctx) || _wt_is_ref(_a2_wt)
                 arg2_is_externref = (_a2_wt === ExternRef)
                 # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
@@ -1153,7 +1153,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
             # dart2wasm carries the type with the value rather than scanning bytes.
             local _arg1_local_is_ref = false  # true if arg1's local is ref-typed (not numeric)
             if length(args) >= 1
-                local _a1_wt = infer_value_wasm_type(args[1], ctx)
+                local _a1_wt = static_wasm_type(args[1], ctx)
                 arg1_actual_32bit = (_a1_wt === I32)
                 # Detect ref-typed locals masquerading as numeric (e.g. Core.IntrinsicFunction
                 # is stored as ExternRef because julia_to_wasm_type returns ExternRef via
@@ -1166,7 +1166,7 @@ function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilati
 
             # Check arg2's actual Wasm type (may differ from Julia type inference).
             if length(args) >= 2
-                arg2_actual_32bit = (infer_value_wasm_type(args[2], ctx) === I32)
+                arg2_actual_32bit = (static_wasm_type(args[2], ctx) === I32)
             end
 
             # Select opcode based on actual Wasm types
@@ -1981,7 +1981,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # was silently dropped, leaving only the true-branch value. In a gcd loop
         # phi-update this froze the loop-carried value → infinite loop (gap
         # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
-        cond_wasm_type = infer_value_wasm_type(args[1], ctx)
+        cond_wasm_type = static_wasm_type(args[1], ctx)
         cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
                       cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
                       cond_wasm_type === AnyRef || cond_wasm_type === EqRef
@@ -3422,9 +3422,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if (b & 0x80) == 0; leb_end = bi; break; end
                         end
                         if leb_end == length(arg_bytes)
-                            # dart2wasm carries the type with the value: a pure local.get is
-                            # numeric iff the inferred value type is numeric.
-                            local src_type = infer_value_wasm_type(arg, ctx)
+                            # typed channel: the emission's own type.
+                            local src_type = arg_ty
                             if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
                                 is_numeric_arg = true
                             end
@@ -3451,7 +3450,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     is_numeric_local = false  # TRUE-PARSE-002: distinguish local_get from constant
                     numeric_src_type = nothing  # TRUE-PARSE-002: for boxing
                     # SELFHOST-008: Check for numeric constants (i32.const 0 from nothing, etc.)
-                    ends_with_ref_producing_gc = _wt_is_ref(infer_value_wasm_type(arg, ctx))
+                    ends_with_ref_producing_gc = arg_ty !== nothing && _wt_is_ref(arg_ty)
                     if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42 || arg_bytes[1] == 0x43 || arg_bytes[1] == 0x44) && !ends_with_ref_producing_gc
                         is_numeric_arg = true
                     elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
@@ -3914,7 +3913,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 if pos - 1 == length(val_bytes) && local_offset >= 0 && local_offset < length(ctx.locals)
                     # dart2wasm carries the type with the value: a pure local.get is numeric
                     # iff the inferred value type is numeric.
-                    local src_type = infer_value_wasm_type(arg1_is_nothing ? args[2] : args[1], ctx)
+                    local src_type = static_wasm_type(arg1_is_nothing ? args[2] : args[1], ctx)
                     if src_type === I64 || src_type === I32 || src_type === F64 || src_type === F32
                         is_numeric_val = true
                     end
@@ -4580,7 +4579,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Also check for local_get of externref-typed local.
         # dart2wasm carries the type with the value rather than scanning bytes.
         if length(arg1_bytes) >= 2 && arg1_bytes[1] == Opcode.LOCAL_GET &&
-           infer_value_wasm_type(args[1], ctx) === ExternRef
+           static_wasm_type(args[1], ctx) === ExternRef
             # externref-typed local fed to a numeric intrinsic — boxing. Loud reject.
             bytes = UInt8[]  # PURE-908: clear pre-pushed args
             emit_unsupported_stub!(ctx, bytes, :unsupported_method,
@@ -5084,11 +5083,11 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # against a ref-typed Nothing local).
                 if length(args) >= 1 && arg_type === Nothing
                     arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
-                                          _wt_is_ref(infer_value_wasm_type(args[1], ctx))
+                                          _wt_is_ref(static_wasm_type(args[1], ctx))
                 end
                 if length(args) >= 2 && arg2_type_ne === Nothing
                     arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
-                                          _wt_is_ref(infer_value_wasm_type(args[2], ctx))
+                                          _wt_is_ref(static_wasm_type(args[2], ctx))
                 end
             end
             # BOTH args must be ref types to use ref.eq
@@ -6100,7 +6099,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             if target_info !== nothing
                 # Push arguments with type checking
                 for (arg_idx, arg) in enumerate(args)
-                    arg_bytes = compile_value(arg, ctx)
+                    arg_bytes, _cw_arg_ty = compile_value_typed(arg, ctx)
                     append!(bytes, arg_bytes)
                     # Check if arg type matches expected param type
                     if arg_idx <= length(target_info.arg_types)
@@ -6220,7 +6219,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20  # LOCAL_GET opcode
                                 # dart2wasm carries the type with the value: derive the actual
                                 # wasm type from the inferred value type rather than the local index.
-                                actual_local_wasm = infer_value_wasm_type(arg, ctx)
+                                actual_local_wasm = _cw_arg_ty
                                 if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
                                     # Actual local is a ref type but not externref — insert conversion
                                     local _ecb = InstrBuilder(; func_name="compile_call", strict=false)
@@ -6514,7 +6513,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             else
                 # Push each arg, then array_new_fixed
                 for ea in expr_args
-                    ea_bytes = compile_value(ea, ctx)
+                    ea_bytes, _ea_ty = compile_value_typed(ea, ctx)
                     is_numeric = false
                     # Check if ea_bytes contains GC_PREFIX — if so, it's a GC op
                     # (string/struct/array), NOT a numeric value. This prevents false
@@ -6523,9 +6522,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     if !has_gc_prefix_ea && length(ea_bytes) >= 1 && (ea_bytes[1] == Opcode.I32_CONST || ea_bytes[1] == Opcode.I64_CONST)
                         is_numeric = true
                     elseif length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
-                        # dart2wasm carries the type with the value: a local.get is numeric
-                        # iff the inferred value type is numeric.
-                        local src_type = infer_value_wasm_type(ea, ctx)
+                        # typed channel: the emission's own type.
+                        local src_type = _ea_ty
                         if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
                             is_numeric = true
                         end
@@ -6558,7 +6556,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
                                 # dart2wasm carries the type with the value: the source is
                                 # externref iff the inferred value type is externref.
-                                is_extern = (infer_value_wasm_type(ea, ctx) === ExternRef)
+                                is_extern = (_ea_ty === ExternRef)
                             end
                             if is_extern
                                 local _aceb = InstrBuilder(; func_name="compile_call", strict=false)
@@ -6571,7 +6569,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             if length(ea_bytes) >= 2 && ea_bytes[1] == Opcode.LOCAL_GET
                                 # dart2wasm carries the type with the value: the source is
                                 # externref iff the inferred value type is externref.
-                                is_extern = (infer_value_wasm_type(ea, ctx) === ExternRef)
+                                is_extern = (_ea_ty === ExternRef)
                             end
                             if !is_extern
                                 local _ecab = InstrBuilder(; func_name="compile_call", strict=false)
