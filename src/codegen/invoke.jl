@@ -4056,9 +4056,19 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         local _sc_fp = _sc_sig.parameters[1]
                         if _sc_fp isa DataType && _sc_fp <: Type && length(_sc_fp.parameters) >= 1
                             local _sc_tt = _sc_fp.parameters[1]
+                            # Only a FIELD-WISE constructor (one arg per struct field) can be
+                            # lowered to a bare struct.new: it needs exactly `fieldcount` operands.
+                            # A non-field-wise constructor reached via :invoke (e.g.
+                            # `Dict{K,V}(ps::Pair...)`, which allocates keys/vals Memory + hashes)
+                            # has a DIFFERENT arg count, so mapping its args straight onto the
+                            # struct fields emits silently-invalid wasm (`struct.new $Dict` fed 3
+                            # Pairs into 8 fields → "expected i64, found (ref …)"). Guard on
+                            # arg-count == field-count so this branch fires ONLY when it can emit
+                            # valid wasm; the rest loud-reject via the terminal :unsupported_method.
                             _sc_ok = _sc_tt isa DataType && is_struct_type(_sc_tt) &&
                                      (haskey(ctx.type_registry.structs, _sc_tt) ||
-                                      (isconcretetype(_sc_tt) && isstructtype(_sc_tt)))
+                                      (isconcretetype(_sc_tt) && isstructtype(_sc_tt))) &&
+                                     isconcretetype(_sc_tt) && fieldcount(_sc_tt) == length(args)
                         end
                     end
                     _sc_ok
