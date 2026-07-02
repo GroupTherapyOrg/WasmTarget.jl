@@ -75,10 +75,17 @@ mutable struct DispatchTableRegistry
     selector_positions::Dict{Any,Vector{Tuple{Int,Int}}}  # func_ref → [(table_pos, entry_i)]
     selector_table_idx::Union{Nothing,UInt32}         # THE one flat funcref table
     selector_table_len::Int
+    # parity(M8.3): the multi-axis CASCADE — Julia multiple dispatch as composed
+    # dart single-axis hops through the SAME table. Per func_ref: level-1 rows that
+    # need a second hop, each = (l1_pos, axis2, offset2, rows2::[(pos2, entry_i)]).
+    selector_cascades::Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
+        Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}
 end
 
 DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}(),
-    Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0)
+    Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0,
+    Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
+        Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}())
 
 """Check if a function has a hash dispatch table."""
 has_dispatch_table(reg::DispatchTableRegistry, func_ref) = haskey(reg.tables, func_ref)
