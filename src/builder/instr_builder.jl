@@ -203,7 +203,16 @@ function local_get!(b::InstrBuilder, idx::Integer)
     validate_push!(b.v, (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef)
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
-local_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.LocalSet(UInt32(idx))))
+function local_set!(b::InstrBuilder, idx::Integer)
+    # dart parity: local.set validates the value against the LOCAL's type when known
+    # (a store is [local.type] → []; pop_any hid ill-typed stores until instantiation).
+    if (idx + 1) <= length(b.locals)
+        validate_pop!(b.v, b.locals[idx + 1])
+    else
+        validate_pop_any!(b.v)
+    end
+    _emit!(b, InstrIR.LocalSet(UInt32(idx)))
+end
 function local_tee!(b::InstrBuilder, idx::Integer)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
     lt = (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef

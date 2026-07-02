@@ -1463,8 +1463,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         extern_convert_any!(_cvb)
                         append!(bytes, builder_code(_cvb))
                     else
-                    # Type mismatch: drop the value and emit type-safe default (typed;
-                    # byte-identical; this site has no EqRef arm → eqref=false).
+                    # Type mismatch: drop the value and emit type-safe default — DIAGNOSED
+                    # (M5 loud-visible; behavior unchanged pending the full audit).
+                    record_unsupported!(ctx, :unsupported_type,
+                        "SSA-store type mismatch (value dropped, type-safe default emitted)"; idx=idx)
                     local _dvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                     drop!(_dvb)
                     append!(bytes, builder_code(_dvb))

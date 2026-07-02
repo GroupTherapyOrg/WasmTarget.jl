@@ -660,6 +660,52 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
+    # parity(M6/F3): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
+    # a variable's local is typed by its REAL inferred type, not the erased Any). The
+    # dormant Loop-C value-channel pass proves, conservatively, which Any-typed SSAs/phis
+    # only ever carry one numeric type (the scalar-replaced Core.Box accumulator cycle);
+    # their locals become that numeric type so the adds/stores line up — the return/phi
+    # boundaries box via the wrap channel where anyref is genuinely required.
+    _numeric_joins = try
+        # Parent side: record %new(Core.Box) contents types per capturing closure type
+        # (feeds the closure-side seeding below when THAT closure's body compiles).
+        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
+        # Closure side: seed the captured-Box getfields with the recorded contents type
+        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
+        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
+        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
+        if !isempty(ctx.arg_types)
+            _sbT = ctx.arg_types[1]
+            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+                argtypes=ctx.arg_types[2:end], self_shift=1))
+        end
+        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
+            _selfT = ctx.arg_types[1]
+            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
+            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
+                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
+            if _bj !== nothing
+                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                if !isempty(_seeds)
+                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, _seeds)
+                end
+            end
+        end
+        _joins
+    catch _je
+        if haskey(ENV, "WT_DBG_JOIN")
+            println(stderr, "JOIN-ERR ", first(sprint(showerror, _je), 120))
+            for _fr in stacktrace(catch_backtrace())[1:min(end,4)]
+                println(stderr, "  @ ", _fr)
+            end
+        end
+        Dict{Int,Type}()
+    end
+
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
@@ -675,6 +721,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     phi_julia_type = Int64
                 end
             end
+            haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
             phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
 
             # PURE-324: For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
@@ -852,6 +899,46 @@ We need locals when:
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
+    # parity(M6/F3): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
+    _numeric_joins = try
+        # Parent side: record %new(Core.Box) contents types per capturing closure type
+        # (feeds the closure-side seeding below when THAT closure's body compiles).
+        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
+        # Closure side: seed the captured-Box getfields with the recorded contents type
+        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
+        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
+        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
+        if !isempty(ctx.arg_types)
+            _sbT = ctx.arg_types[1]
+            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+                argtypes=ctx.arg_types[2:end], self_shift=1))
+        end
+        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
+            _selfT = ctx.arg_types[1]
+            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
+            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
+                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
+            if _bj !== nothing
+                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                if !isempty(_seeds)
+                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, _seeds)
+                end
+            end
+        end
+        _joins
+    catch _je
+        if haskey(ENV, "WT_DBG_JOIN")
+            println(stderr, "JOIN-ERR ", first(sprint(showerror, _je), 120))
+            for _fr in stacktrace(catch_backtrace())[1:min(end,4)]
+                println(stderr, "  @ ", _fr)
+            end
+        end
+        Dict{Int,Type}()
+    end
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
@@ -1216,6 +1303,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # will actually push on the stack. If the source value has a local,
             # that local's type is what will be on the stack (via local.get).
             effective_type = ssa_type
+            # parity(M6/F3): Any-but-really-numeric SSAs take their JOIN type (see above).
+            haskey(_numeric_joins, ssa_id) && (effective_type = _numeric_joins[ssa_id])
             if stmt isa Core.PiNode
                 narrowed_wasm = julia_to_wasm_type_concrete(ssa_type, ctx)
                 # Check if the source value has a local with a different type

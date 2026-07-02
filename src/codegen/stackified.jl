@@ -650,7 +650,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _ne_vb, _ne_vty = compile_value_typed(val, ctx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
                                                 (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_vb)
-                        # Type mismatch with no conversion arm: emit a type-safe default.
+                        # Type mismatch with no conversion arm: emit a type-safe default —
+                        # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
+                        record_unsupported!(ctx, :unsupported_type,
+                            "phi-edge type mismatch with no conversion arm (type-safe default emitted)")
                         emit_raw!(pvb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                     end
                     return _cpv_ret()
