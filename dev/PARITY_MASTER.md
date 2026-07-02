@@ -274,7 +274,17 @@ M8.3 the multi-axis cascade + overlay merge · M8.4 DELETE the FNV apparatus →
 `L10_no_fnv_dispatch`. Full capped gate at M8.4. Strings can't dispatch via classId until M9
 (documented exception: string-axis selectors keep direct/reject).
 
-## M9 — STRINGS JOIN THE CLASSID WORLD (dart: String IS a class, class_info.dart)
+## M9 — STRINGS JOIN THE CLASSID WORLD ✅ COMPLETE (2026-07-03, boundary gate 10 shards + fuzz green)
+
+Delivered: $JlString{classId, data} <: $JlBase (types.jl get_string_struct_type!); String +
+Symbol flipped at every mapper incl. the builder-layer abstract rep; constants + every
+producing foreigncall wrap at birth through the ONE producer; convert_type! string arms =
+the migration engine (classed→data / array→wrapped); ops read .data once at entry; strings
+in the DFS hierarchy → isa AbstractString = the dense-range check (xfail PROMOTED, M8's
+strings-axis exception REMOVED). The str_char pre-push scratch-juggle is the flagged M11
+seam.
+
+(original design:)
 
 Strings are bare `array<i32>` refs with no `$JlBase` header → invisible to classed isa +
 the M8 table. Re-rep as a classed struct (classId + data array). Promotes the
