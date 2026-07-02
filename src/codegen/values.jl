@@ -698,12 +698,35 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     return expected
 end
 
+"""
+    _seed_builder_locals!(b, ctx)
+
+Teach a fresh value-builder the function's REAL local types (params via the same julia→wasm
+mapping the function header used, then ctx.locals), so `local_get!` pushes the TRUE type
+instead of the AnyRef unknown-local fallback. This makes the typed channel's returned type
+(`b.v.stack[end]`) truthful for the most common emission — `local.get` — and therefore safe
+to DRIVE `convert_type!` coercions from (dart: `local.type` is authoritative because dart's
+builder always knows its locals).
+"""
+function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
+    for i in 1:ctx.n_params
+        i <= length(ctx.arg_types) || break
+        builder_set_local_type!(b, i - 1,
+            get_concrete_wasm_type(ctx.arg_types[i], ctx.mod, ctx.type_registry))
+    end
+    for (k, t) in enumerate(ctx.locals)
+        builder_set_local_type!(b, ctx.n_params + k - 1, t)
+    end
+    return b
+end
+
 function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
     # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
     b = InstrBuilder(; func_name="compile_value", strict=false)
+    _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = (tb = UInt8[]; emit_type_id!(tb, ctx.type_registry, T); emit_raw!(b, tb; pushes=WasmValType[I32]))
     _narrow!(li, sid) = (nb = UInt8[]; _narrow_generic_local!(nb, li, sid, ctx); isempty(nb) || emit_raw!(b, nb))
