@@ -2415,14 +2415,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     if (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
         obj_arg = args[1]
         field_ref = args[2]
-        obj_type = infer_value_type(obj_arg, ctx)
+        obj_type = infer_value_type(obj_arg, ctx)   # pre-existing query (the mega-arm relies on it)
         # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read) through the box's REAL struct type.
         local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
         if obj_type === Core.Box && _mb_fld === :contents
             local _mb_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            local _mb_bytes, _mb_ty = compile_value_typed(obj_arg, ctx)
-            emit_raw!(_mb_ib, _mb_bytes; pushes=(_mb_ty === nothing ? WasmValType[] : WasmValType[_mb_ty]))
+            local _mb_ty = emit_value!(_mb_ib, obj_arg, ctx)
             local _mb_idx = _mb_ty isa ConcreteRef ? _mb_ty.type_idx :
                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
@@ -5948,10 +5947,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # (dart Context variable write); the value wraps to anyref through the funnel.
         if !_gfc_done && func.name === :setfield! && length(args) == 3 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           infer_value_type(args[1], ctx) === Core.Box
+           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
             local _bxs_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            local _bxs_bytes, _bxs_ty = compile_value_typed(args[1], ctx)
-            emit_raw!(_bxs_ib, _bxs_bytes; pushes=(_bxs_ty === nothing ? WasmValType[] : WasmValType[_bxs_ty]))
+            local _bxs_ty = emit_value!(_bxs_ib, args[1], ctx)
             local _bxs_idx = _bxs_ty isa ConcreteRef ? _bxs_ty.type_idx :
                              UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_bxs_ty isa ConcreteRef) && ref_cast!(_bxs_ib, Int64(_bxs_idx), false)
@@ -5967,10 +5965,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # defined-check = a null test on the anyref contents.
         if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           infer_value_type(args[1], ctx) === Core.Box
+           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
             local _bxd_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            local _bxd_bytes, _bxd_ty = compile_value_typed(args[1], ctx)
-            emit_raw!(_bxd_ib, _bxd_bytes; pushes=(_bxd_ty === nothing ? WasmValType[] : WasmValType[_bxd_ty]))
+            local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx)
             local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
                              UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_bxd_ty isa ConcreteRef) && ref_cast!(_bxd_ib, Int64(_bxd_idx), false)
@@ -5991,10 +5988,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # (dart Context variable read). The cell is the F3 anyref box struct.
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           infer_value_type(args[1], ctx) === Core.Box
+           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
             local _bx_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            local _bx_bytes, _bx_ty = compile_value_typed(args[1], ctx)
-            emit_raw!(_bx_ib, _bx_bytes; pushes=(_bx_ty === nothing ? WasmValType[] : WasmValType[_bx_ty]))
+            local _bx_ty = emit_value!(_bx_ib, args[1], ctx)
             local _bx_idx = _bx_ty isa ConcreteRef ? _bx_ty.type_idx :
                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !( _bx_ty isa ConcreteRef) && ref_cast!(_bx_ib, Int64(_bx_idx), false)
@@ -6007,7 +6003,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # callee; read the registered struct field here (the ONE shared cell).
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
-            local _gfb_T = infer_value_type(args[1], ctx)
+            local _gfb_T = args[1] isa Core.SSAValue ? get(ctx.ssa_types, args[1].id, Any) : Any
             if _gfb_T isa DataType && isstructtype(_gfb_T) &&
                haskey(ctx.type_registry.structs, _gfb_T)
                 local _gfb_info = ctx.type_registry.structs[_gfb_T]
