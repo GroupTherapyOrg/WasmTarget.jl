@@ -996,12 +996,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
             if stmt isa Core.ReturnNode
                 if isdefined(stmt, :val)
-                    val_wasm_type = infer_value_wasm_type(stmt.val, ctx)
-                    ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-                    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                    # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
-                    is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                    is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
+                    # THE single return-coercion path (dead pre-emit type locals deleted).
                     bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
                     return_!(bb)
@@ -1117,87 +1112,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(isdefined(term,:val) ? term.val : :undef)"
             end
             if isdefined(term, :val)
-                val_wasm_type = infer_value_wasm_type(term.val, ctx)
-                ret_wasm_type = julia_to_wasm_type_concrete(ctx.return_type, ctx)
-                func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-                if _debug_stackified
-                    @warn "  RETURN types: val_wasm=$val_wasm_type, ret_wasm=$ret_wasm_type, func_ret=$func_ret_wasm, compatible=$(return_type_compatible(val_wasm_type, func_ret_wasm))"
-                end
-                # PURE-315: Check numeric-to-ref BEFORE return_type_compatible
-                is_numeric_val = val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                is_ref_ret = func_ret_wasm isa ConcreteRef || func_ret_wasm === ExternRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef || func_ret_wasm === AnyRef
-                if is_numeric_val && is_ref_ret
-                    if func_ret_wasm === ExternRef
-                        _eb = UInt8[]; emit_numeric_to_externref!(_eb, term.val, val_wasm_type, ctx)
-                        emit_raw!(b, _eb; pushes=WasmValType[ExternRef])
-                    elseif func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), ConcreteRef(UInt32(func_ret_wasm.type_idx), true))
-                    else
-                        ref_null!(b, func_ret_wasm)
-                    end
-                    return_!(b)
-                # PURE-6024: Use func_ret_wasm (actual WASM function signature type) for
-                # return type compatibility, not ret_wasm_type (julia_to_wasm_type_concrete).
-                # These disagree for Union types like Union{Int128, Int64, BigInt} where
-                # func_ret_wasm=I64 but ret_wasm_type=ConcreteRef(tagged_union).
-                # The phi local is correctly overridden to I64 (line 5196), so the value
-                # on the stack IS I64, but checking against ConcreteRef incorrectly fails.
-                elseif !return_type_compatible(val_wasm_type, func_ret_wasm)
-                    unreachable!(b)
-                else
-                    val_bytes = compile_value(term.val, ctx)
-                    emit_raw!(b, val_bytes; pushes=(val_wasm_type === nothing ? WasmValType[] : WasmValType[val_wasm_type]))
-                    if func_ret_wasm === ExternRef && val_wasm_type !== ExternRef
-                        is_externref_local = false
-                        if length(val_bytes) >= 2 && val_bytes[1] == 0x20
-                            src_idx = 0; shift = 0; leb_end = 0
-                            for bi in 2:length(val_bytes)
-                                byt = val_bytes[bi]
-                                src_idx |= (Int(byt & 0x7f) << shift)
-                                shift += 7
-                                if (byt & 0x80) == 0
-                                    leb_end = bi
-                                    break
-                                end
-                            end
-                            if leb_end == length(val_bytes)
-                                if src_idx < ctx.n_params
-                                    if src_idx + 1 <= length(ctx.arg_types)
-                                        src_type = ctx.arg_types[src_idx + 1]
-                                        is_externref_local = src_type === ExternRef
-                                    end
-                                else
-                                    arr_idx = src_idx - ctx.n_params + 1
-                                    if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                                        src_type = ctx.locals[arr_idx]
-                                        is_externref_local = src_type === ExternRef
-                                    end
-                                end
-                            end
-                        end
-                        if !is_externref_local
-                            extern_convert_any!(b)
-                        end
-                    elseif val_wasm_type === I32 && func_ret_wasm === I64
-                        num!(b, Opcode.I64_EXTEND_I32_S)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_CONVERT_I32_S)
-                    elseif val_wasm_type === F32 && func_ret_wasm === F64
-                        num!(b, Opcode.F64_PROMOTE_F32)
-                    elseif val_wasm_type === I64 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I64_S)
-                    elseif val_wasm_type === I32 && func_ret_wasm === F32
-                        num!(b, Opcode.F32_CONVERT_I32_S)
-                    # WBUILD-4000: Cast EqRef/StructRef to ConcreteRef for return
-                    elseif (val_wasm_type === EqRef || val_wasm_type === StructRef || val_wasm_type === AnyRef) && func_ret_wasm isa ConcreteRef
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
-                    elseif val_wasm_type isa ConcreteRef && func_ret_wasm isa ConcreteRef && val_wasm_type != func_ret_wasm
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
-                    end
-                    return_!(b)
-                end
+                # parity(M2): THE single return-coercion path (emit_return_coerced!, same as
+                # the block-statement ReturnNode site) — deletes this duplicated ladder
+                # (byte-scanned externref check + hand widening/casts + a numeric→ConcreteRef
+                # ref.null VALUE DROP; the single source boxes/converts properly).
+                b = emit_return_coerced!(b, term.val, ctx)
             else
                 return_!(b)
             end

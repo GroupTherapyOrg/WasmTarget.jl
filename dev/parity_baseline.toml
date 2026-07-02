@@ -8,14 +8,14 @@ L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 
 [metrics]
-R10_silent_unreachable = 32
-R11_patch_markers = 715
+R10_silent_unreachable = 31
+R11_patch_markers = 711
 R12_wasmtools_crutch = 12
-R1_untyped_compile_value = 41
-R2_emit_raw_bridges = 246
+R1_untyped_compile_value = 40
+R2_emit_raw_bridges = 244
 R3_infer_value_type = 136
-R4_infer_value_wasm_type = 46
-R5_julia_type_reguess = 132
+R4_infer_value_wasm_type = 44
+R5_julia_type_reguess = 128
 R6_strict_false_builders = 312
-R7_raw_coercion_ops = 137
+R7_raw_coercion_ops = 131
 R9_union_vestiges = 9
