@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.2...v0.4.3) (2026-07-03)
+
+
+### Bug Fixes
+
+* **1.13:** route every io/print + N-way string-concat consumer through the M9 funnel ([39a4537](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/39a45372fb2e1b0269852cec110e3a9fb67ed040))
+
 ## [0.4.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.1...v0.4.2) (2026-07-02)
 
 
