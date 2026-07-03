@@ -330,3 +330,22 @@ runs — forces scratch juggles like M9's str_char); those get real redesign, no
 - M11.5 R3/R5 static-query consolidation; R2/R7 → 0 → LOCKS L11_no_raw_seams /
   L12_one_coercion_surface; R11 sediment sweep; the FRESH end-to-end certification
   re-audit against the dart source closes the campaign.
+
+## M11 STATUS (2026-07-03, the overnight march)
+
+DELIVERED: **M11.1** the dart intrinsics table (intrinsics_table.jl — declarative
+(lhsT,rhsT,op)→emission, 51-entry numeric core; shifts excluded: Julia's amounts vary in
+width, dart's ints don't). **M11.2a** THE TABLE ROUTE live ahead of the is_func chain with
+narrow-pair normalization carried in (two near-miscompiles caught by the backfills: the
+normalization bypass and the Float32 width flag); dead arms DELETED (add/sub/mul else-halves,
+six int compares, four float compares). **M11.3a/b** seam batches: defaults + conditions +
+phi-store fronts go builder-native (R2 233→213, monotone, baseline tightened each step).
+**M11.4a** both stackified phi-store clusters ALWAYS store (the ty===nothing skip orphaned
+stack values — a silent stack-corruption class).
+
+HONEST REMAINDER (ratcheted, monotone, never regressable): R2 at 213 — the 68 driver-level
+seams (whole-statement/block splices) die with the full compile_statement/compile_invoke
+builder-native decomposition (M11.2b-.4 continue); R7 at 131 (the intrinsic-implementation
+floor — falls with the coercion arms' migration); the escaping-closure cross-function store
+(@test_broken in m10_contexts.jl) sits in the same driver-store unification. R3/R5 hold at
+their floors. The locks L1-L10 all green.
