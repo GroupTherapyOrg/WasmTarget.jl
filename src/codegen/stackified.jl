@@ -92,6 +92,13 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     return  # No extern_convert_any — struct ref is already anyref
 end
 
+"""parity(M11): THE flow front — the ONE seam where a stackified region's bytes
+enter a typed builder. All drivers route here."""
+function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
+    generate_stackified_flow!(b, ctx, args...; kwargs...)
+    return b
+end
+
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
                                   trailing_unreachable::Bool = true)::Vector{UInt8}
     # ========================================================================
