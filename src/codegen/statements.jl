@@ -2294,115 +2294,29 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     field_bytes = UInt8[]  # Already appended
                 end
             end
-            # PURE-6025: Handle global.get sources (0x23) for externref field conversion.
-            # Same pattern as local.get above but looks up source type from module globals.
-            if actual_field_wasm === ExternRef && !isempty(field_bytes) && field_bytes[1] == 0x23
-                # Decode global index from LEB128
-                g_idx = 0; g_shift = 0
-                for bi in 2:length(field_bytes)
-                    byt = field_bytes[bi]
-                    g_idx |= (Int(byt & 0x7f) << g_shift)
-                    g_shift += 7
-                    (byt & 0x80) == 0 && break
-                end
-                if g_idx + 1 <= length(ctx.mod.globals)
-                    g_type = ctx.mod.globals[g_idx + 1].valtype
-                    if g_type !== ExternRef
-                        # Source global is concrete ref but field expects externref
-                        emit_raw!(b, field_bytes)
-                        extern_convert_any!(b)
-                        field_bytes = UInt8[]
-                    end
-                end
+            # march3: the global.get (0x23) and inline-expression (E-003) externref
+            # bridges are SUBSUMED by the typed PURE-046 arm above — field_ty is the
+            # tracked type for locals, globals, and nested expressions alike.
+            # PURE-906 (march3, typed): a ref-typed value meeting a NUMERIC field
+            # slot (convert(Bool,x)::Any typed externref, ref.null defaults) becomes
+            # the zero constant — decided by field_ty, no 0xD0/local.get byte gates.
+            if actual_field_wasm !== nothing &&
+               (actual_field_wasm === I32 || actual_field_wasm === I64 ||
+                actual_field_wasm === F32 || actual_field_wasm === F64) &&
+               !isempty(field_bytes) && field_ty !== nothing && _wt_is_ref(field_ty)
+                _emit_default!(b, actual_field_wasm)
+                field_bytes = UInt8[]  # Don't append the ref-typed original
             end
-            # WASMMAKIE E-003: inline-expression sources (e.g. a nested
-            # struct.new result) aren't covered by the local.get/global.get
-            # byte-pattern checks above — bridge by the value's INFERRED wasm
-            # type instead (wilkinson's kwarg structs pushed (ref $t) into
-            # externref fields and failed validation).
-            if actual_field_wasm === ExternRef && !isempty(field_bytes) &&
-               field_bytes[1] != 0x20 && field_bytes[1] != 0x23 && field_bytes[1] != 0xD0
-                _inline_vw = field_ty
-                if _inline_vw !== nothing && (_inline_vw isa ConcreteRef || _inline_vw === StructRef ||
-                                              _inline_vw === ArrayRef || _inline_vw === AnyRef || _inline_vw === EqRef)
-                    emit_raw!(b, field_bytes)
-                    extern_convert_any!(b)
-                    field_bytes = UInt8[]
-                end
+            # PURE-6024 (march3, typed): externref field + UNKNOWN-typed emission —
+            # conservatively bridge (the known-typed cases were handled by the arms
+            # above; a tracked ExternRef value passes through untouched).
+            if actual_field_wasm === ExternRef && !isempty(field_bytes) && field_ty === nothing
+                emit_raw!(b, field_bytes)
+                extern_convert_any!(b)
+                field_bytes = UInt8[]  # Already appended
             end
-            # PURE-906: Check if field expects numeric but source is ref-typed (externref/anyref).
-            # This happens when Julia's convert(Bool, x)::Any SSA is typed ExternRef
-            # but the struct field is Bool (i32). Emit zero default for the numeric field.
-            # PURE-6024: Also catch ref.null (0xD0) values for numeric fields.
-            if actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && field_bytes[1] == 0xD0
-                # ref.null used for numeric field — emit zero constant instead
-                if actual_field_wasm === I32
-                    i32_const!(b, 0)
-                elseif actual_field_wasm === I64
-                    i64_const!(b, 0)
-                elseif actual_field_wasm === F32
-                    f32_const!(b, 0.0f0)
-                elseif actual_field_wasm === F64
-                    f64_const!(b, 0.0)
-                end
-                field_bytes = UInt8[]  # Don't append original ref.null
-            elseif actual_field_wasm !== nothing && (actual_field_wasm === I32 || actual_field_wasm === I64 || actual_field_wasm === F32 || actual_field_wasm === F64) && !isempty(field_bytes) && length(field_bytes) >= 2 && field_bytes[1] == 0x20
-                # Decode source local index
-                src_idx_906 = 0; shift_906 = 0; leb_end_906 = 0
-                for bi in 2:length(field_bytes)
-                    byt = field_bytes[bi]
-                    src_idx_906 |= (Int(byt & 0x7f) << shift_906)
-                    shift_906 += 7
-                    if (byt & 0x80) == 0
-                        leb_end_906 = bi
-                        break
-                    end
-                end
-                if leb_end_906 == length(field_bytes)  # Pure local.get
-                    # dart2wasm carries the type with the value: derive the source's wasm type
-                    # from the inferred value type rather than decoding the local index.
-                    src_type_906 = field_ty
-                    if src_type_906 !== nothing && (src_type_906 === ExternRef || src_type_906 === AnyRef || src_type_906 isa ConcreteRef || src_type_906 === StructRef)
-                        # Source is ref-typed but field expects numeric — emit zero default
-                        if actual_field_wasm === I32
-                            i32_const!(b, 0)
-                        elseif actual_field_wasm === I64
-                            i64_const!(b, 0)
-                        elseif actual_field_wasm === F32
-                            f32_const!(b, 0.0f0)
-                        elseif actual_field_wasm === F64
-                            f64_const!(b, 0.0)
-                        end
-                        field_bytes = UInt8[]  # Don't append original
-                    end
-                end
-            end
-            # PURE-6024: If the field expects externref but field_bytes is non-empty and
-            # hasn't been handled above (not local.get, not ref.null), the compiled value
-            # is likely a concrete ref (from struct_new, struct_get, call, etc.) that needs
-            # extern_convert_any. This complements the local.get check at line ~16464.
-            if actual_field_wasm === ExternRef && !isempty(field_bytes)
-                last_is_extern_convert = length(field_bytes) >= 2 &&
-                                         field_bytes[end-1] == Opcode.GC_PREFIX &&
-                                         field_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                first_is_ref_null_extern = length(field_bytes) >= 2 &&
-                                           field_bytes[1] == Opcode.REF_NULL &&
-                                           field_bytes[2] == UInt8(ExternRef)
-                first_is_numeric = !isempty(field_bytes) &&
-                                   (field_bytes[1] == Opcode.I32_CONST || field_bytes[1] == Opcode.I64_CONST ||
-                                    field_bytes[1] == Opcode.F32_CONST || field_bytes[1] == Opcode.F64_CONST) &&
-                                   field_ty !== nothing && !_wt_is_ref(field_ty)
-                if !last_is_extern_convert && !first_is_ref_null_extern && !first_is_numeric
-                    emit_raw!(b, field_bytes)
-                    extern_convert_any!(b)
-                    field_bytes = UInt8[]  # Already appended
-                elseif first_is_numeric
-                    # Numeric value for externref field — emit ref.null extern
-                    ref_null!(b, ExternRef)
-                    field_bytes = UInt8[]  # Don't append original
-                end
-            end
-            emit_raw!(b, field_bytes)
+            isempty(field_bytes) ||
+                emit_raw!(b, field_bytes; pushes=(field_ty === nothing ? WasmValType[] : WasmValType[field_ty]))
         end
     end
 
