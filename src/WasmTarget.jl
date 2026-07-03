@@ -19,6 +19,7 @@ include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
 include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (replaces FNV, M8.4)
+include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
 include("codegen/compile.jl")
 include("codegen/structs.jl")
 include("codegen/unions.jl")

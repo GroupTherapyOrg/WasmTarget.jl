@@ -6032,14 +6032,19 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
                 local _gfb_fi = findfirst(==(_gfb_fld), fieldnames(_gfb_T))
                 if _gfb_fi !== nothing
-                    local _gfb_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                    # field index +1: field 0 is the classId header
-                    local _gfb_ft = ctx.mod.types[_gfb_info.wasm_type_idx + 1].fields[_gfb_fi + 1].valtype
-                    emit_value!(_gfb_ib, args[1], ctx,
-                                ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
-                    struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_fi), _gfb_ft)
-                    append!(bytes, builder_code(_gfb_ib))
-                    _gfc_done = true
+                    # the wasm field index comes from the REGISTERED layout's offset
+                    # (1 = classId header present, 0 = headerless) — never hardcoded.
+                    local _gfb_wfi = _gfb_fi - 1 + Int(_gfb_info.field_offset)
+                    local _gfb_flds = ctx.mod.types[_gfb_info.wasm_type_idx + 1].fields
+                    if _gfb_wfi >= 0 && _gfb_wfi < length(_gfb_flds)
+                        local _gfb_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+                        local _gfb_ft = _gfb_flds[_gfb_wfi + 1].valtype
+                        emit_value!(_gfb_ib, args[1], ctx,
+                                    ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
+                        struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_wfi), _gfb_ft)
+                        append!(bytes, builder_code(_gfb_ib))
+                        _gfc_done = true
+                    end
                 end
             end
         end
