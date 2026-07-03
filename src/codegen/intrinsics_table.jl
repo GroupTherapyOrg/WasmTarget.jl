@@ -51,9 +51,9 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (I32, I32, :and_int)  => BinOpEmit(Opcode.I32_AND,   I32),
     (I32, I32, :or_int)   => BinOpEmit(Opcode.I32_OR,    I32),
     (I32, I32, :xor_int)  => BinOpEmit(Opcode.I32_XOR,   I32),
-    (I32, I32, :shl_int)  => BinOpEmit(Opcode.I32_SHL,   I32),
-    (I32, I32, :lshr_int) => BinOpEmit(Opcode.I32_SHR_U, I32),
-    (I32, I32, :ashr_int) => BinOpEmit(Opcode.I32_SHR_S, I32),
+    # (i32 shifts excluded: Julia's shift AMOUNT is Int64 — mixed-width operands
+    # don't fit the uniform key; the legacy arm wraps the amount. dart's ints are
+    # uniformly i64 so its table has no such case.)
     (I32, I32, :sdiv_int) => BinOpEmit(Opcode.I32_DIV_S, I32),
     (I32, I32, :udiv_int) => BinOpEmit(Opcode.I32_DIV_U, I32),
     (I32, I32, :srem_int) => BinOpEmit(Opcode.I32_REM_S, I32),
