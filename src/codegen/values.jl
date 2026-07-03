@@ -1616,58 +1616,28 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     continue
                 end
             end
-            # Check field type compatibility
+            # Check field type compatibility — decided by the emission's TRACKED type
+            # (march3: the struct.new LEB re-decode and the 0x41/0x42/0x20 first-byte
+            # scans are DELETED; _fv_ty is the byproduct dart carries with every value).
             replaced = false
             local _wasm_fi = fi + Int(info.field_offset)  # PURE-9024: skip typeId
             if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
                 expected_wasm = struct_type_def.fields[_wasm_fi].valtype
                 if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
-                    # Field expects a ref type — check if field_val_bytes produces something incompatible
                     need_replace = false
-                    if length(field_val_bytes) >= 3
-                        # Check if ends with struct_new of incompatible type
-                        for scan_pos in (length(field_val_bytes)-2):-1:1
-                            if field_val_bytes[scan_pos] == 0xFB && field_val_bytes[scan_pos+1] == 0x00
-                                sn_type_idx = 0; sn_shift = 0
-                                for bi in (scan_pos+2):length(field_val_bytes)
-                                    byt = field_val_bytes[bi]
-                                    sn_type_idx |= (Int(byt & 0x7f) << sn_shift)
-                                    sn_shift += 7
-                                    if (byt & 0x80) == 0
-                                        if bi == length(field_val_bytes)
-                                            if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
-                                                need_replace = true
-                                            elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
-                                                # ArrayRef: struct is not an array
-                                                # ExternRef: struct ref needs extern.convert_any
-                                                # AnyRef/StructRef: struct refs are valid subtypes, no replace needed
-                                                need_replace = true
-                                            end
-                                        end
-                                        break
-                                    end
-                                end
-                                break
-                            end
-                        end
-                    end
-                    if !need_replace && length(field_val_bytes) >= 1
-                        # Check if field produces a numeric value (i32/i64 const or local.get of numeric)
-                        # BUT NOT if the bytes end with struct.new or array.new_fixed (GC_PREFIX + opcode)
-                        # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
-                        # String constants start with i32.const (char 1) but end with array.new_fixed.
-                        first_byte = field_val_bytes[1]
-                        ends_with_ref_producing_gc = _fv_ty !== nothing && _wt_is_ref(_fv_ty)
-                        if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
+                    if _fv_ty isa ConcreteRef && _wt_heap_kind(_fv_ty, ctx.mod) === :concrete_struct
+                        # behavior-preserving: the old scan fired only on values ENDING in
+                        # struct.new — struct-kind refs, never the array-kind (string data)
+                        if expected_wasm isa ConcreteRef && _fv_ty.type_idx != expected_wasm.type_idx
+                            # mismatched concrete struct ref (exact-idx test, as before)
                             need_replace = true
-                        elseif first_byte == 0x20  # LOCAL_GET
-                            # dart2wasm carries the type with the value: derive the source's
-                            # wasm type from the inferred value type rather than decoding the local.
-                            local src_type = _fv_ty
-                            if src_type === I64 || src_type === I32
-                                need_replace = true
-                            end
+                        elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
+                            # a GC struct ref where an array/extern slot is expected
+                            need_replace = true
                         end
+                    elseif _fv_ty === I32 || _fv_ty === I64
+                        # numeric value meeting a ref-typed field slot
+                        need_replace = true
                     end
                     if need_replace
                         if expected_wasm isa ConcreteRef
@@ -1684,7 +1654,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     end
                 end
             end
-            emit_raw!(b, field_val_bytes; pushes=WasmValType[AnyRef])
+            # declared-top splice (NOT a full merge — the interior isn't typed yet);
+            # nothing is declared for the replaced/empty case (the ref_null! above
+            # already pushed the real value — the old +1 AnyRef phantom is gone).
+            isempty(field_val_bytes) ||
+                emit_raw!(b, field_val_bytes; pushes=WasmValType[_fv_ty === nothing ? AnyRef : _fv_ty])
             # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
             # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
@@ -1692,33 +1666,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             if !replaced && struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
                 local _ef = struct_type_def.fields[_wasm_fi2].valtype
                 if _ef === ExternRef
-                    # Check not already externref (ends with 0xFB 0x1B = EXTERN_CONVERT_ANY)
-                    already_extern = length(field_val_bytes) >= 2 &&
-                                     field_val_bytes[end-1] == 0xFB &&
-                                     field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                    if !already_extern && _fv_ty !== nothing && _wt_is_ref(_fv_ty)
+                    # march3: decided by the TRACKED type — an internal (anyref-family)
+                    # ref bridges via extern.convert_any; an ExternRef value is already
+                    # there (this also covers global.get of Type constants, whose tracked
+                    # type is the global's declared valtype — the LEB re-decode is gone).
+                    if _fv_ty !== nothing && _fv_ty !== ExternRef && _wt_is_ref(_fv_ty)
                         extern_convert_any!(b)
-                    elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
-                        # PURE-6025: global.get produces a concrete ref (e.g., Type constant)
-                        # but field expects externref — need extern.convert_any.
-                        # global.get has no GC prefix; the inferred-type check above may not
-                        # have flagged it as a ref, so handle the global.get case explicitly.
-                        _g_idx = 0; _g_shift = 0
-                        for _gbi in 2:length(field_val_bytes)
-                            _gb = field_val_bytes[_gbi]
-                            _g_idx |= (Int(_gb & 0x7f) << _g_shift)
-                            _g_shift += 7
-                            (_gb & 0x80) == 0 && break
-                        end
-                        if _g_idx + 1 <= length(ctx.mod.globals)
-                            _g_type = ctx.mod.globals[_g_idx + 1].valtype
-                            if _g_type !== ExternRef
-                                extern_convert_any!(b)
-                            end
-                        else
-                            # Unknown global — conservatively emit conversion
-                            extern_convert_any!(b)
-                        end
                     end
                 end
             end
