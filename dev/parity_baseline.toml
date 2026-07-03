@@ -4,6 +4,7 @@
 
 [locks]
 L10_no_fnv_dispatch = 0
+L11_driver_fronts = 0
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0

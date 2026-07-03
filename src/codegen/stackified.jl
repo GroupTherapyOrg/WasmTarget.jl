@@ -95,7 +95,7 @@ end
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
 function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
-    generate_stackified_flow!(b, ctx, args...; kwargs...)
+    emit_raw!(b, generate_stackified_flow(ctx, args...; kwargs...))   # THE front seam
     return b
 end
 
@@ -639,7 +639,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])
+                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # pops=1-style typed splice (declared push)
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)

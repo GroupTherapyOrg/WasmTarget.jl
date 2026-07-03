@@ -1182,6 +1182,12 @@ end
 #     <then arm: try_table A / catch X>   ;; all paths return
 #   end
 #   <else arm: try_table B / catch Y>     ;; all paths return
+"""builder-native front for the branch-split try generator."""
+function generate_branch_split_try!(b::InstrBuilder, args...; kwargs...)
+    emit_raw!(b, generate_branch_split_try(args...; kwargs...))   # THE front seam
+    return b
+end
+
 function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
@@ -1292,8 +1298,8 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     then_chain = [q for q in arm_regions if q.enter_idx < bdest]
     else_chain = [q for q in arm_regions if q.enter_idx >= bdest]
     arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
-    emit_raw!(bb, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
-                                            else_chain, branch_idx))
+    generate_branch_split_try!(bb, ctx, arm_blocks, code, then_chain,
+                                            else_chain, branch_idx)
     return builder_code(bb)
 end
 

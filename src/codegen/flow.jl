@@ -17,7 +17,7 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
         # Single block - just generate statements
         emit_raw!(b, generate_block_code(ctx, blocks[1]))
     else
-        emit_raw!(b, generate_stackified_flow(ctx, blocks, code))
+        generate_stackified_flow!(b, ctx, blocks, code)
     end
 
     # Always end with END opcode

@@ -156,7 +156,7 @@ end
 """parity(M11): THE statement front — the ONE seam where legacy statement bytes
 enter a typed builder (dart: one code generator, one builder). All drivers route here."""
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
-    emit_raw!(b, compile_statement(stmt, idx, ctx))
+    emit_raw!(b, compile_statement(stmt, idx, ctx))   # THE front seam
     return b
 end
 
