@@ -237,7 +237,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     local_set!(b, UInt32(Int(dt.arity)))  # first extra local
                     i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                     local_get!(b, UInt32(Int(dt.arity)))
-                    struct_new!(b, box_idx, WasmValType[])
+                    struct_new!(b, box_idx)   # mod-resolved fields (march3)
                 end
             end
 

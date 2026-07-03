@@ -3338,7 +3338,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             end
                         end
                     end
-                    struct_new!(bec, _ctor_info.wasm_type_idx, WasmValType[])
+                    struct_new!(bec, _ctor_info.wasm_type_idx)   # mod-resolved fields (march3)
                 else
                     # Fallback: can't register type, create a dummy anyref (ref.null any)
                     ref_null!(bec, AnyRef)
@@ -3377,7 +3377,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Emit struct.new for SubString type
                     substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
                     if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx, WasmValType[])
+                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
                     end
                 elseif length(args) >= 1
                     # SubString(str) — view of entire string
@@ -3393,7 +3393,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Emit struct.new
                     substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
                     if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx, WasmValType[])
+                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
                     end
                 end
                 return builder_code(bsub2)
@@ -3789,7 +3789,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     else
                         ref_null!(berr, ArrayRef)
                     end
-                    struct_new!(berr, _ee_info.wasm_type_idx, WasmValType[])
+                    struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
                     global_set!(berr, exn_global)
                 end
                 throw_!(berr, 0)
@@ -4127,7 +4127,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     end
                     # struct.new
                     bscn = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
-                    struct_new!(bscn, _ctor_sinfo.wasm_type_idx, WasmValType[])
+                    struct_new!(bscn, _ctor_sinfo.wasm_type_idx)   # mod-resolved fields (march3)
                     append!(bytes, builder_code(bscn))
                 else
                     # Registration failed — codegen cannot lay out this struct type.

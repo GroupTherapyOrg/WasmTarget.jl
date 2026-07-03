@@ -1748,7 +1748,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         i64_const!(b, 0)
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
 
         return builder_code(b)
     end
@@ -1858,11 +1858,11 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_value!(b, field_values[1], ctx)
             array_len!(b)
             num!(b, Opcode.I64_EXTEND_I32_S)
-            struct_new!(b, size_info.wasm_type_idx, WasmValType[])
+            struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
         end
 
         # Create the Vector struct (already has typeId from above)
-        struct_new!(b, vec_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
         return builder_code(b)
     end
 
@@ -1955,7 +1955,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         for _pad_fi in (length(field_values) + Int(_exn_info.field_offset) + 1):_n_wasm_fields
             _exn_field_null_or_zero!(b, _exn_def.fields[_pad_fi].valtype)
         end
-        struct_new!(b, _exn_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, _exn_info.wasm_type_idx)   # mod-resolved fields (march3)
         return builder_code(b)
     end
 
@@ -2333,7 +2333,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     end
 
     # struct.new type_idx
-    struct_new!(b, info.wasm_type_idx, WasmValType[])
+    struct_new!(b, info.wasm_type_idx)   # mod-resolved fields (march3)
 
     return builder_code(b)
 end
@@ -2780,9 +2780,9 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     else
                         i64_const!(b, 0)
                     end
-                    struct_new!(b, size_info.wasm_type_idx, WasmValType[])
+                    struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
                     # 3. struct.new Vector(typeId, data_ref, size_tuple_ref)
-                    struct_new!(b, vec_type_idx, WasmValType[])
+                    struct_new!(b, vec_type_idx)   # mod-resolved fields (march3)
                     return builder_code(b)
                 end
             end

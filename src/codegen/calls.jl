@@ -143,7 +143,7 @@ function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilatio
     bld = InstrBuilder(; func_name="_emit_throw_error_struct!", mod=ctx.mod)
     if info !== nothing
         emit_type_id!(bld, ctx.type_registry, T)
-        struct_new!(bld, info.wasm_type_idx, WasmValType[])
+        struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
     else
         ref_null!(bld, AnyRef)
     end
@@ -650,7 +650,7 @@ function _compile_call_checked_mul(func, args, bytes::Vector{UInt8}, ctx::Abstra
             register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         end
         tuple_info = ctx.type_registry.structs[tuple_type]
-        struct_new!(bld, tuple_info.wasm_type_idx, WasmValType[])
+        struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
         append!(bytes, builder_code(bld))
     end
     return nothing
@@ -2259,7 +2259,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # struct.new for Tuple{Int64} (typeId=0, then value)
             i32_const!(_pshb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_pshb, size_local)
-            struct_new!(_pshb, size_info.wasm_type_idx, WasmValType[])
+            struct_new!(_pshb, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
             # Now we have new size tuple on stack
             # Get vec from local and set its size field
@@ -2400,7 +2400,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Create new size tuple (typeId=0, then value)
             i32_const!(_popb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
             local_get!(_popb, _pop_newsize_local)
-            struct_new!(_popb, size_info.wasm_type_idx, WasmValType[])
+            struct_new!(_popb, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
             # Store in local for struct.set
             size_tuple_local = allocate_local!(ctx, size_tuple_type)
@@ -3515,7 +3515,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
 
             # struct.new
-            struct_new!(_tupb, info.wasm_type_idx, WasmValType[])
+            struct_new!(_tupb, info.wasm_type_idx)   # mod-resolved fields (march3)
 
             append!(bytes, builder_code(_tupb))
             return bytes
@@ -4660,7 +4660,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         _nc_norm!()                                           # flag: wrapped != raw
         local_get!(_ncb, _nc_r)
         num!(_ncb, Opcode.I32_NE)
-        struct_new!(_ncb, _nc_info.wasm_type_idx, WasmValType[])
+        struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields (march3)
         append!(bytes, builder_code(_ncb))
 
     # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
@@ -4725,7 +4725,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
             end
             tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_caddb, tuple_info.wasm_type_idx, WasmValType[])
+            struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
             append!(bytes, builder_code(_caddb))
         end
 
@@ -4785,7 +4785,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
             end
             tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_csubb, tuple_info.wasm_type_idx, WasmValType[])
+            struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
             append!(bytes, builder_code(_csubb))
         end
 
@@ -5383,7 +5383,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Create the 128-bit struct (typeId, lo, hi)
             type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_sxb, type_idx, WasmValType[])
+            struct_new!(_sxb, type_idx)   # mod-resolved fields (march3)
         end
         # If extending to 32-bit (Int32), it's a no-op since small types already map to i32
         append!(bytes, builder_code(_sxb))
@@ -5457,7 +5457,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
             # Create the 128-bit struct (typeId, lo, hi)
             type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_zxb, type_idx, WasmValType[])
+            struct_new!(_zxb, type_idx)   # mod-resolved fields (march3)
         end
         # If extending to 32-bit (UInt32/Int32), it's a no-op since small types already map to i32
         append!(bytes, builder_code(_zxb))
@@ -5872,7 +5872,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Emit: i32.const $typeId; struct.new $Tuple_empty_type_idx
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 i32_const!(ib, Int64(tuple_empty_tid))
-                struct_new!(ib, info.wasm_type_idx, WasmValType[])
+                struct_new!(ib, info.wasm_type_idx)   # mod-resolved fields (march3)
                 append!(bytes, builder_code(ib))
             end
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
@@ -6447,7 +6447,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                             end
 
                             # Create the NamedTuple struct
-                            struct_new!(_ntb, info.wasm_type_idx, WasmValType[])
+                            struct_new!(_ntb, info.wasm_type_idx)   # mod-resolved fields (march3)
                             append!(bytes, builder_code(_ntb))
                         else
                             error("NamedTuple/Tuple field count mismatch: $(length(names)) vs $(length(value_types))")
@@ -6602,7 +6602,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
                 i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
                 i64_const!(ib, Int64(n_expr_args))
-                struct_new!(ib, size_tuple_info.wasm_type_idx, WasmValType[])
+                struct_new!(ib, size_tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
                 append!(bytes, builder_code(ib))
             end
             size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
@@ -6618,9 +6618,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Vector{Any})))  # real classId (M3)
                 local_get!(ib, data_arr_local)
                 local_get!(ib, size_local)
-                struct_new!(ib, vec_any_info.wasm_type_idx, WasmValType[])
+                struct_new!(ib, vec_any_info.wasm_type_idx)   # mod-resolved fields (march3)
                 # struct.new Expr with (typeId, head, vector)
-                struct_new!(ib, expr_info.wasm_type_idx, WasmValType[])
+                struct_new!(ib, expr_info.wasm_type_idx)   # mod-resolved fields (march3)
                 append!(bytes, builder_code(ib))
             end
 
@@ -6900,7 +6900,7 @@ function _emit_apply_iterate_vect!(bytes::Vector{UInt8}, container_arg, containe
     local_get!(bld, new_arr_local)
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple
-    struct_new!(bld, vec_type_idx, WasmValType[])
+    struct_new!(bld, vec_type_idx)   # mod-resolved fields (march3)
     append!(bytes, builder_code(bld))
 end
 
