@@ -14,7 +14,7 @@
 # See dev/WASM_BUILDER_MIGRATION.md.
 
 export InstrBuilder, builder_code, builder_disasm, set_strict!, StackImbalanceError,
-       set_context!, builder_diagnose
+       set_context!, builder_diagnose, append_builder!
 
 """
     StackImbalanceError
@@ -57,6 +57,7 @@ mutable struct InstrBuilder
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
+    seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
 end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
@@ -72,7 +73,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace)
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
@@ -528,7 +529,39 @@ end
 # Seed the model with stack values produced UPSTREAM (no instruction emitted). For
 # fragment emitters that consume a value the (not-yet-migrated) caller already left on
 # the stack, so the model starts from the true incoming stack rather than empty.
+# Seeds are RECORDED so append_builder! can replay the fragment's true stack effect.
 function seed_input!(b::InstrBuilder, types::Vector{<:Any})
-    for t in types; validate_push!(b.v, t); end
+    for t in types
+        validate_push!(b.v, t)
+        push!(b.seeded, t)
+    end
     b
+end
+
+"""
+    append_builder!(dst, src)
+
+Typed builder merge — the machine-tracked replacement for
+`emit_raw!(dst, builder_code(src); pops=…, pushes=…)`. `dst` pops exactly what
+`src` was seeded with (`src.seeded`, in reverse) and pushes `src`'s tracked final
+stack; the instruction stream transfers at the ir/ layer. No byte round-trip and
+NO human-declared effects — the fragment's real, validator-tracked stack shape
+transfers, so a mis-declared splice is impossible at these seams.
+"""
+function append_builder!(dst::InstrBuilder, src::InstrBuilder)
+    length(src.v.labels) == 1 ||
+        error("append_builder!($(dst.func_name) ← $(src.func_name)): source has open control labels")
+    for t in Iterators.reverse(src.seeded)
+        validate_pop!(dst.v, t)
+    end
+    if src.v.reachable
+        for t in src.v.stack
+            validate_push!(dst.v, t)
+        end
+    else
+        # source ended unreachable — its tail stack is polymorphic; mirror that
+        dst.v.reachable = false
+    end
+    append!(dst.instrs, src.instrs)
+    return _check!(dst)
 end

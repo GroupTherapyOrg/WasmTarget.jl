@@ -171,12 +171,14 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
 end
 
 """
-    _emit_phi_edge_convert!(b, ctx, phi_local_type, src_type, value_bytes) -> Bool
+    _emit_phi_edge_convert!(b, ctx, phi_local_type, src_type, src::InstrBuilder) -> Bool
 
-THE single-source phi-edge value conversion (Loop C flow/phi dedup). `value_bytes` pushes the
-source value (already typed `src_type`); this emits the box / cast / UNBOX needed to land it in
-a phi local of `phi_local_type`, leaving the converted value on `b`'s stack (the caller does the
-local.set). Returns true if an arm applied, false if none did (caller emits a type-safe default).
+THE single-source phi-edge value conversion (Loop C flow/phi dedup). `src` is a fragment
+builder that pushes the source value (already typed `src_type`); this merges it (typed,
+via append_builder!) and emits the box / cast / UNBOX needed to land it in a phi local of
+`phi_local_type`, leaving the converted value on `b`'s stack (the caller does the
+local.set). Returns true if an arm applied, false if none did (caller emits a type-safe
+default — and `src` was NOT merged).
 
 This is the ONE place that knows how a numeric value boxes into a ref phi local — and, the arm
 that was missing at every copy of this logic, how a classId box UNBOXES into a numeric phi local
@@ -184,31 +186,31 @@ that was missing at every copy of this logic, how a classId box UNBOXES into a n
 the default → `i64.const 0`, a silent miscompile (`Any[1,2,3][i]` → 0).
 """
 function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                                 phi_local_type, src_type, value_bytes::Vector{UInt8})::Bool
-    isempty(value_bytes) && return false
+                                 phi_local_type, src_type, src::InstrBuilder)::Bool
+    isempty(src.instrs) && return false
     _num(t) = (t === I32 || t === I64 || t === F32 || t === F64)
     _ref(t) = (t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === ExternRef || t isa ConcreteRef)
     if phi_local_type === ExternRef && _num(src_type)
         # numeric → ExternRef: classId box (via THE single emitter), then to externref
-        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        append_builder!(b, src)
         emit_classid_box!(b, ctx, src_type, nothing)
         extern_convert_any!(b)
         return true
     elseif phi_local_type === AnyRef && _num(src_type)
         # numeric → AnyRef: classId box (a struct ref is already an anyref subtype)
-        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        append_builder!(b, src)
         emit_classid_box!(b, ctx, src_type, nothing)
         return true
     elseif phi_local_type === ExternRef && _ref(src_type)
         # internal ref → ExternRef
-        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        append_builder!(b, src)
         extern_convert_any!(b)
         return true
     elseif _num(phi_local_type) && _ref(src_type)
         # THE missing arm — UNBOX a classId box into a numeric phi local (inverse of the
         # numeric→AnyRef box arm above). Well-typed numeric phi ⟹ the edge is a numeric box,
         # so the ref.cast inside emit_classid_unbox! succeeds; a genuine mistype traps (loud).
-        emit_raw!(b, value_bytes; pushes=WasmValType[src_type])
+        append_builder!(b, src)
         src_type === ExternRef && any_convert_extern!(b)
         emit_classid_unbox!(b, ctx, phi_local_type)
         return true
@@ -216,31 +218,21 @@ function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContex
     return false
 end
 
-"""builder-native front: emit the phi store directly into the target builder."""
-function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)
-    _tb = UInt8[]
-    emit_phi_local_set!(_tb, val, phi_ssa_idx, ctx)
-    emit_raw!(b, _tb)
-    return b
-end
-
 """
-Emit bytecode to store a phi edge value to a phi local, with type compatibility checking.
+Store a phi edge value to a phi local, with type compatibility checking — THE
+builder-native implementation (march3: the bytes shell below delegates here).
 If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
 the store is skipped (these represent unreachable code paths in Union types).
-If the edge value is i32 but the local is i64, adds I64_EXTEND_I32_S.
 Returns true if the store was emitted, false if skipped.
 """
-function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
+function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
     # parity(M2): THE wrap collapse — a phi-edge store IS dart's wrap(val, phi_local_type)
     # followed by local.set (code_generator.dart:879 + convertType): emit typed, coerce the
     # ACTUAL emitted type to the phi local's type through the ONE convert_type! funnel, store.
     # Replaces the ~360-line phi_local_type × edge_val_type elseif-chain (hand-rolled box/
     # extern/cast/widen arms, byte-scans, and the flagged unsigned-LEB REF_CAST_NULL bridge —
     # convert_type!'s ref_cast! emits the spec-correct s33 encoding).
-    lb = InstrBuilder(; func_name="emit_phi_local_set!", mod=ctx.mod)
-    _ret = (x) -> (append!(bytes, builder_code(lb)); x)
-    haskey(ctx.phi_locals, phi_ssa_idx) || return _ret(false)
+    haskey(ctx.phi_locals, phi_ssa_idx) || return false
     local_idx = ctx.phi_locals[phi_ssa_idx]
     phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
 
@@ -248,23 +240,31 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
     # nothing; funneling that would BOX a fabricated zero — dart stores null, not a box).
     if _wt_is_ref(phi_local_type) && is_nothing_value(val, ctx)
         if phi_local_type isa ConcreteRef
-            ref_null!(lb, Int64(phi_local_type.type_idx), phi_local_type)
+            ref_null!(b, Int64(phi_local_type.type_idx), phi_local_type)
         else
-            ref_null!(lb, phi_local_type)
+            ref_null!(b, phi_local_type)
         end
-        local_set!(lb, local_idx)
-        return _ret(true)
+        local_set!(b, local_idx)
+        return true
     end
 
     value_bytes, vty = compile_value_typed(val, ctx)
-    isempty(value_bytes) && return _ret(false)   # caller falls back (unresolvable value)
-    emit_raw!(lb, value_bytes; pushes=(vty === nothing ? WasmValType[] : WasmValType[vty]))
+    isempty(value_bytes) && return false   # caller falls back (unresolvable value)
+    emit_raw!(b, value_bytes; pushes=(vty === nothing ? WasmValType[] : WasmValType[vty]))
     if vty === nothing
         # Dead path — the emission ended unreachable; nothing executes after it.
-        return _ret(true)
+        return true
     end
-    vty === phi_local_type || convert_type!(lb, vty, phi_local_type, ctx)
-    local_set!(lb, local_idx)
-    return _ret(true)
+    vty === phi_local_type || convert_type!(b, vty, phi_local_type, ctx)
+    local_set!(b, local_idx)
+    return true
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
+    lb = InstrBuilder(; func_name="emit_phi_local_set!", mod=ctx.mod)
+    r = emit_phi_local_set!(lb, val, phi_ssa_idx, ctx)
+    append!(bytes, builder_code(lb))
+    return r
 end
 
