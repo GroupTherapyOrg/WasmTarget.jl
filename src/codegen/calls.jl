@@ -3110,7 +3110,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         # Compile the value to store - we need it twice (for array.set and return)
         # First compile gets the value on stack for array.set
-        local (mset_val_bytes, mset_val_ty) = compile_value_typed(value_arg, ctx)
+        local _mv_b = _compile_value_b(value_arg, ctx)
+        local mset_val_ty = isempty(_mv_b.v.stack) ? nothing : _mv_b.v.stack[end]
         # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
         # PURE-045: Check the actual wasm element type, not just elem_type === Any
         # Abstract types like CallInfo also map to ExternRef
@@ -3123,10 +3124,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local is_numeric_mset_any = mset_src_wasm_any === I64 || mset_src_wasm_any === I32 || mset_src_wasm_any === F64 || mset_src_wasm_any === F32
             local is_already_anyref = mset_src_wasm_any === AnyRef || mset_src_wasm_any === StructRef || mset_src_wasm_any isa ConcreteRef
             if is_numeric_mset_any
-                local _n2a = UInt8[]; emit_numeric_to_anyref!(_n2a, value_arg, mset_src_wasm_any, ctx)
-                emit_raw!(_msb, _n2a; pushes=WasmValType[AnyRef])
+                emit_numeric_to_anyref!(_msb, value_arg, mset_src_wasm_any, ctx)
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=WasmValType[mset_src_wasm_any === nothing ? AnyRef : mset_src_wasm_any])
+                append_builder!(_msb, _mv_b)
                 if !is_already_anyref && mset_src_wasm_any === ExternRef
                     any_convert_extern!(_msb)
                 end
@@ -3138,10 +3138,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
             local is_already_externref_mset = mset_src_wasm === ExternRef
             if is_numeric_mset
-                local _n2e2 = UInt8[]; emit_numeric_to_externref!(_n2e2, value_arg, mset_src_wasm, ctx)
-                emit_raw!(_msb, _n2e2; pushes=WasmValType[ExternRef])
+                emit_numeric_to_externref!(_msb, value_arg, mset_src_wasm, ctx)
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=WasmValType[mset_src_wasm === nothing ? ExternRef : mset_src_wasm])
+                append_builder!(_msb, _mv_b)
                 # PURE-048: Skip extern_convert_any if value is already externref.
                 # externref is NOT a subtype of anyref, so extern_convert_any would fail.
                 if !is_already_externref_mset
@@ -3151,45 +3150,15 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         elseif wasm_elem_type isa ConcreteRef
             # PURE-045: Array of concrete ref types (e.g., struct or array refs)
             # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
-            local is_numeric_for_ref = false
-            if length(mset_val_bytes) >= 1 && (mset_val_bytes[1] == Opcode.I32_CONST || mset_val_bytes[1] == Opcode.I64_CONST || mset_val_bytes[1] == Opcode.F32_CONST || mset_val_bytes[1] == Opcode.F64_CONST)
-                # PURE-318/PURE-325: Check for GC_PREFIX (LEB128-safe scan)
-                is_numeric_for_ref = mset_val_ty !== nothing && !_wt_is_ref(mset_val_ty)
-            elseif length(mset_val_bytes) >= 2 && mset_val_bytes[1] == Opcode.LOCAL_GET
-                local src_idx_r = 0
-                local shift_r = 0
-                local pos_r = 2
-                while pos_r <= length(mset_val_bytes)
-                    b = mset_val_bytes[pos_r]
-                    src_idx_r |= (Int(b & 0x7f) << shift_r)
-                    shift_r += 7
-                    pos_r += 1
-                    (b & 0x80) == 0 && break
-                end
-                if pos_r - 1 == length(mset_val_bytes)
-                    # dart2wasm carries the type with the value: a pure local.get is numeric
-                    # iff the inferred value type is numeric.
-                    local src_type_r = mset_val_ty
-                    if src_type_r === I64 || src_type_r === I32 || src_type_r === F64 || src_type_r === F32
-                        is_numeric_for_ref = true
-                    end
-                end
-            end
-            if is_numeric_for_ref
-                # Numeric value (nothing) for ref-typed array — emit ref.null of the element type
+            # march3 (typed): numeric-typed value into a ref-typed array slot → ref.null
+            # (the const first-byte gate + LOCAL_GET LEB walk are the tracked type now)
+            if mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
                 ref_null!(_msb, Int64(wasm_elem_type.type_idx), ConcreteRef(UInt32(wasm_elem_type.type_idx), true))
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=(mset_val_ty===nothing ? WasmValType[] : WasmValType[mset_val_ty]))
+                append_builder!(_msb, _mv_b)
                 # PURE-6025: If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
-                # Check both: (1) byte-level local type, (2) Julia type inference
-                local mset_item_wasm = _get_local_wasm_type(value_arg, mset_val_bytes, ctx)
-                if mset_item_wasm === nothing
-                    # Fallback: use Julia type inference
-                    local val_julia_type = infer_value_type(value_arg, ctx)
-                    mset_item_wasm = get_concrete_wasm_type(val_julia_type, ctx.mod, ctx.type_registry)
-                end
-                if mset_item_wasm === ExternRef
+                if mset_val_ty === ExternRef
                     any_convert_extern!(_msb)
                     ref_cast!(_msb, Int64(wasm_elem_type.type_idx), true)
                 end
@@ -3204,7 +3173,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             elseif wasm_elem_type === F64 && mset_val_ty === I32
                 f64_const!(_msb, 0.0)
             else
-                emit_raw!(_msb, mset_val_bytes; pushes=(mset_val_ty===nothing ? WasmValType[] : WasmValType[mset_val_ty]))
+                append_builder!(_msb, _mv_b)
             end
         end
 
@@ -3218,8 +3187,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # is left on the stack when the SSA has no allocated local, causing
         # "values remaining on stack at end of block" validation errors.
         if haskey(ctx.ssa_locals, idx)
-            local (ret_val_bytes, ret_val_ty) = compile_value_typed(value_arg, ctx)
-            emit_raw!(_msb, ret_val_bytes; pushes=(ret_val_ty===nothing ? WasmValType[] : WasmValType[ret_val_ty]))
+            local _rv2_b = _compile_value_b(value_arg, ctx)
+            local ret_val_ty = isempty(_rv2_b.v.stack) ? nothing : _rv2_b.v.stack[end]
+            append_builder!(_msb, _rv2_b)
             # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
             # emit extern_convert_any. The compile_statement safety check can't catch this
             # because has_gc_prefix=true (from array_set above) skips the trailing local_get

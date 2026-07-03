@@ -16,8 +16,8 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 693
-R2_emit_raw_bridges = 62
-R3_infer_value_type = 135
-R5_julia_type_reguess = 105
+R11_patch_markers = 692
+R2_emit_raw_bridges = 55
+R3_infer_value_type = 134
+R5_julia_type_reguess = 104
 R7_raw_coercion_ops = 130
