@@ -14,5 +14,5 @@
     b3 = WasmTarget.InstrBuilder(; func_name="t3")
     @test WasmTarget.emit_intrinsic_binop!(b3, WasmTarget.I64, WasmTarget.F64, :add_int) === nothing
     # coverage: the table carries the full i64/i32 integer core + f64/f32 float core
-    @test length(WasmTarget.INTRINSIC_BINOPS) >= 55
+    @test length(WasmTarget.INTRINSIC_BINOPS) >= 51   # shifts excluded (mixed-width amounts)
 end

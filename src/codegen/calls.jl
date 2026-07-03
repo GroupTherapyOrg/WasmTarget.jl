@@ -4576,8 +4576,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     local _it_name = func isa GlobalRef ? func.name :
                      (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
     if _it_name !== nothing && !is_128bit
-        local _it_w = is_32bit ? I32 :
-                      (arg_type === Float64 ? F64 : (arg_type === Float32 ? F32 : I64))
+        # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
+        local _it_w = arg_type === Float64 ? F64 :
+                      arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
         local _it_e = get(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name), nothing)
         if _it_e !== nothing
             # Comparisons observe FULL register width — narrow pairs (Int8/Int16 on

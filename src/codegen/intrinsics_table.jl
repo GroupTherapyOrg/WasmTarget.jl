@@ -31,9 +31,6 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (I64, I64, :and_int)  => BinOpEmit(Opcode.I64_AND,   I64),
     (I64, I64, :or_int)   => BinOpEmit(Opcode.I64_OR,    I64),
     (I64, I64, :xor_int)  => BinOpEmit(Opcode.I64_XOR,   I64),
-    (I64, I64, :shl_int)  => BinOpEmit(Opcode.I64_SHL,   I64),
-    (I64, I64, :lshr_int) => BinOpEmit(Opcode.I64_SHR_U, I64),
-    (I64, I64, :ashr_int) => BinOpEmit(Opcode.I64_SHR_S, I64),
     (I64, I64, :sdiv_int) => BinOpEmit(Opcode.I64_DIV_S, I64),
     (I64, I64, :udiv_int) => BinOpEmit(Opcode.I64_DIV_U, I64),
     (I64, I64, :srem_int) => BinOpEmit(Opcode.I64_REM_S, I64),
@@ -51,9 +48,9 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (I32, I32, :and_int)  => BinOpEmit(Opcode.I32_AND,   I32),
     (I32, I32, :or_int)   => BinOpEmit(Opcode.I32_OR,    I32),
     (I32, I32, :xor_int)  => BinOpEmit(Opcode.I32_XOR,   I32),
-    # (i32 shifts excluded: Julia's shift AMOUNT is Int64 — mixed-width operands
-    # don't fit the uniform key; the legacy arm wraps the amount. dart's ints are
-    # uniformly i64 so its table has no such case.)
+    # (ALL shifts excluded: Julia shift AMOUNTS vary in width independently of the
+    # value — i64<<i32, i32<<i64 — mixed-width doesn't fit the uniform key; the
+    # legacy arms coerce the amount. dart's ints are uniformly i64: no such case.)
     (I32, I32, :sdiv_int) => BinOpEmit(Opcode.I32_DIV_S, I32),
     (I32, I32, :udiv_int) => BinOpEmit(Opcode.I32_DIV_U, I32),
     (I32, I32, :srem_int) => BinOpEmit(Opcode.I32_REM_S, I32),
