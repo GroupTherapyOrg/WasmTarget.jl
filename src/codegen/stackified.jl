@@ -906,12 +906,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     local_set!(b, local_idx)
                                     phi_count += 1
                                 elseif !isempty(pv_bytes)
-                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[] : WasmValType[pv_ty]))
-                                    if pv_ty !== nothing
-                                        pv_ty === phi_local_type || convert_type!(b, pv_ty, phi_local_type, ctx)
-                                        local_set!(b, local_idx)
-                                        phi_count += 1
+                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty]))
+                                    if pv_ty !== nothing && pv_ty !== phi_local_type
+                                        convert_type!(b, pv_ty, phi_local_type, ctx)
                                     end
+                                    # parity(M11.4): ALWAYS store — the `ty===nothing`
+                                    # skip orphaned the emitted value on the stack (the
+                                    # escaping-closure double-load bug, second site).
+                                    local_set!(b, local_idx)
+                                    phi_count += 1
                                 end
                             end
                             found_edge = true
@@ -1067,11 +1070,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
                                     local_set!(bb, local_idx)
                                 elseif !isempty(pv_bytes2)
-                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[] : WasmValType[pv_ty2]))
-                                    if pv_ty2 !== nothing
-                                        pv_ty2 === phi_local_type || convert_type!(bb, pv_ty2, phi_local_type, ctx)
-                                        local_set!(bb, local_idx)
+                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty2]))
+                                    if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
+                                        convert_type!(bb, pv_ty2, phi_local_type, ctx)
                                     end
+                                    # parity(M11.4): ALWAYS store — an unknown-typed value
+                                    # left on the stack (the old `ty===nothing` skip)
+                                    # orphaned it: the escaping-closure double-load bug.
+                                    local_set!(bb, local_idx)
                                 end
                             end
                             break
