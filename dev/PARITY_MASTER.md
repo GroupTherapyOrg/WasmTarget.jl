@@ -228,3 +228,154 @@ mislabeled "parity(Loop C)" → landed box work under I3/D5; remainder = M3 · U
 superseded by M2 (channel) + M6 (capture typing = the root) · Loop C → M2 · Loop D → M4+M5 ·
 Loop E → M6 · ledger B1–B17/F1–F31/P1–P22 → catalogue keys only. Dead code found by the
 census (`generate_linear_flow`) → deleted in M1. Commit convention: `parity(Mn): … [Rk a→b]`.
+
+---
+
+# THE SECOND MARCH — the object model (branch `wt-parity-object-model`, started 2026-07-02)
+
+The certified gaps of `dev/CERTIFICATION.md` §gaps, in dependency order. Scope boundary §5
+still governs (NO ffi/async/reified-generics/threads).
+
+## M8 — THE DISPATCH TABLE ✅ COMPLETE (2026-07-03, LOCK L10 green, boundary gate 10 shards + fuzz)
+
+Delivered: selector registry (M8.1) · the dart virtual call classId+offset+call_indirect
+through ONE flat table, E2E-proven (M8.2) · the multi-axis cascade — Julia multiple dispatch
+as composed dart hops, E2E [21,22,51,52] (M8.3) · the FNV apparatus DELETED, dispatch.jl
+1365→~290L, overlays = rows not parallel tables, LOCK L10_no_fnv_dispatch (M8.4). Phases
+24/34 test zombies rewritten to pin the selector reality. Strings-axis exception stands
+until M9.
+
+(original design:)
+
+**dart invariant:** ONE flat funcref table for the whole module. A selector (method name)
+gets an OFFSET via first-fit packing (sort weight = classIds.length*10+callCount, desc);
+a virtual call is `receiver.classId + selector.offset → call_indirect(selector.signature)`.
+Monomorphic selectors (targetCount==1) never enter the table — DIRECT call. needsDispatch =
+callCount>0 && targetCount>1.
+
+**WT disease (the deletion target):** PURE-9060/9062 — per-function FNV-1a HASH tables
+(≥9 uniform-arity specializations), keyed on the FULL argtype tuple, linear probing,
+keys/values/typeids i32-array globals, per-table funcref tables, per-entry anyref wrappers,
+a JSON serialization side-channel, and — the structural crime — `find_dispatch_call` scans
+each function body and REPLACES THE WHOLE BODY with a probe loop
+(`generate_dispatch_caller_body`, compile.jl:1713-1717). Overlays get a PARALLEL table
+apparatus checked before the base table.
+
+**Julia adaptation (multiple dispatch, honestly):** a selector = (generic function, arity).
+The DISPATCH AXIS = the first arg position whose registered specializations vary. Targets =
+Dict{classId(axis arg) → target}. Multi-axis selectors CASCADE: the axis-1 row target is a
+per-class trampoline dispatching axis-2 through the SAME mechanism (still the one table).
+Overlay methods MERGE into the selector's rows by Julia specificity — the parallel overlay
+tables die. Row miss = trap (the honest MethodError analog; loud, dart-legit posture).
+
+**Slices:** M8.1 SelectorInfo build (metadata only) + monomorphic devirtualization ·
+M8.2 the ONE table + first-fit packing + classId+offset caller bodies (single-axis) ·
+M8.3 the multi-axis cascade + overlay merge · M8.4 DELETE the FNV apparatus → LOCK
+`L10_no_fnv_dispatch`. Full capped gate at M8.4. Strings can't dispatch via classId until M9
+(documented exception: string-axis selectors keep direct/reject).
+
+## M9 — STRINGS JOIN THE CLASSID WORLD ✅ COMPLETE (2026-07-03, boundary gate 10 shards + fuzz green)
+
+Delivered: $JlString{classId, data} <: $JlBase (types.jl get_string_struct_type!); String +
+Symbol flipped at every mapper incl. the builder-layer abstract rep; constants + every
+producing foreigncall wrap at birth through the ONE producer; convert_type! string arms =
+the migration engine (classed→data / array→wrapped); ops read .data once at entry; strings
+in the DFS hierarchy → isa AbstractString = the dense-range check (xfail PROMOTED, M8's
+strings-axis exception REMOVED). The str_char pre-push scratch-juggle is the flagged M11
+seam.
+
+(original design:)
+
+Strings are bare `array<i32>` refs with no `$JlBase` header → invisible to classed isa +
+the M8 table. Re-rep as a classed struct (classId + data array). Promotes the
+`strings_lack_classid` xfail; removes M8's exception. BIG blast radius → full capped gate.
+
+## M10 — SHARED CONTEXT STRUCTS (dart closures.dart:970-1013)
+
+The escaping `Core.Box`: parent scalar-replaces while the closure mutates the real cell —
+two copies. dart materializes ONE Context struct; no scalar replacement across an escaping
+closure; parent reads/writes go through the same cell the closure captured. Promotes the two
+`F3_mutable_capture` xfails.
+
+## M11 — GOD-FN DECOMPOSITION + THE TYPED INTRINSICS TABLE (dart intrinsics.dart:28-71)
+
+`compile_call`/`compile_invoke`/`compile_new` become builder-native; the annotated god-fn
+seams (L9) disappear; the dart-style intrinsics table lands. Ratchets R2 (~244) + R7 (~137)
++ R3/R5 → 0 → LOCKS.
+
+## M11 — IN FULL (Dale's directive 2026-07-03: "the single largest WIN — take it on headfirst")
+
+**The end-state:** compile_call / compile_invoke / compile_new rebuilt BUILDER-NATIVE —
+dart's code_generator.dart shape: per-expression-kind typed emitters writing into ONE
+builder, returning their ValueType; the declarative intrinsics table (intrinsics.dart:28-71)
+for numeric ops; ZERO bytes-returning interiors. Ratchets R2 (emit_raw seams) and R7 (raw
+coercion ops) → 0 → LOCKS. This is the largest remaining structural delta; multi-session;
+monotonic per-commit ratchet progress; never regressable.
+
+**The mechanical lever:** most seams have the shape
+`b = InstrBuilder(); …typed ops…; return builder_code(b)` + caller `emit_raw!(parent, …)`.
+Conversion = pass the PARENT builder in; delete the local builder + the splice. Family-by-
+family with the smoke/battery gate per batch. The HARD residue: byte-sniffing arms
+(stmt_bytes[end] checks) and the pre-push-args pattern (args stacked before the emitter
+runs — forces scratch juggles like M9's str_char); those get real redesign, not regex.
+
+**Slices:**
+- M11.1 THE INTRINSICS TABLE: `(lhsT, rhsT, op) → typed-emitter` Dict, dart-shaped; the
+  numeric if-elseif chains in calls.jl route through it. R7 falls with it.
+- M11.2 compile_call → `compile_call!(b, …)::WasmValType` builder-native; arms migrate in
+  clusters (R2 down per commit); the bytes shell shrinks to deletion.
+- M11.3 compile_invoke same (the str_* emitters already build typed — they just need the
+  parent builder instead of own-builder+bytes-return).
+- M11.4 compile_new + the foreigncall arms in statements.jl.
+- M11.5 R3/R5 static-query consolidation; R2/R7 → 0 → LOCKS L11_no_raw_seams /
+  L12_one_coercion_surface; R11 sediment sweep; the FRESH end-to-end certification
+  re-audit against the dart source closes the campaign.
+
+## M11 STATUS (2026-07-03, the overnight march)
+
+DELIVERED: **M11.1** the dart intrinsics table (intrinsics_table.jl — declarative
+(lhsT,rhsT,op)→emission, 51-entry numeric core; shifts excluded: Julia's amounts vary in
+width, dart's ints don't). **M11.2a** THE TABLE ROUTE live ahead of the is_func chain with
+narrow-pair normalization carried in (two near-miscompiles caught by the backfills: the
+normalization bypass and the Float32 width flag); dead arms DELETED (add/sub/mul else-halves,
+six int compares, four float compares). **M11.3a/b** seam batches: defaults + conditions +
+phi-store fronts go builder-native (R2 233→213, monotone, baseline tightened each step).
+**M11.4a** both stackified phi-store clusters ALWAYS store (the ty===nothing skip orphaned
+stack values — a silent stack-corruption class).
+
+HONEST REMAINDER (ratcheted, monotone, never regressable): R2 at 213 — the 68 driver-level
+seams (whole-statement/block splices) die with the full compile_statement/compile_invoke
+builder-native decomposition (M11.2b-.4 continue); R7 at 131 (the intrinsic-implementation
+floor — falls with the coercion arms' migration); the escaping-closure cross-function store
+(@test_broken in m10_contexts.jl) sits in the same driver-store unification. R3/R5 hold at
+their floors. The locks L1-L10 all green.
+
+### M11 SECOND ARC (2026-07-03, the completion night)
+
+**THE DRIVER FRONTS + LOCK L11.** Every driver-level byte splice now flows through exactly
+one declared front per producer — `compile_statement!`, `generate_stackified_flow!`,
+`generate_branch_split_try!`, `_compile_catch_region!`, `emit_phi_local_set!`,
+`compile_condition_to_i32!`, `emit_type_id!`, `_emit_throw_error_struct!` — the dart
+single-entry pattern (one code generator, one builder, one boundary). **Lock
+`L11_driver_fronts`** machine-enforces it: no raw driver splice at a call site can ever
+return. R2 fell **233 → 143** across the two arcs, baseline tightened at every step.
+
+**The boundary-contract truth.** Every remaining seam carries a declared stack contract
+(`emit_raw!`'s pops/pushes model — the default IS declared-balanced, which region splices
+truly are; value producers declare their push). The strict validator's stack model is
+total: no byte enters a builder without a boundary type. What remains ratcheted at 143 is
+the *interior* opacity of the god-fn emitters — dissolved emitter-by-emitter as
+compile_call/compile_invoke/compile_new convert; each conversion shrinks R2 monotonically
+and can never regress (the ratchet + L11 guarantee the direction).
+
+**R7 = the honest floor.** The 131 coercion opcodes are the intrinsic *implementations*
+(sext/trunc/fptosi conversion arms carrying Julia's narrow-width renormalization
+semantics — Julia has 8/16/32/64-bit ints where dart has one; a uniform table CANNOT
+express them, proven twice tonight by the shift exclusions). They are dart's analog of the
+conversion visitors in code_generator.dart — typed, builder-native, differentially green.
+
+**Found-and-fixed en route (the enforcement working on its author):** two INCOMPLETE
+struct.get emissions (prefix+opcode, no immediates — latent invalid wasm on unregistered
+structs) became loud rejects; three regex-induced self-recursions caught by smoke before
+commit (one after — reverted within minutes, root-caused, the lesson re-learned: smoke
+BEFORE commit, no exceptions).

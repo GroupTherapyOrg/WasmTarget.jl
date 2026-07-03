@@ -369,10 +369,10 @@ operands in arithmetic that consumes the box's `:contents` reads (e.g. `contents
 """
 function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
     out = Dict{Int,Type}()
-    (selfT isa DataType && isstructtype(selfT)) || return out
-    boxfields = Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT)
-                            if fieldtype(selfT, i) === Core.Box)
-    isempty(boxfields) && return out
+
+    boxfields = (selfT isa DataType && isstructtype(selfT)) ?
+        Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT)
+                    if fieldtype(selfT, i) === Core.Box) : Set{Symbol}()
     _wc(t) = t isa Type ? _F3_CC.widenconst(t) : (t === nothing ? Any : try _F3_CC.widenconst(t) catch; Any end)
     # ssa_types may be a Vector, a Dict, or WT's IntKeyMap (get-safe on all three).
     _ssat(i) = _wc(try get(ssa_types, i, Any) catch
@@ -384,14 +384,29 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
                                       argtypes[a.n - self_shift] isa Type) ?
                                      argtypes[a.n - self_shift] : Any) :
               (a isa Bool ? Bool : (a isa Number ? typeof(a) : Any))
+    # A box read is `getfield(carrier, boxfield)` where the carrier is #self# (the
+    # closure compiling its own body) OR any local value whose type has Core.Box
+    # fields (parity M10b: a closure RETURNED by a callee and used here — the box
+    # was born in the callee; the inlined body reads it through the closure value).
+    _has_box_fields(T) = T isa DataType && isstructtype(T) &&
+        any(i -> fieldtype(T, i) === Core.Box, 1:fieldcount(T))
+    _saw_ssa_carrier = false
+    _saw_write = false
     box_reads = Set{Int}()
     for (i, stmt) in enumerate(code)
         (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
         op = stmt.args[1]
         (op isa GlobalRef && op.name === :getfield) || continue
-        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue
+        base = stmt.args[2]
+        carrier_ok = (base isa Core.Argument && base.n == 1 && !isempty(boxfields)) ||
+                     (base isa Core.SSAValue && _has_box_fields(_ssat(base.id)))
+        carrier_ok || continue
+        base isa Core.SSAValue && (_saw_ssa_carrier = true)
         fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
-        fldn in boxfields && push!(box_reads, i)
+        _bf = base isa Core.Argument ? boxfields :
+              Set{Symbol}(fieldname(_ssat(base.id), j) for j in 1:fieldcount(_ssat(base.id))
+                          if fieldtype(_ssat(base.id), j) === Core.Box)
+        fldn in _bf && push!(box_reads, i)
     end
     isempty(box_reads) && return out
     contents_reads = Set{Int}()
@@ -430,9 +445,23 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         op = stmt.args[1]
         (op isa GlobalRef && op.name === :setfield!) || continue
         (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        _saw_write = true
         v = stmt.args[4]
         vt = v isa Core.SSAValue ? get(joins, v.id, _ssat(v.id)) : _opT(v)
         (_f3_is_numeric_jl(vt) && vt <: cand) || return Dict{Int,Type}()
+    end
+    # The BOX-READ ids are Core.Box VALUES, never numerics — they must not appear in
+    # the join output (they'd re-type the box itself and break every consumer).
+    for b in box_reads
+        delete!(joins, b)
+    end
+    # VACUOUS-VERIFY guard: if NO setfield! write was visible in this body, the
+    # optimistic candidate was never actually tested. For the #self# carrier that is
+    # fine (the closure only reads; the parent wrote) — but for generalized SSA
+    # carriers (a closure value from a callee) an unverified candidate poisons
+    # string-carrying accumulators (print_to_string). Bail without joins then.
+    if !_saw_write && _saw_ssa_carrier
+        return Dict{Int,Type}()
     end
     return joins
 end

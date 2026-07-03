@@ -92,6 +92,13 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     return  # No extern_convert_any — struct ref is already anyref
 end
 
+"""parity(M11): THE flow front — the ONE seam where a stackified region's bytes
+enter a typed builder. All drivers route here."""
+function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
+    emit_raw!(b, generate_stackified_flow(ctx, args...; kwargs...))   # THE front seam
+    return b
+end
+
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
                                   trailing_unreachable::Bool = true)::Vector{UInt8}
     # ========================================================================
@@ -481,6 +488,32 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     # Helper: emit a type-safe default value for a given WasmValType
+    # builder-native variant: emit the default directly into the target builder
+    function emit_phi_type_default!(tb::InstrBuilder, wasm_type::WasmValType)
+        if wasm_type isa ConcreteRef
+            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
+        elseif wasm_type === StructRef
+            ref_null!(tb, StructRef)
+        elseif wasm_type === ArrayRef
+            ref_null!(tb, ArrayRef)
+        elseif wasm_type === ExternRef
+            ref_null!(tb, ExternRef)
+        elseif wasm_type === AnyRef
+            ref_null!(tb, AnyRef)
+        elseif wasm_type === EqRef
+            ref_null!(tb, EqRef)
+        elseif wasm_type === I64
+            i64_const!(tb, 0)
+        elseif wasm_type === F32
+            f32_const!(tb, 0.0f0)
+        elseif wasm_type === F64
+            f64_const!(tb, 0.0)
+        else
+            i32_const!(tb, 0)
+        end
+        return tb
+    end
+
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
         # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
         # strict=false; byte-identical to the prior raw emission.
@@ -551,11 +584,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
-                            emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                            emit_phi_type_default!(pvb, phi_local_wasm_type)
                         end
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
+                    # parity(M10): the single-source-at-load contract — a join-refined
+                    # numeric riding a ref local narrows HERE too, and the reported type
+                    # becomes the numeric so the phi store boxes through the funnel.
+                    local _cpv_refined = get(ctx.ssa_types, val.id, Any)
+                    if _cpv_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
+                       ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
+                        # funnel-unbox directly on the builder (no byte seam)
+                        convert_type!(pvb, ssa_local_type, julia_to_wasm_type(_cpv_refined), ctx;
+                                      from_julia=_cpv_refined)
+                    end
                 end
             elseif haskey(ctx.phi_locals, val.id)
                 local_idx = ctx.phi_locals[val.id]
@@ -566,7 +609,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                        emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
@@ -576,25 +619,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                    emit_phi_type_default!(pvb, phi_local_wasm_type)
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
-                # PURE-036bg: Check type compatibility for recomputed SSA values
-                # The compiled statement may produce a type incompatible with the phi local
+                # Type compatibility for recomputed SSA values (the M10a fix lives in the
+                # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
-                    # Loop C flow/phi dedup: box / cast / UNBOX (recomputed SSA) via the single
-                    # helper. Source = the recomputed statement (or compile_value fallback).
                     local _sb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
-                    if stmt !== nothing && !(stmt isa Core.PhiNode)
-                        emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
-                    else
-                        emit_value!(_sb, val, ctx)
-                    end
+                    emit_value!(_sb, val, ctx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                        emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
@@ -602,7 +639,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])
+                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # pops=1-style typed splice (declared push)
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)
@@ -655,7 +692,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
                         record_unsupported!(ctx, :unsupported_type,
                             "phi-edge type mismatch with no conversion arm (type-safe default emitted)")
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                        emit_phi_type_default!(pvb, phi_local_type)
                     end
                     return _cpv_ret()
                 end
@@ -713,9 +750,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         elseif val isa Float32
             return F32
         elseif val isa Symbol || val isa String
-            # PURE-036ba: Symbol and String compile to array<i32> (string array type)
-            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-            return ConcreteRef(str_type_idx, false)  # non-nullable since array.new_fixed produces non-nullable ref
+            # parity(M9): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
         elseif val isa QuoteNode
             # PURE-036bg: QuoteNode wraps a value - recursively determine its Wasm type
             return get_phi_edge_wasm_type(val.value)
@@ -872,16 +909,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 pv_bytes, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
                                 if pv_n >= 2
                                     # multi-value emission can't feed one local.set — type-safe default
-                                    emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    emit_phi_type_default!(b, phi_local_type)
                                     local_set!(b, local_idx)
                                     phi_count += 1
                                 elseif !isempty(pv_bytes)
-                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[] : WasmValType[pv_ty]))
-                                    if pv_ty !== nothing
-                                        pv_ty === phi_local_type || convert_type!(b, pv_ty, phi_local_type, ctx)
-                                        local_set!(b, local_idx)
-                                        phi_count += 1
+                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty]))
+                                    if pv_ty !== nothing && pv_ty !== phi_local_type
+                                        convert_type!(b, pv_ty, phi_local_type, ctx)
                                     end
+                                    # parity(M11.4): ALWAYS store — the `ty===nothing`
+                                    # skip orphaned the emitted value on the stack (the
+                                    # escaping-closure double-load bug, second site).
+                                    local_set!(b, local_idx)
+                                    phi_count += 1
                                 end
                             end
                             found_edge = true
@@ -1006,7 +1046,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # THE single return-coercion path (dead pre-emit type locals deleted).
                     bb = emit_return_coerced!(bb, stmt.val, ctx)
                 else
-                    return_!(bb)
+                    # A valueless ReturnNode is Julia IR `unreachable` (the tail of a
+                    # throw branch) — a structural trap, NEVER a bare `return` (which is
+                    # invalid in a result-typed function and was silently wrong in a void
+                    # one). dart: unimplemented/throw paths end in unreachable.
+                    unreachable!(bb)   # structural trap (dart-legit dead path)
                 end
 
             elseif stmt isa Core.GotoIfNot
@@ -1030,14 +1074,17 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_bytes2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
-                                    emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    emit_phi_type_default!(bb, phi_local_type)
                                     local_set!(bb, local_idx)
                                 elseif !isempty(pv_bytes2)
-                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[] : WasmValType[pv_ty2]))
-                                    if pv_ty2 !== nothing
-                                        pv_ty2 === phi_local_type || convert_type!(bb, pv_ty2, phi_local_type, ctx)
-                                        local_set!(bb, local_idx)
+                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty2]))
+                                    if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
+                                        convert_type!(bb, pv_ty2, phi_local_type, ctx)
                                     end
+                                    # parity(M11.4): ALWAYS store — an unknown-typed value
+                                    # left on the stack (the old `ty===nothing` skip)
+                                    # orphaned it: the escaping-closure double-load bug.
+                                    local_set!(bb, local_idx)
                                 end
                             end
                             break
@@ -1125,7 +1172,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # ref.null VALUE DROP; the single source boxes/converts properly).
                 b = emit_return_coerced!(b, term.val, ctx)
             else
-                return_!(b)
+                # A valueless ReturnNode terminator is Julia IR `unreachable` (throw tail):
+                # a structural trap, never a bare `return` (invalid in result-typed fns).
+                unreachable!(b)   # structural trap (dart-legit dead path)
             end
 
         elseif term isa Core.GotoIfNot

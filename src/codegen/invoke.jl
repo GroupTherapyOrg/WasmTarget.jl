@@ -1,3 +1,11 @@
+# parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
+# their DATA array (op contract: these positions are strings; no type re-query).
+function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
+    haskey(ENV, "WT_DBG_STRARG") && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
+    emit_value!(b, arg, ctx, ConcreteRef(UInt32(str_type_idx), true))
+    return b
+end
+
 """
 Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h + char[i].
 """
@@ -25,7 +33,7 @@ function _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store string reference
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, str_local)
 
     # Get length
@@ -125,13 +133,13 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -298,13 +306,13 @@ function _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, last_start_local, I32)
 
     # Store haystack
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, haystack_local)
     array_len!(b)
     local_set!(b, haystack_len_local)
 
     # Store needle
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, needle_local)
     array_len!(b)
     local_set!(b, needle_len_local)
@@ -453,13 +461,13 @@ function _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store prefix
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, prefix_local)
     array_len!(b)
     local_set!(b, prefix_len_local)
@@ -558,13 +566,13 @@ function _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Ve
     builder_set_local_type!(b, result_local, I32)
 
     # Store s
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
 
     # Store suffix
-    emit_value!(b, args[2], ctx)
+    _emit_str_arg!(b, args[2], ctx, str_type_idx)
     local_tee!(b, suffix_local)
     array_len!(b)
     local_set!(b, suffix_len_local)
@@ -666,7 +674,7 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -727,6 +735,7 @@ function _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vect
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -764,7 +773,7 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, i_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -836,6 +845,7 @@ function _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -867,7 +877,7 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get its length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, s_len_local)
@@ -928,6 +938,7 @@ function _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -959,7 +970,7 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1027,6 +1038,7 @@ function _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::V
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -1058,7 +1070,7 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_set!(b, len_local)
@@ -1126,6 +1138,7 @@ function _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::V
 
     # Return result
     local_get!(b, result_local)
+    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
 
     return builder_code(b)
 end
@@ -1163,7 +1176,7 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
     builder_set_local_type!(b, c_local, I32)
 
     # Store s and get length
-    emit_value!(b, args[1], ctx)
+    _emit_str_arg!(b, args[1], ctx, str_type_idx)
     local_tee!(b, s_local)
     array_len!(b)
     local_tee!(b, len_local)
@@ -1324,6 +1337,7 @@ function _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector
 
     end_block!(b)  # end else (not all whitespace)
     end_block!(b)  # end else (not empty)
+    emit_string_wrap!(b, ctx)   # parity(M9): the result is a CLASSED string
 
     return builder_code(b)
 end
@@ -1335,6 +1349,9 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
     io = get_io_imports()
     if io !== nothing
         b = InstrBuilder(; func_name="_compile_invoke_print", mod=ctx.mod)
+        # parity(M9): the io bridge consumes the DATA array — every string value
+        # funnels through the expected-type channel so classed strings unwrap here.
+        _pr_str_arr = ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)
         for arg in args
             # Determine argument type
             arg_type = nothing
@@ -1361,7 +1378,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
             if arg_type === String || arg_type === Symbol
                 # String: compile value, convert to JS string via decoder, call write_string
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, _pr_str_arr)
                 # Need a temp local for tee
                 tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
@@ -1420,7 +1437,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 local_set!(b, len_local)
 
                 # Write "["
-                emit_value!(b, "[", ctx)
+                emit_value!(b, "[", ctx, _pr_str_arr)
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, str_tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
@@ -1443,7 +1460,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 i32_const!(b, 0)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)  # void
-                emit_value!(b, ", ", ctx)
+                emit_value!(b, ", ", ctx, _pr_str_arr)
                 _sb2 = UInt8[]; emit_jl_string_to_js!(_sb2, io.decode_idx, str_tmp_local); emit_raw!(b, _sb2; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end_block!(b)  # end if
@@ -1471,7 +1488,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 else
                     # Unsupported element type — just write "?"
                     drop!(b)
-                    emit_value!(b, "?", ctx)
+                    emit_value!(b, "?", ctx, _pr_str_arr)
                     _sb3 = UInt8[]; emit_jl_string_to_js!(_sb3, io.decode_idx, str_tmp_local); emit_raw!(b, _sb3; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end
@@ -1489,7 +1506,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 end_block!(b)  # end block
 
                 # Write "]"
-                emit_value!(b, "]", ctx)
+                emit_value!(b, "]", ctx, _pr_str_arr)
                 _sb4 = UInt8[]; emit_jl_string_to_js!(_sb4, io.decode_idx, str_tmp_local); emit_raw!(b, _sb4; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
@@ -1506,14 +1523,14 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                     local_set!(b, tup_local)
 
                     # Write "("
-                    emit_value!(b, "(", ctx)
+                    emit_value!(b, "(", ctx, _pr_str_arr)
                     _tb1 = UInt8[]; emit_jl_string_to_js!(_tb1, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb1; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                     for (fi, et) in enumerate(elem_types)
                         # Write ", " separator (after first element)
                         if fi > 1
-                            emit_value!(b, ", ", ctx)
+                            emit_value!(b, ", ", ctx, _pr_str_arr)
                             _tb2 = UInt8[]; emit_jl_string_to_js!(_tb2, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb2; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1539,7 +1556,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                             call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                         else
                             drop!(b)
-                            emit_value!(b, "?", ctx)
+                            emit_value!(b, "?", ctx, _pr_str_arr)
                             _tb3 = UInt8[]; emit_jl_string_to_js!(_tb3, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb3; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1547,13 +1564,13 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
                     # Single-element tuple gets trailing comma: (1,)
                     if length(elem_types) == 1
-                        emit_value!(b, ",", ctx)
+                        emit_value!(b, ",", ctx, _pr_str_arr)
                         _tb4 = UInt8[]; emit_jl_string_to_js!(_tb4, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb4; pops=1, pushes=WasmValType[ExternRef])
                         call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                     end
 
                     # Write ")"
-                    emit_value!(b, ")", ctx)
+                    emit_value!(b, ")", ctx, _pr_str_arr)
                     _tb5 = UInt8[]; emit_jl_string_to_js!(_tb5, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb5; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
@@ -2803,6 +2820,16 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Compile index arg and convert to 0-based
                 bchr = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
                 idx_type = infer_value_type(args[2], ctx)
+                # parity(M9): the pre-pushed string is the CLASSED struct sitting UNDER
+                # the index — save idx, read .data, reload idx.
+                _sc_idx = length(ctx.locals) + ctx.n_params
+                push!(ctx.locals, idx_type === Int64 || idx_type === Int ? I64 : I32)
+                builder_set_local_type!(bchr, _sc_idx, idx_type === Int64 || idx_type === Int ? I64 : I32)
+                local_set!(bchr, _sc_idx)
+                _ssi = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                ref_cast!(bchr, Int64(_ssi), false)
+                struct_get!(bchr, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(str_type_idx), true))
+                local_get!(bchr, _sc_idx)
                 if idx_type === Int64 || idx_type === Int
                     # Convert Int64 to Int32 and subtract 1
                     num!(bchr, Opcode.I32_WRAP_I64)
@@ -2931,8 +2958,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # Clear bytes - recompile in correct order
                 bss = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
 
-                # Store source string
-                emit_value!(bss, args[1], ctx)
+                # Store source string DATA (parity M9: the funnel unwraps the class)
+                emit_value!(bss, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 local_set!(bss, src_local)
 
                 # Create new string of specified length
@@ -2969,8 +2996,9 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                 array_copy!(bss, str_type_idx, str_type_idx)
 
-                # Return result
+                # Return result — published as the CLASSED string (parity M9)
                 local_get!(bss, result_local)
+                emit_string_wrap!(bss, ctx)
                 return builder_code(bss)
 
             # WasmTarget string operations - str_hash(s) -> Int32
@@ -3424,7 +3452,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                     # Step 1: Compile each arg and store in locals
                     for i in 1:n
-                        emit_value!(bms, args[i], ctx)
+                        emit_value!(bms, args[i], ctx, str_arr_type)   # parity(M9): funnel → DATA array
                         local_set!(bms, str_locals[i])
                     end
 
@@ -3593,7 +3621,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             # show(nothing) → write "nothing"
                             call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
                         elseif arg_type === String || arg_type === Symbol
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(M9): funnel → DATA array
                             tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                             local _tb_js = UInt8[]
                             emit_jl_string_to_js!(_tb_js, io.decode_idx, tmp_local)
@@ -3670,7 +3698,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         arg_type = infer_value_type(args[i], ctx)
                         if arg_type === String || arg_type === Symbol
                             # Already a string — just compile it
-                            emit_value!(bpts, args[i], ctx)
+                            emit_value!(bpts, args[i], ctx, str_arr_type_pt)   # parity(M9): funnel → DATA array
                         elseif arg_type === Int32 || arg_type === Int64 ||
                                arg_type === UInt32 || arg_type === UInt64 ||
                                arg_type === Int16 || arg_type === UInt16 ||
@@ -3759,9 +3787,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # error("msg") → create ErrorException struct, stash, throw
                 local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
                 if _ee_info !== nothing
-                    local _tid_err = UInt8[]
-                    emit_type_id!(_tid_err, ctx.type_registry, ErrorException)
-                    emit_raw!(berr, _tid_err; pushes=WasmValType[I32])
+                    emit_type_id!(berr, ctx.type_registry, ErrorException)
                     # Field 1: msg (ArrayRef for AbstractString)
                     if length(args) >= 1
                         emit_value!(berr, args[1], ctx)
@@ -4026,7 +4052,8 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 end
                 if str_arg !== nothing
                     hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-                    emit_value!(bhb, str_arg, ctx)  # string array ref
+                    emit_value!(bhb, str_arg, ctx,
+                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
                     # len arg
                     if length(expr.args) >= 4
                         emit_value!(bhb, expr.args[4], ctx)  # length i64

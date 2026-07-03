@@ -131,9 +131,12 @@ using Dates: Dates, @dateformat_str
 # before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
 _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
+_wt_shard0() && include("m8_selector_table.jl")
+_wt_shard0() && include("m11_intrinsics_table.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
+_wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
@@ -5342,23 +5345,19 @@ begin
                 (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
             ]
             mod, type_registry, func_registry, dt_registry = compile_module(functions; return_registries=true)
-            @test length(dt_registry.tables) == 1  # one table for disp_val
+            @test length(dt_registry.tables) == 1  # one selector for disp_val
             dt = first(values(dt_registry.tables))
             @test length(dt.entries) == 10
             @test dt.arity == Int32(1)
-            @test dt.table_size >= 14  # power of 2, load factor ≤ 0.75
+            # parity(M8): the selector is ROUTED — packed offset + the ONE flat table
+            @test haskey(dt_registry.selector_offset, disp_val)
+            @test dt_registry.selector_table_idx !== nothing
+            @test dt_registry.selector_table_len >= 10
         end
 
-        @testset "FNV-1a hash produces correct values" begin
-            # Verify FNV-1a implementation matches known values
-            h1 = WasmTarget.fnv1a_hash(Int32[1])
-            h2 = WasmTarget.fnv1a_hash(Int32[2])
-            @test h1 != h2  # different inputs → different hashes
-            @test h1 == WasmTarget.fnv1a_hash(Int32[1])  # deterministic
-            # Multi-arg hash
-            h12 = WasmTarget.fnv1a_hash(Int32[1, 2])
-            h21 = WasmTarget.fnv1a_hash(Int32[2, 1])
-            @test h12 != h21  # order matters
+        @testset "the hash tier is DELETED (LOCK L10) — selectors are the only dispatch" begin
+            @test !isdefined(WasmTarget, :fnv1a_hash)
+            @test !isdefined(WasmTarget, :resolve_table_layout)
         end
 
         @testset "Megamorphic dispatch via call_indirect" begin
@@ -5445,11 +5444,13 @@ begin
             mod, type_registry, func_registry, dt_registry = compile_module(
                 all_functions; return_registries=true, overlay_entries=overlay_set)
 
-            # The overlay should have split the dispatch table:
-            # - Normal dispatch_registry should NOT contain disp_val (it's in overlay)
-            # - OR the overlay registry was built internally
-            # Check that we at least got a valid module
+            # parity(M8.4): overlays are ROWS in the one selector table, not a parallel
+            # apparatus — disp_val stays in the dispatch registry with 12 targets
+            # (10 base + 2 overlay structs), all selector-routed.
             @test mod isa WasmModule
+            @test haskey(dt_registry.tables, disp_val)
+            @test length(dt_registry.tables[disp_val].entries) == 12
+            @test haskey(dt_registry.selector_offset, disp_val)
             bytes = to_bytes(mod)
             @test length(bytes) > 0
         end
@@ -5522,14 +5523,12 @@ begin
             end
         end
 
-        @testset "FNV-1a hash overlay separation" begin
-            # Verify that overlay hash keys don't collide with base hash keys
-            # (since overlay and base tables are separate, collisions within each are handled by probing)
-            h_overlay1 = WasmTarget.fnv1a_hash(Int32[100])  # DispOverlay1 type ID
-            h_overlay2 = WasmTarget.fnv1a_hash(Int32[200])  # DispOverlay2 type ID
-            @test h_overlay1 != h_overlay2  # Different overlay types get different hashes
-            @test h_overlay1 != UInt32(0)   # Not the sentinel
-            @test h_overlay2 != UInt32(0)
+        @testset "the FNV hash-dispatch apparatus is DELETED (LOCK L10)" begin
+            # parity(M8.4): dispatch is dart's ONE selector table — classId + offset +
+            # call_indirect. The hash scheme must never reappear.
+            @test !isdefined(WasmTarget, :fnv1a_hash)
+            @test !isdefined(WasmTarget, :OverlayRegistry)
+            @test !isdefined(WasmTarget, :build_overlay_tables)
         end
 
     end

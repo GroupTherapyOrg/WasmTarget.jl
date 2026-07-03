@@ -491,9 +491,9 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     builder_set_local_type!(b, len1_local, I32)
 
     # Store str1, str2
-    emit_value!(b, str1, ctx)
+    emit_value!(b, str1, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
     local_set!(b, str1_local)
-    emit_value!(b, str2, ctx)
+    emit_value!(b, str2, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
     local_set!(b, str2_local)
 
     # len1 = str1.len (stored); len2 = str2.len (left on stack)
@@ -544,10 +544,11 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
     builder_set_local_type!(b, len_local, I32)
     builder_set_local_type!(b, i_local, I32)
 
-    # Store str1 and str2
-    emit_value!(b, str1, ctx)
+    # Store str1 and str2 — expected=the DATA array; the funnel unwraps the classed
+    # string (parity M9: ops read the class's array field once at entry)
+    emit_value!(b, str1, ctx, strref)
     local_set!(b, str1_local)
-    emit_value!(b, str2, ctx)
+    emit_value!(b, str2, ctx, strref)
     local_set!(b, str2_local)
 
     # len1 = str1.len (tee into len_local); compare with len2

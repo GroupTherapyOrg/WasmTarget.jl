@@ -397,8 +397,8 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
     if T === Union{}
         return I32
     elseif T === String || T === Symbol
-        # Strings and Symbols are WasmGC arrays of bytes (not structs)
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
         # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
@@ -543,8 +543,8 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             return ConcreteRef(info.wasm_type_idx, true)
         end
     elseif T === String
-        # Strings are WasmGC arrays of bytes
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T === Int128 || T === UInt128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
@@ -684,6 +684,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         if !isempty(ctx.arg_types)
             _sbT = ctx.arg_types[1]
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
                 argtypes=ctx.arg_types[2:end], self_shift=1))
         end
@@ -703,6 +704,27 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         _joins
     catch
         Dict{Int,Type}()
+    end
+    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
+    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
+    # type-safe-default ZERO (the mutable-capture silent 0).
+    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
+    # stay local-typing hints only (they poisoned print_to_string's string-carrying
+    # accumulator when made visible).
+    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
+        local _orig = get(ctx.ssa_types, _jk, Any)
+        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
+        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
+        # type — their truth lives in the join-typed LOCAL, and rewriting them
+        # desynced String-carrying phis in print_to_string (a String local receiving
+        # a join-typed i32 edge).
+        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
+        if (_orig === Any || _orig isa Union) &&
+           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
+            ctx.ssa_types[_jk] = _jv
+        end
     end
 
     # Allocate locals for phi nodes (they need to persist across iterations)
@@ -912,6 +934,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         if !isempty(ctx.arg_types)
             _sbT = ctx.arg_types[1]
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
                 argtypes=ctx.arg_types[2:end], self_shift=1))
         end
@@ -931,6 +954,27 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         _joins
     catch
         Dict{Int,Type}()
+    end
+    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
+    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
+    # type-safe-default ZERO (the mutable-capture silent 0).
+    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
+    # stay local-typing hints only (they poisoned print_to_string's string-carrying
+    # accumulator when made visible).
+    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
+        local _orig = get(ctx.ssa_types, _jk, Any)
+        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
+        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
+        # type — their truth lives in the join-typed LOCAL, and rewriting them
+        # desynced String-carrying phis in print_to_string (a String local receiving
+        # a join-typed i32 edge).
+        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
+        if (_orig === Any || _orig isa Union) &&
+           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
+            ctx.ssa_types[_jk] = _jv
+        end
     end
 
     # Count uses of each SSA value
@@ -2245,6 +2289,15 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
             any_convert_extern!(b)
         end
         ref_cast!(b, Int64(concrete_wasm.type_idx), true)
+        append!(bytes, builder_code(b))
+    elseif concrete_wasm === I32 || concrete_wasm === I64 ||
+           concrete_wasm === F32 || concrete_wasm === F64
+        # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
+        # funnel (dart convertType) — symmetric to the store-side box. Without this,
+        # consumers read a raw box ref where the numeric is expected.
+        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
+        seed_input!(b, WasmValType[local_wasm_type])
+        convert_type!(b, local_wasm_type, concrete_wasm, ctx; from_julia=ssa_julia_type)
         append!(bytes, builder_code(b))
     end
 end

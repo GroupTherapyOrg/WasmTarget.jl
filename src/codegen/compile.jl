@@ -65,7 +65,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
             get_array_type!(mod, type_registry, elem_type)
         elseif T === String
             # Register string array type
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
     end
 
@@ -79,7 +79,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
         elem_type = eltype(return_type)
         get_array_type!(mod, type_registry, elem_type)
     elseif return_type === String
-        get_string_array_type!(mod, type_registry)
+        get_string_struct_type!(mod, type_registry)
     end
 
     # Determine Wasm types for parameters and return (skip WasmGlobal args)
@@ -848,13 +848,28 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)
+    # parity(M9): params are the CLASSED string — every string push reads through
+    # to the DATA array (dart: methods read the class's array field).
+    # parity(M9): string-returning bodies publish the CLASSED string. The caller-visible
+    # result type is $JlString; the array is saved through a dedicated extra local.
+    function _wrap_result_str!(bb, scratch_idx)
+        builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
+        local_set!(bb, scratch_idx)
+        i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
+        local_get!(bb, scratch_idx)
+        struct_new!(bb, get_string_struct_type!(mod, type_registry),
+                    WasmValType[I32, ConcreteRef(UInt32(str_type_idx), true)])
+    end
+    _str0!(bb) = (local_get!(bb, 0);
+                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+                              ConcreteRef(UInt32(str_type_idx), true)))
 
     if fname === :str_char
         # str_char(s::String, i::Int32)::Int32
         # Gets character at 1-based index
         # local 0 = string (array ref)
         # local 1 = index (i32)
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         local_get!(b, 1)  # index
         # Subtract 1 for 0-based indexing
         i32_const!(b, 1)
@@ -880,7 +895,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 3)  # idx0
 
         # b0 = s[idx0] (array.get_u)
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         local_get!(b, 3)  # idx0
         array_get!(b, str_type_idx, I32; signed=false)
         local_set!(b, 2)  # b0
@@ -912,7 +927,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         i32_const!(b, 0x06)
         num!(b, Opcode.I32_SHL)
         # s[idx0+1] & 0x3F
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         local_get!(b, 3)  # idx0
         i32_const!(b, 1)
         num!(b, Opcode.I32_ADD)
@@ -936,7 +951,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         i32_const!(b, 0x0C)  # 12
         num!(b, Opcode.I32_SHL)
         # (s[idx0+1] & 0x3F) << 6
-        local_get!(b, 0)
+        _str0!(b)
         local_get!(b, 3)
         i32_const!(b, 1)
         num!(b, Opcode.I32_ADD)
@@ -947,7 +962,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         num!(b, Opcode.I32_SHL)
         num!(b, Opcode.I32_OR)
         # s[idx0+2] & 0x3F
-        local_get!(b, 0)
+        _str0!(b)
         local_get!(b, 3)
         i32_const!(b, 2)
         num!(b, Opcode.I32_ADD)
@@ -965,7 +980,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         i32_const!(b, 0x12)  # 18
         num!(b, Opcode.I32_SHL)
         # (s[idx0+1] & 0x3F) << 12
-        local_get!(b, 0)
+        _str0!(b)
         local_get!(b, 3)
         i32_const!(b, 1)
         num!(b, Opcode.I32_ADD)
@@ -976,7 +991,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         num!(b, Opcode.I32_SHL)
         num!(b, Opcode.I32_OR)
         # (s[idx0+2] & 0x3F) << 6
-        local_get!(b, 0)
+        _str0!(b)
         local_get!(b, 3)
         i32_const!(b, 2)
         num!(b, Opcode.I32_ADD)
@@ -987,7 +1002,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         num!(b, Opcode.I32_SHL)
         num!(b, Opcode.I32_OR)
         # s[idx0+3] & 0x3F
-        local_get!(b, 0)
+        _str0!(b)
         local_get!(b, 3)
         i32_const!(b, 3)
         num!(b, Opcode.I32_ADD)
@@ -1007,7 +1022,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # str_len(s::String)::Int32
         # Returns byte length of string (ncodeunits)
         # local 0 = string (array ref)
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         # array.len
         array_len!(b)
         end_block!(b)
@@ -1024,7 +1039,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, I32)  # local 3: len
 
         # len = array.len(s)
-        local_get!(b, 0)
+        _str0!(b)
         array_len!(b)
         local_set!(b, 3)  # len
 
@@ -1046,7 +1061,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         end_block!(b)
 
         # byte = s[i]; if (byte & 0xC0) != 0x80: count++
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         local_get!(b, 1)  # i
         array_get!(b, str_type_idx, I32; signed=false)
         i32_const!(b, Int32(0xC0))
@@ -1151,13 +1166,15 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Create new string array of given length
         local_get!(b, 0)  # length
         array_new_default!(b, str_type_idx)
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
+        _wrap_result_str!(b, 1 + length(extra_locals) - 1)   # 1 param
         end_block!(b)
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_setchar!
         # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
         # Sets character at 1-based index
-        local_get!(b, 0)  # string
+        _str0!(b)          # string DATA
         local_get!(b, 1)  # index
         # Subtract 1 for 0-based indexing
         i32_const!(b, 1)
@@ -1173,42 +1190,54 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Concatenate two UTF-8 byte arrays into a new array
         # local 0 = a (array ref), local 1 = b (array ref)
         # extra locals: local 2 = len_a, local 3 = result (array ref)
-        push!(extra_locals, I32)  # local 2: len_a
+        # parity(M9): params are CLASSED strings — unwrap once into array locals
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
+        _a_data = 2 + length(extra_locals) - 2
+        _b_data = 2 + length(extra_locals) - 1
+        _str0!(b); local_set!(b, _a_data)
+        local_get!(b, 1)
+        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+                    ConcreteRef(UInt32(str_type_idx), true))
+        local_set!(b, _b_data)
+        push!(extra_locals, I32)  # len_a
         str_ref_type = ConcreteRef(str_type_idx, true)
         push!(extra_locals, str_ref_type)  # local 3: result array ref
 
         # len_a = array.len(a)
-        local_get!(b, 0)  # a
+        local_get!(b, _a_data)  # a data
         array_len!(b)
-        local_set!(b, 2)  # len_a
+        local_set!(b, 4)  # len_a
 
         # result = array.new_default(len_a + array.len(b))
-        local_get!(b, 2)  # len_a
-        local_get!(b, 1)  # b
+        local_get!(b, 4)  # len_a
+        local_get!(b, _b_data)  # b data
         array_len!(b)
         num!(b, Opcode.I32_ADD)
         array_new_default!(b, str_type_idx)
-        local_set!(b, 3)  # result
+        local_set!(b, 5)  # result
 
         # array.copy(result, 0, a, 0, len_a)
-        local_get!(b, 3)  # dst: result
+        local_get!(b, 5)  # dst: result
         i32_const!(b, 0)  # dst_offset: 0
-        local_get!(b, 0)  # src: a
+        local_get!(b, _a_data)  # src: a data
         i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 2)  # len: len_a
+        local_get!(b, 4)  # len: len_a
         array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # array.copy(result, len_a, b, 0, array.len(b))
-        local_get!(b, 3)  # dst: result
-        local_get!(b, 2)  # dst_offset: len_a
-        local_get!(b, 1)  # src: b
+        local_get!(b, 5)  # dst: result
+        local_get!(b, 4)  # dst_offset: len_a
+        local_get!(b, _b_data)  # src: b data
         i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 1)  # b
+        local_get!(b, _b_data)  # b data
         array_len!(b)  # len: array.len(b)
         array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
 
         # return result
-        local_get!(b, 3)  # result
+        local_get!(b, 5)  # result
+        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
+        _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
         end_block!(b)
         return (builder_code(b), extra_locals)
 
@@ -1443,7 +1472,7 @@ function compile_module(functions::Vector;
                 register_closure_type!(mod, type_registry, T)
             elseif T === Symbol
                 # Symbol is represented as a string (byte array), not a struct
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
             elseif T <: Vector
@@ -1456,7 +1485,7 @@ function compile_module(functions::Vector;
                 # Multi-dimensional arrays (Matrix, etc.) - register as struct
                 register_matrix_type!(mod, type_registry, T)
             elseif T === String
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             end
         end
 
@@ -1465,7 +1494,7 @@ function compile_module(functions::Vector;
             register_closure_type!(mod, type_registry, return_type)
         elseif return_type === Symbol
             # Symbol is represented as a string (byte array), not a struct
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
         elseif return_type !== Union{} && return_type <: Vector
@@ -1478,7 +1507,7 @@ function compile_module(functions::Vector;
             # Multi-dimensional arrays (Matrix, etc.) - register as struct
             register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
 
         push!(function_data, (f, arg_types, name, code_info, return_type, global_args, is_closure))
@@ -1615,34 +1644,16 @@ function compile_module(functions::Vector;
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
 
     # PURE-9062: Build overlay tables if overlay_entries are specified.
-    # Overlay entries (user methods) go into a separate table checked before the base table.
-    overlay_registry = OverlayRegistry()
-    if !isempty(overlay_entries) && !isempty(dispatch_registry.tables)
-        # Convert overlay_entries Set{(func, arg_types)} → Dict{func → Set{arg_types}}
-        overlay_arg_types = Dict{Any, Set{Tuple}}()
-        for (func_ref, arg_types) in overlay_entries
-            if !haskey(overlay_arg_types, func_ref)
-                overlay_arg_types[func_ref] = Set{Tuple}()
-            end
-            push!(overlay_arg_types[func_ref], arg_types)
-        end
-
-        overlay_registry = build_overlay_tables(dispatch_registry, overlay_arg_types;
-                                                 type_registry=type_registry)
-
-        if !isempty(overlay_registry.overlays)
-            # Remove overlaid functions from the normal dispatch registry
-            # (they're now handled by overlay_registry)
-            for func_ref in keys(overlay_registry.overlays)
-                delete!(dispatch_registry.tables, func_ref)
-            end
-            # Emit overlay dispatch metadata (both overlay and base tables)
-            emit_overlay_metadata!(mod, type_registry, overlay_registry)
-        end
-    end
+    # parity(M8.4): overlays are NOT a parallel table apparatus — a user method is
+    # just a higher-priority ROW in the same selector (dart has one table, period).
+    # dt.entries already carries one entry per tuple with the user registration
+    # winning at register time; same-tuple collisions were resolved before build.
+    # The old split (build_overlay_tables → parallel tables checked first) is DELETED.
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
+        # parity(M8.2): pack single-axis selectors into the ONE dart table
+        pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
     # Track export names to avoid duplicates (WASM requires unique export names)
@@ -1668,16 +1679,9 @@ function compile_module(functions::Vector;
         # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
         dispatch_dt = nothing
-        overlay_pair = (nothing, nothing)
-        if code_info !== nothing && type_registry.base_struct_idx !== nothing
-            # PURE-9062: Check overlay registry first
-            if !isempty(overlay_registry.overlays)
-                overlay_pair = find_overlay_dispatch_call(code_info, overlay_registry)
-            end
-            # Then check normal dispatch registry
-            if overlay_pair[1] === nothing && !isempty(dispatch_registry.tables)
-                dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
-            end
+        if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
+           !isempty(dispatch_registry.tables)
+            dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
         end
 
         if name in stub_names
@@ -1703,18 +1707,18 @@ function compile_module(functions::Vector;
         elseif intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
-        elseif overlay_pair[1] !== nothing
-            # PURE-9062: Generate overlay dispatch body (overlay probe → base fallback)
-            n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            overlay_dt, base_fallback_dt = overlay_pair
-            body, locals = generate_overlay_dispatch_caller_body(
-                overlay_dt, base_fallback_dt, n_params,
-                type_registry.base_struct_idx, type_registry)
         elseif dispatch_dt !== nothing
             # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            body, locals = generate_dispatch_caller_body(
-                dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
+            if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
+                # parity(M8.2): the dart virtual call — classId + offset + call_indirect
+                body, locals = generate_selector_caller_body(
+                    dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
+                    caller_return_type=return_type, mod=mod, type_registry=type_registry)
+            else
+                body, locals = generate_dispatch_caller_body(
+                    dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
+            end
         else
             # Generate function body from Julia IR
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
@@ -1776,9 +1780,6 @@ function compile_module(functions::Vector;
     end
 
     # PURE-9062 Phase 2: Add overlay wrapper functions
-    if !isempty(overlay_registry.overlays)
-        emit_overlay_wrappers!(mod, type_registry, overlay_registry)
-    end
 
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
@@ -1874,7 +1875,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         # Register types used in parameters
         for (i, T) in enumerate(arg_types)
             if T === Symbol
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
             elseif T <: Vector
@@ -1882,7 +1883,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
             elseif T <: Array && T isa DataType
                 register_matrix_type!(mod, type_registry, T)
             elseif T === String
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             end
         end
 
@@ -1894,7 +1895,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
         elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
             register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
 
         push!(function_data, (func_ref, arg_types, name, code_info, return_type, global_args, false))
@@ -2271,7 +2272,7 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
         elseif is_struct_type(T)
             register_struct_type!(mod, type_registry, T)
         elseif T === String
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
     end
 
@@ -2284,7 +2285,7 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
         elseif is_struct_type(return_type)
             register_struct_type!(mod, type_registry, return_type)
         elseif return_type === String
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
     end
 
@@ -2403,7 +2404,7 @@ function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo
                     elseif T <: Vector
                         register_vector_type!(mod, type_registry, T)
                     elseif T === String
-                        get_string_array_type!(mod, type_registry)
+                        get_string_struct_type!(mod, type_registry)
                     end
                 end
             end
@@ -2641,7 +2642,7 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
         # Register types used in parameters
         for (i, T) in enumerate(arg_types)
             if T === Symbol
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             elseif is_struct_type(T)
                 register_struct_type!(mod, type_registry, T)
             elseif T <: Vector
@@ -2649,7 +2650,7 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
             elseif T <: Array && T isa DataType
                 register_matrix_type!(mod, type_registry, T)
             elseif T === String
-                get_string_array_type!(mod, type_registry)
+                get_string_struct_type!(mod, type_registry)
             end
         end
 
@@ -2661,7 +2662,7 @@ function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
         elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
             register_matrix_type!(mod, type_registry, return_type)
         elseif return_type === String
-            get_string_array_type!(mod, type_registry)
+            get_string_struct_type!(mod, type_registry)
         end
 
         push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))

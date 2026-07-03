@@ -18,6 +18,8 @@ include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
+include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (replaces FNV, M8.4)
+include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
 include("codegen/compile.jl")
 include("codegen/structs.jl")
 include("codegen/unions.jl")
@@ -76,7 +78,7 @@ export WasmGlobal, global_index, global_eltype
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
 # Therapy.jl integration - direct IR compilation for reactive handlers
 export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry, register_function!
-export serialize_type_registry, serialize_function_table, serialize_type_ids, serialize_dispatch_tables
+export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 # Soundness: strict-mode diagnostics + validation gate

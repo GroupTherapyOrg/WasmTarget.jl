@@ -41,6 +41,7 @@ mutable struct TypeRegistry
     structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
     arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
+    string_struct_idx::Union{Nothing, UInt32} # parity(M9): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
     numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # PURE-325: box types for numeric→externref returns
@@ -83,7 +84,7 @@ mutable struct TypeRegistry
 end
 
 TypeRegistry() = TypeRegistry(
-    Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing,
+    Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, nothing,
     Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
@@ -98,7 +99,7 @@ TypeRegistry() = TypeRegistry(
 # All Dict fields are nothing — safe for MVP Int64 arithmetic where
 # no struct/array/union type registration is needed.
 TypeRegistry(::Val{:minimal}) = TypeRegistry(
-    nothing, nothing, nothing,  # structs, arrays, string_array_idx
+    nothing, nothing, nothing, nothing,  # structs, arrays, string_array_idx, string_struct_idx
     nothing, nothing,            # unions, numeric_boxes
     nothing, nothing,            # type_constant_globals, typename_constant_globals
     nothing, nothing,            # type_ids, type_ranges
@@ -150,8 +151,10 @@ function assign_type_ids!(registry::TypeRegistry)
 
     # Also include primitive numeric types that may need boxing/dispatch
     # PURE-9028: Include Nothing for BoxedNothing typeId
+    # parity(M9): String + Symbol are CLASSED now — they join the hierarchy so
+    # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-              Float16, Float32, Float64, Nothing)
+              Float16, Float32, Float64, Nothing, String, Symbol)
         push!(concrete_types, T)
     end
 
@@ -351,6 +354,14 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     result["arrays"] = arrays
 
     return result
+end
+
+"""builder-native: push the type's DFS id as i32."""
+function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
+    tb = UInt8[]
+    emit_type_id!(tb, registry, T)
+    emit_raw!(b, tb; pushes=WasmValType[I32])
+    return b
 end
 
 """
@@ -962,6 +973,27 @@ function get_string_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
         registry.string_array_idx = add_array_type!(mod, UInt8(0x78), true)
     end
     return registry.string_array_idx
+end
+
+"""
+    get_string_struct_type!(mod, registry) -> UInt32
+
+parity(M9): the CLASSED string — dart: String IS a class. A Julia String value is
+`(struct (field i32 classId) (field (ref null \$strbytes) data))`, SUBTYPE of \$JlBase,
+so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
+table like every other value. String OPS unwrap `.data` once at entry and work on the
+byte array (dart's methods read the class's array field the same way).
+"""
+function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    if registry.string_struct_idx === nothing
+        arr_idx = get_string_array_type!(mod, registry)
+        base_idx = registry.base_struct_idx
+        st = StructType(FieldType[FieldType(I32, false),
+                                  FieldType(ConcreteRef(arr_idx, true), true)],
+                        base_idx === nothing ? nothing : UInt32(base_idx))
+        registry.string_struct_idx = add_type!(mod, st)
+    end
+    return registry.string_struct_idx
 end
 
 """
@@ -1806,9 +1838,9 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         return ConcreteRef(dt_idx, true)
     end
     if T === String || T === Symbol
-        # Strings and Symbols are WasmGC arrays of bytes
-        # Symbol is represented as its name string (byte array)
-        type_idx = get_string_array_type!(mod, registry)
+        # parity(M9): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
+        # a class). Symbol shares the rep (its name string).
+        type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
     elseif is_closure_type(T)
         # Closure types are structs with captured variables

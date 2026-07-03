@@ -833,6 +833,14 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
+"""builder-native front for the catch-region compiler."""
+function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
+    _tb = UInt8[]
+    _compile_catch_region!(_tb, ctx, code, from, to)
+    emit_raw!(b, _tb)
+    return b
+end
+
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     b = InstrBuilder(; func_name="_compile_catch_region!", mod=ctx.mod)
     i = from
@@ -844,7 +852,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
         end
         if stmt isa Core.GotoIfNot
             else_target = stmt.dest
-            emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
+            compile_condition_to_i32!(b, stmt.cond, ctx)
             then_start = i + 1
             then_end = min(else_target - 1, to)
             then_has_return = any(code[j] isa Core.ReturnNode for j in then_start:then_end)
@@ -852,7 +860,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
             for j in then_start:then_end
                 ts = code[j]
                 if ts !== nothing && !(ts isa Expr && ts.head === :pop_exception)
-                    emit_raw!(b, compile_statement(ts, j, ctx))
+                    compile_statement!(b, ts, j, ctx)
                 end
             end
             if then_has_return
@@ -865,7 +873,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
                 for j in else_target:to
                     es = code[j]
                     if es !== nothing && !(es isa Expr && es.head === :pop_exception)
-                        emit_raw!(b, compile_statement(es, j, ctx))
+                        compile_statement!(b, es, j, ctx)
                     end
                 end
                 end_block!(b)
@@ -873,7 +881,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
                 i = to + 1
             end
         else
-            emit_raw!(b, compile_statement(stmt, i, ctx))
+            compile_statement!(b, stmt, i, ctx)
             i += 1
         end
     end
@@ -962,7 +970,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
                     push!(pre_blocks, BasicBlock(b.start_idx, exit_idx - 1, nothing))
             end
         end
-        emit_raw!(bb, generate_stackified_flow(ctx, pre_blocks, code; trailing_unreachable = false))
+        generate_stackified_flow!(bb, ctx, pre_blocks, code; trailing_unreachable = false)
         # P3 gap e1cc83db76ea: the pre subset can end with a catchable-throw
         # statement (boundscheck arm) that leaves last_stmt_was_stub=true —
         # compile_condition_to_i32 then dead-code-guards the CONDITION into a
@@ -970,7 +978,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         # The pre region falls through here alive; reset BEFORE the condition.
         ctx.last_stmt_was_stub = false
         block!(bb)   # $else
-        emit_raw!(bb, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        compile_condition_to_i32!(bb, (code[exit_idx]::Core.GotoIfNot).cond, ctx)
         num!(bb, Opcode.I32_EQZ)
         br_if!(bb, 0)
         ctx.last_stmt_was_stub = false
@@ -998,8 +1006,8 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(pre_try_blocks)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre_try_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre_try_blocks, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -1023,7 +1031,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
     # - phi locals set at every edge (GotoNode, GotoIfNot, fall-through)
     # - nested GotoIfNot properly generates if/else or br_if
     # - returns use RETURN opcode (exits function from within try_table)
-    emit_raw!(bb, generate_stackified_flow(ctx, try_body_blocks, code))
+    generate_stackified_flow!(bb, ctx, try_body_blocks, code)
 
     if has_merge
         # Normal completion: the try-exit edge targets the merge block, which is
@@ -1035,7 +1043,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e < catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -1068,10 +1076,10 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         if _arm_complex
             catch_blocks = [b for b in blocks
                             if b.start_idx >= catch_dest && b.start_idx < merge_start]
-            emit_raw!(bb, generate_stackified_flow(ctx, catch_blocks, code;
-                                                   trailing_unreachable = false))
+            generate_stackified_flow!(bb, ctx, catch_blocks, code;
+                                                   trailing_unreachable = false)
         else
-            _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
+            _compile_catch_region!(bb, ctx, code, catch_dest, merge_start - 1)
         end
     else
         # P2-batch19: self-contained catch arm (ends in return) — compile via
@@ -1080,7 +1088,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         catch_blocks = [b for b in blocks
                         if b.start_idx >= catch_dest &&
                            (!has_exit_branch || b.start_idx < exit_dest)]
-        emit_raw!(bb, generate_stackified_flow(ctx, catch_blocks, code))
+        generate_stackified_flow!(bb, ctx, catch_blocks, code)
     end
 
     if has_exit_branch
@@ -1090,7 +1098,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         # stackified — else arms can contain loops/begin blocks/nested ifs that
         # the linear walk flattened or rejected (gap 227929b3fbff family).
         post_blocks = [b for b in blocks if b.start_idx >= exit_dest]
-        emit_raw!(bb, generate_stackified_flow(ctx, post_blocks, code))
+        generate_stackified_flow!(bb, ctx, post_blocks, code)
     end
 
     if has_merge
@@ -1101,7 +1109,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e >= catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -1119,8 +1127,8 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         _pm_complex = any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, _pm_rng)
         if _pm_complex
             pm_blocks = [b for b in blocks if b.start_idx >= merge_start]
-            emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
-                                                   trailing_unreachable = false))
+            generate_stackified_flow!(bb, ctx, pm_blocks, code;
+                                                   trailing_unreachable = false)
         else
             for i in _pm_rng
                 stmt = code[i]
@@ -1128,7 +1136,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    compile_statement!(bb, stmt, i, ctx)
                 end
             end
         end
@@ -1174,6 +1182,12 @@ end
 #     <then arm: try_table A / catch X>   ;; all paths return
 #   end
 #   <else arm: try_table B / catch Y>     ;; all paths return
+"""builder-native front for the branch-split try generator."""
+function generate_branch_split_try!(b::InstrBuilder, args...; kwargs...)
+    emit_raw!(b, generate_branch_split_try(args...; kwargs...))   # THE front seam
+    return b
+end
+
 function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
@@ -1189,7 +1203,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     function _emit_try_table!(body_blocks::Vector{BasicBlock})
         block!(b)
         try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
-        emit_raw!(b, generate_stackified_flow(ctx, body_blocks, code))
+        generate_stackified_flow!(b, ctx, body_blocks, code)
         end_block!(b)   # try_table
         end_block!(b)   # catch landing block
         ctx.last_stmt_was_stub = false
@@ -1198,7 +1212,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     function _emit_arm!(lo::Int, chain::Vector{TryRegion}, hi::Int)
         if isempty(chain)
             arm_blocks = [b2 for b2 in blocks if b2.start_idx >= lo && b2.start_idx <= hi]
-            emit_raw!(b, generate_stackified_flow(ctx, arm_blocks, code))
+            generate_stackified_flow!(b, ctx, arm_blocks, code)
             ctx.last_stmt_was_stub = false
         else
             _emit_chain_levels!(b, ctx, blocks, code, chain, lo, hi, _emit_try_table!)
@@ -1215,12 +1229,12 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
         end
     end
     if !isempty(pre)
-        emit_raw!(b, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        generate_stackified_flow!(b, ctx, pre, code; trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
     block!(b)   # $else
-    emit_raw!(b, compile_condition_to_i32((code[branch_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(b, (code[branch_idx]::Core.GotoIfNot).cond, ctx)
     num!(b, Opcode.I32_EQZ)
     br_if!(b, 0)
     _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
@@ -1267,14 +1281,14 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
     if !isempty(pre)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre, code; trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
     head !== nothing && pushfirst!(body, head)
     block!(bb)
     try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(bb, generate_stackified_flow(ctx, body, code))
+    generate_stackified_flow!(bb, ctx, body, code)
     end_block!(bb)   # try_table
     end_block!(bb)   # catch landing block
     ctx.last_stmt_was_stub = false
@@ -1284,8 +1298,8 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     then_chain = [q for q in arm_regions if q.enter_idx < bdest]
     else_chain = [q for q in arm_regions if q.enter_idx >= bdest]
     arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
-    emit_raw!(bb, generate_branch_split_try(ctx, arm_blocks, code, then_chain,
-                                            else_chain, branch_idx))
+    generate_branch_split_try!(bb, ctx, arm_blocks, code, then_chain,
+                                            else_chain, branch_idx)
     return builder_code(bb)
 end
 
@@ -1327,14 +1341,14 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(pre)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre, code; trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre, code; trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     body = [b for b in blocks if b.start_idx > r.enter_idx && b.start_idx < r.catch_dest]
     head !== nothing && pushfirst!(body, head)
     block!(bb)
     try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(bb, generate_stackified_flow(ctx, body, code))
+    generate_stackified_flow!(bb, ctx, body, code)
     end_block!(bb)   # try_table
     end_block!(bb)   # catch landing block
     ctx.last_stmt_was_stub = false
@@ -1353,13 +1367,13 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(arm_pre)
-        emit_raw!(bb, generate_stackified_flow(ctx, arm_pre, code; trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, arm_pre, code; trailing_unreachable=false)
     end
     # e1cc class: the prefix can end with a catchable-throw arm — reset before
     # compiling the live condition.
     ctx.last_stmt_was_stub = false
     block!(bb)   # $skiparm
-    emit_raw!(bb, compile_condition_to_i32((code[gin_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(bb, (code[gin_idx]::Core.GotoIfNot).cond, ctx)
     num!(bb, Opcode.I32_EQZ)
     br_if!(bb, 0)   # !cond → inner-try arm
     ctx.last_stmt_was_stub = false
@@ -1367,7 +1381,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     local _ph = code[merge_idx]::Core.PhiNode
     for (j, e) in enumerate(_ph.edges)
         if Int(e) == skip_idx && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             break
         end
     end
@@ -1391,7 +1405,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(in_pre)
-        emit_raw!(bb, generate_stackified_flow(ctx, in_pre, code; trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, in_pre, code; trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     in_body = [b for b in blocks
@@ -1399,15 +1413,15 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     in_head !== nothing && pushfirst!(in_body, in_head)
     block!(bb)
     try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(bb, generate_stackified_flow(ctx, in_body, code;
-                                           trailing_unreachable=false))
+    generate_stackified_flow!(bb, ctx, in_body, code;
+                                           trailing_unreachable=false)
     ctx.last_stmt_was_stub = false
     # If the inner body completes normally it merges too — store its phi
     # edge (an edge strictly inside the body range) and branch to $armmerge.
     local _had_body_edge = false
     for (j, e) in enumerate(_ph.edges)
         if inner.enter_idx < Int(e) && Int(e) < inner.catch_dest && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             _had_body_edge = true
             break
         end
@@ -1422,13 +1436,13 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     tail_blocks = [b for b in blocks
                    if b.start_idx >= inner.catch_dest && b.start_idx < merge_idx]
     if !isempty(tail_blocks)
-        emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, tail_blocks, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     for (j, e) in enumerate(_ph.edges)
         if Int(e) >= inner.catch_dest && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             break
         end
     end
@@ -1438,14 +1452,14 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     # Post-merge [merge_idx ..]: phi reads, conversions, return
     if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, merge_idx:length(code))
         pm_blocks = [b for b in blocks if b.start_idx >= merge_idx]
-        emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pm_blocks, code;
+                                               trailing_unreachable=false)
     else
         for i in merge_idx:length(code)
             stmt = code[i]
             if stmt !== nothing
                 stmt isa Expr && stmt.head === :pop_exception && continue
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
         end
     end
@@ -1466,7 +1480,7 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
     function _emit_try_table_region!(body_blocks::Vector{BasicBlock})
         block!(b)
         try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
-        emit_raw!(b, generate_stackified_flow(ctx, body_blocks, code))
+        generate_stackified_flow!(b, ctx, body_blocks, code)
         end_block!(b)   # try_table
         end_block!(b)   # catch landing block
         ctx.last_stmt_was_stub = false
@@ -1509,8 +1523,8 @@ function _emit_chain_levels!(b::InstrBuilder, ctx::AbstractCompilationContext,
         end
         if !isempty(pre)
             # Falls through into this level's try_table — no trailing unreachable.
-            emit_raw!(b, generate_stackified_flow(ctx, pre, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, pre, code;
+                                                  trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
         body = [b2 for b2 in blocks
@@ -1521,7 +1535,7 @@ function _emit_chain_levels!(b::InstrBuilder, ctx::AbstractCompilationContext,
 
     tail_blocks = [b2 for b2 in blocks
                    if b2.start_idx >= chain[end].catch_dest && b2.start_idx <= hi]
-    emit_raw!(b, generate_stackified_flow(ctx, tail_blocks, code))
+    generate_stackified_flow!(b, ctx, tail_blocks, code)
     ctx.last_stmt_was_stub = false
     return b
 end
@@ -1583,8 +1597,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
         end
     end
     if !isempty(pre)
-        emit_raw!(b, generate_stackified_flow(ctx, pre, code;
-                                              trailing_unreachable=false))
+        generate_stackified_flow!(b, ctx, pre, code;
+                                              trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     body = [b2 for b2 in blocks
@@ -1598,8 +1612,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
     mk > 0 && block!(b)   # $merge_k
     block!(b)   # $ck — catch landing
     try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(b, generate_stackified_flow(ctx, body, code;
-                                          trailing_unreachable=(mk == 0)))
+    generate_stackified_flow!(b, ctx, body, code;
+                                          trailing_unreachable=(mk == 0))
     ctx.last_stmt_was_stub = false
     if mk > 0
         # Normal completion: the merge target is outside the body subset, so
@@ -1638,8 +1652,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             # catch-side phi stores (a pad trapped the whole catch path of a
             # return-style inner level — ff6dc9760825 on 1.13). A returning
             # arm emits its own RETURN; the function-end pad covers the rest.
-            emit_raw!(b, generate_stackified_flow(ctx, arm_blocks, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, arm_blocks, code;
+                                                  trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
@@ -1665,14 +1679,14 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
         # inner level, the code that flows on inside the ENCLOSING catch arm.
         if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, mk:hi)
             pm_blocks = [b2 for b2 in blocks if b2.start_idx >= mk && b2.start_idx <= hi]
-            emit_raw!(b, generate_stackified_flow(ctx, pm_blocks, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, pm_blocks, code;
+                                                  trailing_unreachable=false)
         else
             for i in mk:hi
                 stmt = code[i]
                 if stmt !== nothing
                     stmt isa Expr && stmt.head === :pop_exception && continue
-                    emit_raw!(b, compile_statement(stmt, i, ctx))
+                    compile_statement!(b, stmt, i, ctx)
                 end
             end
         end
@@ -2065,7 +2079,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         for i in 1:(enter_idx-1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
         end
 
@@ -2081,7 +2095,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
                 i += 1
             end
         end
@@ -2120,7 +2134,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
         # Catch handler code (from catch_dest to merge_start-1)
         # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
-        _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
+        _compile_catch_region!(bb, ctx, code, catch_dest, merge_start - 1)
 
         # SET catch phi locals
         for phi_idx in merge_phi_nodes
@@ -2158,11 +2172,11 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 end
                 # Otherwise the phi_local is read directly when the value is used
             elseif stmt isa Core.ReturnNode
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             elseif stmt isa Expr && stmt.head === :pop_exception
                 continue
             else
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
         end
 
@@ -2185,7 +2199,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         for i in 1:(enter_idx-1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
         end
 
@@ -2201,7 +2215,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
                 i += 1
             end
         end
@@ -2211,11 +2225,11 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             stmt = code[i]
             if stmt !== nothing
                 if stmt isa Core.ReturnNode
-                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    compile_statement!(bb, stmt, i, ctx)
                     br!(bb, 1)
                     break
                 else
-                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    compile_statement!(bb, stmt, i, ctx)
                 end
             end
         end
@@ -2250,7 +2264,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             if _catch_stmt isa Core.GotoIfNot
                 # Generate if/else for the conditional branch
                 local _else_target = _catch_stmt.dest
-                emit_raw!(bb, compile_condition_to_i32(_catch_stmt.cond, ctx); pushes=WasmValType[I32])
+                compile_condition_to_i32!(bb, _catch_stmt.cond, ctx)
                 # Determine if the then-branch has a return/throw (one-way)
                 local _then_start = _catch_i + 1
                 local _then_has_return = false
@@ -2266,7 +2280,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     for _j in _then_start:min(_else_target - 1, length(code))
                         local _ts = code[_j]
                         if _ts !== nothing && !(_ts isa Expr && _ts.head === :pop_exception)
-                            emit_raw!(bb, compile_statement(_ts, _j, ctx))
+                            compile_statement!(bb, _ts, _j, ctx)
                         end
                     end
                     end_block!(bb)
@@ -2278,14 +2292,14 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     for _j in _then_start:min(_else_target - 1, length(code))
                         local _ts2 = code[_j]
                         if _ts2 !== nothing && !(_ts2 isa Expr && _ts2.head === :pop_exception)
-                            emit_raw!(bb, compile_statement(_ts2, _j, ctx))
+                            compile_statement!(bb, _ts2, _j, ctx)
                         end
                     end
                     else_!(bb)
                     for _j in _else_target:length(code)
                         local _es = code[_j]
                         if _es !== nothing && !(_es isa Expr && _es.head === :pop_exception)
-                            emit_raw!(bb, compile_statement(_es, _j, ctx))
+                            compile_statement!(bb, _es, _j, ctx)
                         end
                     end
                     end_block!(bb)
@@ -2293,7 +2307,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                     _catch_i = length(code) + 1  # done
                 end
             else
-                emit_raw!(bb, compile_statement(_catch_stmt, _catch_i, ctx))
+                compile_statement!(bb, _catch_stmt, _catch_i, ctx)
                 _catch_i += 1
             end
         end
@@ -2329,7 +2343,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
         for i in (last_processed + 1):(enter_idx - 1)
             stmt = code[i]
             if stmt !== nothing && !(stmt isa Core.EnterNode)
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
         end
 
@@ -2373,7 +2387,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
                     _ti = _advance_past_gotoifnot(stmt, _ti, leave_idx, code)
                 else
-                    emit_raw!(bb, compile_statement(stmt, _ti, ctx))
+                    compile_statement!(bb, stmt, _ti, ctx)
                     _ti += 1
                 end
             end
@@ -2409,7 +2423,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    compile_statement!(bb, stmt, i, ctx)
                 end
             end
 
@@ -2454,7 +2468,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                 if stmt isa Expr && stmt.head === :pop_exception
                     continue
                 end
-                emit_raw!(bb, compile_statement(stmt, i, ctx))
+                compile_statement!(bb, stmt, i, ctx)
             end
 
             last_processed = region_end
@@ -2484,7 +2498,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
                     _ti2 = _advance_past_gotoifnot(stmt, _ti2, leave_idx, code)
                 else
-                    emit_raw!(bb, compile_statement(stmt, _ti2, ctx))
+                    compile_statement!(bb, stmt, _ti2, ctx)
                     _ti2 += 1
                 end
             end
@@ -2494,11 +2508,11 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                 stmt = code[i]
                 if stmt !== nothing
                     if stmt isa Core.ReturnNode
-                        emit_raw!(bb, compile_statement(stmt, i, ctx))
+                        compile_statement!(bb, stmt, i, ctx)
                         br!(bb, 1)
                         break
                     else
-                        emit_raw!(bb, compile_statement(stmt, i, ctx))
+                        compile_statement!(bb, stmt, i, ctx)
                     end
                 end
             end
@@ -2517,7 +2531,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     if stmt isa Expr && stmt.head === :pop_exception
                         continue
                     end
-                    emit_raw!(bb, compile_statement(stmt, i, ctx))
+                    compile_statement!(bb, stmt, i, ctx)
                 end
             end
 
@@ -2531,7 +2545,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
     for i in (last_processed + 1):length(code)
         stmt = code[i]
         if stmt !== nothing && !(stmt isa Expr && stmt.head === :pop_exception)
-            emit_raw!(bb, compile_statement(stmt, i, ctx))
+            compile_statement!(bb, stmt, i, ctx)
         end
     end
 
@@ -2577,8 +2591,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(pre_outer)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre_outer, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre_outer, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2616,8 +2630,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(between)
-        emit_raw!(bb, generate_stackified_flow(ctx, between, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, between, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2625,7 +2639,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # then-arm (the whole inner-try machinery) to the common tail.
     if body_branch > 0
         block!(bb)
-        emit_raw!(bb, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        compile_condition_to_i32!(bb, (code[body_branch]::Core.GotoIfNot).cond, ctx)
         num!(bb, Opcode.I32_EQZ)
         br_if!(bb, 0)
     end
@@ -2657,7 +2671,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     _ib_head !== nothing && pushfirst!(inner_body, _ib_head)
-    emit_raw!(bb, generate_stackified_flow(ctx, inner_body, code))
+    generate_stackified_flow!(bb, ctx, inner_body, code)
     ctx.last_stmt_was_stub = false
 
     # End inner try_table
@@ -2687,7 +2701,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if Int(e) < inner.catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -2719,8 +2733,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(inner_catch)
-        emit_raw!(bb, generate_stackified_flow(ctx, inner_catch, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, inner_catch, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     # Catch path: store merge-phi edges keyed inside the handler range.
@@ -2731,7 +2745,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if inner.catch_dest <= Int(e) <= inner_catch_hi && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -2756,8 +2770,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(merge_blocks)
-            emit_raw!(bb, generate_stackified_flow(ctx, merge_blocks, code;
-                                                   trailing_unreachable=false))
+            generate_stackified_flow!(bb, ctx, merge_blocks, code;
+                                                   trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
@@ -2779,8 +2793,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(tail_blocks)
-            emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
-                                                   trailing_unreachable=false))
+            generate_stackified_flow!(bb, ctx, tail_blocks, code;
+                                                   trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
@@ -2798,7 +2812,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # P3: stackified for the same linear-walk reasons as the inner handler.
     outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
     if !isempty(outer_catch)
-        emit_raw!(bb, generate_stackified_flow(ctx, outer_catch, code))
+        generate_stackified_flow!(bb, ctx, outer_catch, code)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2810,7 +2824,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
     b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", mod=ctx.mod)
     else_target = stmt.dest
 
-    emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(b, stmt.cond, ctx)
 
     then_start = i + 1
     then_end = min(else_target - 1, leave_idx - 1)
@@ -2842,13 +2856,13 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                emit_raw!(b, compile_statement(code[j], j, ctx))
+                compile_statement!(b, code[j], j, ctx)
             end
         end
         else_!(b)
         for j in else_target:(merge_after-1)
             if code[j] !== nothing
-                emit_raw!(b, compile_statement(code[j], j, ctx))
+                compile_statement!(b, code[j], j, ctx)
             end
         end
         end_block!(b)
@@ -2857,7 +2871,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                emit_raw!(b, compile_statement(code[j], j, ctx))
+                compile_statement!(b, code[j], j, ctx)
             end
         end
         end_block!(b)
@@ -2868,13 +2882,13 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         if_!(b)
         for j in then_start:then_end
             if code[j] !== nothing
-                emit_raw!(b, compile_statement(code[j], j, ctx))
+                compile_statement!(b, code[j], j, ctx)
             end
         end
         else_!(b)
         for j in else_target:(leave_idx-1)
             if code[j] !== nothing
-                emit_raw!(b, compile_statement(code[j], j, ctx))
+                compile_statement!(b, code[j], j, ctx)
             end
         end
         end_block!(b)
