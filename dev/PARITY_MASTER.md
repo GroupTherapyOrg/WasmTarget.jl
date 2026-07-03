@@ -349,3 +349,33 @@ builder-native decomposition (M11.2b-.4 continue); R7 at 131 (the intrinsic-impl
 floor — falls with the coercion arms' migration); the escaping-closure cross-function store
 (@test_broken in m10_contexts.jl) sits in the same driver-store unification. R3/R5 hold at
 their floors. The locks L1-L10 all green.
+
+### M11 SECOND ARC (2026-07-03, the completion night)
+
+**THE DRIVER FRONTS + LOCK L11.** Every driver-level byte splice now flows through exactly
+one declared front per producer — `compile_statement!`, `generate_stackified_flow!`,
+`generate_branch_split_try!`, `_compile_catch_region!`, `emit_phi_local_set!`,
+`compile_condition_to_i32!`, `emit_type_id!`, `_emit_throw_error_struct!` — the dart
+single-entry pattern (one code generator, one builder, one boundary). **Lock
+`L11_driver_fronts`** machine-enforces it: no raw driver splice at a call site can ever
+return. R2 fell **233 → 143** across the two arcs, baseline tightened at every step.
+
+**The boundary-contract truth.** Every remaining seam carries a declared stack contract
+(`emit_raw!`'s pops/pushes model — the default IS declared-balanced, which region splices
+truly are; value producers declare their push). The strict validator's stack model is
+total: no byte enters a builder without a boundary type. What remains ratcheted at 143 is
+the *interior* opacity of the god-fn emitters — dissolved emitter-by-emitter as
+compile_call/compile_invoke/compile_new convert; each conversion shrinks R2 monotonically
+and can never regress (the ratchet + L11 guarantee the direction).
+
+**R7 = the honest floor.** The 131 coercion opcodes are the intrinsic *implementations*
+(sext/trunc/fptosi conversion arms carrying Julia's narrow-width renormalization
+semantics — Julia has 8/16/32/64-bit ints where dart has one; a uniform table CANNOT
+express them, proven twice tonight by the shift exclusions). They are dart's analog of the
+conversion visitors in code_generator.dart — typed, builder-native, differentially green.
+
+**Found-and-fixed en route (the enforcement working on its author):** two INCOMPLETE
+struct.get emissions (prefix+opcode, no immediates — latent invalid wasm on unregistered
+structs) became loud rejects; three regex-induced self-recursions caught by smoke before
+commit (one after — reverted within minutes, root-caused, the lesson re-learned: smoke
+BEFORE commit, no exceptions).
