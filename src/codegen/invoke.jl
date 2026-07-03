@@ -3300,8 +3300,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             local _is_numeric_val = _val_wasm === I32 || _val_wasm === I64 || _val_wasm === F32 || _val_wasm === F64
                             # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
                             if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
-                                local _na_ec = UInt8[]; emit_numeric_to_anyref!(_na_ec, args[fi], _val_wasm, ctx)
-                                emit_raw!(bec, _na_ec; pushes=WasmValType[AnyRef])
+                                emit_numeric_to_anyref!(bec, args[fi], _val_wasm, ctx)
                                 if _ctor_field_wasm(fi) === ExternRef
                                     extern_convert_any!(bec)
                                 end

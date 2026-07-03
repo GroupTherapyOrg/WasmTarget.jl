@@ -2134,9 +2134,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
                 val_wasm_type = julia_to_wasm_type(val_julia_type)
                 if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                    _n2a = UInt8[]
-                    emit_numeric_to_anyref!(_n2a, val, val_wasm_type, ctx)
-                    emit_raw!(b, _n2a)
+                    emit_numeric_to_anyref!(b, val, val_wasm_type, ctx)
                 else
                     emit_value!(b, val, ctx)
                     if val_wasm_type === ExternRef

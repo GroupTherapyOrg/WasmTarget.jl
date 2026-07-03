@@ -70,19 +70,16 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
 end
 
 """
-    emit_numeric_to_anyref!(target_bytes, val, val_wasm, ctx)
+    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
 
-Like emit_numeric_to_externref! but produces anyref (no extern_convert_any).
-Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
+Like emit_numeric_to_externref! but produces anyref (no extern_convert_any) —
+builder-native (THE implementation): value → real-classId box (already anyref).
+`nothing` values become ref.null any (dart: null, not a boxed zero).
 """
-function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
-    # local builder, then append its code to the caller-supplied buffer (byte-identical).
-    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", mod=ctx.mod)
+function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
         ref_null!(b, AnyRef)  # any heap type (0x6E)
-        append!(target_bytes, builder_code(b))
-        return
+        return b
     end
     # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
@@ -91,8 +88,15 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    return b  # No extern_convert_any — struct ref is already anyref
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", mod=ctx.mod)
+    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
-    return  # No extern_convert_any — struct ref is already anyref
+    return
 end
 
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes
