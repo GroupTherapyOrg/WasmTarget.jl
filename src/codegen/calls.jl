@@ -130,7 +130,9 @@ end
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
 """builder-native front for the throw-error emitter."""
 function _emit_throw_error_struct!(b::InstrBuilder, ctx::AbstractCompilationContext, ErrT)
-    _emit_throw_error_struct!(b, ctx, ErrT)
+    _tb = UInt8[]
+    _emit_throw_error_struct!(_tb, ctx, ErrT)
+    emit_raw!(b, _tb)
     return b
 end
 
