@@ -688,6 +688,12 @@ ref.cast + struct.get when needed.
 # MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
+"""builder-native variant: emit the i32 condition directly into the target builder."""
+function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
+    emit_raw!(b, compile_condition_to_i32(cond, ctx); pushes=WasmValType[I32])
+    return b
+end
+
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))

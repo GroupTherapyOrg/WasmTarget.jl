@@ -844,7 +844,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
         end
         if stmt isa Core.GotoIfNot
             else_target = stmt.dest
-            emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
+            compile_condition_to_i32!(b, stmt.cond, ctx)
             then_start = i + 1
             then_end = min(else_target - 1, to)
             then_has_return = any(code[j] isa Core.ReturnNode for j in then_start:then_end)
@@ -970,7 +970,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         # The pre region falls through here alive; reset BEFORE the condition.
         ctx.last_stmt_was_stub = false
         block!(bb)   # $else
-        emit_raw!(bb, compile_condition_to_i32((code[exit_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        compile_condition_to_i32!(bb, (code[exit_idx]::Core.GotoIfNot).cond, ctx)
         num!(bb, Opcode.I32_EQZ)
         br_if!(bb, 0)
         ctx.last_stmt_was_stub = false
@@ -1220,7 +1220,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     end
 
     block!(b)   # $else
-    emit_raw!(b, compile_condition_to_i32((code[branch_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(b, (code[branch_idx]::Core.GotoIfNot).cond, ctx)
     num!(b, Opcode.I32_EQZ)
     br_if!(b, 0)
     _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
@@ -1359,7 +1359,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     # compiling the live condition.
     ctx.last_stmt_was_stub = false
     block!(bb)   # $skiparm
-    emit_raw!(bb, compile_condition_to_i32((code[gin_idx]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(bb, (code[gin_idx]::Core.GotoIfNot).cond, ctx)
     num!(bb, Opcode.I32_EQZ)
     br_if!(bb, 0)   # !cond → inner-try arm
     ctx.last_stmt_was_stub = false
@@ -2250,7 +2250,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
             if _catch_stmt isa Core.GotoIfNot
                 # Generate if/else for the conditional branch
                 local _else_target = _catch_stmt.dest
-                emit_raw!(bb, compile_condition_to_i32(_catch_stmt.cond, ctx); pushes=WasmValType[I32])
+                compile_condition_to_i32!(bb, _catch_stmt.cond, ctx)
                 # Determine if the then-branch has a return/throw (one-way)
                 local _then_start = _catch_i + 1
                 local _then_has_return = false
@@ -2625,7 +2625,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # then-arm (the whole inner-try machinery) to the common tail.
     if body_branch > 0
         block!(bb)
-        emit_raw!(bb, compile_condition_to_i32((code[body_branch]::Core.GotoIfNot).cond, ctx); pushes=WasmValType[I32])
+        compile_condition_to_i32!(bb, (code[body_branch]::Core.GotoIfNot).cond, ctx)
         num!(bb, Opcode.I32_EQZ)
         br_if!(bb, 0)
     end
@@ -2810,7 +2810,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
     b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", mod=ctx.mod)
     else_target = stmt.dest
 
-    emit_raw!(b, compile_condition_to_i32(stmt.cond, ctx); pushes=WasmValType[I32])
+    compile_condition_to_i32!(b, stmt.cond, ctx)
 
     then_start = i + 1
     then_end = min(else_target - 1, leave_idx - 1)

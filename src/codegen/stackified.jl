@@ -577,7 +577,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
-                            emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                            emit_phi_type_default!(pvb, phi_local_wasm_type)
                         end
                     end
                 else
@@ -602,7 +602,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                        emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
@@ -612,7 +612,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                    emit_phi_type_default!(pvb, phi_local_wasm_type)
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
@@ -685,7 +685,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
                         record_unsupported!(ctx, :unsupported_type,
                             "phi-edge type mismatch with no conversion arm (type-safe default emitted)")
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                        emit_phi_type_default!(pvb, phi_local_type)
                     end
                     return _cpv_ret()
                 end
@@ -902,7 +902,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 pv_bytes, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
                                 if pv_n >= 2
                                     # multi-value emission can't feed one local.set — type-safe default
-                                    emit_raw!(b, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    emit_phi_type_default!(b, phi_local_type)
                                     local_set!(b, local_idx)
                                     phi_count += 1
                                 elseif !isempty(pv_bytes)
@@ -1067,7 +1067,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_bytes2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
-                                    emit_raw!(bb, emit_phi_type_default(phi_local_type); pushes=WasmValType[phi_local_type])
+                                    emit_phi_type_default!(bb, phi_local_type)
                                     local_set!(bb, local_idx)
                                 elseif !isempty(pv_bytes2)
                                     emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty2]))
