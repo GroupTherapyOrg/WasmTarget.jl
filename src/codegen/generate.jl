@@ -833,6 +833,14 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
+"""builder-native front for the catch-region compiler."""
+function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
+    _tb = UInt8[]
+    _compile_catch_region!(_tb, ctx, code, from, to)
+    emit_raw!(b, _tb)
+    return b
+end
+
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     b = InstrBuilder(; func_name="_compile_catch_region!", mod=ctx.mod)
     i = from
@@ -998,8 +1006,8 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
     end
     if !isempty(pre_try_blocks)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre_try_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre_try_blocks, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -1068,10 +1076,10 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         if _arm_complex
             catch_blocks = [b for b in blocks
                             if b.start_idx >= catch_dest && b.start_idx < merge_start]
-            emit_raw!(bb, generate_stackified_flow(ctx, catch_blocks, code;
-                                                   trailing_unreachable = false))
+            generate_stackified_flow!(bb, ctx, catch_blocks, code;
+                                                   trailing_unreachable = false)
         else
-            _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
+            _compile_catch_region!(bb, ctx, code, catch_dest, merge_start - 1)
         end
     else
         # P2-batch19: self-contained catch arm (ends in return) — compile via
@@ -1119,8 +1127,8 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         _pm_complex = any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, _pm_rng)
         if _pm_complex
             pm_blocks = [b for b in blocks if b.start_idx >= merge_start]
-            emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
-                                                   trailing_unreachable = false))
+            generate_stackified_flow!(bb, ctx, pm_blocks, code;
+                                                   trailing_unreachable = false)
         else
             for i in _pm_rng
                 stmt = code[i]
@@ -1399,8 +1407,8 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     in_head !== nothing && pushfirst!(in_body, in_head)
     block!(bb)
     try_table!(bb, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(bb, generate_stackified_flow(ctx, in_body, code;
-                                           trailing_unreachable=false))
+    generate_stackified_flow!(bb, ctx, in_body, code;
+                                           trailing_unreachable=false)
     ctx.last_stmt_was_stub = false
     # If the inner body completes normally it merges too — store its phi
     # edge (an edge strictly inside the body range) and branch to $armmerge.
@@ -1422,8 +1430,8 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     tail_blocks = [b for b in blocks
                    if b.start_idx >= inner.catch_dest && b.start_idx < merge_idx]
     if !isempty(tail_blocks)
-        emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, tail_blocks, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     for (j, e) in enumerate(_ph.edges)
@@ -1438,8 +1446,8 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     # Post-merge [merge_idx ..]: phi reads, conversions, return
     if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, merge_idx:length(code))
         pm_blocks = [b for b in blocks if b.start_idx >= merge_idx]
-        emit_raw!(bb, generate_stackified_flow(ctx, pm_blocks, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pm_blocks, code;
+                                               trailing_unreachable=false)
     else
         for i in merge_idx:length(code)
             stmt = code[i]
@@ -1509,8 +1517,8 @@ function _emit_chain_levels!(b::InstrBuilder, ctx::AbstractCompilationContext,
         end
         if !isempty(pre)
             # Falls through into this level's try_table — no trailing unreachable.
-            emit_raw!(b, generate_stackified_flow(ctx, pre, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, pre, code;
+                                                  trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
         body = [b2 for b2 in blocks
@@ -1583,8 +1591,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
         end
     end
     if !isempty(pre)
-        emit_raw!(b, generate_stackified_flow(ctx, pre, code;
-                                              trailing_unreachable=false))
+        generate_stackified_flow!(b, ctx, pre, code;
+                                              trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     body = [b2 for b2 in blocks
@@ -1598,8 +1606,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
     mk > 0 && block!(b)   # $merge_k
     block!(b)   # $ck — catch landing
     try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
-    emit_raw!(b, generate_stackified_flow(ctx, body, code;
-                                          trailing_unreachable=(mk == 0)))
+    generate_stackified_flow!(b, ctx, body, code;
+                                          trailing_unreachable=(mk == 0))
     ctx.last_stmt_was_stub = false
     if mk > 0
         # Normal completion: the merge target is outside the body subset, so
@@ -1638,8 +1646,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             # catch-side phi stores (a pad trapped the whole catch path of a
             # return-style inner level — ff6dc9760825 on 1.13). A returning
             # arm emits its own RETURN; the function-end pad covers the rest.
-            emit_raw!(b, generate_stackified_flow(ctx, arm_blocks, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, arm_blocks, code;
+                                                  trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
@@ -1665,8 +1673,8 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
         # inner level, the code that flows on inside the ENCLOSING catch arm.
         if any(i -> code[i] isa Core.GotoIfNot || code[i] isa Core.GotoNode, mk:hi)
             pm_blocks = [b2 for b2 in blocks if b2.start_idx >= mk && b2.start_idx <= hi]
-            emit_raw!(b, generate_stackified_flow(ctx, pm_blocks, code;
-                                                  trailing_unreachable=false))
+            generate_stackified_flow!(b, ctx, pm_blocks, code;
+                                                  trailing_unreachable=false)
         else
             for i in mk:hi
                 stmt = code[i]
@@ -2120,7 +2128,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
 
         # Catch handler code (from catch_dest to merge_start-1)
         # P2-batch17: GotoIfNot-aware (conditional catch arms — gap f80bce91645e)
-        _tb = UInt8[]; _compile_catch_region!(_tb, ctx, code, catch_dest, merge_start - 1); emit_raw!(bb, _tb)
+        _compile_catch_region!(bb, ctx, code, catch_dest, merge_start - 1)
 
         # SET catch phi locals
         for phi_idx in merge_phi_nodes
@@ -2577,8 +2585,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(pre_outer)
-        emit_raw!(bb, generate_stackified_flow(ctx, pre_outer, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, pre_outer, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2616,8 +2624,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(between)
-        emit_raw!(bb, generate_stackified_flow(ctx, between, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, between, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
 
@@ -2719,8 +2727,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
     if !isempty(inner_catch)
-        emit_raw!(bb, generate_stackified_flow(ctx, inner_catch, code;
-                                               trailing_unreachable=false))
+        generate_stackified_flow!(bb, ctx, inner_catch, code;
+                                               trailing_unreachable=false)
         ctx.last_stmt_was_stub = false
     end
     # Catch path: store merge-phi edges keyed inside the handler range.
@@ -2756,8 +2764,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(merge_blocks)
-            emit_raw!(bb, generate_stackified_flow(ctx, merge_blocks, code;
-                                                   trailing_unreachable=false))
+            generate_stackified_flow!(bb, ctx, merge_blocks, code;
+                                                   trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
@@ -2779,8 +2787,8 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             end
         end
         if !isempty(tail_blocks)
-            emit_raw!(bb, generate_stackified_flow(ctx, tail_blocks, code;
-                                                   trailing_unreachable=false))
+            generate_stackified_flow!(bb, ctx, tail_blocks, code;
+                                                   trailing_unreachable=false)
             ctx.last_stmt_was_stub = false
         end
     end
