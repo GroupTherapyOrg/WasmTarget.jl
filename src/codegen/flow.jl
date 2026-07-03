@@ -15,7 +15,7 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
         emit_raw!(b, generate_try_catch(ctx, blocks, code))
     elseif length(blocks) == 1
         # Single block - just generate statements
-        emit_raw!(b, generate_block_code(ctx, blocks[1]))
+        generate_block_code!(b, ctx, blocks[1])
     else
         generate_stackified_flow!(b, ctx, blocks, code)
     end

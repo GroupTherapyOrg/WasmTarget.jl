@@ -1626,9 +1626,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             for (j, e) in enumerate(st.edges)
                 ei = Int(e)
                 if r.enter_idx < ei && ei < r.catch_dest && isassigned(st.values, j)
-                    tmp = UInt8[]
-                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
-                    emit_raw!(b, tmp)
+                    emit_phi_local_set!(b, st.values[j], i, ctx)   # THE builder front
                     break
                 end
             end
@@ -1666,9 +1664,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             haskey(ctx.phi_locals, i) || continue
             for (j, e) in enumerate(st.edges)
                 if r.catch_dest <= Int(e) < mk && isassigned(st.values, j)
-                    tmp = UInt8[]
-                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
-                    emit_raw!(b, tmp)
+                    emit_phi_local_set!(b, st.values[j], i, ctx)   # THE builder front
                     break
                 end
             end
@@ -2092,7 +2088,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                _compile_try_body_gotoifnot!(bb, stmt, i, leave_idx, code, ctx)
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
                 compile_statement!(bb, stmt, i, ctx)
@@ -2212,7 +2208,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                _compile_try_body_gotoifnot!(bb, stmt, i, leave_idx, code, ctx)
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
                 compile_statement!(bb, stmt, i, ctx)
@@ -2384,7 +2380,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
+                    _compile_try_body_gotoifnot!(bb, stmt, _ti, leave_idx, code, ctx)
                     _ti = _advance_past_gotoifnot(stmt, _ti, leave_idx, code)
                 else
                     compile_statement!(bb, stmt, _ti, ctx)
@@ -2495,7 +2491,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
+                    _compile_try_body_gotoifnot!(bb, stmt, _ti2, leave_idx, code, ctx)
                     _ti2 = _advance_past_gotoifnot(stmt, _ti2, leave_idx, code)
                 else
                     compile_statement!(bb, stmt, _ti2, ctx)
@@ -2819,9 +2815,9 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     return builder_code(bb)
 end
 
-# PURE-9031: Helper — compile a GotoIfNot inside the try body
-function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", mod=ctx.mod)
+# PURE-9031: Helper — compile a GotoIfNot inside the try body.
+# Builder-native front: emits directly into the caller's builder.
+function _compile_try_body_gotoifnot!(b::InstrBuilder, stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)
     else_target = stmt.dest
 
     compile_condition_to_i32!(b, stmt.cond, ctx)
@@ -2894,7 +2890,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         end_block!(b)
         ctx.last_stmt_was_stub = false
     end
-    return builder_code(b)
+    return b
 end
 
 # PURE-9031: Helper — advance past a GotoIfNot in the try body
