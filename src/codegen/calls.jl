@@ -2282,39 +2282,29 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             num!(_pshb, Opcode.I64_SUB)
             num!(_pshb, Opcode.I32_WRAP_I64)  # array.set expects i32 index
 
-            # Value to store
-            local (item_bytes, item_ty) = compile_value_typed(item_arg, ctx)
+            # Value to store — typed channel throughout
+            local _item_b = _compile_value_b(item_arg, ctx)
+            local item_ty = isempty(_item_b.v.stack) ? nothing : _item_b.v.stack[end]
             # If array element type is externref (elem_type is Any), convert ref→externref
             if elem_type === Any
-                # typed channel: the producer's own type (item_ty) — no re-guess.
-                local push_src_wasm = item_ty
-                local is_numeric_item = push_src_wasm === I64 || push_src_wasm === I32 || push_src_wasm === F64 || push_src_wasm === F32
-                local is_already_externref_item = push_src_wasm === ExternRef
+                local is_numeric_item = item_ty === I64 || item_ty === I32 || item_ty === F64 || item_ty === F32
                 if is_numeric_item
-                    local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
-                    emit_raw!(_pshb, _n2e; pushes=WasmValType[ExternRef])
+                    # march3: was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
+                    # OUTER-SCOPE variables (a latent copy-paste bug); the ITEM boxes.
+                    emit_numeric_to_externref!(_pshb, item_arg, item_ty, ctx)
                 else
-                    emit_raw!(_pshb, item_bytes; pushes=(item_ty===nothing ? WasmValType[] : WasmValType[item_ty]))
+                    append_builder!(_pshb, _item_b)
                     # PURE-048: Skip extern_convert_any if value is already externref
-                    if !is_already_externref_item
-                        extern_convert_any!(_pshb)
-                    end
+                    item_ty === ExternRef || extern_convert_any!(_pshb)
                 end
             else
-                emit_raw!(_pshb, item_bytes; pushes=(item_ty===nothing ? WasmValType[] : WasmValType[item_ty]))
+                append_builder!(_pshb, _item_b)
                 # PURE-6025: If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
                 local elem_wasm = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-                if elem_wasm isa ConcreteRef
-                    local item_src_wasm = _get_local_wasm_type(item_arg, item_bytes, ctx)
-                    if item_src_wasm === nothing
-                        local item_julia_t = infer_value_type(item_arg, ctx)
-                        item_src_wasm = get_concrete_wasm_type(item_julia_t, ctx.mod, ctx.type_registry)
-                    end
-                    if item_src_wasm === ExternRef
-                        any_convert_extern!(_pshb)
-                        ref_cast!(_pshb, Int64(elem_wasm.type_idx), true)
-                    end
+                if elem_wasm isa ConcreteRef && item_ty === ExternRef
+                    any_convert_extern!(_pshb)
+                    ref_cast!(_pshb, Int64(elem_wasm.type_idx), true)
                 end
             end
 
