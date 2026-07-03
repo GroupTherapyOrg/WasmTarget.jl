@@ -572,37 +572,34 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # This handles things like Main.SLOT_EMPTY that are module-level constants
             try
                 val = getfield(stmt.mod, stmt.name)
-                value_bytes, value_ty = compile_value_typed(val, ctx)
+                # march3: typed channel — the tracked top replaces the const-first-byte sniff
+                local _gv_b = _compile_value_b(val, ctx)
+                local value_ty = isempty(_gv_b.v.stack) ? nothing : _gv_b.v.stack[end]
+                local _gv_replaced = false
 
-                # CG-003d: Safety check for Nothing/numeric values stored to ref-typed locals.
-                # compile_value(nothing) → i32_const 0, which is incompatible with ref locals
-                # (EqRef, ConcreteRef, StructRef, etc.). Replace with ref.null of correct type.
-                if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
+                # CG-003d: a numeric value (incl. compile_value(nothing) → i32_const 0)
+                # stored to a ref-typed local becomes ref.null of the correct type.
+                if !isempty(_gv_b.instrs) && haskey(ctx.ssa_locals, idx)
                     local_idx = ctx.ssa_locals[idx]
                     local_array_idx = local_idx - ctx.n_params + 1
                     if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
                         local_wasm_type = ctx.locals[local_array_idx]
-                        first_byte = value_bytes[1]
-                        is_numeric_value = (first_byte == Opcode.I32_CONST || first_byte == Opcode.I64_CONST ||
-                                           first_byte == Opcode.F32_CONST || first_byte == Opcode.F64_CONST)
+                        is_numeric_value = value_ty === I32 || value_ty === I64 ||
+                                           value_ty === F32 || value_ty === F64
                         local_is_ref = (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                                        local_wasm_type === ArrayRef || local_wasm_type === ExternRef ||
                                        local_wasm_type === AnyRef || local_wasm_type === EqRef)
                         if is_numeric_value && local_is_ref
-                            # Replace numeric value with ref.null of the correct type
-                            # (typed via _append_default!; byte-identical; local_is_ref
-                            # guarantees a ref type, so the numeric/else arms are unreachable).
-                            empty!(value_bytes)
-                            _append_default!(value_bytes, local_wasm_type)
+                            _emit_default!(b, local_wasm_type)
+                            _gv_replaced = true
                         end
                     end
                 end
-
-                emit_raw!(b, value_bytes; pushes=(value_ty===nothing ? WasmValType[] : WasmValType[value_ty]))
+                _gv_replaced || append_builder!(b, _gv_b)   # typed merge
 
                 # If this SSA value needs a local, store it (only if we actually pushed a value)
-                # compile_value returns empty bytes for Functions, Types, etc.
-                if !isempty(value_bytes) && haskey(ctx.ssa_locals, idx)
+                # compile_value emits nothing for Functions, Types, etc.
+                if (_gv_replaced || !isempty(_gv_b.instrs)) && haskey(ctx.ssa_locals, idx)
                     local_idx = ctx.ssa_locals[idx]
                     local_set!(b, local_idx)
                 end
@@ -1596,8 +1593,8 @@ end
 #   i32/i64.const 0 → 41/42 00 · f32/f64.const 0 → const-op + 4/8 zero bytes.
 # `eqref` toggles whether EqRef gets an explicit ref.null (some sites had no EqRef arm and
 # fell through to the i32.const-0 else — pass eqref=false to reproduce that exactly).
-function _append_default!(buf::Vector{UInt8}, wasm_type; eqref::Bool=true)
-    tb = InstrBuilder(; func_name="_append_default")
+"""builder-native (THE implementation): push the type-correct default/null."""
+function _emit_default!(tb::InstrBuilder, wasm_type; eqref::Bool=true)
     if wasm_type isa ConcreteRef
         ref_null!(tb, Int64(wasm_type.type_idx), wasm_type)
     elseif wasm_type === ExternRef
@@ -1621,6 +1618,13 @@ function _append_default!(buf::Vector{UInt8}, wasm_type; eqref::Bool=true)
     else
         i32_const!(tb, 0)
     end
+    return tb
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function _append_default!(buf::Vector{UInt8}, wasm_type; eqref::Bool=true)
+    tb = InstrBuilder(; func_name="_append_default")
+    _emit_default!(tb, wasm_type; eqref=eqref)
     append!(buf, builder_code(tb))
     return buf
 end
