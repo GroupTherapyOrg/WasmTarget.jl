@@ -1349,6 +1349,9 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
     io = get_io_imports()
     if io !== nothing
         b = InstrBuilder(; func_name="_compile_invoke_print", mod=ctx.mod)
+        # parity(M9): the io bridge consumes the DATA array — every string value
+        # funnels through the expected-type channel so classed strings unwrap here.
+        _pr_str_arr = ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)
         for arg in args
             # Determine argument type
             arg_type = nothing
@@ -1375,7 +1378,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
             if arg_type === String || arg_type === Symbol
                 # String: compile value, convert to JS string via decoder, call write_string
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, _pr_str_arr)
                 # Need a temp local for tee
                 tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
@@ -1434,7 +1437,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 local_set!(b, len_local)
 
                 # Write "["
-                emit_value!(b, "[", ctx)
+                emit_value!(b, "[", ctx, _pr_str_arr)
                 _sb = UInt8[]; emit_jl_string_to_js!(_sb, io.decode_idx, str_tmp_local); emit_raw!(b, _sb; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
@@ -1457,7 +1460,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 i32_const!(b, 0)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)  # void
-                emit_value!(b, ", ", ctx)
+                emit_value!(b, ", ", ctx, _pr_str_arr)
                 _sb2 = UInt8[]; emit_jl_string_to_js!(_sb2, io.decode_idx, str_tmp_local); emit_raw!(b, _sb2; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end_block!(b)  # end if
@@ -1485,7 +1488,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 else
                     # Unsupported element type — just write "?"
                     drop!(b)
-                    emit_value!(b, "?", ctx)
+                    emit_value!(b, "?", ctx, _pr_str_arr)
                     _sb3 = UInt8[]; emit_jl_string_to_js!(_sb3, io.decode_idx, str_tmp_local); emit_raw!(b, _sb3; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end
@@ -1503,7 +1506,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                 end_block!(b)  # end block
 
                 # Write "]"
-                emit_value!(b, "]", ctx)
+                emit_value!(b, "]", ctx, _pr_str_arr)
                 _sb4 = UInt8[]; emit_jl_string_to_js!(_sb4, io.decode_idx, str_tmp_local); emit_raw!(b, _sb4; pops=1, pushes=WasmValType[ExternRef])
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
@@ -1520,14 +1523,14 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                     local_set!(b, tup_local)
 
                     # Write "("
-                    emit_value!(b, "(", ctx)
+                    emit_value!(b, "(", ctx, _pr_str_arr)
                     _tb1 = UInt8[]; emit_jl_string_to_js!(_tb1, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb1; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                     for (fi, et) in enumerate(elem_types)
                         # Write ", " separator (after first element)
                         if fi > 1
-                            emit_value!(b, ", ", ctx)
+                            emit_value!(b, ", ", ctx, _pr_str_arr)
                             _tb2 = UInt8[]; emit_jl_string_to_js!(_tb2, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb2; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1553,7 +1556,7 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
                             call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                         else
                             drop!(b)
-                            emit_value!(b, "?", ctx)
+                            emit_value!(b, "?", ctx, _pr_str_arr)
                             _tb3 = UInt8[]; emit_jl_string_to_js!(_tb3, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb3; pops=1, pushes=WasmValType[ExternRef])
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1561,13 +1564,13 @@ function _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationConte
 
                     # Single-element tuple gets trailing comma: (1,)
                     if length(elem_types) == 1
-                        emit_value!(b, ",", ctx)
+                        emit_value!(b, ",", ctx, _pr_str_arr)
                         _tb4 = UInt8[]; emit_jl_string_to_js!(_tb4, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb4; pops=1, pushes=WasmValType[ExternRef])
                         call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                     end
 
                     # Write ")"
-                    emit_value!(b, ")", ctx)
+                    emit_value!(b, ")", ctx, _pr_str_arr)
                     _tb5 = UInt8[]; emit_jl_string_to_js!(_tb5, io.decode_idx, str_tmp_local2); emit_raw!(b, _tb5; pops=1, pushes=WasmValType[ExternRef])
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
@@ -3449,7 +3452,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
 
                     # Step 1: Compile each arg and store in locals
                     for i in 1:n
-                        emit_value!(bms, args[i], ctx)
+                        emit_value!(bms, args[i], ctx, str_arr_type)   # parity(M9): funnel → DATA array
                         local_set!(bms, str_locals[i])
                     end
 
@@ -3618,7 +3621,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                             # show(nothing) → write "nothing"
                             call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
                         elseif arg_type === String || arg_type === Symbol
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(M9): funnel → DATA array
                             tmp_local = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                             local _tb_js = UInt8[]
                             emit_jl_string_to_js!(_tb_js, io.decode_idx, tmp_local)
@@ -3695,7 +3698,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                         arg_type = infer_value_type(args[i], ctx)
                         if arg_type === String || arg_type === Symbol
                             # Already a string — just compile it
-                            emit_value!(bpts, args[i], ctx)
+                            emit_value!(bpts, args[i], ctx, str_arr_type_pt)   # parity(M9): funnel → DATA array
                         elseif arg_type === Int32 || arg_type === Int64 ||
                                arg_type === UInt32 || arg_type === UInt64 ||
                                arg_type === Int16 || arg_type === UInt16 ||
