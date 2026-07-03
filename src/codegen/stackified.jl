@@ -481,6 +481,32 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     # Helper: emit a type-safe default value for a given WasmValType
+    # builder-native variant: emit the default directly into the target builder
+    function emit_phi_type_default!(tb::InstrBuilder, wasm_type::WasmValType)
+        if wasm_type isa ConcreteRef
+            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
+        elseif wasm_type === StructRef
+            ref_null!(tb, StructRef)
+        elseif wasm_type === ArrayRef
+            ref_null!(tb, ArrayRef)
+        elseif wasm_type === ExternRef
+            ref_null!(tb, ExternRef)
+        elseif wasm_type === AnyRef
+            ref_null!(tb, AnyRef)
+        elseif wasm_type === EqRef
+            ref_null!(tb, EqRef)
+        elseif wasm_type === I64
+            i64_const!(tb, 0)
+        elseif wasm_type === F32
+            f32_const!(tb, 0.0f0)
+        elseif wasm_type === F64
+            f64_const!(tb, 0.0)
+        else
+            i32_const!(tb, 0)
+        end
+        return tb
+    end
+
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
         # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
         # strict=false; byte-identical to the prior raw emission.
@@ -580,19 +606,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
-                # PURE-036bg: Check type compatibility for recomputed SSA values
-                # (the M10a fix lives in the ssa_types join-write, not here)
+                # Type compatibility for recomputed SSA values (the M10a fix lives in the
+                # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
-                    if stmt !== nothing && !(stmt isa Core.PhiNode)
-                        emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
-                    else
-                        emit_value!(_sb, val, ctx)
-                    end
+                    emit_value!(_sb, val, ctx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
-                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                        emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
