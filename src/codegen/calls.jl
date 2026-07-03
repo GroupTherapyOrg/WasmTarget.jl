@@ -4569,32 +4569,47 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         append!(bytes, builder_code(_ib))
     end
 
+    # parity(M11.2): THE INTRINSICS TABLE ROUTE (dart intrinsics.dart) — one
+    # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
+    # emit here; the chain below keeps only what the table can't express
+    # (128-bit, checked-overflow, unary, ===, conversions) and shrinks with M11.
+    local _it_name = func isa GlobalRef ? func.name :
+                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+    if _it_name !== nothing && !is_128bit
+        local _it_w = is_32bit ? I32 :
+                      (arg_type === Float64 ? F64 : (arg_type === Float32 ? F32 : I64))
+        local _it_e = get(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name), nothing)
+        if _it_e !== nothing
+            # Comparisons observe FULL register width — narrow pairs (Int8/Int16 on
+            # i32) normalise first (sign-extend for signed/equality, mask for
+            # unsigned; P2-batch13/14 semantics carried into the table route).
+            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int)
+                _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
+            elseif is_32bit && _it_name in (:ult_int, :ule_int)
+                _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
+            end
+            _op1!(_it_e.opcode)
+            return bytes
+        end
+    end
+
     # Match intrinsics by name
     if is_func(func, :add_int)
-        if is_128bit
-            # 128-bit addition: (a_lo, a_hi) + (b_lo, b_hi)
-            # Stack has: [a_struct, b_struct], need to produce result_struct
-            # This is complex - need to extract fields, compute with carry, create new struct
-            append!(bytes, emit_int128_add(ctx, arg_type))
-        else
-            _op1!(is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        # 128-bit addition: (a_lo, a_hi) + (b_lo, b_hi)
+        # Stack has: [a_struct, b_struct], need to produce result_struct
+        # This is complex - need to extract fields, compute with carry, create new struct
+        append!(bytes, emit_int128_add(ctx, arg_type))
 
     elseif is_func(func, :sub_int)
-        if is_128bit
-            # 128-bit subtraction
-            append!(bytes, emit_int128_sub(ctx, arg_type))
-        else
-            _op1!(is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        # 128-bit subtraction
+        append!(bytes, emit_int128_sub(ctx, arg_type))
 
     elseif is_func(func, :mul_int)
-        if is_128bit
-            # 128-bit multiplication (only need low 128 bits of result)
-            append!(bytes, emit_int128_mul(ctx, arg_type))
-        else
-            _op1!(is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        # 128-bit multiplication (only need low 128 bits of result)
+        append!(bytes, emit_int128_mul(ctx, arg_type))
 
     # P2-batch13: NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
     # The register-width handlers below detect overflow with sign-bit tricks at
@@ -4882,74 +4897,35 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
     # checked_abs's overflow test (lcm(Int8(-128), 1) returned 128 instead of
     # throwing). Signed → sign-extend in register; unsigned → mask.
     elseif is_func(func, :slt_int)  # signed less than
-        if is_128bit
-            append!(bytes, emit_int128_slt(ctx, arg_type))
-        else
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
-            _op1!(is_32bit ? Opcode.I32_LT_S : Opcode.I64_LT_S)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_slt(ctx, arg_type))
 
     elseif is_func(func, :sle_int)  # signed less or equal
-        if is_128bit
-            append!(bytes, emit_int128_sle(ctx, arg_type))
-        else
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
-            _op1!(is_32bit ? Opcode.I32_LE_S : Opcode.I64_LE_S)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_sle(ctx, arg_type))
 
     elseif is_func(func, :ult_int)  # unsigned less than
-        if is_128bit
-            append!(bytes, emit_int128_ult(ctx, arg_type))
-        else
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
-            _op1!(is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_ult(ctx, arg_type))
 
     elseif is_func(func, :ule_int)  # unsigned less or equal
-        if is_128bit
-            append!(bytes, emit_int128_ule(ctx, arg_type))
-        else
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, false, _julia_int_width(arg_type, is_32bit))
-            _op1!(is_32bit ? Opcode.I32_LE_U : Opcode.I64_LE_U)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_ule(ctx, arg_type))
 
     elseif is_func(func, :eq_int)
-        if is_128bit
-            append!(bytes, emit_int128_eq(ctx, arg_type))
-        else
-            # P2-batch14: equality also observes full register width — normalise
-            # narrow pairs (Int8(0) == Int8(x) compared junk high bits, gap
-            # 1bcb0e7214c3). Sign-extend is equality-preserving at the width.
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))
-            _op1!(is_32bit ? Opcode.I32_EQ : Opcode.I64_EQ)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_eq(ctx, arg_type))
 
     elseif is_func(func, :ne_int)
-        if is_128bit
-            append!(bytes, emit_int128_ne(ctx, arg_type))
-        else
-            is_32bit && _emit_normalise_narrow_pair!(bytes, ctx, true, _julia_int_width(arg_type, is_32bit))  # P2-batch14
-            _op1!(is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-        end
+        # (non-128-bit handled by THE intrinsics table route above)
+        append!(bytes, emit_int128_ne(ctx, arg_type))
 
     # Float comparison operations
-    elseif is_func(func, :lt_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_LT : Opcode.F64_LT)
-
-    elseif is_func(func, :le_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_LE : Opcode.F64_LE)
-
     elseif is_func(func, :gt_float)
         _op1!(arg_type === Float32 ? Opcode.F32_GT : Opcode.F64_GT)
 
     elseif is_func(func, :ge_float)
         _op1!(arg_type === Float32 ? Opcode.F32_GE : Opcode.F64_GE)
-
-    elseif is_func(func, :eq_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_EQ : Opcode.F64_EQ)
-
-    elseif is_func(func, :ne_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_NE : Opcode.F64_NE)
 
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
     elseif is_func(func, :(===))
