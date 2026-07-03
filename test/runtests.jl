@@ -168,6 +168,8 @@ _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
 _wt_shard0() && include("value_channel_propagate.jl")
 # parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
 _wt_shard0() && include("m1_void_backfills.jl")
+# march3: try/catch driver battery (the throw-arm-past-the-leave silent miscompile).
+_wt_shard0() && include("march3_try_backfills.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()

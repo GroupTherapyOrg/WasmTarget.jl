@@ -713,6 +713,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         # (2) Numeric constants (i32_const, i64_const, f32_const, f64_const) stored into ref-typed locals
         # (3) struct_get producing abstract ref (structref/arrayref) where concrete ref expected → ref.cast
         ssa_type_mismatch = false
+        # WT_DBG_STMT=1: per-statement emission trace (idx, stmt, bytes, dest local)
+        get(ENV, "WT_DBG_STMT", "") == "1" && println(stderr,
+            "STMT idx=$idx stmt=$(first(repr(stmt), 90)) nbytes=$(length(stmt_bytes)) ssa_local=$(get(ctx.ssa_locals, idx, nothing)) stub=$(ctx.last_stmt_was_stub)")
         needs_ref_cast_local = nothing  # Set to ConcreteRef target type when ref.cast is needed
         needs_any_convert_extern = false  # PURE-036bj: externref→anyref before ref.cast
         needs_extern_convert_any = false  # PURE-913: ref→externref for Any-typed locals

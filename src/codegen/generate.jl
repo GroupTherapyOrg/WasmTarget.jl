@@ -1997,6 +1997,21 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         n_gin = count(i -> code[i] isa Core.GotoIfNot, (enter_idx + 1):(catch_dest - 1))
         n_gin >= 2 && (has_phi = true)
     end
+    # march3 (silent wrong value, `y = try; x > 5 ? x : throw(...); catch; 0; end`):
+    # a GotoIfNot arm whose dest lies PAST the leave (in (leave_idx, catch_dest))
+    # is a throw arm the linear walk can never visit — its range is bounded by
+    # leave_idx, so the arm compiled to an EMPTY if/else and the try-exit phi
+    # store ran unconditionally (the catch never fired; wrong value flowed out).
+    # The shape belongs to the stackifier (ONE lowering).
+    if !has_phi
+        for i in (enter_idx + 1):(leave_idx - 1)
+            st = code[i]
+            if st isa Core.GotoIfNot && st.dest > leave_idx && st.dest < catch_dest
+                has_phi = true
+                break
+            end
+        end
+    end
     # P2-batch19: CATCH-INTERNAL phis (all edges ≥ catch_dest — inlined diamonds
     # or loops inside the catch arm, e.g. `catch; mod(typemin, x)`) need the
     # stackified catch compilation; the linear walk misplaced their edge
