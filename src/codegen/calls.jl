@@ -1957,9 +1957,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # The cond keeps infer_value_wasm_type — that's a pure pre-emit type QUERY (drives the
         # cond_is_ref SELECT-vs-fallback decision below), legitimate dart-style type knowledge,
         # NOT the redundant re-guess-at-emit the typed channel deletes.
-        true_bytes, _true_ty = compile_value_typed(args[2], ctx)   # true_val
-        false_bytes, _false_ty = compile_value_typed(args[3], ctx)  # false_val
-        cond_bytes = compile_value(args[1], ctx)   # cond  # god-fn seam: typed when the caller goes builder-native (M4 tail)
+        local _tv_b = _compile_value_b(args[2], ctx)   # true_val
+        local _fv_b = _compile_value_b(args[3], ctx)   # false_val
+        local _cv_b = _compile_value_b(args[1], ctx)   # cond
 
         # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
         # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
@@ -1974,20 +1974,20 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                       cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
                       cond_wasm_type === AnyRef || cond_wasm_type === EqRef
 
-        # If cond produces ref, fall back to just true_bytes (can't use as SELECT condition)
+        # If cond produces ref, fall back to just the true value (can't use as SELECT condition)
         if cond_is_ref
-            append!(bytes, true_bytes)
+            append!(bytes, builder_code(_tv_b))
             return bytes
         end
 
         local _ieb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-        # If any compile_value returned empty, select would have insufficient operands.
+        # If any value emission is empty, select would have insufficient operands.
         # Fall back to emitting just the true value (or a type-safe default).
-        if isempty(true_bytes) || isempty(false_bytes) || isempty(cond_bytes)
-            if !isempty(true_bytes)
-                emit_raw!(_ieb, true_bytes; pushes=(_true_ty===nothing ? WasmValType[] : WasmValType[_true_ty]))
-            elseif !isempty(false_bytes)
-                emit_raw!(_ieb, false_bytes; pushes=(_false_ty===nothing ? WasmValType[] : WasmValType[_false_ty]))
+        if isempty(_tv_b.instrs) || isempty(_fv_b.instrs) || isempty(_cv_b.instrs)
+            if !isempty(_tv_b.instrs)
+                append_builder!(_ieb, _tv_b)
+            elseif !isempty(_fv_b.instrs)
+                append_builder!(_ieb, _fv_b)
             else
                 # All empty — emit type-safe default for the value type
                 val_type = infer_value_type(args[2], ctx)
@@ -2008,10 +2008,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             return bytes
         end
 
-        # All three values are non-empty, emit proper select
-        emit_raw!(_ieb, true_bytes; pushes=(_true_ty===nothing ? WasmValType[] : WasmValType[_true_ty]))
-        emit_raw!(_ieb, false_bytes; pushes=(_false_ty===nothing ? WasmValType[] : WasmValType[_false_ty]))
-        emit_raw!(_ieb, cond_bytes; pushes=WasmValType[I32])
+        # All three values are non-empty, emit proper select — typed merges
+        append_builder!(_ieb, _tv_b)
+        append_builder!(_ieb, _fv_b)
+        append_builder!(_ieb, _cv_b)
 
         # Determine the type of the values for select
         val_type = infer_value_type(args[2], ctx)
