@@ -1035,7 +1035,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e < catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -1101,7 +1101,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if e >= catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -1367,7 +1367,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     local _ph = code[merge_idx]::Core.PhiNode
     for (j, e) in enumerate(_ph.edges)
         if Int(e) == skip_idx && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             break
         end
     end
@@ -1407,7 +1407,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     local _had_body_edge = false
     for (j, e) in enumerate(_ph.edges)
         if inner.enter_idx < Int(e) && Int(e) < inner.catch_dest && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             _had_body_edge = true
             break
         end
@@ -1428,7 +1428,7 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
     end
     for (j, e) in enumerate(_ph.edges)
         if Int(e) >= inner.catch_dest && isassigned(_ph.values, j)
-            _tb = UInt8[]; emit_phi_local_set!(_tb, _ph.values[j], merge_idx, ctx); emit_raw!(bb, _tb)
+            emit_phi_local_set!(bb, _ph.values[j], merge_idx, ctx)
             break
         end
     end
@@ -2687,7 +2687,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if Int(e) < inner.catch_dest && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end
@@ -2731,7 +2731,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
             haskey(ctx.phi_locals, i) || continue
             for (k, e) in enumerate(st.edges)
                 if inner.catch_dest <= Int(e) <= inner_catch_hi && isassigned(st.values, k)
-                    _tb = UInt8[]; emit_phi_local_set!(_tb, st.values[k], i, ctx); emit_raw!(bb, _tb)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
                     break
                 end
             end

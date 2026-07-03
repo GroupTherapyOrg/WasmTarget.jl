@@ -216,6 +216,14 @@ function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContex
     return false
 end
 
+"""builder-native front: emit the phi store directly into the target builder."""
+function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)
+    _tb = UInt8[]
+    emit_phi_local_set!(_tb, val, phi_ssa_idx, ctx)
+    emit_raw!(b, _tb)
+    return b
+end
+
 """
 Emit bytecode to store a phi edge value to a phi local, with type compatibility checking.
 If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
