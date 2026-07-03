@@ -684,6 +684,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         if !isempty(ctx.arg_types)
             _sbT = ctx.arg_types[1]
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
                 argtypes=ctx.arg_types[2:end], self_shift=1))
         end
@@ -708,12 +709,20 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
-    for (_jk, _jv) in _numeric_joins
-        # Only refine ERASED slots (Any / Union) — never overwrite a concrete type
-        # (e.g. the Core.Box value itself, which the join seeds but must stay a Box
-        # for the isdefined/getfield machinery).
+    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
+    # stay local-typing hints only (they poisoned print_to_string's string-carrying
+    # accumulator when made visible).
+    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
         local _orig = get(ctx.ssa_types, _jk, Any)
-        if _orig === Any || _orig isa Union
+        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
+        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
+        # type — their truth lives in the join-typed LOCAL, and rewriting them
+        # desynced String-carrying phis in print_to_string (a String local receiving
+        # a join-typed i32 edge).
+        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
+        if (_orig === Any || _orig isa Union) &&
+           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
             ctx.ssa_types[_jk] = _jv
         end
     end
@@ -925,6 +934,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         if !isempty(ctx.arg_types)
             _sbT = ctx.arg_types[1]
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
                 argtypes=ctx.arg_types[2:end], self_shift=1))
         end
@@ -949,12 +959,20 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
-    for (_jk, _jv) in _numeric_joins
-        # Only refine ERASED slots (Any / Union) — never overwrite a concrete type
-        # (e.g. the Core.Box value itself, which the join seeds but must stay a Box
-        # for the isdefined/getfield machinery).
+    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
+    # stay local-typing hints only (they poisoned print_to_string's string-carrying
+    # accumulator when made visible).
+    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
         local _orig = get(ctx.ssa_types, _jk, Any)
-        if _orig === Any || _orig isa Union
+        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
+        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
+        # type — their truth lives in the join-typed LOCAL, and rewriting them
+        # desynced String-carrying phis in print_to_string (a String local receiving
+        # a join-typed i32 edge).
+        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
+        if (_orig === Any || _orig isa Union) &&
+           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
             ctx.ssa_types[_jk] = _jv
         end
     end

@@ -132,10 +132,10 @@ using Dates: Dates, @dateformat_str
 _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
-_wt_shard0() && include("m10_contexts.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
+_wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct

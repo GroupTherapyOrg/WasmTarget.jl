@@ -580,19 +580,20 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
-                # parity(M10a): recompute through THE WRAP CHANNEL — typed emission +
-                # the funnel adjust to the phi local's type. The old arm GUESSED the
-                # source type statically (Any for join-typed cycles), failed its convert,
-                # and emitted a ZERO DEFAULT while dropping the real value — the
-                # mutable-capture silent 0 (`i64.add; drop; i64.const 0` in the wat).
-                if phi_local_wasm_type !== nothing
-                    emit_value!(pvb, val, ctx, phi_local_wasm_type)
-                    return _cpv_ret()
-                end
+                # PURE-036bg: Check type compatibility for recomputed SSA values
+                # (the M10a fix lives in the ssa_types join-write, not here)
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
-                if false
-                    nothing
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
+                    local _sb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                    if stmt !== nothing && !(stmt isa Core.PhiNode)
+                        emit_raw!(_sb, compile_statement(stmt, val.id, ctx))
+                    else
+                        emit_value!(_sb, val, ctx)
+                    end
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
+                        emit_raw!(pvb, emit_phi_type_default(phi_local_wasm_type); pushes=WasmValType[phi_local_wasm_type])
+                    end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)

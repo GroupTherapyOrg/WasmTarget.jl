@@ -390,6 +390,8 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
     # was born in the callee; the inlined body reads it through the closure value).
     _has_box_fields(T) = T isa DataType && isstructtype(T) &&
         any(i -> fieldtype(T, i) === Core.Box, 1:fieldcount(T))
+    _saw_ssa_carrier = false
+    _saw_write = false
     box_reads = Set{Int}()
     for (i, stmt) in enumerate(code)
         (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
@@ -399,6 +401,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         carrier_ok = (base isa Core.Argument && base.n == 1 && !isempty(boxfields)) ||
                      (base isa Core.SSAValue && _has_box_fields(_ssat(base.id)))
         carrier_ok || continue
+        base isa Core.SSAValue && (_saw_ssa_carrier = true)
         fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
         _bf = base isa Core.Argument ? boxfields :
               Set{Symbol}(fieldname(_ssat(base.id), j) for j in 1:fieldcount(_ssat(base.id))
@@ -442,6 +445,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         op = stmt.args[1]
         (op isa GlobalRef && op.name === :setfield!) || continue
         (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        _saw_write = true
         v = stmt.args[4]
         vt = v isa Core.SSAValue ? get(joins, v.id, _ssat(v.id)) : _opT(v)
         (_f3_is_numeric_jl(vt) && vt <: cand) || return Dict{Int,Type}()
@@ -450,6 +454,14 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
     # the join output (they'd re-type the box itself and break every consumer).
     for b in box_reads
         delete!(joins, b)
+    end
+    # VACUOUS-VERIFY guard: if NO setfield! write was visible in this body, the
+    # optimistic candidate was never actually tested. For the #self# carrier that is
+    # fine (the closure only reads; the parent wrote) — but for generalized SSA
+    # carriers (a closure value from a callee) an unverified candidate poisons
+    # string-carrying accumulators (print_to_string). Bail without joins then.
+    if !_saw_write && _saw_ssa_carrier
+        return Dict{Int,Type}()
     end
     return joins
 end
