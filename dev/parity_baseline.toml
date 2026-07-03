@@ -16,7 +16,7 @@ L9_no_unjustified_untyped_emission = 0
 
 [metrics]
 R11_patch_markers = 698
-R2_emit_raw_bridges = 146
+R2_emit_raw_bridges = 143
 R3_infer_value_type = 136
 R5_julia_type_reguess = 126
 R7_raw_coercion_ops = 131

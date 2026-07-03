@@ -2540,7 +2540,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     info = ctx.type_registry.structs[obj_type]
                     struct_get!(_refb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array (0=typeId)
                 else
-                    emit_raw!(_refb, UInt8[Opcode.GC_PREFIX, Opcode.STRUCT_GET])
+                    # parity(M11): an unregistered struct previously emitted an INCOMPLETE
+                    # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
+                    record_unsupported!(ctx, :unsupported_type, "field access on an unregistered struct type"; idx=idx)
+                    unreachable!(_refb)
                 end
                 append!(bytes, builder_code(_refb))
                 return bytes
@@ -2553,7 +2556,8 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     info = ctx.type_registry.structs[obj_type]
                     struct_get!(_szfb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
                 else
-                    emit_raw!(_szfb, UInt8[Opcode.GC_PREFIX, Opcode.STRUCT_GET])
+                    record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
+                    unreachable!(_szfb)
                 end
                 append!(bytes, builder_code(_szfb))
                 return bytes
