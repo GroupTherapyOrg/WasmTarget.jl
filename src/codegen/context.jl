@@ -640,6 +640,35 @@ function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     return bytes
 end
 
+# parity(M10b): a CHECKED CAST carries its target type — dart's `as T`
+# (code_generator.dart visitAsExpression: the cast expression's static type IS T).
+# `convert(T, x)` / `typeassert(x, T)` results that inference left erased refine
+# to T when the join already proves x carries exactly T (the identity cast the
+# calls.jl arm lowers value-only) — the result local then types as T, so the
+# store and every load agree (the escaping-closure i64-into-anyref invalid store).
+function refine_checked_cast_types!(ctx::AbstractCompilationContext, code)
+    _cres(a) = a isa GlobalRef ? (isdefined(a.mod, a.name) ? getglobal(a.mod, a.name) : nothing) : a
+    for (_ck, _cstmt) in enumerate(code)
+        _cstmt isa Expr || continue
+        local _cargs = _cstmt.head === :call ? _cstmt.args :
+                       _cstmt.head === :invoke ? _cstmt.args[2:end] : nothing
+        (_cargs === nothing || length(_cargs) != 3) && continue
+        local _cf = try _cres(_cargs[1]) catch; nothing end
+        local _isconv = _cf === Base.convert
+        local _ista = _cf === Core.typeassert
+        (_isconv || _ista) || continue
+        local _cT = try _cres(_cargs[_isconv ? 2 : 3]) catch; nothing end
+        _cT isa DataType || continue
+        local _cx = _cargs[_isconv ? 3 : 2]
+        _cx isa Core.SSAValue || continue
+        local _corig = get(ctx.ssa_types, _ck, Any)
+        (_corig === Any || _corig isa Union) || continue
+        get(ctx.ssa_types, _cx.id, Any) === _cT || continue
+        ctx.ssa_types[_ck] = _cT
+    end
+    return nothing
+end
+
 """
 Analyze control flow to find loops and handle phi nodes.
 """
@@ -726,6 +755,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
+    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
 
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
@@ -976,6 +1006,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
+    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()

@@ -6331,6 +6331,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                    call_arg_types[1] <: Type && call_arg_types[1] isa DataType &&
                    length(call_arg_types[1].parameters) == 1 &&
                    call_arg_types[2] === call_arg_types[1].parameters[1]
+                    bytes = UInt8[]  # clear pre-pushed args — identity re-emits the value itself
                     local _cvi_ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_cvi_ib, args[2], ctx)
                     append!(bytes, builder_code(_cvi_ib))

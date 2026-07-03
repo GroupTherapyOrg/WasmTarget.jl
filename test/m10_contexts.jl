@@ -21,14 +21,25 @@
     @test compare_julia_wasm(f_two, Int64(4)).pass             # 10 + 16 = 26
 end
 
-# M10b CERTIFIED GAP: the cross-function escaping closure (@noinline maker; caller mutates
-# through the shared box). Compiles clean (0 diagnostics) + validates; a runtime null-deref
-# remains in the caller's inlined contents path — the deep "one closure rep" work. The
-# in-function sharing case (useit above) is CORRECT.
-@testset "M10b escaping closure (documented gap)" begin
-    @noinline mkn_g(n::Int64) = (c = 0; inc = () -> (c += n; c); inc)
-    outer_g(n::Int64)::Int64 = (f = mkn_g(n); f(); f())
-    @test !isempty(WasmTarget.compile(outer_g, (Int64,)))   # compiles + validates
-    r = try compare_julia_wasm(outer_g, Int64(3)) catch; (pass=false,) end
-    @test_broken r.pass                                      # runtime gap, tracked
+# M10b CLOSED (march 3): the cross-function escaping closure (@noinline maker; caller
+# mutates through the shared box). Root causes were (1) the identity-convert arm in
+# calls.jl appending its value emission AFTER the pre-pushed args (doubled bytes), and
+# (2) the convert/typeassert results staying erased-Any so the result local typed anyref
+# while the store carried the refined i64 — fixed by refine_checked_cast_types! (dart
+# `as T`: the cast's static type IS T, code_generator.dart visitAsExpression).
+# top-level so the entries are singleton functions, not capturing closures —
+# a closure-typed ENTRY can't cross the JS arg boundary in run_wasm.
+@noinline mkn_g(n::Int64) = (c = 0; inc = () -> (c += n; c); inc)
+outer_g(n::Int64)::Int64 = (f = mkn_g(n); f(); f())
+@noinline mkf_g(x::Float64) = (c = 0.0; add = () -> (c += x; c); add)
+outerf_g(x::Float64)::Float64 = (f = mkf_g(x); f(); f(); f())
+@noinline mk2_g(n::Int64) = (c = n; bump = () -> (c += 1; c); bump)
+outer2_g(n::Int64)::Int64 = (f = mk2_g(n); g = mk2_g(n * 10); f(); g(); f() + g())
+
+@testset "M10b escaping closure" begin
+    @test compare_julia_wasm(outer_g, Int64(3)).pass         # 3 + 3 = 6
+    @test compare_julia_wasm(outer_g, Int64(-5)).pass        # -10
+    # richer shapes: float cell, more mutations, two escaping closures
+    @test compare_julia_wasm(outerf_g, 1.5).pass             # 4.5
+    @test compare_julia_wasm(outer2_g, Int64(2)).pass        # 4 + 22 = 26
 end
