@@ -1346,6 +1346,13 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
         # Value is already on stack — check if it's actually a ref type
         local isa2_val_wasm = nothing
         if value_arg isa Core.SSAValue
+            # parity(M10): the load (_narrow_generic_local!) delivers the SSA's REFINED
+            # type — when the join proved a numeric, the value on stack IS that numeric
+            # regardless of the (anyref) local. The refined type drives the fold.
+            local _isa2_refined = get(ctx.ssa_types, value_arg.id, Any)
+            if _isa2_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
+                isa2_val_wasm = julia_to_wasm_type(_isa2_refined)
+            else
             local isa2_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
             # Fix: isa2_local_idx includes n_params, but ctx.locals only has non-param locals
             if isa2_local_idx !== nothing
@@ -1353,6 +1360,7 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 if local_offset >= 0 && local_offset < length(ctx.locals)
                     isa2_val_wasm = ctx.locals[local_offset + 1]
                 end
+            end
             end
         elseif value_arg isa Core.Argument
             # PURE-325: Also handle function parameters (not just SSA values)
@@ -2427,12 +2435,21 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
             local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
             struct_get!(_mb_ib, _mb_idx, UInt32(1), _mb_ft)
-            # Land in a typed scratch + end with local.get: the SSA-store heuristics
-            # peek at the tail instruction and substitute ref.null for tails they
-            # can't type (same workaround as the het-tuple arm above).
+            # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
+            # unbox through the ONE funnel so declared and actual agree at the store.
+            local _mb_jt = get(ctx.ssa_types, idx, Any)
+            local _mb_want = _mb_jt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
+                             julia_to_wasm_type(_mb_jt) : nothing
+            local _mb_out = _mb_ft
+            if _mb_want !== nothing && _mb_want !== _mb_ft && _wt_is_ref(_mb_ft)
+                convert_type!(_mb_ib, _mb_ft, _mb_want, ctx)
+                _mb_out = _mb_want
+            end
+            # Land in a typed scratch + end with local.get (unambiguous tail for the
+            # store heuristics — same workaround as the het-tuple arm above).
             local _mb_res = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, _mb_ft)
-            builder_set_local_type!(_mb_ib, _mb_res, _mb_ft)
+            push!(ctx.locals, _mb_out)
+            builder_set_local_type!(_mb_ib, _mb_res, _mb_out)
             local_set!(_mb_ib, _mb_res)
             local_get!(_mb_ib, _mb_res)
             append!(bytes, builder_code(_mb_ib))
@@ -4493,7 +4510,12 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
         local _generic_arith = func isa GlobalRef &&
             func.name in (:+, :-, :*, :div, :rem, :mod)
-        if (is_numeric_intrinsic || _generic_arith) && _arg_anyref
+        # parity(M10): when the SSA's REFINED type is already numeric (the join),
+        # the LOAD (_narrow_generic_local!) is THE single unbox source — appending a
+        # second unbox here double-converted. Only unbox when the type is truly erased.
+        local _aa_refined_numeric = arg isa Core.SSAValue &&
+            get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
+        if (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !_aa_refined_numeric
             local _aa_target = is_32bit ? I32 : I64
             local _ub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_classid_unbox!(_ub, ctx, _aa_target; nullable=true)

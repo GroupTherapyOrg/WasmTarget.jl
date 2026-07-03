@@ -582,6 +582,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
+                    # parity(M10): the single-source-at-load contract — a join-refined
+                    # numeric riding a ref local narrows HERE too, and the reported type
+                    # becomes the numeric so the phi store boxes through the funnel.
+                    local _cpv_refined = get(ctx.ssa_types, val.id, Any)
+                    if _cpv_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
+                       ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
+                        # funnel-unbox directly on the builder (no byte seam)
+                        convert_type!(pvb, ssa_local_type, julia_to_wasm_type(_cpv_refined), ctx;
+                                      from_julia=_cpv_refined)
+                    end
                 end
             elseif haskey(ctx.phi_locals, val.id)
                 local_idx = ctx.phi_locals[val.id]

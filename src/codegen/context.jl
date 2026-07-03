@@ -2290,6 +2290,15 @@ function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id
         end
         ref_cast!(b, Int64(concrete_wasm.type_idx), true)
         append!(bytes, builder_code(b))
+    elseif concrete_wasm === I32 || concrete_wasm === I64 ||
+           concrete_wasm === F32 || concrete_wasm === F64
+        # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
+        # funnel (dart convertType) — symmetric to the store-side box. Without this,
+        # consumers read a raw box ref where the numeric is expected.
+        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
+        seed_input!(b, WasmValType[local_wasm_type])
+        convert_type!(b, local_wasm_type, concrete_wasm, ctx; from_julia=ssa_julia_type)
+        append!(bytes, builder_code(b))
     end
 end
 

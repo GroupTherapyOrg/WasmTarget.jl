@@ -1015,9 +1015,18 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         ssa_wasm_type = julia_to_wasm_type_concrete(ssa_julia_type, ctx)
                         if (ssa_wasm_type === I32 || ssa_wasm_type === I64 ||
                             ssa_wasm_type === F32 || ssa_wasm_type === F64)
-                            # SSA produces numeric value but local expects ref type
-                            # (compound numeric expressions like i32_wrap + i32_sub)
-                            needs_type_safe_default = true
+                            # parity(M10): a numeric value meeting a ref-typed local BOXES
+                            # through the ONE funnel (dart convertType) — the old arm
+                            # emitted a type-safe NULL default, silently dropping the value
+                            # (the box-contents reads of the escaping-closure case).
+                            append!(bytes, stmt_bytes)
+                            local _nbx = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                            seed_input!(_nbx, WasmValType[ssa_wasm_type])
+                            convert_type!(_nbx, ssa_wasm_type, local_wasm_type, ctx;
+                                          from_julia=(ssa_julia_type isa DataType ? ssa_julia_type : nothing))
+                            local_set!(_nbx, local_idx)
+                            append!(bytes, builder_code(_nbx))
+                            ssa_type_mismatch = true   # value handled here — skip the normal append/store
                         elseif ssa_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                             # SSA produces externref but local expects concrete ref.
                             # PURE-325: For memoryrefset! calls, the return value is the

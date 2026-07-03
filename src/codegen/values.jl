@@ -833,7 +833,21 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = (tb = UInt8[]; emit_type_id!(tb, ctx.type_registry, T); emit_raw!(b, tb; pushes=WasmValType[I32]))
-    _narrow!(li, sid) = (nb = UInt8[]; _narrow_generic_local!(nb, li, sid, ctx); isempty(nb) || emit_raw!(b, nb))
+    # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
+    # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
+    # funnel box for join-refined numerics).
+    function _narrow!(li, sid)
+        nb = UInt8[]
+        _narrow_generic_local!(nb, li, sid, ctx)
+        isempty(nb) && return
+        local _nt = get(ctx.ssa_types, sid, Any)
+        # numerics declare their refined type (join-refined loads); refs keep legacy shape
+        local _nw = _nt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
+                    julia_to_wasm_type(_nt) : nothing
+        local _decl = _nw !== nothing && !_wt_is_ref(_nw)
+        emit_raw!(b, nb; pops=(_decl ? 1 : 0),
+                  pushes=(_decl ? WasmValType[_nw] : WasmValType[]))
+    end
 
     # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
