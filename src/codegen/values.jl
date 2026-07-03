@@ -787,13 +787,12 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
-    # NOTE(march3): stays bytes + declared-top for now — the declared push IS the
-    # emission's tracked top (not a re-guess). The full append_builder! merge is
-    # only valid once _compile_value_b's byte-inspecting interior branches are
-    # typed: their declared-balanced splices make vb's stack unreliable below the
-    # top (proven by the dict-constant Pair→ref.null regression when merged).
-    bytes, ty = compile_value_typed(val, ctx)
-    emit_raw!(b, bytes; pushes=(ty === nothing ? WasmValType[] : WasmValType[ty]))
+    # march3: THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
+    # proved _compile_value_b's tracked stack honest (zero liars across smoke +
+    # the heaviest shards after the struct_new! mod-resolving fix).
+    vb = _compile_value_b(val, ctx)
+    ty = isempty(vb.v.stack) ? nothing : vb.v.stack[end]
+    append_builder!(b, vb)
     return ty
 end
 

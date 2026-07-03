@@ -540,6 +540,10 @@ end
 function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])
     for _ in 1:pops; validate_pop_any!(b.v); end
     for p in pushes; validate_push!(b.v, p); end
+    # A zero-byte splice records NO instruction (the declared effects above still
+    # apply to the model) — `isempty(b.instrs)` keeps meaning "emits nothing",
+    # exactly like the byte-era `isempty(bytes)` tests it replaced.
+    isempty(raw) && return _check!(b)
     _emit!(b, InstrIR.RawBytes(raw))
 end
 
