@@ -1650,7 +1650,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                     # Push the signal value (re-read from global)
                     global_get!(bss2, global_idx, AnyRef)
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
-                    emit_raw!(bss2, emit_convert_to_f64(global_type); pops=1, pushes=WasmValType[F64])
+                    emit_convert_to_f64!(bss2, global_type)
                     # Call the DOM import function
                     call!(bss2, import_idx, WasmValType[], WasmValType[])
                 end

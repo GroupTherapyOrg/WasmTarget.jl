@@ -593,9 +593,21 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
 end
 
 """
-Emit bytecode to convert a value on the stack to f64.
-Used for DOM bindings where all numeric values are passed as f64 for JS compatibility.
+Convert a numeric value on the stack to f64 (no-op when already f64) — builder-native
+(THE implementation). Used for DOM bindings where numerics pass as f64 for JS.
 """
+function emit_convert_to_f64!(b, valtype::WasmValType)
+    if valtype == I32
+        num!(b, 0xB7)  # f64.convert_i32_s
+    elseif valtype == I64
+        num!(b, 0xB9)  # f64.convert_i64_s
+    elseif valtype == F32
+        num!(b, 0xBB)  # f64.promote_f32
+    end
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_convert_to_f64(valtype::WasmValType)::Vector{UInt8}
     if valtype == I32
         return UInt8[0xB7]  # f64.convert_i32_s

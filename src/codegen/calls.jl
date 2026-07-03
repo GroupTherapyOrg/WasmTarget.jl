@@ -1831,8 +1831,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Push the signal value (re-read from global)
                 global_get!(_setb, global_idx, global_type)
                 # Convert to f64 for DOM imports (all DOM imports expect f64)
-                local _cvtb = UInt8[]; append!(_cvtb, emit_convert_to_f64(global_type))
-                emit_raw!(_setb, _cvtb; pops=1, pushes=WasmValType[F64])
+                emit_convert_to_f64!(_setb, global_type)
                 # Call the DOM import function
                 call!(_setb, import_idx, WasmValType[], WasmValType[])
             end
@@ -1879,8 +1878,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     # Push the signal value (re-read from global)
                     global_get!(_ssgb, global_idx, global_type)
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
-                    local _cvtb2 = UInt8[]; append!(_cvtb2, emit_convert_to_f64(global_type))
-                    emit_raw!(_ssgb, _cvtb2; pops=1, pushes=WasmValType[F64])
+                    emit_convert_to_f64!(_ssgb, global_type)
                     # Call the DOM import function
                     call!(_ssgb, import_idx, WasmValType[], WasmValType[])
                 end
@@ -3703,8 +3701,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 emit_value!(_tofb, arg, ctx)
                 base_idx = ctx.type_registry.base_struct_idx
                 if base_idx !== nothing
-                    local _tof2 = UInt8[]; emit_typeof!(_tof2, base_idx)
-                    emit_raw!(_tofb, _tof2; pops=1, pushes=WasmValType[I32])
+                    emit_typeof!(_tofb, base_idx)
                 else
                     i32_const!(_tofb, 0)
                 end
