@@ -558,14 +558,13 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
     for t in Iterators.reverse(src.seeded)
         validate_pop!(dst.v, t)
     end
-    if src.v.reachable
-        for t in src.v.stack
-            validate_push!(dst.v, t)
-        end
-    else
-        # source ended unreachable — its tail stack is polymorphic; mirror that
-        dst.v.reachable = false
+    # Transfer the tracked stack ALWAYS — downstream emission decisions read
+    # dst.v.stack (the wrap chokepoint's actual-type). An unreachable tail
+    # additionally poisons reachability (polymorphic stack, wasm-spec style).
+    for t in src.v.stack
+        validate_push!(dst.v, t)
     end
+    src.v.reachable || (dst.v.reachable = false)
     append!(dst.instrs, src.instrs)
     return _check!(dst)
 end

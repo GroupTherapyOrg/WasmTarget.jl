@@ -509,13 +509,13 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
     push!(ctx.locals, wasm_type)
     builder_set_local_type!(b, sc, wasm_type)
     local_set!(b, sc)                       # save the value
-    let tid = UInt8[]
-        if julia_type === nothing
-            emit_box_type_id!(tid, ctx.type_registry, wasm_type)   # fallback: wasm-rep id
-        else
-            emit_type_id!(tid, ctx.type_registry, julia_type)      # REAL classId
-        end
-        emit_raw!(b, tid; pushes=WasmValType[I32])                 # field 0 = classId
+    if julia_type === nothing
+        # fallback: wasm-rep id (the width's default Julia type)
+        emit_type_id!(b, ctx.type_registry,
+                      wasm_type === I32 ? Int32 : wasm_type === I64 ? Int64 :
+                      wasm_type === F32 ? Float32 : wasm_type === F64 ? Float64 : Any)
+    else
+        emit_type_id!(b, ctx.type_registry, julia_type)            # REAL classId
     end
     local_get!(b, sc)                       # reload the value (field 1)
     # Declare the REAL stack effect ([classId:i32, value] → box ref) — an empty field list
@@ -781,6 +781,11 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
+    # NOTE(march3): stays bytes + declared-top for now — the declared push IS the
+    # emission's tracked top (not a re-guess). The full append_builder! merge is
+    # only valid once _compile_value_b's byte-inspecting interior branches are
+    # typed: their declared-balanced splices make vb's stack unreliable below the
+    # top (proven by the dict-constant Pair→ref.null regression when merged).
     bytes, ty = compile_value_typed(val, ctx)
     emit_raw!(b, bytes; pushes=(ty === nothing ? WasmValType[] : WasmValType[ty]))
     return ty
@@ -1416,31 +1421,28 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             if needs_extern_convert
                 elem_val = val[i]
                 # typed channel: the emission's own type replaces the GC_PREFIX/const-first-byte scans.
-                elem_bytes, _el_ty = compile_value_typed(elem_val, ctx)
+                local _el_b = _compile_value_b(elem_val, ctx)
+                local _el_ty = isempty(_el_b.v.stack) ? nothing : _el_b.v.stack[end]
                 is_numeric_elem = _el_ty === I32 || _el_ty === I64 || _el_ty === F32 || _el_ty === F64
                 if is_numeric_elem
                     # Box numeric value into a struct then convert to externref
-                    val_wasm_elem = elem_bytes[1] == Opcode.I32_CONST ? I32 :
-                                    elem_bytes[1] == Opcode.I64_CONST ? I64 :
-                                    elem_bytes[1] == Opcode.F32_CONST ? F32 : F64
-                    nb = UInt8[]; emit_numeric_to_externref!(nb, elem_val, val_wasm_elem, ctx)
+                    nb = UInt8[]; emit_numeric_to_externref!(nb, elem_val, _el_ty, ctx)
                     emit_raw!(b, nb; pushes=WasmValType[ExternRef])
-                elseif !isempty(elem_bytes) && elem_bytes[end] == UInt8(ExternRef) &&
-                       length(elem_bytes) >= 2 && elem_bytes[end-1] == Opcode.REF_NULL
-                    # Already externref (ref.null extern) — no conversion needed
-                    emit_raw!(b, elem_bytes; pushes=WasmValType[ExternRef])
+                elseif _el_ty === ExternRef
+                    # Already externref — no conversion needed (was a REF_NULL byte sniff)
+                    append_builder!(b, _el_b)
                 else
-                    emit_raw!(b, elem_bytes; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _el_b)
                     extern_convert_any!(b)
                 end
             else
-                elem_bytes_plain, _elp_ty = compile_value_typed(val[i], ctx)
-                if isempty(elem_bytes_plain)
-                    # TRUE-INT-002-impl2-impl: compile_value returned empty bytes.
+                local _elp_b = _compile_value_b(val[i], ctx)
+                if isempty(_elp_b.instrs)
+                    # TRUE-INT-002-impl2-impl: compile_value returned empty.
                     # Push ref.null as placeholder to maintain array_new_fixed stack balance.
                     ref_null!(b, AnyRef)  # 0x6E any heap type
                 else
-                    emit_raw!(b, elem_bytes_plain; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _elp_b)
                 end
             end
             # PURE-6022: Check after each element in case compile_value hit a stub
@@ -1483,14 +1485,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         else
             arr_type_def = ctx.mod.types[array_type_idx + 1]
             for i in 1:n_mem
-                # el_bytes holds the recursive compile_value result and is INSPECTED
-                # via isempty below — keep it as a local buffer (byte-inspecting branch).
-                el_bytes = UInt8[]
+                local _el_vb = nothing
                 defined = isassigned(mem, i)
                 if defined
-                    el_bytes, _ = compile_value_typed(mem[i], ctx)
+                    _el_vb = _compile_value_b(mem[i], ctx)
                 end
-                if !defined || isempty(el_bytes)
+                if !defined || isempty(_el_vb.instrs)
                     # undef slot (or uncompilable element) — type-correct default.
                     # Straight-line emission: emit the typed default directly on `b`.
                     evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
@@ -1508,7 +1508,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         ref_null!(b, AnyRef)  # 0x6E any
                     end
                 else
-                    emit_raw!(b, el_bytes; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _el_vb)   # typed merge
                 end
             end
             array_new_fixed!(b, array_type_idx, n_mem, AnyRef)
