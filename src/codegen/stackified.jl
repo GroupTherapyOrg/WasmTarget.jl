@@ -43,16 +43,12 @@ function _value_julia_type(val, ctx::AbstractCompilationContext)
     return nothing
 end
 
-function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
-    # local builder, then append its code to the caller-supplied buffer (byte-identical).
-    # compile_value / emit_box_type_id! splices bridge in via emit_raw!. strict=false.
-    b = InstrBuilder(; func_name="emit_numeric_to_externref!", mod=ctx.mod)
+"""builder-native (THE implementation): value → classId box → externref.
+`nothing` values become ref.null extern (dart: null, not a boxed zero)."""
+function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
-        # return nothing → ref.null extern
         ref_null!(b, ExternRef)
-        append!(target_bytes, builder_code(b))
-        return
+        return b
     end
     # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
@@ -62,6 +58,13 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    b = InstrBuilder(; func_name="emit_numeric_to_externref!", mod=ctx.mod)
+    emit_numeric_to_externref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
     return
 end

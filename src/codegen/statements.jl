@@ -241,8 +241,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
 
             if func_ret_wasm === ExternRef && is_numeric_val
                 # PURE-325: Box numeric value for ExternRef return (handles nothing too)
-                _rb = UInt8[]; emit_numeric_to_externref!(_rb, stmt.val, val_wasm, ctx)
-                emit_raw!(b, _rb; pushes=WasmValType[ExternRef])
+                emit_numeric_to_externref!(b, stmt.val, val_wasm, ctx)
             elseif func_ret_wasm isa ConcreteRef && is_numeric_val
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
@@ -255,8 +254,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
             else
-                val_bytes = compile_value(stmt.val, ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-                if isempty(val_bytes)
+                local _rv_b = _compile_value_b(stmt.val, ctx)
+                local val_wasm2 = isempty(_rv_b.v.stack) ? nothing : _rv_b.v.stack[end]
+                if isempty(_rv_b.instrs)
                     # TRUE-INT-002: compile_value produced empty bytes (stubbed SSA value on dead path).
                     # Push a type-correct default so `return` has a value on the stack.
                     if func_ret_wasm isa ConcreteRef
@@ -275,7 +275,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         f64_const!(b, 0.0)
                     end
                 else
-                    emit_raw!(b, val_bytes; pushes=(val_wasm === nothing ? WasmValType[] : WasmValType[val_wasm]))
+                    append_builder!(b, _rv_b)   # typed merge
                 end
                 # If function returns externref but value is a concrete ref, convert
                 if func_ret_wasm === ExternRef && val_wasm !== ExternRef
@@ -472,30 +472,11 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         i32_const!(b, 0)
                     end
                 else
-                    val_bytes, val_ty = compile_value_typed(stmt.val, ctx)
-                    # Safety: check if val_bytes pushes multiple values (all local_gets, N>=2).
-                    # local_set only consumes 1, so N-1 would be orphaned.
-                    is_multi_value_bytes = false
-                    if length(val_bytes) >= 4
-                        _all_gets = true
-                        _n_gets = 0
-                        _pos = 1
-                        while _pos <= length(val_bytes)
-                            if val_bytes[_pos] != 0x20
-                                _all_gets = false
-                                break
-                            end
-                            _n_gets += 1
-                            _pos += 1
-                            while _pos <= length(val_bytes) && (val_bytes[_pos] & 0x80) != 0
-                                _pos += 1
-                            end
-                            _pos += 1
-                        end
-                        if _all_gets && _pos > length(val_bytes) && _n_gets >= 2
-                            is_multi_value_bytes = true
-                        end
-                    end
+                    # march3: the tracked stack IS the multi-value answer — the
+                    # all-local_gets LEB walk is deleted (audit-proven channel).
+                    local _pi_b = _compile_value_b(stmt.val, ctx)
+                    local val_ty = isempty(_pi_b.v.stack) ? nothing : _pi_b.v.stack[end]
+                    is_multi_value_bytes = length(_pi_b.v.stack) >= 2
                     if is_multi_value_bytes
                         # Multi-value source: emit type-safe default for the local's type
                         if pi_local_type isa ConcreteRef
@@ -527,7 +508,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         # dart2wasm carries the type with the value: the source is numeric
                         # iff the EMISSION's own type (val_ty, from compile_value_typed above)
                         # is not a ref — no re-guess needed.
-                        is_numeric_val = !isempty(val_bytes) && val_ty !== nothing && !_wt_is_ref(val_ty)
+                        is_numeric_val = !isempty(_pi_b.instrs) && val_ty !== nothing && !_wt_is_ref(val_ty)
                         if is_numeric_val
                             # Replace with ref.null of the correct type
                             if pi_local_type isa ConcreteRef
@@ -535,8 +516,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             elseif pi_local_type === ArrayRef
                                 ref_null!(b, ArrayRef)
                             elseif pi_local_type === ExternRef
-                                _ne = UInt8[]; emit_numeric_to_externref!(_ne, stmt.val, val_wasm, ctx)
-                                emit_raw!(b, _ne; pushes=WasmValType[ExternRef])
+                                emit_numeric_to_externref!(b, stmt.val, val_wasm, ctx)
                             elseif pi_local_type === AnyRef
                                 ref_null!(b, AnyRef)
                             elseif pi_local_type === EqRef
@@ -545,10 +525,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 ref_null!(b, StructRef)
                             end
                         else
-                            emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
+                            append_builder!(b, _pi_b)   # typed merge
                         end
                     else
-                        emit_raw!(b, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
+                        append_builder!(b, _pi_b)   # typed merge
                     end
                 end
             end
