@@ -767,6 +767,12 @@ the emit produced no single result — e.g. an unreachable/dead path). Callers c
 """
 function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
     b = _compile_value_b(val, ctx)
+    # march3 audit: a value emission must track exactly ONE pushed value (or zero
+    # for dead paths). More means an interior splice lied to the model — the
+    # blocker list for the channel inversion. Enumerate, don't guess.
+    if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(b.v.stack) > 1
+        println(stderr, "VALUE-STACK-LIAR n=$(length(b.v.stack)) stack=$(b.v.stack) val=$(first(repr(val), 80))")
+    end
     return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
 end
 
@@ -1143,7 +1149,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     emit_value!(b, field_val, ctx)
                 end
             end
-            struct_new!(b, type_idx, WasmValType[])
+            struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         else
             emit_value!(b, inner, ctx)
         end
@@ -1235,7 +1241,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Type
         # PURE-4151: Type constant — each unique Type gets a unique Wasm global
@@ -1258,7 +1264,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(Module)
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
@@ -1267,7 +1273,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(T)
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
         # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
@@ -1290,7 +1296,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             emit_value!(b, field_val, ctx)
         end
 
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif typeof(val) <: Dict
         # Dict constant with pre-populated data — materialize Memory fields as arrays
@@ -1385,7 +1391,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, Int64(getfield(val, :maxprobe)))
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
 
     elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
         # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
@@ -1464,10 +1470,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
         _emit_tid!(Tuple{Int64})
         i64_const!(b, Int64(length(val)))
-        struct_new!(b, size_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
         # struct.new for Vector{T}
-        struct_new!(b, vec_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
@@ -1678,7 +1684,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         finally
             pop!(_VALUE_COMPILE_STACK)
         end

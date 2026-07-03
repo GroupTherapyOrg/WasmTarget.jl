@@ -368,6 +368,19 @@ function struct_new!(b::InstrBuilder, type_idx::Integer, field_types::Vector{<:A
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types]))
     _emit!(b, InstrIR.StructNew(UInt32(type_idx)))
 end
+# march3: mod-resolving form (dart wasm_builder — the instruction knows its type).
+# Pops the REAL declared field list from the module; the empty-list fudge (which
+# left every operand phantom-tracked — the value-channel liar class) has no home here.
+function struct_new!(b::InstrBuilder, type_idx::Integer)
+    local _mod = b.v.mod
+    local _ft = if _mod !== nothing && type_idx + 1 >= 1 && type_idx + 1 <= length(_mod.types) &&
+                   _mod.types[type_idx + 1] isa StructType
+        WasmValType[f.valtype for f in _mod.types[type_idx + 1].fields]
+    else
+        error("struct_new!(b, $type_idx): module type definition unavailable — pass the field list explicitly")
+    end
+    struct_new!(b, type_idx, _ft)
+end
 function struct_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
