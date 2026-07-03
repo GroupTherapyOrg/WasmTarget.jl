@@ -2052,7 +2052,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # local.get LEB scan + infer_value_wasm_type re-guess. A NUMERIC value into a
                 # ref-typed Union field is an ill-typed store (bad upstream inference); keep
                 # the type-correct null so the module validates (M5 turns this loud).
-                val_bytes, _cn_vty = compile_value_typed(val, ctx)
+                local _cn_vb = _compile_value_b(val, ctx)
+                local _cn_vty = isempty(_cn_vb.v.stack) ? nothing : _cn_vb.v.stack[end]
                 if inner_type !== nothing &&
                    (_cn_vty === I32 || _cn_vty === I64 || _cn_vty === F32 || _cn_vty === F64)
                     if inner_type === String || inner_type === Symbol
@@ -2069,7 +2070,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         ref_null!(b, StructRef)
                     end
                 else
-                    emit_raw!(b, val_bytes; pushes=(_cn_vty === nothing ? WasmValType[] : WasmValType[_cn_vty]))
+                    append_builder!(b, _cn_vb)   # typed merge
                 end
             end
         elseif field_type === Any
@@ -2182,10 +2183,12 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 continue  # Skip to next field — ref.null already emitted
             end
 
-            field_bytes, field_ty = compile_value_typed(val, ctx)
-            # Safety: if field_bytes is empty (SSA without local, not re-compilable)
+            local _fld_b = _compile_value_b(val, ctx)
+            local field_ty = isempty(_fld_b.v.stack) ? nothing : _fld_b.v.stack[end]
+            local _fld_done = false   # true once the value (or its replacement) is on `b`
+            # Safety: if the emission is empty (SSA without local, not re-compilable)
             # and the field expects a ref type, emit ref.null of the correct type.
-            if isempty(field_bytes) && actual_field_wasm !== nothing &&
+            if isempty(_fld_b.instrs) && actual_field_wasm !== nothing &&
                (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef ||
                 actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef)
                 if actual_field_wasm isa ConcreteRef
@@ -2197,8 +2200,8 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 else
                     ref_null!(b, StructRef)
                 end
-                field_bytes = UInt8[]
-            elseif isempty(field_bytes) && actual_field_wasm !== nothing &&
+                _fld_done = true
+            elseif isempty(_fld_b.instrs) && actual_field_wasm !== nothing &&
                    (actual_field_wasm === I32 || actual_field_wasm === I64 ||
                     actual_field_wasm === F32 || actual_field_wasm === F64)
                 # Empty bytes for numeric field — emit zero constant
@@ -2211,13 +2214,13 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                 elseif actual_field_wasm === F64
                     f64_const!(b, 0.0)
                 end
-                field_bytes = UInt8[]
+                _fld_done = true
             end
             # Union-typed field (no Nothing variant) registered as a tagged-union
             # B4/U2: the union-field tagged-union-wrapper box-coercion is RETIRED — a union
             # field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper ConcreteRef, so the value flows in as an anyref subtype directly.
-            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && !isempty(field_bytes)
+            if actual_field_wasm !== nothing && (actual_field_wasm isa ConcreteRef || actual_field_wasm === StructRef || actual_field_wasm === ArrayRef || actual_field_wasm === AnyRef || actual_field_wasm === ExternRef) && !_fld_done && !isempty(_fld_b.instrs)
                 # typed channel: the emission's own type (field_ty) — no re-guess, no byte gate.
                 src_type = field_ty
                 if src_type !== nothing && (src_type === I64 || src_type === I32 || src_type === F32 || src_type === F64)
@@ -2229,30 +2232,30 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                         ref_null!(b, ArrayRef)
                     elseif actual_field_wasm === AnyRef
                         # Box numeric local for anyref field via THE single box emitter.
-                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        append_builder!(b, _fld_b)
                         emit_classid_box!(b, ctx, src_type, nothing)
                     elseif actual_field_wasm === ExternRef
                         # PURE-6024: Box numeric local → box struct → extern_convert_any via the one emitter.
-                        emit_raw!(b, field_bytes; pushes=WasmValType[src_type])
+                        append_builder!(b, _fld_b)
                         emit_classid_box!(b, ctx, src_type, nothing)
                         extern_convert_any!(b)
                     else
                         ref_null!(b, StructRef)
                     end
-                    field_bytes = UInt8[]  # Don't append original
+                    _fld_done = true
                 elseif actual_field_wasm === ExternRef && src_type !== nothing && src_type !== ExternRef
                     # PURE-046: Source is a concrete ref but field expects externref
                     # (e.g., abstract type field like AbstractInterpreter registered as externref)
                     # Need to convert concrete ref to externref using extern.convert_any
-                    emit_raw!(b, field_bytes)
+                    append_builder!(b, _fld_b)
                     extern_convert_any!(b)
-                    field_bytes = UInt8[]  # Already appended
+                    _fld_done = true
                 elseif actual_field_wasm === ExternRef && src_type !== nothing && src_type === ExternRef
                     # PURE-6025: Source IS already externref, field expects externref — no conversion needed.
                     # Must explicitly handle to prevent the catch-all below from emitting EXTERN_CONVERT_ANY
                     # which expects anyref input and would fail on externref.
-                    emit_raw!(b, field_bytes)
-                    field_bytes = UInt8[]  # Already appended — prevent catch-all
+                    append_builder!(b, _fld_b)
+                    _fld_done = true
                 elseif actual_field_wasm isa ConcreteRef && src_type !== nothing &&
                        (src_type === StructRef || src_type === AnyRef || src_type === EqRef)
                     # PURE-701b: field expects a CONCRETE struct ref but the source
@@ -2265,9 +2268,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                     #   struct.new[k] expected (ref null T), found local.get of type structref
                     # ref.cast null $T narrows it (no-op when already T, traps otherwise),
                     # mirroring emit_ref_cast_if_structref! on the struct.get side.
-                    emit_raw!(b, field_bytes)
+                    append_builder!(b, _fld_b)
                     ref_cast!(b, Int64(actual_field_wasm.type_idx), true)
-                    field_bytes = UInt8[]  # Already appended
+                    _fld_done = true
                 end
             end
             # march3: the global.get (0x23) and inline-expression (E-003) externref
@@ -2279,20 +2282,19 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             if actual_field_wasm !== nothing &&
                (actual_field_wasm === I32 || actual_field_wasm === I64 ||
                 actual_field_wasm === F32 || actual_field_wasm === F64) &&
-               !isempty(field_bytes) && field_ty !== nothing && _wt_is_ref(field_ty)
+               !_fld_done && !isempty(_fld_b.instrs) && field_ty !== nothing && _wt_is_ref(field_ty)
                 _emit_default!(b, actual_field_wasm)
-                field_bytes = UInt8[]  # Don't append the ref-typed original
+                _fld_done = true   # don't merge the ref-typed original
             end
             # PURE-6024 (march3, typed): externref field + UNKNOWN-typed emission —
             # conservatively bridge (the known-typed cases were handled by the arms
             # above; a tracked ExternRef value passes through untouched).
-            if actual_field_wasm === ExternRef && !isempty(field_bytes) && field_ty === nothing
-                emit_raw!(b, field_bytes)
+            if actual_field_wasm === ExternRef && !_fld_done && !isempty(_fld_b.instrs) && field_ty === nothing
+                append_builder!(b, _fld_b)
                 extern_convert_any!(b)
-                field_bytes = UInt8[]  # Already appended
+                _fld_done = true
             end
-            isempty(field_bytes) ||
-                emit_raw!(b, field_bytes; pushes=(field_ty === nothing ? WasmValType[] : WasmValType[field_ty]))
+            _fld_done || isempty(_fld_b.instrs) || append_builder!(b, _fld_b)   # typed merge
         end
     end
 
