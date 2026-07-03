@@ -3421,7 +3421,13 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # struct field expects externref (Any-typed tuple element)
             struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
             for (fi, arg) in enumerate(args)
-                arg_bytes, arg_ty = compile_value_typed(arg, ctx)
+                # march3 (typed): the first-byte const scans + LOCAL_GET LEB decodes are
+                # gone — arg_ty (the tracked emission type) decides; const-vs-local is an
+                # ir/-level kind test (dart looks at node kinds, never at bytes).
+                local _ab = _compile_value_b(arg, ctx)
+                local arg_ty = isempty(_ab.v.stack) ? nothing : _ab.v.stack[end]
+                local _ab_numeric = arg_ty === I32 || arg_ty === I64 || arg_ty === F32 || arg_ty === F64
+                local _ab_is_local = length(_ab.instrs) == 1 && _ab.instrs[1] isa InstrIR.LocalGet
                 expected_wasm = nothing
                 # Account for typeId at field 0: struct_type_def.fields is 1-indexed,
                 # wasm field for Julia field fi is at position fi + field_offset
@@ -3430,87 +3436,29 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     expected_wasm = struct_type_def.fields[wasm_fi].valtype
                 end
                 if expected_wasm === ExternRef
-                    # Check if arg_bytes is a numeric value (i32/i64 const or numeric local)
-                    # PURE-220: But NOT if bytes contain GC instructions (struct.new, array.new_fixed)
-                    # which indicate a complex ref value (String, Symbol), not a simple numeric.
-                    is_numeric_arg = false
-                    ends_with_ref_producing_gc = arg_ty !== nothing && _wt_is_ref(arg_ty)
-                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42) && !ends_with_ref_producing_gc
-                        is_numeric_arg = true
-                    elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
-                        src_idx = 0; shift = 0; leb_end = 0
-                        for bi in 2:length(arg_bytes)
-                            b = arg_bytes[bi]
-                            src_idx |= (Int(b & 0x7f) << shift)
-                            shift += 7
-                            if (b & 0x80) == 0; leb_end = bi; break; end
-                        end
-                        if leb_end == length(arg_bytes)
-                            # typed channel: the emission's own type.
-                            local src_type = arg_ty
-                            if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                                is_numeric_arg = true
-                            end
-                        end
-                    end
-                    if is_numeric_arg
+                    if _ab_numeric
                         ref_null!(_tupb, ExternRef)
                     else
-                        emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
-                        # Convert internal ref to externref if not already externref
-                        is_already_extern = false
-                        if length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
-                            # dart2wasm carries the type with the value: the source is already
-                            # externref iff the inferred value type is externref.
-                            is_already_extern = (arg_ty === ExternRef)
-                        end
-                        if !is_already_extern
-                            extern_convert_any!(_tupb)
-                        end
+                        append_builder!(_tupb, _ab)
+                        # already-externref values pass through (tracked type, any source)
+                        arg_ty === ExternRef || extern_convert_any!(_tupb)
                     end
                 elseif expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef
-                    # Ref-typed field: check for numeric local or constant mismatch
-                    is_numeric_arg = false
-                    is_numeric_local = false  # TRUE-PARSE-002: distinguish local_get from constant
-                    numeric_src_type = nothing  # TRUE-PARSE-002: for boxing
-                    # SELFHOST-008: Check for numeric constants (i32.const 0 from nothing, etc.)
-                    ends_with_ref_producing_gc = arg_ty !== nothing && _wt_is_ref(arg_ty)
-                    if length(arg_bytes) >= 1 && (arg_bytes[1] == 0x41 || arg_bytes[1] == 0x42 || arg_bytes[1] == 0x43 || arg_bytes[1] == 0x44) && !ends_with_ref_producing_gc
-                        is_numeric_arg = true
-                    elseif length(arg_bytes) >= 2 && arg_bytes[1] == 0x20
-                        src_idx = 0; shift = 0; leb_end = 0
-                        for bi in 2:length(arg_bytes)
-                            byt = arg_bytes[bi]
-                            src_idx |= (Int(byt & 0x7f) << shift)
-                            shift += 7
-                            if (byt & 0x80) == 0; leb_end = bi; break; end
-                        end
-                        if leb_end == length(arg_bytes)
-                            # dart2wasm carries the type with the value: a pure local.get is
-                            # numeric iff the inferred value type is numeric.
-                            local src_type = arg_ty
-                            if src_type === I32 || src_type === I64 || src_type === F32 || src_type === F64
-                                is_numeric_arg = true
-                                is_numeric_local = true
-                                numeric_src_type = src_type
-                            end
-                        end
-                    end
-                    if is_numeric_arg
-                        if is_numeric_local && expected_wasm === AnyRef && numeric_src_type !== nothing
+                    if _ab_numeric
+                        if _ab_is_local && expected_wasm === AnyRef
                             # TRUE-PARSE-002: Box numeric local for anyref tuple field via THE single box emitter.
-                            emit_raw!(_tupb, arg_bytes; pushes=WasmValType[numeric_src_type])
-                            emit_classid_box!(_tupb, ctx, numeric_src_type, nothing)
+                            append_builder!(_tupb, _ab)
+                            emit_classid_box!(_tupb, ctx, arg_ty, nothing)
                         elseif expected_wasm isa ConcreteRef
                             ref_null!(_tupb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
                         else
                             ref_null!(_tupb, expected_wasm isa UInt8 ? RefType(expected_wasm) : StructRef)
                         end
                     else
-                        emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
+                        append_builder!(_tupb, _ab)
                     end
                 else
-                    emit_raw!(_tupb, arg_bytes; pushes=(arg_ty===nothing ? WasmValType[] : WasmValType[arg_ty]))
+                    append_builder!(_tupb, _ab)
                 end
             end
 
