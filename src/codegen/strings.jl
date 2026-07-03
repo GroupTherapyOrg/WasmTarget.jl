@@ -161,26 +161,29 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
 end
 
 """
-    emit_jl_string_to_js!(bytes, decode_func_idx, tmp_local)
+    emit_jl_string_to_js!(b, decode_func_idx)
 
-Emit bytecode to convert a Julia string (WasmGC i8 array on stack) to a
-JS string (externref). Calls the module-level `\$utf8_to_js` helper function.
+Convert a Julia string (WasmGC i8 array on stack) to a JS string via the
+module-level `\$utf8_to_js` helper — builder-native (THE implementation).
 
-**Stack effect:** `[(ref \$str_arr)] → [externref]`
+**Stack effect:** `[(ref \$str_arr)] → [(ref extern)]`
 """
-function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
+function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
     helper_idx = _UTF8_TO_JS_FUNC_IDX[]
     if helper_idx === nothing
         error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
     end
-    # Stack: [i8_arr_ref]
-    # Call $utf8_to_js(i8_arr_ref) → (ref extern)
-    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(helper_idx), byte-identical.
-    # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
-    # build into a local collect-mode builder and splice the result (no seeding needed; the
-    # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
+    # Call $utf8_to_js(i8_arr_ref) → (ref extern), the REAL declared effect.
+    call!(b, helper_idx, WasmValType[ArrayRef], WasmValType[NonNullExternRef])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them).
+`tmp_local` is historical and unused."""
+function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
     ib = InstrBuilder(; func_name="emit_jl_string_to_js")
-    call!(ib, helper_idx, WasmValType[], WasmValType[])
+    seed_input!(ib, WasmValType[ArrayRef])
+    emit_jl_string_to_js!(ib, decode_func_idx)
     append!(bytes, builder_code(ib))
 end
 

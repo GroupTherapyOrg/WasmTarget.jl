@@ -38,10 +38,6 @@ include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
-include("codegen/packages.jl")
-
-# Packages - Domain-specific extensions
-include("packages/statistics.jl")
 
 include("codegen/wasm_constructors.jl")
 
@@ -71,8 +67,6 @@ export wasm_symbol_boundscheck, wasm_symbol_foreigncall
 export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
-export register_package!, list_packages, package_functions, precompile_package
-export compile_with_packages, detect_using_statements, register_builtin_packages!
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE

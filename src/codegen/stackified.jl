@@ -918,13 +918,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
                                 # (cpv takes needs_temp) + the "safety check" re-derivation.
                                 pv_b, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
+                                # NOTE(march3): bytes + declared-top until compile_phi_value's
+                                # INTERIOR is typed — mid-function temp locals are unseeded in
+                                # its fragment builders, so its tracked stack undercounts
+                                # (str_uppercase shard-3 red: the cluster branched on pv_n and
+                                # emitted a bare local.set). Same order lesson as emit_value!.
+                                local pv_bytes = builder_code(pv_b)
                                 if pv_n >= 2
                                     # multi-value emission can't feed one local.set — type-safe default
                                     emit_phi_type_default!(b, phi_local_type)
                                     local_set!(b, local_idx)
                                     phi_count += 1
-                                elseif !isempty(pv_b.instrs)
-                                    append_builder!(b, pv_b)   # typed merge — real tracked effect
+                                elseif !isempty(pv_bytes)
+                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty]))
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
                                         convert_type!(b, pv_ty, phi_local_type, ctx)
                                     end
@@ -1084,11 +1090,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
+                                local pv_bytes2 = builder_code(pv_b2)
                                 if pv_n2 >= 2
                                     emit_phi_type_default!(bb, phi_local_type)
                                     local_set!(bb, local_idx)
-                                elseif !isempty(pv_b2.instrs)
-                                    append_builder!(bb, pv_b2)   # typed merge — real tracked effect
+                                elseif !isempty(pv_bytes2)
+                                    # NOTE(march3): bytes + declared-top (see cluster A note)
+                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty2]))
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
                                         convert_type!(bb, pv_ty2, phi_local_type, ctx)
                                     end
