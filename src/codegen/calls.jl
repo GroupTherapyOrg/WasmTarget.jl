@@ -1392,10 +1392,7 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
             if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
                 # typeId-based check: extract typeId from exception struct + compare
                 any_convert_extern!(bld)
-                let tb = UInt8[]
-                    emit_typeof!(tb, ctx.type_registry.base_struct_idx)
-                    emit_raw!(bld, tb; pops=1, pushes=WasmValType[I32])
-                end
+                emit_typeof!(bld, ctx.type_registry.base_struct_idx)
                 i32_const!(bld, Int64(_isa2_check_tid))
                 num!(bld, Opcode.I32_EQ)
             else
@@ -1539,26 +1536,15 @@ function _compile_call_isa(args, bytes::Vector{UInt8}, ctx::AbstractCompilationC
                 local_tee!(bld, _isa_guard_local)
                 ref_test!(bld, Int64(_base_idx), false)  # ref.test (ref $JlBase)
                 num!(bld, Opcode.I32_EQZ)
-                # if NOT a $JlBase struct → push 0 (false)
-                local _isa_guard_b = InstrBuilder(; func_name="_compile_call_isa.guard", mod=ctx.mod)
-                i32_const!(_isa_guard_b, 0)
-                local _isa_guard_block = builder_code(_isa_guard_b)
-                # else → do the DFS range check
-                local _isa_dfs_b = InstrBuilder(; func_name="_compile_call_isa.dfs", mod=ctx.mod)
-                local_get!(_isa_dfs_b, _isa_guard_local)
-                let tb = UInt8[]
-                    emit_typeof!(tb, _base_idx)
-                    emit_raw!(_isa_dfs_b, tb; pops=1, pushes=WasmValType[I32])
-                end
+                # if (not $JlBase) { 0 } else { dfs range check } — straight on `bld`
+                if_!(bld, I32)  # i32 result type
+                i32_const!(bld, 0)
+                else_!(bld)
+                local_get!(bld, _isa_guard_local)
+                emit_typeof!(bld, _base_idx)
                 # dart's 3-instruction unsigned window via THE single range discriminator
                 # (was tee + ge_s/le_s/and with a temp local).
-                emit_classid_range_check!(_isa_dfs_b, _low, _high)
-                local _isa_dfs_block = builder_code(_isa_dfs_b)
-                # Emit if-else: if (not $JlBase) { 0 } else { dfs_check }
-                if_!(bld, I32)  # i32 result type
-                emit_raw!(bld, _isa_guard_block; pushes=WasmValType[I32])
-                else_!(bld)
-                emit_raw!(bld, _isa_dfs_block; pushes=WasmValType[I32])
+                emit_classid_range_check!(bld, _low, _high)
                 end_block!(bld)
             else
                 # No DFS range for this abstract type — return false

@@ -26,3 +26,19 @@ _m3_try_rethrow(x::Int64)::Int64 = try; x == 3 ? error("boom") : x; catch e; x +
     @test compare_julia_wasm(_m3_try_rethrow, Int64(3)).pass
     @test compare_julia_wasm(_m3_try_rethrow, Int64(7)).pass
 end
+
+# march3 FINDING (pre-existing, silent wrong value — NOT introduced by the march;
+# verified identical on parent 67b09a5^): `isa` over Any[] against a LOCALLY-defined
+# abstract hierarchy returns false for struct members (exp 21, act 3 — each `e isa _AZ`
+# yields false). The registered-at-compile DFS range apparently misses Main-defined
+# hierarchies in the single-entry compile. Track until the isa/classId dimension revisits.
+abstract type _M3AZ end
+struct _M3B1 <: _M3AZ; x::Int64; end
+struct _M3B2 <: _M3AZ; y::Float64; end
+_m3_isa_local_hier(x::Int64)::Int64 =
+    (v = Any[_M3B1(x), _M3B2(2.5), "s"]; c = 0; for e in v; c += e isa _M3AZ ? 10 : 1; end; c)
+
+@testset "march3: isa over Any[] w/ local abstract hierarchy (documented gap)" begin
+    r = try compare_julia_wasm(_m3_isa_local_hier, Int64(1)) catch; (pass=false,) end
+    @test_broken r.pass
+end
