@@ -3798,13 +3798,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
 
         if (arg1_is_nothing && is_ref_type_or_union(arg2_type)) ||
            (arg2_is_nothing && is_ref_type_or_union(arg1_type))
-            # Compile the non-nothing ref argument
-            local val_bytes = UInt8[]
-            if arg1_is_nothing
-                val_bytes, _nv_ty = compile_value_typed(args[2], ctx)
-            else
-                val_bytes, _nv_ty = compile_value_typed(args[1], ctx)
-            end
+            # Compile the non-nothing ref argument (typed channel)
+            local _nv_b = _compile_value_b(arg1_is_nothing ? args[2] : args[1], ctx)
+            local _nv_ty = isempty(_nv_b.v.stack) ? nothing : _nv_b.v.stack[end]
             # typed channel: numeric values can never be null — the emission's own type
             # answers (was a LOCAL_GET LEB decode + const first-byte scan + static re-guess).
             local is_numeric_val = _nv_ty === I32 || _nv_ty === I64 || _nv_ty === F32 || _nv_ty === F64
@@ -3816,7 +3812,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 append!(bytes, builder_code(_neqb))
                 return bytes
             end
-            emit_raw!(_neqb, val_bytes; pushes=WasmValType[AnyRef])
+            append_builder!(_neqb, _nv_b)   # typed merge
             # ref.is_null checks if ref is null (returns i32 1 for null, 0 otherwise)
             ref_is_null!(_neqb)
             if is_func(func, :(!==))
@@ -5602,9 +5598,9 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             end
             if !_throw_used_default
                 # Compile the exception value normally
-                exn_bytes, exn_ty = compile_value_typed(_throw_val, ctx)
-                if !isempty(exn_bytes)
-                    emit_raw!(_thrb, exn_bytes; pushes=(exn_ty===nothing ? WasmValType[] : WasmValType[exn_ty]))
+                local _exn_b = _compile_value_b(_throw_val, ctx)
+                if !isempty(_exn_b.instrs)
+                    append_builder!(_thrb, _exn_b)   # typed merge
                     global_set!(_thrb, exn_global)
                 end
             end
@@ -6390,11 +6386,10 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
             # Locals-first approach: compile each piece into a local, then assemble.
 
             # Step 1: Compile head (Symbol = array<i32>) → local
-            local (_head_bytes, _head_ty) = compile_value_typed(head_arg, ctx)
             # parity(M9): the head Symbol is a CLASSED string value
             head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
             let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_raw!(ib, _head_bytes; pushes=(_head_ty===nothing ? WasmValType[] : WasmValType[_head_ty]))
+                emit_value!(ib, head_arg, ctx)
                 local_set!(ib, head_local)
                 append!(bytes, builder_code(ib))
             end
