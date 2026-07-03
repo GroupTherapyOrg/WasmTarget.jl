@@ -1786,86 +1786,64 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
                                       length(src_stmt.args) >= 4)
             end
         end
-        field0_bytes = compile_value(field_values[1], ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
+        # march3 (typed): the LOCAL_GET LEB decode is gone — the tracked type
+        # answers "is the source numeric where field 0 needs an array ref".
+        local _f0_b = _compile_value_b(field_values[1], ctx)
         if is_multi_arg_memref
             # Multi-arg memoryrefnew pushed [array_ref, i32_index] — drop the i32 index
-            push!(field0_bytes, Opcode.DROP)
+            drop!(_f0_b)
         end
-        if length(field0_bytes) >= 2 && field0_bytes[1] == 0x20  # LOCAL_GET = 0x20
-            src_idx = 0; shift = 0
-            for bi in 2:length(field0_bytes)
-                byt = field0_bytes[bi]
-                src_idx |= (Int(byt & 0x7f) << shift)
-                shift += 7
-                (byt & 0x80) == 0 && break
-            end
-            arr_idx = src_idx - ctx.n_params + 1
-            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                src_type = ctx.locals[arr_idx]
-                if src_type === I64 || src_type === I32
-                    # PURE-325: The local has numeric type but Vector field 0 needs an array ref.
-                    # Before falling back to ref.null, check if the source SSA is a memoryrefnew
-                    # or memorynew result — if so, recompile the source to get the actual array ref.
-                    recompiled = false
-                    if field_values[1] isa Core.SSAValue
-                        src_stmt_f0 = ctx.code_info.code[field_values[1].id]
-                        if src_stmt_f0 isa Expr && src_stmt_f0.head === :call
-                            sf0 = src_stmt_f0.args[1]
-                            is_memref = sf0 isa GlobalRef &&
-                                        (sf0.mod === Core || sf0.mod === Base) &&
-                                        sf0.name in (:memoryrefnew, :memoryref, :memorynew)
-                            if is_memref
-                                # Recompile the source statement to get the actual array ref
-                                field0_bytes = compile_call(src_stmt_f0, field_values[1].id, ctx)
-                                recompiled = true
-                            end
-                        end
-                        # Also check if source is a PiNode wrapping a memoryrefnew
-                        if !recompiled && src_stmt_f0 isa Core.PiNode
-                            field0_bytes = compile_value(src_stmt_f0.val, ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-                            recompiled = true
-                        end
-                    end
-                    if !recompiled
-                        # Non-Array AbstractVector (UnitRange, StepRange) — use ref.null
-                        data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
-                        field0_bytes = UInt8[]
-                        push!(field0_bytes, Opcode.REF_NULL)
-                        append!(field0_bytes, encode_leb128_signed(Int64(data_array_idx)))
+        local _f0_ty = isempty(_f0_b.v.stack) ? nothing : _f0_b.v.stack[end]
+        if _f0_ty === I64 || _f0_ty === I32
+            # PURE-325: numeric source but Vector field 0 needs an array ref.
+            # Before falling back to ref.null, check if the source SSA is a memoryrefnew
+            # or memorynew result — if so, recompile the source to get the actual array ref.
+            recompiled = false
+            if field_values[1] isa Core.SSAValue
+                src_stmt_f0 = ctx.code_info.code[field_values[1].id]
+                if src_stmt_f0 isa Expr && src_stmt_f0.head === :call
+                    sf0 = src_stmt_f0.args[1]
+                    is_memref = sf0 isa GlobalRef &&
+                                (sf0.mod === Core || sf0.mod === Base) &&
+                                sf0.name in (:memoryrefnew, :memoryref, :memorynew)
+                    if is_memref
+                        # Recompile the source statement to get the actual array ref
+                        emit_raw!(b, compile_call(src_stmt_f0, field_values[1].id, ctx))   # god-fn seam (M4 tail)
+                        recompiled = true
                     end
                 end
+                # Also check if source is a PiNode wrapping a memoryrefnew
+                if !recompiled && src_stmt_f0 isa Core.PiNode
+                    emit_value!(b, src_stmt_f0.val, ctx)
+                    recompiled = true
+                end
             end
+            if !recompiled
+                # Non-Array AbstractVector (UnitRange, StepRange) — use ref.null
+                data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
+                ref_null!(b, Int64(data_array_idx), ConcreteRef(UInt32(data_array_idx), true))
+            end
+        else
+            append_builder!(b, _f0_b)   # typed merge
         end
-        emit_raw!(b, field0_bytes)
 
         # Compile field 2: the size tuple (field 0=typeId, field 1=array_ref, field 2=size_tuple)
         if length(field_values) >= 2
-            field1_bytes = compile_value(field_values[2], ctx)  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-            if length(field1_bytes) >= 2 && field1_bytes[1] == Opcode.LOCAL_GET
-                src_idx = 0; shift = 0
-                for bi in 2:length(field1_bytes)
-                    byt = field1_bytes[bi]
-                    src_idx |= (Int(byt & 0x7f) << shift)
-                    shift += 7
-                    (byt & 0x80) == 0 && break
+            # march3 (typed): numeric-typed source where the size TUPLE ref belongs
+            # → ref.null of the tuple type (the LOCAL_GET LEB decode is gone)
+            local _f1_b = _compile_value_b(field_values[2], ctx)
+            local _f1_ty = isempty(_f1_b.v.stack) ? nothing : _f1_b.v.stack[end]
+            if _f1_ty === I64 || _f1_ty === I32
+                size_tuple_type_inner = Tuple{Int64}
+                if !haskey(ctx.type_registry.structs, size_tuple_type_inner)
+                    register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type_inner)
                 end
-                arr_idx = src_idx - ctx.n_params + 1
-                if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                    src_type = ctx.locals[arr_idx]
-                    if src_type === I64 || src_type === I32
-                        # Emit ref.null for the size tuple type instead
-                        size_tuple_type_inner = Tuple{Int64}
-                        if !haskey(ctx.type_registry.structs, size_tuple_type_inner)
-                            register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type_inner)
-                        end
-                        size_info_inner = ctx.type_registry.structs[size_tuple_type_inner]
-                        field1_bytes = UInt8[]
-                        push!(field1_bytes, Opcode.REF_NULL)
-                        append!(field1_bytes, encode_leb128_signed(Int64(size_info_inner.wasm_type_idx)))
-                    end
-                end
+                size_info_inner = ctx.type_registry.structs[size_tuple_type_inner]
+                ref_null!(b, Int64(size_info_inner.wasm_type_idx),
+                          ConcreteRef(UInt32(size_info_inner.wasm_type_idx), true))
+            else
+                append_builder!(b, _f1_b)   # typed merge
             end
-            emit_raw!(b, field1_bytes)
         else
             # No size provided - get array length and create tuple
             # Create Tuple{Int64} struct (typeId + i64 value)
