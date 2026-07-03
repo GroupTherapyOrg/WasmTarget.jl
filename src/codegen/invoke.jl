@@ -3784,7 +3784,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # error("msg") → create ErrorException struct, stash, throw
                 local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
                 if _ee_info !== nothing
-                    local emit_type_id!(berr, ctx.type_registry, ErrorException)
+                    emit_type_id!(berr, ctx.type_registry, ErrorException)
                     # Field 1: msg (ArrayRef for AbstractString)
                     if length(args) >= 1
                         emit_value!(berr, args[1], ctx)

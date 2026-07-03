@@ -175,8 +175,7 @@ function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
     local_get!(bld, lb)
     num!(bld, weqz)
     if_!(bld)
-    let _emit_throw_error_struct!(bld, ctx, DivideError)
-    end
+    _emit_throw_error_struct!(bld, ctx, DivideError)
     end_block!(bld)
     if check_overflow
         # a == typemin(width) && b == -1 → throw DivideError
@@ -189,8 +188,7 @@ function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
         num!(bld, weq)
         num!(bld, Opcode.I32_AND)
         if_!(bld)
-        let _emit_throw_error_struct!(bld, ctx, DivideError)
-        end
+        _emit_throw_error_struct!(bld, ctx, DivideError)
         end_block!(bld)
     end
     local_get!(bld, la)
