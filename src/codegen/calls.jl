@@ -128,15 +128,19 @@ end
 # stash the instance in the $current_exn global, then `throw` tag 0 — the same
 # mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
+"""builder-native front for the throw-error emitter."""
+function _emit_throw_error_struct!(b::InstrBuilder, ctx::AbstractCompilationContext, ErrT)
+    _emit_throw_error_struct!(b, ctx, ErrT)
+    return b
+end
+
 function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, @nospecialize(T))
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, T)
     bld = InstrBuilder(; func_name="_emit_throw_error_struct!", mod=ctx.mod)
     if info !== nothing
-        tb = UInt8[]
-        emit_type_id!(tb, ctx.type_registry, T)
-        emit_raw!(bld, tb; pushes=WasmValType[I32])
+        emit_type_id!(bld, ctx.type_registry, T)
         struct_new!(bld, info.wasm_type_idx, WasmValType[])
     else
         ref_null!(bld, AnyRef)
@@ -171,9 +175,7 @@ function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
     local_get!(bld, lb)
     num!(bld, weqz)
     if_!(bld)
-    let tb = UInt8[]
-        _emit_throw_error_struct!(tb, ctx, DivideError)
-        emit_raw!(bld, tb)
+    let _emit_throw_error_struct!(bld, ctx, DivideError)
     end
     end_block!(bld)
     if check_overflow
@@ -187,9 +189,7 @@ function _emit_div_guard!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext,
         num!(bld, weq)
         num!(bld, Opcode.I32_AND)
         if_!(bld)
-        let tb = UInt8[]
-            _emit_throw_error_struct!(tb, ctx, DivideError)
-            emit_raw!(bld, tb)
+        let _emit_throw_error_struct!(bld, ctx, DivideError)
         end
         end_block!(bld)
     end

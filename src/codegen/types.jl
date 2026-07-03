@@ -356,6 +356,14 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     return result
 end
 
+"""builder-native: push the type's DFS id as i32."""
+function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
+    tb = UInt8[]
+    emit_type_id!(tb, registry, T)
+    emit_raw!(b, tb; pushes=WasmValType[I32])
+    return b
+end
+
 """
     emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
 
