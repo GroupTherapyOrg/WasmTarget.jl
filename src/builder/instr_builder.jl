@@ -348,6 +348,10 @@ ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
 # single on-wire heaptype byte (dart2wasm encodes HeapType directly).
 ref_null!(b::InstrBuilder, rt::RefType) =
     (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
+# ref.null none (heaptype 0x71, the bottom of the any hierarchy — not a RefType enum
+# value; tracked as anyref, which every none ref is a subtype of).
+ref_null_none!(b::InstrBuilder) =
+    (validate_push!(b.v, AnyRef); _emit!(b, InstrIR.RefNullAbstract(0x71)))
 ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefFunc(UInt32(func_idx))))
 ref_is_null!(b::InstrBuilder) = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
