@@ -699,7 +699,7 @@ function _compile_call_flipsign(args, bytes::Vector{UInt8}, ctx::AbstractCompila
 
         # Compute -x using emit_int128_neg
         local_get!(bld, x_struct_local)
-        emit_raw!(bld, emit_int128_neg(ctx, arg_type); pops=1, pushes=(struct_rt === nothing ? WasmValType[] : WasmValType[struct_rt]))
+        emit_int128_neg!(bld, ctx, arg_type)
 
         # Store negated x
         neg_x_local = length(ctx.locals) + ctx.n_params
@@ -3597,8 +3597,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 # Field is anyref — concrete/struct refs are already subtypes of anyref.
                                 # Numerics need boxing. No extern_convert_any needed.
                                 if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                                    local _sfn2a = UInt8[]; emit_numeric_to_anyref!(_sfn2a, value_arg, val_wasm_type, ctx)
-                                    emit_raw!(_sfsb, _sfn2a; pushes=WasmValType[AnyRef])
+                                    emit_numeric_to_anyref!(_sfsb, value_arg, val_wasm_type, ctx)
                                 else
                                     # anyref, externref→any.convert_extern, or concrete ref (subtype of anyref)
                                     emit_value!(_sfsb, value_arg, ctx)
@@ -3612,8 +3611,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                     emit_value!(_sfsb, value_arg, ctx)
                                 elseif val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                                     # PURE-4150: Numeric type → box then convert
-                                    local _sfn2e = UInt8[]; emit_numeric_to_externref!(_sfn2e, value_arg, val_wasm_type, ctx)
-                                    emit_raw!(_sfsb, _sfn2e; pushes=WasmValType[ExternRef])
+                                    emit_numeric_to_externref!(_sfsb, value_arg, val_wasm_type, ctx)
                                 else
                                     # Concrete/abstract ref → extern_convert_any
                                     emit_value!(_sfsb, value_arg, ctx)
@@ -3631,7 +3629,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                                 emit_value!(_sfsb, value_arg, ctx)
                             else
                                 # Ref-typed field: ref.null none (bottom of internal ref hierarchy)
-                                emit_raw!(_sfsb, UInt8[Opcode.REF_NULL, 0x71]; pushes=WasmValType[AnyRef])  # none heap type (NOT 0x6E which is any)
+                                ref_null_none!(_sfsb)
                             end
                         else
                             emit_value!(_sfsb, value_arg, ctx)

@@ -199,15 +199,12 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
 end
 
 """
-Emit 128-bit negation: -x = ~x + 1 = (0, 0) - x
-Stack: [x_struct] -> [result_struct]
+Emit 128-bit negation: -x = ~x + 1 = (0, 0) - x.
+Builder-native (THE implementation): consumes [x_struct] from `b`'s stack, pushes -x.
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct], pushes -x struct (two's complement).
-function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
 
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -235,6 +232,15 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_neg!(b, ctx, result_type)
     return builder_code(b)
 end
 
