@@ -1949,9 +1949,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             return builder_code(b)
         end
         if _exn_info.field_offset > 0
-            _tid = UInt8[]
-            emit_type_id!(_tid, ctx.type_registry, struct_type)
-            emit_raw!(b, _tid)
+            emit_type_id!(b, ctx.type_registry, struct_type)   # classId, field 0
         end
         for (fi, val) in enumerate(field_values)
             _wfi = fi + Int(_exn_info.field_offset)
@@ -2013,9 +2011,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
 
     # PURE-9024/9025: Push typeId (i32) as field 0 before Julia field values
     if info.field_offset > 0
-        _tid = UInt8[]
-        emit_type_id!(_tid, ctx.type_registry, struct_type)
-        emit_raw!(b, _tid)
+        emit_type_id!(b, ctx.type_registry, struct_type)   # classId, field 0
     end
 
     # Push field values in order, handling Union field types

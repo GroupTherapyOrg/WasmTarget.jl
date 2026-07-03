@@ -1688,7 +1688,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     end
     # Read dispatch typeId into a local.
     local_get!(bld, arg_locals[dpos])
-    tof = UInt8[]; emit_typeof!(tof, base_idx); emit_raw!(bld, tof; pops=1, pushes=WasmValType[I32])
+    emit_typeof!(bld, base_idx)
     tid_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I32)
     local_set!(bld, tid_local)
 
@@ -1719,7 +1719,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         if_!(bld, result_wasm === nothing ? 0x40 : result_wasm)
         local _bbr_b = InstrBuilder(; func_name="_try_inline_typeid_dispatch.branch", mod=ctx.mod)
         emit_branch(_bbr_b, tid, cw, c)
-        emit_raw!(bld, builder_code(_bbr_b); pushes=(result_wasm === nothing ? WasmValType[] : WasmValType[result_wasm]))
+        append_builder!(bld, _bbr_b)   # typed merge
         else_!(bld)
     end
     unreachable!(bld)  # structural trap (dart-legit dead path)

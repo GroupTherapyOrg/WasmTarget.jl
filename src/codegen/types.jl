@@ -425,12 +425,19 @@ Emit bytecode to extract typeId (field 0) from a struct reference on the stack.
 Assumes the value on top of the stack is a struct ref (or anyref that can be cast).
 Result: i32 typeId on the stack.
 """
-function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
-    b = InstrBuilder(; func_name="emit_typeof!")
+function emit_typeof!(b::InstrBuilder, base_idx::UInt32)
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
     # struct.get $JlBase 0 — extract typeId field
     struct_get!(b, base_idx, UInt32(0), I32)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
+    b = InstrBuilder(; func_name="emit_typeof!")
+    seed_input!(b, WasmValType[AnyRef])
+    emit_typeof!(b, base_idx)
     append!(bytes, builder_code(b))
 end
 
