@@ -813,7 +813,9 @@ Modifies `bytes` in-place.
 function _compile_call_egaleq(args, bytes::Vector{UInt8}, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     bld = InstrBuilder(; func_name="_compile_call_egaleq", mod=ctx.mod)
     if is_128bit
-        emit_raw!(bld, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
+        local _i128sr = _int128_structref(ctx, arg_type)
+        seed_input!(bld, WasmValType[_i128sr, _i128sr])
+        emit_int128_eq!(bld, ctx, arg_type)
     elseif arg_type === Float64
         num!(bld, Opcode.F64_EQ)
     elseif arg_type === Float32

@@ -26,7 +26,8 @@ end
 # calls.jl appending its value emission AFTER the pre-pushed args (doubled bytes), and
 # (2) the convert/typeassert results staying erased-Any so the result local typed anyref
 # while the store carried the refined i64 — fixed by refine_checked_cast_types! (dart
-# `as T`: the cast's static type IS T, code_generator.dart visitAsExpression).
+# `as T`: a statically-satisfied cast is wrap(operand, target) typed by the target,
+# code_generator.dart:3100-3102 visitAsExpression isUnchecked path).
 # top-level so the entries are singleton functions, not capturing closures —
 # a closure-typed ENTRY can't cross the JS arg boundary in run_wasm.
 @noinline mkn_g(n::Int64) = (c = 0; inc = () -> (c += n; c); inc)

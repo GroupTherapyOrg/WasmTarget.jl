@@ -640,12 +640,16 @@ function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     return bytes
 end
 
-# parity(M10b): a CHECKED CAST carries its target type — dart's `as T`
-# (code_generator.dart visitAsExpression: the cast expression's static type IS T).
+# parity(M10b): a CAST carries its target type — dart's `as T`
+# (code_generator.dart:3100 visitAsExpression: a statically-satisfied cast —
+# `omitExplicitTypeChecks || node.isUnchecked` — is EXACTLY `wrap(operand,
+# expectedType)`: the operand through the one wrap channel, typed by the target).
 # `convert(T, x)` / `typeassert(x, T)` results that inference left erased refine
 # to T when the join already proves x carries exactly T (the identity cast the
-# calls.jl arm lowers value-only) — the result local then types as T, so the
-# store and every load agree (the escaping-closure i64-into-anyref invalid store).
+# calls.jl arm lowers value-only, = dart's isUnchecked path) — the result local
+# then types as T, so the store and every load agree (the escaping-closure
+# i64-into-anyref invalid store). A genuinely-dynamic cast stays a loud reject
+# (correct-or-loud) until dart's emitAsCheck analog lands.
 function refine_checked_cast_types!(ctx::AbstractCompilationContext, code)
     _cres(a) = a isa GlobalRef ? (isdefined(a.mod, a.name) ? getglobal(a.mod, a.name) : nothing) : a
     for (_ck, _cstmt) in enumerate(code)
