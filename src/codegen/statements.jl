@@ -1260,41 +1260,16 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         # When stmt_bytes starts with a "memoryref pair" (local_get X, local_get Y)
         # followed by the SAME pair + an operation, the leading pair is orphaned.
         # Strip the leading orphaned local_gets.
-        if !ssa_type_mismatch && !is_orphaned_multi_value && haskey(ctx.ssa_locals, idx) && length(stmt_bytes) >= 8
-            # Check if bytes start with local_get X, local_get Y pattern
-            if stmt_bytes[1] == 0x20
-                # Parse first local_get
-                _fg_idx1 = 0; _fg_shift = 0; _fg_end1 = 0
-                for _bi in 2:length(stmt_bytes)
-                    byt = stmt_bytes[_bi]
-                    _fg_idx1 |= (Int(byt & 0x7f) << _fg_shift)
-                    _fg_shift += 7
-                    if (byt & 0x80) == 0; _fg_end1 = _bi; break; end
-                end
-                if _fg_end1 > 0 && _fg_end1 < length(stmt_bytes) && stmt_bytes[_fg_end1 + 1] == 0x20
-                    # Parse second local_get
-                    _fg_idx2 = 0; _fg_shift = 0; _fg_end2 = 0
-                    for _bi in (_fg_end1 + 2):length(stmt_bytes)
-                        byt = stmt_bytes[_bi]
-                        _fg_idx2 |= (Int(byt & 0x7f) << _fg_shift)
-                        _fg_shift += 7
-                        if (byt & 0x80) == 0; _fg_end2 = _bi; break; end
-                    end
-                    pair_len = _fg_end2  # Length of the leading pair [get X, get Y]
-                    if _fg_end2 > 0 && pair_len < length(stmt_bytes)
-                        # Check if the SAME pair appears again after the first pair
-                        remaining = @view stmt_bytes[pair_len+1:end]
-                        if length(remaining) > pair_len
-                            prefix = @view stmt_bytes[1:pair_len]
-                            next_prefix = @view remaining[1:pair_len]
-                            if prefix == next_prefix
-                                # Leading pair is duplicated — strip it (it would be orphaned)
-                                stmt_bytes = stmt_bytes[pair_len+1:end]
-                            end
-                        end
-                    end
-                end
-            end
+        # march4 Phase B: the duplicated-leading-pair strip is FOUR node compares
+        # (was two LEB parses + @view prefix comparison + a byte-slice reassign).
+        if !ssa_type_mismatch && !is_orphaned_multi_value && haskey(ctx.ssa_locals, idx) &&
+           length(_sf.instrs) >= 4 &&
+           _sf.instrs[1] isa InstrIR.LocalGet && _sf.instrs[2] isa InstrIR.LocalGet &&
+           _sf.instrs[3] isa InstrIR.LocalGet && _sf.instrs[4] isa InstrIR.LocalGet &&
+           _sf.instrs[1].idx == _sf.instrs[3].idx && _sf.instrs[2].idx == _sf.instrs[4].idx
+            # Leading pair is duplicated — strip it (it would be orphaned)
+            deleteat!(_sf.instrs, 1:2)
+            stmt_bytes = builder_code(_sf)
         end
 
         if !ssa_type_mismatch && !is_orphaned_multi_value
