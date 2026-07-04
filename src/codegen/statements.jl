@@ -1303,7 +1303,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         # The unreachable instruction is polymorphic and satisfies any type expectation
         stmt_type_check = get(ctx.ssa_types, idx, Any)
         if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
-           !(length(stmt_bytes) >= 1 && stmt_bytes[end] == Opcode.UNREACHABLE)
+           !(!isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.Unreachable)
             local _urb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
             unreachable!(_urb)  # structural trap (dart-legit dead path)
             append!(bytes, builder_code(_urb))
@@ -1313,24 +1313,12 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         if haskey(ctx.ssa_locals, idx) && !ssa_type_mismatch
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
-            # PURE-6005: The bytecode check for DROP+UNREACHABLE (0x1a 0x00) can false-positive
-            # on struct_get operands: struct_get type_26 field_0 = [0xfb 0x02 0x1a 0x00]
-            # where type_idx=26 (0x1a=DROP) and field_idx=0 (0x00=UNREACHABLE).
-            # Guard: also require that no GC_PREFIX (0xfb) appears in the last 4 bytes,
-            # since real DROP+UNREACHABLE never follows a GC instruction's operands.
-            _has_gc_in_tail = false
-            if length(stmt_bytes) >= 3
-                for _tbi in max(1, length(stmt_bytes)-3):(length(stmt_bytes)-2)
-                    if stmt_bytes[_tbi] == Opcode.GC_PREFIX
-                        _has_gc_in_tail = true
-                        break
-                    end
-                end
-            end
-            is_unreachable_bytecode = (length(stmt_bytes) >= 2 &&
-                                       stmt_bytes[end] == Opcode.UNREACHABLE &&
-                                       stmt_bytes[end-1] == Opcode.DROP &&
-                                       !_has_gc_in_tail) ||
+            # march4 Phase B: DROP+UNREACHABLE tail is two node-kind tests — the
+            # PURE-6005 false-positive class (struct_get operand bytes 0x1a 0x00)
+            # cannot exist at the ir/ layer, so its GC-in-tail guard is gone too.
+            is_unreachable_bytecode = (length(_sf.instrs) >= 2 &&
+                                       _sf.instrs[end] isa InstrIR.Unreachable &&
+                                       _sf.instrs[end-1] isa InstrIR.Drop) ||
                                       _stmt_ends_unreachable  # PURE-908: catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
