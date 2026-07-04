@@ -1002,7 +1002,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     elseif stmt.head === :invoke
                         emit_raw!(b, compile_invoke(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     elseif stmt.head === :new
-                        emit_raw!(b, compile_new(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
+                        compile_new!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :foreigncall
                         emit_raw!(b, compile_foreigncall(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     end

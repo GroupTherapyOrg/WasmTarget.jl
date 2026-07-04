@@ -1626,13 +1626,9 @@ function _append_default!(buf::Vector{UInt8}, wasm_type; eqref::Bool=true)
     return buf
 end
 
-function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    # MIGRATED to InstrBuilder: straight-line emission goes through typed methods on `b`
-    # in source order; field-value branches build local `_bytes` buffers and LEB-decode
-    # them (the LOCAL_GET source-type checks) then splice via emit_raw!; external emit_*!
-    # helpers (emit_unsupported_stub!, emit_type_id!, _exn_field_null_or_zero!) build into
-    # a local temp buffer then bridge via emit_raw!. Stays strict=false (byte-inspecting).
-    b = InstrBuilder(; func_name="compile_new", mod=ctx.mod)
+"""dart visitConstructorInvocation shape (march4): emits the struct construction
+INTO the caller's builder and returns it — THE implementation."""
+function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
 
     # expr.args[1] is the type, rest are field values
     struct_type_ref = expr.args[1]
@@ -1658,7 +1654,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "struct construction (:new) with a non-constant type — type instability"; idx=idx,
                 detail=ssa_type)
-            return builder_code(b)
+            return b
         end
     elseif struct_type_ref isa Core.Argument
         # Constructor bodies reference the constructed type as Core.Argument(1)
@@ -1674,7 +1670,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
                 detail=new_ssa_type)
-            return builder_code(b)
+            return b
         end
     else
         error("Unknown struct type reference: $struct_type_ref")
@@ -1687,7 +1683,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
        length(struct_type.parameters) >= 1 && struct_type.parameters[1] === UInt8 &&
        length(field_values) >= 1
         emit_value!(b, field_values[1], ctx)
-        return builder_code(b)
+        return b
     end
 
     # Special case: Dict{K,V} construction
@@ -1743,7 +1739,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         # struct.new
         struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
 
-        return builder_code(b)
+        return b
     end
 
     # Special case: Vector{T} construction
@@ -1856,7 +1852,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
 
         # Create the Vector struct (already has typeId from above)
         struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
-        return builder_code(b)
+        return b
     end
 
     # PURE-049: MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
@@ -1871,14 +1867,14 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
         end
-        return builder_code(b)
+        return b
     end
     if struct_type isa DataType && struct_type.name.name in (:Memory, :GenericMemory)
         # Memory{T} — emit ref.null of the array type (we can't construct raw memory in Wasm)
         elem_type = eltype(struct_type)
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
-        return builder_code(b)
+        return b
     end
 
     # PURE-325 / P2-batch17: Error constructors used to compile to a bare
@@ -1901,7 +1897,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         if _exn_info === nothing || !(_exn_def isa StructType)
             record_unsupported!(ctx, :unsupported_method, "exception struct unregistered (cannot construct)"; idx=idx)
             unreachable!(b)
-            return builder_code(b)
+            return b
         end
         if _exn_info.field_offset > 0
             emit_type_id!(b, ctx.type_registry, struct_type)   # classId, field 0
@@ -1950,7 +1946,7 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             _exn_field_null_or_zero!(b, _exn_def.fields[_pad_fi].valtype)
         end
         struct_new!(b, _exn_info.wasm_type_idx)   # mod-resolved fields (march3)
-        return builder_code(b)
+        return b
     end
 
     # Get the registered struct info
@@ -2331,6 +2327,14 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
     # struct.new type_idx
     struct_new!(b, info.wasm_type_idx)   # mod-resolved fields (march3)
 
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    b = InstrBuilder(; func_name="compile_new", mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
+    compile_new!(b, expr, idx, ctx)
     return builder_code(b)
 end
 
