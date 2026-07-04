@@ -1910,8 +1910,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
             _wfi = fi + Int(_exn_info.field_offset)
             _fwasm = _wfi <= length(_exn_def.fields) ? _exn_def.fields[_wfi].valtype : nothing
             # typed channel: the emission's own type decides (re-guess + recompile deleted)
-            _vbytes, _vwasm = compile_value_typed(val, ctx)
-            _emit_v!() = emit_raw!(b, _vbytes; pushes=WasmValType[_vwasm])
+            local _v_b = _compile_value_b(val, ctx)
+            local _vwasm = isempty(_v_b.v.stack) ? nothing : _v_b.v.stack[end]
+            _emit_v!() = append_builder!(b, _v_b)   # typed merge
             _emitted = false
             if _fwasm !== nothing && _vwasm !== nothing
                 if _fwasm === _vwasm

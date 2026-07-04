@@ -248,9 +248,10 @@ function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::Abstra
         return true
     end
 
-    value_bytes, vty = compile_value_typed(val, ctx)
-    isempty(value_bytes) && return false   # caller falls back (unresolvable value)
-    emit_raw!(b, value_bytes; pushes=(vty === nothing ? WasmValType[] : WasmValType[vty]))
+    local _pv_vb = _compile_value_b(val, ctx)
+    local vty = isempty(_pv_vb.v.stack) ? nothing : _pv_vb.v.stack[end]
+    isempty(_pv_vb.instrs) && return false   # caller falls back (unresolvable value)
+    append_builder!(b, _pv_vb)   # typed merge
     if vty === nothing
         # Dead path — the emission ended unreachable; nothing executes after it.
         return true
