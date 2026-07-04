@@ -913,37 +913,14 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # of an ht_keyindex2_shorthash! invoke (composition-only null deref:
                 # only modules with enough locals reach index 379). Same misparse
                 # class as the i32.const-32 byte-scan bug (gap a1b2c32const).
-                if !needs_type_safe_default && length(stmt_bytes) >= 4 && local_wasm_type isa ConcreteRef
-                    sg_pos = 0
-                    local _sg_li = _last_instr_start(stmt_bytes)
-                    if _sg_li > 0 && _sg_li + 1 <= length(stmt_bytes) &&
-                       stmt_bytes[_sg_li] == Opcode.GC_PREFIX && stmt_bytes[_sg_li + 1] == Opcode.STRUCT_GET
-                        sg_pos = _sg_li
-                    end
-                    if sg_pos > 0 && sg_pos + 2 <= length(stmt_bytes)
-                        # Decode type_idx LEB128
-                        sg_type_idx = 0
-                        sg_shift = 0
-                        sg_bi = sg_pos + 2
-                        while sg_bi <= length(stmt_bytes)
-                            byt = stmt_bytes[sg_bi]
-                            sg_type_idx |= (Int(byt & 0x7f) << sg_shift)
-                            sg_shift += 7
-                            sg_bi += 1
-                            (byt & 0x80) == 0 && break
-                        end
-                        # Decode field_idx LEB128
-                        sg_field_idx = 0
-                        sg_shift = 0
-                        while sg_bi <= length(stmt_bytes)
-                            byt = stmt_bytes[sg_bi]
-                            sg_field_idx |= (Int(byt & 0x7f) << sg_shift)
-                            sg_shift += 7
-                            sg_bi += 1
-                            (byt & 0x80) == 0 && break
-                        end
-                        # Check: is the struct_get the LAST instruction? (sg_bi - 1 == length)
-                        if sg_bi - 1 == length(stmt_bytes) && sg_type_idx + 1 <= length(ctx.mod.types)
+                if !needs_type_safe_default && local_wasm_type isa ConcreteRef &&
+                   !isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.StructGet &&
+                   _sf.instrs[end].op == Opcode.STRUCT_GET
+                    # march4 Phase B: the tail node carries type_idx + field — the
+                    # forward LEB parse (added for the local.get-379 misparse, gap
+                    # a6c6091b2a80) is unnecessary at the ir/ layer.
+                    let sg_type_idx = Int(_sf.instrs[end].idx), sg_field_idx = Int(_sf.instrs[end].field)
+                        if sg_type_idx + 1 <= length(ctx.mod.types)
                             mod_type = ctx.mod.types[sg_type_idx + 1]
                             if mod_type isa StructType && sg_field_idx + 1 <= length(mod_type.fields)
                                 field_result_type = mod_type.fields[sg_field_idx + 1].valtype
