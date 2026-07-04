@@ -1552,7 +1552,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
     end
 
-    emit_raw!(b, bytes)
+    emit_raw!(b, bytes)   # god-fn seam (M4 tail): the accumulator's ONE exit
     return builder_code(b)
 end
 

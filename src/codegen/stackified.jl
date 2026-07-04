@@ -655,7 +655,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # pops=1-style typed splice (declared push)
+                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # god-fn seam (M4 tail)
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)
@@ -1116,7 +1116,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
             else
                 stmt_bytes = compile_statement(stmt, i, ctx)
-                emit_raw!(bb, stmt_bytes)
+                emit_raw!(bb, stmt_bytes)   # god-fn seam (M4 tail)
 
                 # DEBUG: trace DROP emissions
                 _dbg_fn = try string(ctx.func_name) catch; "" end

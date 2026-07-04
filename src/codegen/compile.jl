@@ -3501,7 +3501,7 @@ function run_selfhost_v2()::Vector{UInt8}
 
     # Statement 3: return SSA(2) — use REAL compile_statement for ReturnNode
     ret_node = Core.ReturnNode(Core.SSAValue(2))
-    emit_raw!(b, compile_statement(ret_node, 3, ctx); pops=1)
+    emit_raw!(b, compile_statement(ret_node, 3, ctx); pops=1)   # god-fn seam (M4 tail)
 
     end_block!(b)
 

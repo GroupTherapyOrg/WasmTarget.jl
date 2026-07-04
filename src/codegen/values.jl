@@ -690,7 +690,7 @@ ref.cast + struct.get when needed.
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
 """builder-native variant: emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
-    emit_raw!(b, compile_condition_to_i32(cond, ctx); pushes=WasmValType[I32])
+    emit_raw!(b, compile_condition_to_i32(cond, ctx); pushes=WasmValType[I32])   # god-fn seam (M4 tail)
     return b
 end
 
@@ -861,7 +861,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         local _nw = _nt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
                     julia_to_wasm_type(_nt) : nothing
         local _decl = _nw !== nothing && !_wt_is_ref(_nw)
-        emit_raw!(b, nb; pops=(_decl ? 1 : 0),
+        emit_raw!(b, nb; pops=(_decl ? 1 : 0),   # god-fn seam (M4 tail): the narrow channel
                   pushes=(_decl ? WasmValType[_nw] : WasmValType[]))
     end
 
@@ -998,13 +998,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     # orphan-prevention skip for multi-arg memoryrefnew.
                     local _ssa_t = WasmValType[static_wasm_type(val, ctx)]
                     if stmt.head === :call
-                        emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)
+                        emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     elseif stmt.head === :invoke
-                        emit_raw!(b, compile_invoke(stmt, val.id, ctx); pushes=_ssa_t)
+                        emit_raw!(b, compile_invoke(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     elseif stmt.head === :new
-                        emit_raw!(b, compile_new(stmt, val.id, ctx); pushes=_ssa_t)
+                        emit_raw!(b, compile_new(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     elseif stmt.head === :foreigncall
-                        emit_raw!(b, compile_foreigncall(stmt, val.id, ctx); pushes=_ssa_t)
+                        emit_raw!(b, compile_foreigncall(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
                     end
                 end
             end
