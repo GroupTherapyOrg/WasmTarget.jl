@@ -1594,13 +1594,15 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 continue
             end
             field_val = getfield(val, field_name)
-            field_val_bytes, _fv_ty = compile_value_typed(field_val, ctx)
+            local _fvc_b = _compile_value_b(field_val, ctx)
+            local _fv_ty = isempty(_fvc_b.v.stack) ? nothing : _fvc_b.v.stack[end]
+            local _fvc_done = false
             # B4/U2: the union-typed-field tagged-union-wrapper box-coercion is RETIRED — a
             # union field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper, so the constant's field value (a ref) is already anyref-compatible.
             # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
             # emit ref.null for the field's expected type
-            if isempty(field_val_bytes)
+            if isempty(_fvc_b.instrs)
                 local _empty_fi = fi + Int(info.field_offset)
                 if struct_type_def isa StructType && _empty_fi <= length(struct_type_def.fields)
                     empty_field_type = struct_type_def.fields[_empty_fi].valtype
@@ -1653,16 +1655,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         else
                             ref_null!(b, StructRef)
                         end
-                        field_val_bytes = UInt8[]
+                        _fvc_done = true
                         replaced = true
                     end
                 end
             end
-            # declared-top splice (NOT a full merge — the interior isn't typed yet);
-            # nothing is declared for the replaced/empty case (the ref_null! above
-            # already pushed the real value — the old +1 AnyRef phantom is gone).
-            isempty(field_val_bytes) ||
-                emit_raw!(b, field_val_bytes; pushes=WasmValType[_fv_ty === nothing ? AnyRef : _fv_ty])
+            _fvc_done || isempty(_fvc_b.instrs) || append_builder!(b, _fvc_b)   # typed merge
             # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
             # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
