@@ -998,7 +998,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     # orphan-prevention skip for multi-arg memoryrefnew.
                     local _ssa_t = WasmValType[static_wasm_type(val, ctx)]
                     if stmt.head === :call
-                        emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)   # god-fn seam (M4 tail)
+                        compile_call!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :invoke
                         compile_invoke!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :new
