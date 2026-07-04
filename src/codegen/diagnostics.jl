@@ -238,7 +238,20 @@ Do NOT use this for (A) structural dead-code unreachables (genuinely-unreachable
 validator requires) or (B) native-throws parity stubs (`Union{}`-return / `throw_*`/`kwerr`
 helpers) — those stay bare `unreachable` (sound; erroring would reject most of Base — see
 `test/fuzz/STRICT_MODE_INVENTORY.md`).
+
+Builder-native form (first method): emits its unreachable straight on `b`.
 """
+function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
+                                construct::AbstractString; idx::Int=0, detail=nothing,
+                                soundness_fatal::Bool=true)
+    local _code2 = try ctx.code_info.code catch; nothing end
+    local _me2 = idx > 0 && _code2 !== nothing && stmt_must_execute(_code2, idx)
+    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail, soundness_fatal=(soundness_fatal && _me2))
+    unreachable!(b)
+    ctx.last_stmt_was_stub = true
+    return nothing
+end
+
 function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)

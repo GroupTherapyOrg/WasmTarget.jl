@@ -200,8 +200,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     # unreachable must be structurally valid WASM, and continuing to compile produces invalid
     # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
     if ctx.last_stmt_was_stub
-        push!(bytes, 0x00)  # unreachable — keeps stack polymorphic
-        emit_raw!(b, bytes)
+        unreachable!(b)   # structural trap (dead-block continuation; keeps stack polymorphic)
         return builder_code(b)
     end
 
@@ -220,12 +219,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
        !(stmt isa Core.GotoNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.PhiNode) &&
        !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
         if haskey(ctx.slot_locals, _slot_assign_id)
-            # MIGRATED: compile_value bridges via emit_raw!; slot local.set typed on `b`.
-            emit_value!(b, stmt, ctx)
+            emit_value!(b, stmt, ctx)   # THE typed value channel
             local_set!(b, ctx.slot_locals[_slot_assign_id])
         end
-        emit_raw!(b, bytes)
-        return builder_code(b)
+        return builder_code(b)   # `bytes` untouched on this path
     end
 
     if stmt isa Core.ReturnNode
@@ -1658,11 +1655,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         else
             # :new of a struct whose type isn't statically known (dynamic SSAValue type) —
             # type instability. Loud reject (constructs an object natively).
-            _stub = UInt8[]
-            emit_unsupported_stub!(ctx, _stub, :unsupported_type,
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "struct construction (:new) with a non-constant type — type instability"; idx=idx,
                 detail=ssa_type)
-            emit_raw!(b, _stub)
             return builder_code(b)
         end
     elseif struct_type_ref isa Core.Argument
@@ -1676,11 +1671,9 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
         else
             # :new where the constructed type (Core.Argument #self#) can't be resolved to a
             # concrete struct — type instability. Loud reject.
-            _stub = UInt8[]
-            emit_unsupported_stub!(ctx, _stub, :unsupported_type,
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
                 detail=new_ssa_type)
-            emit_raw!(b, _stub)
             return builder_code(b)
         end
     else
