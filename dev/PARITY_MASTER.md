@@ -379,3 +379,46 @@ struct.get emissions (prefix+opcode, no immediates — latent invalid wasm on un
 structs) became loud rejects; three regex-induced self-recursions caught by smoke before
 commit (one after — reverted within minutes, root-caused, the lesson re-learned: smoke
 BEFORE commit, no exceptions).
+
+## MARCH 3 — THE GOD-FN INTERIOR CONVERSION (2026-07-03/04, branch `wt-parity-march3`)
+
+**R2: 143 → 18, LOCK L12 flipped.** The overnight march that converted the god-fn
+interior splice mass to typed emission, audit-first.
+
+**THE MECHANISM (`append_builder!`):** builders record their seeds; the typed merge
+replays a fragment's REAL tracked effect at the ir/ layer — human-declared pops/pushes
+lies are impossible at converted seams. Landed with `struct_new!(b, type_idx)`
+(mod-resolved field lists — the empty-list fudge that phantom-tracked every constant's
+operands is dead REPO-WIDE) and zero-byte splices recording no instruction.
+
+**THE METHOD (audit-first):** permanent `WT_AUDIT_VALUE_STACK` hooks in
+compile_value_typed + compile_phi_value enumerate every model liar; the channel
+inversions flipped only after the audit read ZERO across smoke + the heaviest shards.
+The order lesson (interiors before channel inversions) was proven three times by
+one-line wat diffs and is documented at every guarded site.
+
+**DEAD BYTE-SCANNING (the disease this march existed to kill):** ~17 LEB-decode walks
+and ~25 first-byte sniffs deleted across compile_new's field weave, Core.tuple args,
+memoryrefset!/push!/setindex! value channels, the struct-constant branch, PiNode's
+multi-value scan, the isa DFS blocks, and the extern bridges — every decision now reads
+the TRACKED TYPE dart carries with every value.
+
+**FIXED EN ROUTE:** the escaping closure CLOSED (M10b: checked casts carry their target
+type per code_generator.dart:3100 + the identity-convert double-emission); the
+throw-arm-past-the-leave silent miscompile (dispatch to the stackified driver — ONE
+lowering); two latent outer-scope boxing bugs (push!/setindex! boxed ReturnNode-scope
+variables); a latent double extern-convert; the phantom +1 declares in the struct
+field/replaced paths. FINDING pinned (@test_broken): isa over Any[] vs locally-defined
+abstract hierarchies silently false — the DFS range misses Main-defined hierarchies.
+
+**LOCK L12_god_fn_seams_only (the march's exit):** every remaining emit_raw! (15 real
+sites) is a machine-verified annotated god-fn seam or front — the four god-fn junctions,
+compile_statement's products + accumulator exit, the condition/try_catch products, the
+narrow channel, three fronts. The class is CLOSED to new members; R2 falls only by
+killing seams.
+
+**THE REMAINDER (the next march, M4 tail):** the arm-by-arm god-fn decomposition —
+compile_call/compile_invoke/compile_new/compile_statement builder-native (the
+pre-pushed-args pattern dies; dart visitors emit their own args), which dissolves the
+fronts + junctions (R2 18 → 0), kills the stackifier's drop byte-sniff via real tracked
+heights, then R3 (136) to its floor and the fresh dart certification re-audit.
