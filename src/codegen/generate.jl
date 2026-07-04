@@ -833,16 +833,16 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
-"""builder-native front for the catch-region compiler."""
-function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
-    _tb = UInt8[]
-    _compile_catch_region!(_tb, ctx, code, from, to)
-    emit_raw!(b, _tb)
-    return b
-end
-
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     b = InstrBuilder(; func_name="_compile_catch_region!", mod=ctx.mod)
+    _compile_catch_region!(b, ctx, code, from, to)
+    append!(bytes, builder_code(b))
+    return bytes
+end
+
+"""builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
+function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     i = from
     while i <= to
         stmt = code[i]
@@ -885,8 +885,7 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
             i += 1
         end
     end
-    append!(bytes, builder_code(b))
-    return bytes
+    return b
 end
 
 function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
