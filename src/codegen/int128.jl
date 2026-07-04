@@ -350,10 +350,8 @@ Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_s b) || (a == b)
 """
 # MIGRATED to InstrBuilder. (a <_s b) || (a == b); composes slt + eq via emit_raw!.
-function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_sle!(b::InstrBuilder, ctx, arg_type::Type)
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
 
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -370,6 +368,15 @@ function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
     emit_int128_eq!(b, ctx, arg_type)
     # (a < b) || (a == b)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_sle!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -379,10 +386,8 @@ Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_u b) || (a == b)
 """
 # MIGRATED to InstrBuilder. (a <_u b) || (a == b); composes ult + eq via emit_raw!.
-function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_ule!(b::InstrBuilder, ctx, arg_type::Type)
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
 
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -399,6 +404,15 @@ function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
     emit_int128_eq!(b, ctx, arg_type)
     # (a < b) || (a == b)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_ule!(b, ctx, arg_type)
     return builder_code(b)
 end
 
