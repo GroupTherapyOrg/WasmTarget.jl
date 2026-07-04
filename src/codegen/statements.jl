@@ -153,24 +153,12 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
     return _fail("depth", arg)
 end
 
-"""parity(M11): THE statement front — the ONE seam where legacy statement bytes
-enter a typed builder (dart: one code generator, one builder). All drivers route here."""
+"""
+Compile a single IR statement — dart's ONE code generator, ONE builder (march4
+Phase C): THE visitor emits directly into the caller's builder; the byte era's
+front seam and accumulator are gone.
+"""
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
-    emit_raw!(b, compile_statement(stmt, idx, ctx))   # THE front seam
-    return b
-end
-
-"""
-Compile a single IR statement to Wasm bytecode.
-"""
-function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    # MIGRATED to InstrBuilder (byte-INSPECTING fn): `bytes` stays a local UInt8[]
-    # accumulator — every branch LEB-decodes / scans it (e.g. the n_drops debug loop,
-    # the trailing-local.get type checks, the DROP+UNREACHABLE bytecode probe) and
-    # external emit_*! helpers mutate it. Only the FINAL splice goes through the typed
-    # builder via emit_raw!, so the output is byte-identical. Stays strict=false.
-    b = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-    _seed_builder_locals!(b, ctx)
 
     # PURE-6027: Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
@@ -201,7 +189,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
     if ctx.last_stmt_was_stub
         unreachable!(b)   # structural trap (dead-block continuation; keeps stack polymorphic)
-        return builder_code(b)
+        return b
     end
 
     # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
@@ -222,7 +210,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             emit_value!(b, stmt, ctx)   # THE typed value channel
             local_set!(b, ctx.slot_locals[_slot_assign_id])
         end
-        return builder_code(b)   # `bytes` untouched on this path
+        return b   # `bytes` untouched on this path
     end
 
     if stmt isa Core.ReturnNode
@@ -1378,7 +1366,15 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
     end
 
-    return builder_code(b)   # march4 Phase C: the accumulator (and its exit seam) is GONE
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    b = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
+    compile_statement!(b, stmt, idx, ctx)
+    return builder_code(b)
 end
 
 """
