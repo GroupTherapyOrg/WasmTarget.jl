@@ -38,6 +38,7 @@ Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
 """
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
+    ENV["WT_CUR_FN"] = try first(string(ctx.func_ref), 80) catch; "?" end   # debug context for builder errors
     code = ctx.code_info.code
     n = length(code)
 

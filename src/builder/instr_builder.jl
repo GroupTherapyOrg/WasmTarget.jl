@@ -577,8 +577,24 @@ NO human-declared effects — the fragment's real, validator-tracked stack shape
 transfers, so a mis-declared splice is impossible at these seams.
 """
 function append_builder!(dst::InstrBuilder, src::InstrBuilder)
-    length(src.v.labels) == 1 ||
-        error("append_builder!($(dst.func_name) ← $(src.func_name)): source has open control labels")
+    if length(src.v.labels) != 1
+        # locate the underflow: depth trace over the instr kinds
+        local _d = 1
+        local _report = ""
+        for (_ix, _ins) in enumerate(src.instrs)
+            if _ins isa InstrIR.Block || _ins isa InstrIR.Loop || _ins isa InstrIR.If || _ins isa InstrIR.TryTable
+                _d += 1
+            elseif _ins isa InstrIR.End
+                _d -= 1
+                if _d <= 0 && isempty(_report)
+                    local _w = [string(nameof(typeof(src.instrs[j]))) for j in max(1,_ix-6):min(length(src.instrs),_ix+4)]
+                    _report = "UNDERFLOW at instr $_ix/$(length(src.instrs)); window=$(join(_w, ","))"
+                end
+            end
+        end
+        error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
+              "$(length(src.v.labels)) labels; $_report")
+    end
     for t in Iterators.reverse(src.seeded)
         validate_pop!(dst.v, t)
     end

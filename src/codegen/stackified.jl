@@ -1390,9 +1390,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         end
 
-        # Close loop if this is the last block of the loop (back edge source)
+        # Close loop if this is the LAST back-edge source of the loop. A loop
+        # with several `continue`-style branches has MULTIPLE back-edge sources
+        # to the same header (1.13 Base IR does this in print); the loop label
+        # closes only at the maximal one — earlier sources just `br` back
+        # (their terminators already emitted it). Firing at every source emitted
+        # one spurious End per extra edge, eating outer labels (the byte era
+        # spliced this silently; the typed merge rejects it).
         for (src, dst) in back_edges
-            if src == block_idx
+            if src == block_idx && block_idx == maximum(s for (s, d) in back_edges if d == dst)
                 # Close any inner target blocks that are still open for this loop
                 if haskey(loop_inner_targets, dst)
                     for target in loop_inner_targets[dst]
@@ -1402,6 +1408,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         end
                     end
                 end
+                _debug_stackified && @warn "  END-OF-LOOP fires at block=$block_idx src=$src dst=$dst open_loops=$open_loops labels=$(length(b.v.labels))"
                 end_block!(b)  # End of loop
                 # Remove from open_loops
                 filter!(h -> h != dst, open_loops)
@@ -1411,6 +1418,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Close any remaining open blocks
     while !isempty(open_blocks)
+        _debug_stackified && @warn "  FINAL-SWEEP close $(last(open_blocks)) labels=$(length(b.v.labels))"
         pop!(open_blocks)
         end_block!(b)
     end
