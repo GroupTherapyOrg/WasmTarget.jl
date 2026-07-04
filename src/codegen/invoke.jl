@@ -3126,26 +3126,23 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 i32_const!(bas, 1)
                 num!(bas, Opcode.I32_SUB)
 
-                # Value
-                local (val_bytes, val_ty) = compile_value_typed(args[3], ctx)
+                # Value — typed channel throughout
+                local _as_b = _compile_value_b(args[3], ctx)
+                local val_ty = isempty(_as_b.v.stack) ? nothing : _as_b.v.stack[end]
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
-                    # typed channel: the emission's own type (val_ty from the producer above).
-                    local arrset_src_wasm = val_ty
-                    local is_numeric_val = arrset_src_wasm === I64 || arrset_src_wasm === I32 || arrset_src_wasm === F64 || arrset_src_wasm === F32
-                    local is_already_externref_val = arrset_src_wasm === ExternRef
-                    if is_numeric_val
-                        local _n2e = UInt8[]; emit_numeric_to_externref!(_n2e, stmt.val, val_wasm, ctx)
-                        emit_raw!(bas, _n2e; pushes=WasmValType[ExternRef])
+                    if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
+                        # march3: was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
+                        # OUTER-SCOPE variables (same latent copy-paste bug as push!); the
+                        # stored VALUE boxes.
+                        emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
                     else
-                        emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
+                        append_builder!(bas, _as_b)
                         # PURE-048: Skip extern_convert_any if value is already externref
-                        if !is_already_externref_val
-                            extern_convert_any!(bas)
-                        end
+                        val_ty === ExternRef || extern_convert_any!(bas)
                     end
                 else
-                    emit_raw!(bas, val_bytes; pushes=(val_ty===nothing ? WasmValType[] : WasmValType[val_ty]))
+                    append_builder!(bas, _as_b)
                 end
 
                 # array.set

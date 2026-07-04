@@ -1431,8 +1431,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 is_numeric_elem = _el_ty === I32 || _el_ty === I64 || _el_ty === F32 || _el_ty === F64
                 if is_numeric_elem
                     # Box numeric value into a struct then convert to externref
-                    nb = UInt8[]; emit_numeric_to_externref!(nb, elem_val, _el_ty, ctx)
-                    emit_raw!(b, nb; pushes=WasmValType[ExternRef])
+                    emit_numeric_to_externref!(b, elem_val, _el_ty, ctx)
                 elseif _el_ty === ExternRef
                     # Already externref — no conversion needed (was a REF_NULL byte sniff)
                     append_builder!(b, _el_b)
