@@ -688,22 +688,15 @@ ref.cast + struct.get when needed.
 # MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
-"""builder-native variant: emit the i32 condition directly into the target builder."""
+"""THE condition visitor (march4): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
-    emit_raw!(b, compile_condition_to_i32(cond, ctx); pushes=WasmValType[I32])   # god-fn seam (M4 tail)
-    return b
-end
-
-function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
             println(stderr, "   ", fr)
         end
     end
-    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
     set_context!(b, "GotoIfNot cond → i32")
-    # bridge the (still-raw) compile_value with its known pushed type
     emit_value!(b, cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
@@ -738,6 +731,13 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             end
         end
     end
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
+    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
+    compile_condition_to_i32!(b, cond, ctx)
     return builder_code(b)
 end
 
