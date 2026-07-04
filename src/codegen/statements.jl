@@ -821,55 +821,36 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # PURE-913: Skip trailing check when the pure local.get check already
                 # handled the conversion (any flag was set: ref_cast, any_convert, extern_convert)
                 pure_check_handled = needs_ref_cast_local !== nothing || needs_any_convert_extern || needs_extern_convert_any
-                if !needs_type_safe_default && !has_gc_prefix && !pure_check_handled && length(stmt_bytes) >= 2
-                    # PURE-306 / P3-titlecase: locate the trailing local.get by FORWARD
-                    # parse from a known instruction boundary. The previous backward scan
-                    # misread immediate bytes as the LOCAL_GET opcode — `i32.const 32`
-                    # is [0x41, 0x20], so any `x ± 32` (ASCII case distance!) had its
-                    # 0x20 immediate matched, the following arithmetic opcode decoded as
-                    # a bogus local index, and a random local's type then decided whether
-                    # the whole computation was replaced with a zero default.
-                    local si = _last_instr_start(stmt_bytes)
-                    if si > 0 && stmt_bytes[si] == 0x20 && si < length(stmt_bytes)
-                        # Decode the trailing local.get's LEB128 index
-                        local tlg_idx = 0
-                        local tlg_shift = 0
-                        local tlg_end = 0
-                        for bi in (si + 1):length(stmt_bytes)
-                            byt = stmt_bytes[bi]
-                            tlg_idx |= (Int(byt & 0x7f) << tlg_shift)
-                            tlg_shift += 7
-                            if (byt & 0x80) == 0
-                                tlg_end = bi
-                                break
-                            end
+                if !needs_type_safe_default && !has_gc_prefix && !pure_check_handled &&
+                   length(_sf.instrs) >= 2 && _sf.instrs[end] isa InstrIR.LocalGet
+                    # PURE-306 / P3-titlecase (march4, ir/): the trailing local.get IS the
+                    # tail node — the forward-parse (added for the i32.const-32 misparse)
+                    # and the resize! byte-truncation are node operations now.
+                    local tlg_idx = Int(_sf.instrs[end].idx)
+                    tlg_arr_idx = tlg_idx - ctx.n_params + 1
+                    if tlg_arr_idx >= 1 && tlg_arr_idx <= length(ctx.locals)
+                        tlg_type = ctx.locals[tlg_arr_idx]
+                        if !wasm_types_compatible(local_wasm_type, tlg_type)
+                            # Trailing local.get of incompatible type — drop the node and default
+                            pop!(_sf.instrs)
+                            stmt_bytes = builder_code(_sf)
+                            needs_type_safe_default = true
                         end
-                        if tlg_end == length(stmt_bytes)
-                            # This local.get is at the very end of stmt_bytes
-                            tlg_arr_idx = tlg_idx - ctx.n_params + 1
-                            if tlg_arr_idx >= 1 && tlg_arr_idx <= length(ctx.locals)
-                                tlg_type = ctx.locals[tlg_arr_idx]
-                                if !wasm_types_compatible(local_wasm_type, tlg_type)
-                                    # Trailing local.get of incompatible type — truncate and emit default
-                                    resize!(stmt_bytes, si - 1)
-                                    needs_type_safe_default = true
-                                end
-                            elseif tlg_idx < ctx.n_params
-                                # PURE-036bl: Trailing local.get of a PARAM - check param type
-                                param_julia_type = ctx.arg_types[tlg_idx + 1]  # Julia is 1-indexed
-                                tlg_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
-                                if tlg_type !== nothing && !wasm_types_compatible(local_wasm_type, tlg_type)
-                                    if tlg_type === ExternRef && local_wasm_type isa ConcreteRef
-                                        # externref param → concrete ref requires any_convert_extern + ref.cast
-                                        needs_any_convert_extern = true
-                                        needs_ref_cast_local = local_wasm_type
-                                    elseif (tlg_type === StructRef || tlg_type === ArrayRef || tlg_type === AnyRef) && local_wasm_type isa ConcreteRef
-                                        needs_ref_cast_local = local_wasm_type
-                                    else
-                                        resize!(stmt_bytes, si - 1)
-                                        needs_type_safe_default = true
-                                    end
-                                end
+                    elseif tlg_idx < ctx.n_params
+                        # PURE-036bl: Trailing local.get of a PARAM - check param type
+                        param_julia_type = ctx.arg_types[tlg_idx + 1]  # Julia is 1-indexed
+                        tlg_type = get_concrete_wasm_type(param_julia_type, ctx.mod, ctx.type_registry)
+                        if tlg_type !== nothing && !wasm_types_compatible(local_wasm_type, tlg_type)
+                            if tlg_type === ExternRef && local_wasm_type isa ConcreteRef
+                                # externref param → concrete ref requires any_convert_extern + ref.cast
+                                needs_any_convert_extern = true
+                                needs_ref_cast_local = local_wasm_type
+                            elseif (tlg_type === StructRef || tlg_type === ArrayRef || tlg_type === AnyRef) && local_wasm_type isa ConcreteRef
+                                needs_ref_cast_local = local_wasm_type
+                            else
+                                pop!(_sf.instrs)
+                                stmt_bytes = builder_code(_sf)
+                                needs_type_safe_default = true
                             end
                         end
                     end
