@@ -1072,74 +1072,44 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         # based on Julia type (e.g. ArrayRef) without detecting that the actual
                         # wasm local is externref. This happens when has_gc_prefix=true skips
                         # the trailing local.get check at line 13299.
-                        if !needs_any_convert_extern && length(stmt_bytes) >= 2
-                            for si in length(stmt_bytes):-1:max(1, length(stmt_bytes) - 5)
-                                if stmt_bytes[si] == 0x20 && si < length(stmt_bytes)  # LOCAL_GET
-                                    tlg_idx_rc = 0
-                                    tlg_shift_rc = 0
-                                    tlg_end_rc = 0
-                                    for bi in (si + 1):length(stmt_bytes)
-                                        byt = stmt_bytes[bi]
-                                        tlg_idx_rc |= (Int(byt & 0x7f) << tlg_shift_rc)
-                                        tlg_shift_rc += 7
-                                        if (byt & 0x80) == 0
-                                            tlg_end_rc = bi
+                        # march4 Phase B: the trailing LOCAL_GET/CALL backward byte hunt
+                        # (last-6-bytes scan + LEB decodes) is ONE tail-node inspection.
+                        if !needs_any_convert_extern && !isempty(_sf.instrs)
+                            local _tl_rc = _sf.instrs[end]
+                            if _tl_rc isa InstrIR.LocalGet
+                                local tlg_idx_rc = Int(_tl_rc.idx)
+                                tlg_arr_rc = tlg_idx_rc - ctx.n_params + 1
+                                if tlg_arr_rc >= 1 && tlg_arr_rc <= length(ctx.locals) && ctx.locals[tlg_arr_rc] === ExternRef
+                                    needs_any_convert_extern = true
+                                elseif tlg_idx_rc < ctx.n_params
+                                    # Parameter — check its wasm type
+                                    param_jt = ctx.arg_types[tlg_idx_rc + 1]
+                                    param_wt = get_concrete_wasm_type(param_jt, ctx.mod, ctx.type_registry)
+                                    if param_wt === ExternRef
+                                        needs_any_convert_extern = true
+                                    end
+                                end
+                            elseif _tl_rc isa InstrIR.Call
+                                # PURE-900: does the call return externref? Functions might not
+                                # be in mod.functions yet — use the pre-populated func_registry.
+                                local call_idx_rc = Int(_tl_rc.idx)
+                                n_imports = length(ctx.mod.imports)
+                                if call_idx_rc < n_imports
+                                    imp = ctx.mod.imports[call_idx_rc + 1]
+                                    imp_type = ctx.mod.types[imp.type_idx + 1]
+                                    if imp_type isa FuncType && !isempty(imp_type.results) && imp_type.results[1] === ExternRef
+                                        needs_any_convert_extern = true
+                                    end
+                                elseif ctx.func_registry !== nothing
+                                    for (_, finfo) in ctx.func_registry.functions
+                                        if finfo.wasm_idx == UInt32(call_idx_rc)
+                                            ret_wt = get_concrete_wasm_type(finfo.return_type, ctx.mod, ctx.type_registry)
+                                            if ret_wt === ExternRef
+                                                needs_any_convert_extern = true
+                                            end
                                             break
                                         end
                                     end
-                                    if tlg_end_rc == length(stmt_bytes)
-                                        tlg_arr_rc = tlg_idx_rc - ctx.n_params + 1
-                                        if tlg_arr_rc >= 1 && tlg_arr_rc <= length(ctx.locals) && ctx.locals[tlg_arr_rc] === ExternRef
-                                            needs_any_convert_extern = true
-                                        elseif tlg_idx_rc < ctx.n_params
-                                            # Parameter — check its wasm type
-                                            param_jt = ctx.arg_types[tlg_idx_rc + 1]
-                                            param_wt = get_concrete_wasm_type(param_jt, ctx.mod, ctx.type_registry)
-                                            if param_wt === ExternRef
-                                                needs_any_convert_extern = true
-                                            end
-                                        end
-                                    end
-                                    break
-                                elseif stmt_bytes[si] == 0x10 && si < length(stmt_bytes)  # CALL
-                                    # PURE-900: Check if call returns externref
-                                    # Functions might not be in mod.functions yet during compilation,
-                                    # so use func_registry which was pre-populated.
-                                    call_idx_rc = 0
-                                    call_shift_rc = 0
-                                    call_end_rc = 0
-                                    for bi in (si + 1):length(stmt_bytes)
-                                        byt = stmt_bytes[bi]
-                                        call_idx_rc |= (Int(byt & 0x7f) << call_shift_rc)
-                                        call_shift_rc += 7
-                                        if (byt & 0x80) == 0
-                                            call_end_rc = bi
-                                            break
-                                        end
-                                    end
-                                    if call_end_rc == length(stmt_bytes)
-                                        n_imports = length(ctx.mod.imports)
-                                        if call_idx_rc < n_imports
-                                            # Imported function — check import's type
-                                            imp = ctx.mod.imports[call_idx_rc + 1]
-                                            imp_type = ctx.mod.types[imp.type_idx + 1]
-                                            if imp_type isa FuncType && !isempty(imp_type.results) && imp_type.results[1] === ExternRef
-                                                needs_any_convert_extern = true
-                                            end
-                                        elseif ctx.func_registry !== nothing
-                                            # Look up via func_registry (pre-populated before compilation)
-                                            for (_, finfo) in ctx.func_registry.functions
-                                                if finfo.wasm_idx == UInt32(call_idx_rc)
-                                                    ret_wt = get_concrete_wasm_type(finfo.return_type, ctx.mod, ctx.type_registry)
-                                                    if ret_wt === ExternRef
-                                                        needs_any_convert_extern = true
-                                                    end
-                                                    break
-                                                end
-                                            end
-                                        end
-                                    end
-                                    break
                                 end
                             end
                         end
@@ -1169,20 +1139,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # whose LEB128 type index bytes can match i32.const (0x41). For example,
                 # struct.get 65 0 = [0xFB, 0x02, 0x41, 0x00] where 0x41 = i32.const opcode.
                 # The earlier check at line 15046 already uses !has_gc_prefix for the same reason.
-                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && !has_gc_prefix && length(stmt_bytes) >= 2
-                    # PURE-6025: Expanded to catch any small numeric constant, not just i32.const 0.
-                    # An i64.const 1 stored into a ref-typed local also needs type_safe_default.
-                    # Check 1-byte LEB128 (values 0-63 signed / 0-127 unsigned)
-                    if (stmt_bytes[end-1] == Opcode.I32_CONST || stmt_bytes[end-1] == Opcode.I64_CONST) && (stmt_bytes[end] & 0x80) == 0
-                        needs_type_safe_default = true
-                    end
-                    # Check 2-byte LEB128 (values 64-8191): opcode + continuation + terminal
-                    # e.g., i32.const 111 = [0x41, 0xEF, 0x00]
-                    if !needs_type_safe_default && length(stmt_bytes) >= 3
-                        if (stmt_bytes[end-2] == Opcode.I32_CONST || stmt_bytes[end-2] == Opcode.I64_CONST) && (stmt_bytes[end-1] & 0x80) != 0 && (stmt_bytes[end] & 0x80) == 0
-                            needs_type_safe_default = true
-                        end
-                    end
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && !has_gc_prefix &&
+                   !isempty(_sf.instrs) &&
+                   (_sf.instrs[end] isa InstrIR.I32Const || _sf.instrs[end] isa InstrIR.I64Const)
+                    # march4 Phase B: a trailing numeric constant into a ref local — one
+                    # node-kind test, all widths (the 1-/2-byte LEB decodes + the PURE-6015
+                    # struct.get-operand false-positive guard are gone at the ir/ layer).
+                    needs_type_safe_default = true
                 end
 
                 if needs_type_safe_default
