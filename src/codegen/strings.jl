@@ -469,7 +469,11 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
 # array.copy. Byte-identical to before.
-function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
+compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
+    builder_code(compile_string_concat_b(str1, str2, ctx))
+
+"""builder-returning core (march3): callers merge via append_builder!."""
+function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -513,7 +517,7 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     array_copy!(b, str_type_idx, str_type_idx)
 
     local_get!(b, result_local)                             # return result
-    return builder_code(b)
+    return b
 end
 
 """
@@ -523,7 +527,11 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
 # control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
+compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
+    builder_code(compile_string_equal_b(str1, str2, ctx))
+
+"""builder-returning core (march3): callers merge via append_builder!."""
+function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -580,6 +588,6 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
         end_block!(b)                                      # end result block
     end_block!(b)                                          # end if-else
 
-    return builder_code(b)
+    return b
 end
 

@@ -3723,7 +3723,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
         arg2_type = infer_value_type(args[2], ctx)
         if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
             local _seqb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_raw!(_seqb, compile_string_equal(args[1], args[2], ctx); pushes=WasmValType[I32])
+            append_builder!(_seqb, compile_string_equal_b(args[1], args[2], ctx))
             if is_func(func, :(!==))
                 # Negate the result for !==
                 num!(_seqb, Opcode.I32_EQZ)

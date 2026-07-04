@@ -97,7 +97,11 @@ end
 """
 Extract: str_find(haystack, needle) -> Int32. Returns 1-based position or 0 if not found.
 """
-function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8}
+_compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
+    builder_code(_compile_invoke_str_find_b(args, ctx))
+
+"""builder-returning core (march3): callers merge via append_builder!."""
+function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_find", strict=_wt_builder_strict())
 
@@ -263,7 +267,7 @@ function _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector
     # Return result
     local_get!(b, result_local)
 
-    return builder_code(b)
+    return b
 end
 
 """
@@ -1873,7 +1877,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
             # _searchindex(String, String, Int64) → str_find (returns I32, widen to I64)
             if _name_early === :_searchindex && length(args) == 3
                 bsi = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
-                emit_raw!(bsi, _compile_invoke_str_find([args[1], args[2]], ctx); pushes=WasmValType[I32])
+                append_builder!(bsi, _compile_invoke_str_find_b([args[1], args[2]], ctx))
                 num!(bsi, Opcode.I64_EXTEND_I32_S)
                 return builder_code(bsi)
             end
@@ -2605,7 +2609,7 @@ function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::
                 # emitting i64.mul on two string refs — the E-003 island's
                 # fn#107 validation failure. Args were pre-pushed: rebuild.
                 bcat = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
-                emit_raw!(bcat, compile_string_concat(args[1], args[2], ctx); pushes=WasmValType[AnyRef])
+                append_builder!(bcat, compile_string_concat_b(args[1], args[2], ctx))
                 return builder_code(bcat)
             elseif name === :* || name === :mul_int
                 bmul = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
