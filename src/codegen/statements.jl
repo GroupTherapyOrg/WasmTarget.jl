@@ -704,22 +704,11 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 needs_type_safe_default = false
                 struct_get_type_ok = false  # PURE-904: Track when struct_get already produces compatible type
 
-                if stmt_bytes[1] == 0x20  # LOCAL_GET
-                    # Decode the source local.get index and verify it consumes ALL bytes
-                    src_local_idx = 0
-                    shift = 0
-                    leb_end = 0
-                    for bi in 2:length(stmt_bytes)
-                        byt = stmt_bytes[bi]
-                        src_local_idx |= (Int(byt & 0x7f) << shift)
-                        shift += 7
-                        if (byt & 0x80) == 0
-                            leb_end = bi
-                            break
-                        end
-                    end
-                    # Only apply safety check if stmt_bytes is EXACTLY local.get <idx>
-                    is_pure_local_get = (leb_end == length(stmt_bytes))
+                if !isempty(_sf.instrs) && _sf.instrs[1] isa InstrIR.LocalGet
+                    # march4 Phase B: the ir/ node carries the index — the LEB decode
+                    # + consumes-ALL-bytes verification is one kind + count test.
+                    src_local_idx = Int(_sf.instrs[1].idx)
+                    is_pure_local_get = length(_sf.instrs) == 1
                     src_array_idx = src_local_idx - ctx.n_params + 1
                     if is_pure_local_get && src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
                         src_wasm_type = ctx.locals[src_array_idx]
@@ -760,8 +749,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             end
                         end
                     end
-                elseif (stmt_bytes[1] == Opcode.I32_CONST || stmt_bytes[1] == Opcode.I64_CONST ||
-                        stmt_bytes[1] == Opcode.F32_CONST || stmt_bytes[1] == Opcode.F64_CONST)
+                elseif !isempty(_sf.instrs) && (_sf.instrs[1] isa InstrIR.I32Const || _sf.instrs[1] isa InstrIR.I64Const ||
+                        _sf.instrs[1] isa InstrIR.F32Const || _sf.instrs[1] isa InstrIR.F64Const)
                     # Numeric constant being stored into a ref-typed local
                     # PURE-204: Skip for invoke/call results — their stmt_bytes start with
                     # i32.const for the first argument but contain a CALL that returns a ref type.
