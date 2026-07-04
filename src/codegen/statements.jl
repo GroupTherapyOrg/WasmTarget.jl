@@ -2339,14 +2339,10 @@ function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vec
 end
 
 """
-Compile a foreign call expression.
-Handles specific patterns like jl_alloc_genericmemory for Vector allocation.
+Compile a foreign call expression — dart visitor shape (march4): emits INTO the
+caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
-function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    # MIGRATED to InstrBuilder: straight-line emission goes through typed methods on `b`
-    # in source order; compile_value splices bridge via emit_raw!; external emit_*! helpers
-    # and recursive emitter results bridge via emit_raw! too. Stays strict=false.
-    b = InstrBuilder(; func_name="compile_foreigncall", mod=ctx.mod)
+function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
 
     # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
     # For jl_alloc_genericmemory:
@@ -2416,7 +2412,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # array.new_default creates array filled with default value (0 for primitives, null for refs)
             array_new_default!(b, arr_type_idx)
 
-            return builder_code(b)
+            return b
         elseif name === :memset
             # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
@@ -2428,7 +2424,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
                 unreachable!(b)  # non-strict path: trap rather than mis-fill
                 ctx.last_stmt_was_stub = true
-                return builder_code(b)
+                return b
             end
             # Zero-fill no-op. memset returns the ptr, but only materialise it when
             # the result is actually stored (ssa_local exists). Unconditionally
@@ -2440,7 +2436,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
                 emit_value!(b, expr.args[6], ctx)
             end
-            return builder_code(b)
+            return b
         elseif name === :jl_types_equal
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
@@ -2453,7 +2449,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 t2 = _resolve_type_lit(expr.args[7])
                 if t1 isa Type && t2 isa Type
                     i32_const!(b, t1 === t2 ? 1 : 0)
-                    return builder_code(b)
+                    return b
                 end
             end
             # Non-literal args: fall through to the unknown-foreigncall stub below
@@ -2467,7 +2463,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
             unreachable!(b)  # non-strict path: trap rather than return a fake hash
             ctx.last_stmt_was_stub = true
-            return builder_code(b)
+            return b
         elseif name === :jl_string_to_genericmemory
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
@@ -2481,7 +2477,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                             ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             end
 
-            return builder_code(b)
+            return b
         elseif name === :jl_alloc_string
             # PURE-317: jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
@@ -2499,7 +2495,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             end
             array_new_default!(b, str_arr_type)
             emit_string_wrap!(b, ctx)   # parity(M9): a String is classed from birth
-            return builder_code(b)
+            return b
         elseif name === :jl_string_ptr
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
@@ -2508,7 +2504,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # original string arg, so the base value doesn't affect it.
             # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
             i64_const!(b, 1)
-            return builder_code(b)
+            return b
         elseif name === :jl_id_start_char
             # PURE-316: jl_id_start_char(c::UInt32) -> Int32
             # Checks if a Unicode codepoint is a valid identifier start character.
@@ -2559,7 +2555,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 # No argument — return 0
                 i32_const!(b, 0)
             end
-            return builder_code(b)
+            return b
         elseif name === :jl_id_char
             # PURE-316: jl_id_char(c::UInt32) -> Int32
             # Checks if a Unicode codepoint is a valid identifier continuation character.
@@ -2619,7 +2615,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             else
                 i32_const!(b, 0)
             end
-            return builder_code(b)
+            return b
         elseif name === :jl_string_to_genericmemory
             # PURE-316: jl_string_to_genericmemory(s::String) -> Memory{UInt8}
             # Converts a String's underlying bytes to a Memory{UInt8}.
@@ -2632,7 +2628,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 emit_value!(b, str_arg, ctx,
                             ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             end
-            return builder_code(b)
+            return b
         elseif name === :jl_genericmemory_to_string
             # PURE-325: jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
@@ -2678,7 +2674,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 emit_value!(b, mem_arg, ctx)
                 emit_string_wrap!(b, ctx)
             end
-            return builder_code(b)
+            return b
         elseif name === :jl_pchar_to_string
             # PURE-325: jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
@@ -2719,7 +2715,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     # parity(M9): publish as the CLASSED string
                     local_get!(b, dest_local)
                     emit_string_wrap!(b, ctx)
-                    return builder_code(b)
+                    return b
                 end
                 # Fallback: the pointer might be directly compilable as a ref
                 emit_value!(b, ptr_arg, ctx)
@@ -2727,7 +2723,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 ptr_arg = expr.args[6]
                 emit_value!(b, ptr_arg, ctx)
             end
-            return builder_code(b)
+            return b
         elseif name === :utf8proc_grapheme_break_stateful
             # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
@@ -2735,7 +2731,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             # for all character pairs. This is conservative: it treats every codepoint
             # as its own grapheme cluster, which is correct for ASCII/BMP parsing.
             i32_const!(b, 1)  # true = always a grapheme break
-            return builder_code(b)
+            return b
         elseif name === :jl_ptr_to_array_1d
             # PURE-324: jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
@@ -2783,7 +2779,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                     struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
                     # 3. struct.new Vector(typeId, data_ref, size_tuple_ref)
                     struct_new!(b, vec_type_idx)   # mod-resolved fields (march3)
-                    return builder_code(b)
+                    return b
                 end
             end
         end
@@ -2885,7 +2881,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
 
             # Push result (the "pointer" or 0)
             local_get!(b, result_local)
-            return builder_code(b)
+            return b
         end
     end
 
@@ -2930,7 +2926,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 array_copy!(b, _mmv_arr, _mmv_arr)
                 # memmove returns dest ptr — fake i64 0
                 i64_const!(b, 0)
-                return builder_code(b)
+                return b
             end
         end
 
@@ -2979,7 +2975,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 array_copy!(b, arr_copy_type, arr_copy_type)
                 # memmove returns dest ptr — push i64.const 0
                 i64_const!(b, 0)
-                return builder_code(b)
+                return b
             end
         end
 
@@ -3060,7 +3056,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             array_copy!(b, arr_copy_type, arr_copy_type)  # dest type, src type
             # memmove returns dest ptr — push i64.const 0 as the result
             i64_const!(b, 0)
-            return builder_code(b)
+            return b
         end
     end
 
@@ -3071,7 +3067,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         if length(expr.args) >= 8
             gc_root = expr.args[8]
             emit_value!(b, gc_root, ctx)
-            return builder_code(b)
+            return b
         end
     end
 
@@ -3081,7 +3077,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     if name === :jl_get_current_task
         # No bytecode needed — the Task value is phantom.
         # Mark this SSA so it doesn't get stored to a local.
-        return builder_code(b)
+        return b
     end
 
     # PURE-9042: jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
@@ -3095,7 +3091,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # Convert f64 → i64 (unsigned — trunc_sat to handle large values).
         # Typed builder emitter (was a raw 0xFC 0x07 splice — F17 retired it).
         trunc_sat!(b, Opcode.I64_TRUNC_SAT_F64_U)
-        return builder_code(b)
+        return b
     end
 
     # P3 gap 450889a9cb7e: memmove(dest, src, n) over Vector{UInt8} storage —
@@ -3124,7 +3120,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             array_copy!(b, _arr_t, _arr_t)
             # memmove returns the dest pointer — fake i64 0 (consumers ignore it)
             i64_const!(b, 0)
-            return builder_code(b)
+            return b
         end
     end
 
@@ -3171,7 +3167,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 i32_const!(b, 0)
             end
             call!(b, hash_func_idx, WasmValType[], WasmValType[I64])
-            return builder_code(b)
+            return b
         end
         # If we can't trace the string, fall through to unreachable
     end
@@ -3207,7 +3203,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
                 num!(b, Opcode.I32_WRAP_I64)
             end
             array_copy!(b, _gmc_arr, _gmc_arr)
-            return builder_code(b)   # Cvoid — no value
+            return b   # Cvoid — no value
         end
     end
 
@@ -3235,7 +3231,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
             local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
             if _ti_r !== nothing
                 emit_value!(b, _ti_r, ctx)
-                return builder_code(b)
+                return b
             end
         end
     end
@@ -3244,7 +3240,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         # every base is byte offset 0. A benign value, NOT a stub: typed
         # pointerref/pointerset trace the object identity separately.
         i64_const!(b, 0)
-        return builder_code(b)
+        return b
     elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
         # datatype_storedinline(T) — pure layout predicate; fold when the
         # type argument is a compile-time constant.
@@ -3255,7 +3251,7 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
         end
         if _fc_t isa Type
             i32_const!(b, (try Base.allocatedinline(_fc_t) catch; false end) ? 1 : 0)
-            return builder_code(b)
+            return b
         end
     end
 
@@ -3313,6 +3309,14 @@ function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationConte
     # digest its own zeros — input-independent output).
     record_unsupported!(ctx, :unsupported_method,
         "foreigncall `$(name)` (no handler; emitted type-default value)"; idx=idx, detail=expr)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
+    b = InstrBuilder(; func_name="compile_foreigncall", mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
+    compile_foreigncall!(b, expr, idx, ctx)
     return builder_code(b)
 end
 
