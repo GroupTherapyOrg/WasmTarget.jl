@@ -655,7 +655,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # god-fn seam (M4 tail)
+                    compile_statement!(pvb, stmt, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)
@@ -1115,15 +1115,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Nothing statement
 
             else
-                stmt_bytes = compile_statement(stmt, i, ctx)
-                emit_raw!(bb, stmt_bytes)   # god-fn seam (M4 tail)
+                # march4 Phase C: THE statement visitor emits directly; the drop
+                # logic reads the emission's node window (byte sniffs are gone).
+                local _stmt_i0 = length(bb.instrs)
+                compile_statement!(bb, stmt, i, ctx)
+                local _stmt_emitted = length(bb.instrs) > _stmt_i0
 
-                # DEBUG: trace DROP emissions
+                # DEBUG: trace DROP emissions (node count)
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
-                    _drop_count = count(byt -> byt == 0x1a, stmt_bytes)
+                    _drop_count = count(x -> x isa InstrIR.Drop, @view bb.instrs[_stmt_i0+1:end])
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops_in_stmt_bytes=$(_drop_count) stmt_bytes_len=$(length(stmt_bytes)) last2=$(length(stmt_bytes) >= 2 ? (stmt_bytes[end-1], stmt_bytes[end]) : ()) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
+                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end
                 end
 
@@ -1138,12 +1141,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
 
                 if !haskey(ctx.ssa_locals, i)
-                    # PURE-220: Skip if compile_statement already emitted a DROP
-                    # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
-                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
-                                      !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
+                    # PURE-220 (march4, node): skip if the visitor already emitted a DROP.
+                    # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
+                    already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
-                        if !already_dropped && !isempty(stmt_bytes) && statement_produces_wasm_value(stmt, i, ctx)
+                        if !already_dropped && _stmt_emitted && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1152,7 +1154,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 end
                             end
                         end
-                    elseif stmt isa Core.PiNode && !isempty(stmt_bytes)
+                    elseif stmt isa Core.PiNode && _stmt_emitted
                         # PiNode without ssa_local pushed a value onto the stack.
                         # Drop it if it's only used by phi edges (phi stores re-compute
                         # the value via compile_phi_value, so this stack value is orphaned).
