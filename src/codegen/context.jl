@@ -2314,55 +2314,51 @@ function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::AbstractC
 end
 
 """
-    _narrow_generic_local!(bytes, local_idx, ssa_id, ctx)
+    _narrow_generic_local!(b, local_idx, ssa_id, ctx) -> Bool
 
-PURE-901: When a local has generic type (anyref/structref) but the SSA's Julia type
-maps to a concrete Wasm type, emit `ref.cast null \$concrete_type` to narrow the value
-on the stack. This ensures downstream struct_get/array_get see the correct type.
-
-This is safe because ref.cast null on the correct type is a no-op at runtime,
-and on the wrong type it traps (which indicates a real codegen bug).
+PURE-901 (march4, builder-native — THE implementation): when a local has generic type
+(anyref/structref/externref/eqref) but the SSA's Julia type maps to a concrete Wasm
+type, narrow the value on `b`'s stack (`ref.cast null` for refs — a no-op at runtime
+when correct, a trap on a real codegen bug — and THE funnel-unbox for join-refined
+numerics). Returns false when no narrowing applies.
 """
-function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)
+function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)::Bool
     arr_idx = local_idx - ctx.n_params + 1
     if arr_idx < 1 || arr_idx > length(ctx.locals)
-        return
+        return false
     end
     local_wasm_type = ctx.locals[arr_idx]
     if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef || local_wasm_type === EqRef)
-        return  # Local is already concrete — no narrowing needed
+        return false  # Local is already concrete — no narrowing needed
     end
     # Look up the SSA's Julia type to find a concrete Wasm type
     ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
     if ssa_julia_type === Any || ssa_julia_type === Union{}
-        return  # Can't narrow — don't know the concrete type
+        return false  # Can't narrow — don't know the concrete type
     end
     # CG-003d: Don't narrow Union{Nothing, T} types — the value may be Nothing,
     # and downstream code (e.g., === nothing comparison) needs the unnarrowed type.
     # Narrowing happens via PiNode after the null check succeeds.
     if ssa_julia_type isa Union
-        return
+        return false
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
-        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
-        seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
         if local_wasm_type === ExternRef
             # PURE-6025: ExternRef needs any_convert_extern before ref.cast
             any_convert_extern!(b)
         end
         ref_cast!(b, Int64(concrete_wasm.type_idx), true)
-        append!(bytes, builder_code(b))
+        return true
     elseif concrete_wasm === I32 || concrete_wasm === I64 ||
            concrete_wasm === F32 || concrete_wasm === F64
         # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
-        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
-        seed_input!(b, WasmValType[local_wasm_type])
         convert_type!(b, local_wasm_type, concrete_wasm, ctx; from_julia=ssa_julia_type)
-        append!(bytes, builder_code(b))
+        return true
     end
+    return false
 end
 
 """

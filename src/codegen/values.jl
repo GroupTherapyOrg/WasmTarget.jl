@@ -852,18 +852,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
-    function _narrow!(li, sid)
-        nb = UInt8[]
-        _narrow_generic_local!(nb, li, sid, ctx)
-        isempty(nb) && return
-        local _nt = get(ctx.ssa_types, sid, Any)
-        # numerics declare their refined type (join-refined loads); refs keep legacy shape
-        local _nw = _nt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
-                    julia_to_wasm_type(_nt) : nothing
-        local _decl = _nw !== nothing && !_wt_is_ref(_nw)
-        emit_raw!(b, nb; pops=(_decl ? 1 : 0),   # god-fn seam (M4 tail): the narrow channel
-                  pushes=(_decl ? WasmValType[_nw] : WasmValType[]))
-    end
+    # march4: THE narrow channel emits direct — the cast/unbox is tracked (the
+    # declared pops/pushes contract died with the bytes buffer).
+    _narrow!(li, sid) = _narrow_generic_local!(b, li, sid, ctx)
 
     # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
