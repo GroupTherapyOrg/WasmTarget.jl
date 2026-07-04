@@ -170,7 +170,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     # external emit_*! helpers mutate it. Only the FINAL splice goes through the typed
     # builder via emit_raw!, so the output is byte-identical. Stays strict=false.
     b = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-    bytes = UInt8[]
+    _seed_builder_locals!(b, ctx)
 
     # PURE-6027: Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
@@ -865,8 +865,9 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                    !isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.ArrayGet &&
                    (_sf.instrs[end].op == Opcode.ARRAY_GET_U || _sf.instrs[end].op == Opcode.ARRAY_GET_S)
                     # march4 Phase B: the tail node's own op picks the extend
-                    push!(stmt_bytes, _sf.instrs[end].op == Opcode.ARRAY_GET_U ?
-                          Opcode.I64_EXTEND_I32_U : Opcode.I64_EXTEND_I32_S)
+                    num!(_sf, _sf.instrs[end].op == Opcode.ARRAY_GET_U ?
+                           Opcode.I64_EXTEND_I32_U : Opcode.I64_EXTEND_I32_S)
+                         stmt_bytes = builder_code(_sf)
                 end
 
                 # Check if stmt_bytes ends with struct_get whose result type is incompatible
@@ -935,13 +936,13 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             # through the ONE funnel (dart convertType) — the old arm
                             # emitted a type-safe NULL default, silently dropping the value
                             # (the box-contents reads of the escaping-closure case).
-                            append!(bytes, stmt_bytes)
+                            append_builder!(b, _sf)
                             local _nbx = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                             seed_input!(_nbx, WasmValType[ssa_wasm_type])
                             convert_type!(_nbx, ssa_wasm_type, local_wasm_type, ctx;
                                           from_julia=(ssa_julia_type isa DataType ? ssa_julia_type : nothing))
                             local_set!(_nbx, local_idx)
-                            append!(bytes, builder_code(_nbx))
+                            append_builder!(b, _nbx)
                             ssa_type_mismatch = true   # value handled here — skip the normal append/store
                         elseif ssa_wasm_type === ExternRef && local_wasm_type isa ConcreteRef
                             # SSA produces externref but local expects concrete ref.
@@ -961,7 +962,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                 needs_ref_cast_local = local_wasm_type
                                 local _aceb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                                 any_convert_extern!(_aceb)
-                                append!(stmt_bytes, builder_code(_aceb))
+                                append_builder!(_sf, _aceb); stmt_bytes = builder_code(_sf)
                             end
                         elseif (ssa_wasm_type === StructRef || ssa_wasm_type === ArrayRef) && local_wasm_type isa ConcreteRef
                             # SSA produces abstract structref/arrayref, local expects concrete ref
@@ -1119,7 +1120,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                             any_convert_extern!(_rcb)
                         end
                         ref_cast!(_rcb, Int64(needs_ref_cast_local.type_idx), true)
-                        append!(stmt_bytes, builder_code(_rcb))
+                        append_builder!(_sf, _rcb); stmt_bytes = builder_code(_sf)
                     end
                 end
 
@@ -1127,7 +1128,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 if needs_extern_convert_any
                     local _ecab = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                     extern_convert_any!(_ecab)
-                    append!(stmt_bytes, builder_code(_ecab))
+                    append_builder!(_sf, _ecab); stmt_bytes = builder_code(_sf)
                 end
 
                 # PURE-3111: Final catch-all for phantom type returns (Nothing/Type{T}).
@@ -1154,10 +1155,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     ssa_type_mismatch = true
                     # Emit type-safe default instead of the incompatible value (typed via
                     # _append_default!; byte-identical), then local.set via a temp builder.
-                    _append_default!(bytes, local_wasm_type)
+                    _emit_default!(b, local_wasm_type)
                     local _tsb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                     local_set!(_tsb, local_idx)
-                    append!(bytes, builder_code(_tsb))
+                    append_builder!(b, _tsb)
                 end
             end
         end
@@ -1195,10 +1196,10 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         local_wasm_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                         if local_wasm_type !== nothing
                             # Type-safe default + local.set (typed; byte-identical).
-                            _append_default!(bytes, local_wasm_type)
+                            _emit_default!(b, local_wasm_type)
                             local _msb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                             local_set!(_msb, local_idx)
-                            append!(bytes, builder_code(_msb))
+                            append_builder!(b, _msb)
                         end
                         ssa_type_mismatch = true  # Prevent double local_set
                     end
@@ -1224,7 +1225,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
 
         if !ssa_type_mismatch && !is_orphaned_multi_value
-            append!(bytes, stmt_bytes)
+            append_builder!(b, _sf)
         end
 
         # PURE-9065: Drop orphaned multi-arg memoryrefnew values for Nothing-typed memory.
@@ -1244,7 +1245,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     local _drb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                     drop!(_drb)  # drop i32_index
                     drop!(_drb)  # drop array_ref
-                    append!(bytes, builder_code(_drb))
+                    append_builder!(b, _drb)
                 end
             end
         end
@@ -1257,7 +1258,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
            !(!isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.Unreachable)
             local _urb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
             unreachable!(_urb)  # structural trap (dart-legit dead path)
-            append!(bytes, builder_code(_urb))
+            append_builder!(b, _urb)
         end
 
         # If this SSA value needs a local, store it (and remove from stack)
@@ -1290,11 +1291,11 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     if value_wasm_type === ExternRef && local_type === AnyRef
                         local _cvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                         any_convert_extern!(_cvb)
-                        append!(bytes, builder_code(_cvb))
+                        append_builder!(b, _cvb)
                     elseif value_wasm_type === AnyRef && local_type === ExternRef
                         local _cvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                         extern_convert_any!(_cvb)
-                        append!(bytes, builder_code(_cvb))
+                        append_builder!(b, _cvb)
                     else
                     # Type mismatch: drop the value and emit type-safe default — DIAGNOSED
                     # (M5 loud-visible; behavior unchanged pending the full audit).
@@ -1302,8 +1303,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                         "SSA-store type mismatch (value dropped, type-safe default emitted)"; idx=idx)
                     local _dvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
                     drop!(_dvb)
-                    append!(bytes, builder_code(_dvb))
-                    _append_default!(bytes, local_type; eqref=false)
+                    append_builder!(b, _dvb)
+                    _emit_default!(b, local_type; eqref=false)
                     end  # close else from PURE-908 externref↔anyref check
                 end
                 # CS-004: Cross-function calls may return anyref/structref even when
@@ -1339,7 +1340,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                     elseif local_type === StructRef && _cs4_ret === AnyRef
                                         ref_cast!(_csb, StructRef, true)  # structref heap type
                                     end
-                                    append!(bytes, builder_code(_csb))
+                                    append_builder!(b, _csb)
                                     break  # Use first matching overload
                                 end
                             end
@@ -1355,7 +1356,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     local_tee!(_slb, ctx.slot_locals[_slot_assign_id])
                 end
                 local_set!(_slb, local_idx)
-                append!(bytes, builder_code(_slb))
+                append_builder!(b, _slb)
             end
         end
     end
@@ -1365,30 +1366,19 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
         local _slb2 = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
         local_set!(_slb2, ctx.slot_locals[_slot_assign_id])
-        append!(bytes, builder_code(_slb2))
+        append_builder!(b, _slb2)
     end
 
-    # TRACE: Find double-DROP in compiled output for func 8
+    # TRACE: Find double-DROP in compiled output for func 8 (node count — no byte scan)
     if ctx.func_idx == 8
-        n_drops = 0
-        for bi in 1:length(bytes)
-            if bytes[bi] == 0x1a
-                # Check it's really a DROP (not an operand of struct.get etc.)
-                # Only count if not preceded by fb 02 (GC struct.get)
-                is_struct_get_operand = bi >= 3 && bytes[bi-2] == 0xfb && bytes[bi-1] == 0x02
-                if !is_struct_get_operand
-                    n_drops += 1
-                end
-            end
-        end
+        local n_drops = count(i -> i isa InstrIR.Drop, b.instrs)
         if n_drops >= 2
             stmt_str = stmt isa Expr ? string(stmt)[1:min(80, length(string(stmt)))] : string(typeof(stmt))
-            @debug "STMT $idx has $n_drops DROPs in $(length(bytes)) bytes: $stmt_str"
+            @debug "STMT $idx has $n_drops DROPs: $stmt_str"
         end
     end
 
-    emit_raw!(b, bytes)   # god-fn seam (M4 tail): the accumulator's ONE exit
-    return builder_code(b)
+    return builder_code(b)   # march4 Phase C: the accumulator (and its exit seam) is GONE
 end
 
 """
