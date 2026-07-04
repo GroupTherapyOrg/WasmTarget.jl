@@ -632,9 +632,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
             # check branch meant getindex OOB could never reach the catchable
             # throw_boundserror path (gap 3ead683e6ff9 family / divergent_throw).
-            local _bcb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-            i32_const!(_bcb, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
-            append!(stmt_bytes, builder_code(_bcb))
+            i32_const!(_sf, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
+            stmt_bytes = builder_code(_sf)
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
             compile_foreigncall!(_sf, stmt, idx, ctx)
@@ -645,9 +644,7 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             # We stash exception values into a (mut anyref) global before throw,
             # and retrieve them here with global.get.
             exn_global = ensure_exception_global!(ctx.mod)
-            local _exb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-            global_get!(_exb, exn_global, AnyRef)
-            append!(stmt_bytes, builder_code(_exb))
+            global_get!(_sf, exn_global, AnyRef)
             # The global is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
             # Downcast anyref → structref so the local.set is type-valid.
             local _exn_local_wasm = nothing
@@ -659,16 +656,12 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 end
             end
             if _exn_local_wasm === StructRef
-                # anyref → structref via ref.cast null struct (typed; byte-identical)
-                local _ecb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-                ref_cast!(_ecb, StructRef, true)
-                append!(stmt_bytes, builder_code(_ecb))
+                # anyref → structref (the SSA local may be structref for exception unions)
+                ref_cast!(_sf, StructRef, true)
             elseif _exn_local_wasm isa ConcreteRef
-                # anyref → concrete ref via ref.cast null $type (typed; byte-identical)
-                local _ecb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-                ref_cast!(_ecb, Int64(_exn_local_wasm.type_idx), true)
-                append!(stmt_bytes, builder_code(_ecb))
+                ref_cast!(_sf, Int64(_exn_local_wasm.type_idx), true)
             end
+            stmt_bytes = builder_code(_sf)
         elseif stmt.head === :leave
             # Exception handling: Leave try block — no-op in WASM
             # (try_table control flow handles this structurally)
@@ -1300,29 +1293,15 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                                            func_ref.name === :memoryrefnew &&
                                            length(stmt.args) >= 4)
             end
-            # General orphan detection: if stmt_bytes consists entirely of
-            # local_get instructions (opcode 0x20 + LEB128 index) pushing 2+ values,
-            # it's pure stack-pushing with no side effects. Without proper consumption
-            # these values will be orphaned on the stack.
-            # This catches base+index pairs from array access patterns.
-            if !is_orphaned_multi_value && length(stmt_bytes) >= 4
-                all_local_gets = true
-                n_gets = 0
-                pos = 1
-                while pos <= length(stmt_bytes)
-                    if stmt_bytes[pos] != 0x20  # LOCAL_GET opcode
-                        all_local_gets = false
-                        break
-                    end
-                    n_gets += 1
-                    pos += 1
-                    # Skip LEB128 local index
-                    while pos <= length(stmt_bytes) && (stmt_bytes[pos] & 0x80) != 0
-                        pos += 1
-                    end
-                    pos += 1  # final byte of LEB128
-                end
-                if all_local_gets && pos > length(stmt_bytes) && n_gets >= 2
+            # General orphan detection (march4 Phase B, ir/-kind): if the emission
+            # consists entirely of local.get instructions pushing 2+ values, it's pure
+            # stack-pushing with no side effects — without proper consumption these
+            # values are orphaned. Catches base+index pairs from array access patterns.
+            # (Was a LOCAL_GET-opcode + LEB128 byte walk.)
+            if !is_orphaned_multi_value && length(_sf.instrs) >= 2
+                local all_local_gets = all(i -> i isa InstrIR.LocalGet, _sf.instrs)
+                local n_gets = length(_sf.instrs)
+                if all_local_gets && n_gets >= 2
                     if haskey(ctx.ssa_locals, idx)
                         # Statement pushes multiple values but has an SSA local.
                         # local_set would only consume 1, leaving N-1 orphaned.
