@@ -6,6 +6,7 @@
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
+L13_no_byte_bridges = 0
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
@@ -18,7 +19,7 @@ L9_no_unjustified_untyped_emission = 0
 
 [metrics]
 R11_patch_markers = 691
-R2_emit_raw_bridges = 6
+R2_emit_raw_bridges = 0
 R3_infer_value_type = 134
 R5_julia_type_reguess = 104
 R7_raw_coercion_ops = 130

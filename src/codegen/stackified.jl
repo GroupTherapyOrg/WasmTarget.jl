@@ -102,12 +102,12 @@ end
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
 function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
-    emit_raw!(b, generate_stackified_flow(ctx, args...; kwargs...))   # THE front seam
+    append_builder!(b, generate_stackified_flow(ctx, args...; kwargs...))   # typed merge
     return b
 end
 
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
-                                  trailing_unreachable::Bool = true)::Vector{UInt8}
+                                  trailing_unreachable::Bool = true)::InstrBuilder
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================
@@ -1428,6 +1428,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # here, i.e. exactly at the caller's continuation.
     needs_exit_block && end_block!(b)
 
-    return builder_code(b)
+    return b
 end
 

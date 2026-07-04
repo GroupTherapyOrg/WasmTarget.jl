@@ -12,7 +12,7 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
     # phi init, PURE-314), and generate_loop_code + generate_branched_loops (no-phi loops).
     if has_try_catch(code)
-        emit_raw!(b, generate_try_catch(ctx, blocks, code))   # god-fn seam (M4 tail)
+        append_builder!(b, generate_try_catch(ctx, blocks, code))   # typed merge
     elseif length(blocks) == 1
         # Single block - just generate statements
         generate_block_code!(b, ctx, blocks[1])

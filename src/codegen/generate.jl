@@ -888,7 +888,7 @@ function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext
     return b
 end
 
-function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
+function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_try_catch_stackified", mod=ctx.mod)
     catch_dest = region.catch_dest
 
@@ -1141,7 +1141,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # P2-batch18: does the outer region's normal path (between :leave and the catch
@@ -1183,14 +1183,14 @@ end
 #   <else arm: try_table B / catch Y>     ;; all paths return
 """builder-native front for the branch-split try generator."""
 function generate_branch_split_try!(b::InstrBuilder, args...; kwargs...)
-    emit_raw!(b, generate_branch_split_try(args...; kwargs...))   # THE front seam
+    append_builder!(b, generate_branch_split_try(args...; kwargs...))   # typed merge
     return b
 end
 
 function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
-                                   branch_idx::Int)::Vector{UInt8}
+                                   branch_idx::Int)::InstrBuilder
     b = InstrBuilder(; func_name="generate_branch_split_try", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1239,7 +1239,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
     end_block!(b)   # $else
     _emit_arm!(else_start, else_chain, length(code))          # else arm — all paths return
-    return builder_code(b)
+    return b
 end
 
 # P2-batch18 (generalised to N levels in P2-batch24, gap a38002fd0ef2):
@@ -1258,7 +1258,7 @@ end
 # catch-subset blocks.
 function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, outer::TryRegion, arm_regions::Vector{TryRegion},
-                                  branch_idx::Int)::Vector{UInt8}
+                                  branch_idx::Int)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_catch_arm_split", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1299,7 +1299,7 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
     generate_branch_split_try!(bb, ctx, arm_blocks, code, then_chain,
                                             else_chain, branch_idx)
-    return builder_code(bb)
+    return bb
 end
 
 # P3 gap 10cc64efe535: catch-arm split with a GotoNode skip and MERGING arms.
@@ -1319,7 +1319,7 @@ end
 #   <post-merge [merge ..]: phi reads, pop_exception, return>
 function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, outer::TryRegion, inner::TryRegion,
-                                       gin_idx::Int, skip_idx::Int, merge_idx::Int)::Vector{UInt8}
+                                       gin_idx::Int, skip_idx::Int, merge_idx::Int)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_catch_arm_skip_merge", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1462,11 +1462,11 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
             end
         end
     end
-    return builder_code(bb)
+    return bb
 end
 
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                  code, chain::Vector{TryRegion})::Vector{UInt8}
+                                  code, chain::Vector{TryRegion})::InstrBuilder
     b = InstrBuilder(; func_name="generate_catch_try_chain", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1487,7 +1487,7 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
 
     _emit_chain_levels!(b, ctx, blocks, code, chain, 1, length(code),
                         _emit_try_table_region!)
-    return builder_code(b)
+    return b
 end
 
 # Shared chain emission bounded to [lo, hi] (P2-batch25: arms of a branch-split
@@ -1556,12 +1556,12 @@ end
 # A level whose normal path returns (no merge phi) emits the plain
 # return-style block and recurses into its catch arm.
 function generate_catch_try_chain_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                        code, chain::Vector{TryRegion})::Vector{UInt8}
+                                        code, chain::Vector{TryRegion})::InstrBuilder
     b = InstrBuilder(; func_name="generate_catch_try_chain_merge", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     _emit_merge_chain_level!(b, ctx, blocks, code, chain, 1, 1, length(code))
-    return builder_code(b)
+    return b
 end
 
 function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationContext,
@@ -1689,7 +1689,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
     return b
 end
 
-function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_try_catch", mod=ctx.mod)
     regions = find_try_regions(code)
 
@@ -2326,14 +2326,14 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         end_block!(bb)
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # PURE-9033: Generate sequential (non-nested) try/catch regions.
 # Each region gets its own try_table block structure, processed in order.
 # Example: two sequential try/catch blocks in one function.
 function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                       code, regions::Vector{TryRegion})::Vector{UInt8}
+                                       code, regions::Vector{TryRegion})::InstrBuilder
     bb = InstrBuilder(; func_name="generate_sequential_try_catch", mod=ctx.mod)
 
     # Ensure exception infrastructure
@@ -2559,7 +2559,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
         end
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # PURE-9033: Generate nested try/catch (2-level nesting: inner try/catch inside outer try/catch).
@@ -2581,7 +2581,7 @@ end
 #   ; outer catch handler
 #
 function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                     code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+                                     code, outer::TryRegion, inner::TryRegion)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_nested_try_catch_2", mod=ctx.mod)
 
     # Ensure exception infrastructure
@@ -2826,7 +2826,7 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         ctx.last_stmt_was_stub = false
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # PURE-9031: Helper — compile a GotoIfNot inside the try body.
