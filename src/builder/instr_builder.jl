@@ -79,8 +79,15 @@ end
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
     code = UInt8[]
-    for instr in b.instrs
-        encode!(code, instr)
+    for i in eachindex(b.instrs)
+        if !isassigned(b.instrs, i)
+            around = [isassigned(b.instrs, j) ? string(nameof(typeof(b.instrs[j]))) : "#undef"
+                      for j in max(1, i-3):min(length(b.instrs), i+3)]
+            nundef = count(j -> !isassigned(b.instrs, j), eachindex(b.instrs))
+            lastundef = findlast(j -> !isassigned(b.instrs, j), eachindex(b.instrs))
+            error("builder_code($(b.func_name)): UNDEF instr slot $i of $(length(b.instrs)); n_undef=$nundef last_undef=$lastundef; window=$(join(around, ","))")
+        end
+        encode!(code, b.instrs[i])
     end
     code
 end
@@ -582,6 +589,14 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
         validate_push!(dst.v, t)
     end
     src.v.reachable || (dst.v.reachable = false)
-    append!(dst.instrs, src.instrs)
+    # JULIA-113-RC1 WORKAROUND: bulk `append!` on these abstract-eltype Memory-backed
+    # vectors nondeterministically leaves an UNDEF TAIL in the copied region under
+    # 1.13.0-rc1 (clean source verified immediately before; holes end exactly at the
+    # append boundary; GC-timing dependent; not reproducible in isolation). Element-wise
+    # push! writes each slot at transfer time and is immune. Semantically identical.
+    sizehint!(dst.instrs, length(dst.instrs) + length(src.instrs))
+    for ins in src.instrs
+        push!(dst.instrs, ins)
+    end
     return _check!(dst)
 end
