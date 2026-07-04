@@ -606,18 +606,26 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
         end
 
     elseif stmt isa Expr
+        # march4 Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
+        # stmt_bytes = its serialization — byte-identical while the byte tail migrates
+        # to _sf's tracked state cluster-by-cluster (dev/MARCH4_STATEMENT_PLAN.md).
+        local _sf = InstrBuilder(; func_name="compile_statement.frag", mod=ctx.mod)
+        _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
         if stmt.head === :call
-            stmt_bytes = compile_call(stmt, idx, ctx)
+            compile_call!(_sf, stmt, idx, ctx)
+            stmt_bytes = builder_code(_sf)
             if haskey(ENV, "WT_TRACE_MM") && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
                 println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
             end
         elseif stmt.head === :invoke
-            stmt_bytes = compile_invoke(stmt, idx, ctx)
+            compile_invoke!(_sf, stmt, idx, ctx)
+            stmt_bytes = builder_code(_sf)
         elseif stmt.head === :new
             # Struct construction: %new(Type, args...)
-            stmt_bytes = compile_new(stmt, idx, ctx)
+            compile_new!(_sf, stmt, idx, ctx)
+            stmt_bytes = builder_code(_sf)
         elseif stmt.head === :boundscheck
             # P2-batch6: compile to the expr's REAL value (true unless @inbounds).
             # We previously pushed false ("wasm has its own bounds checking"), but
@@ -629,7 +637,8 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
             append!(stmt_bytes, builder_code(_bcb))
         elseif stmt.head === :foreigncall
             # Handle foreign calls - specifically for Vector allocation
-            stmt_bytes = compile_foreigncall(stmt, idx, ctx)
+            compile_foreigncall!(_sf, stmt, idx, ctx)
+            stmt_bytes = builder_code(_sf)
         elseif stmt.head === :the_exception
             # PURE-9032: Retrieve the caught exception value from the $current_exn global.
             # Julia IR emits :the_exception in catch blocks to get the caught exception.
