@@ -1797,7 +1797,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                                 sf0.name in (:memoryrefnew, :memoryref, :memorynew)
                     if is_memref
                         # Recompile the source statement to get the actual array ref
-                        emit_raw!(b, compile_call(src_stmt_f0, field_values[1].id, ctx))   # god-fn seam (M4 tail)
+                        compile_call!(b, src_stmt_f0, field_values[1].id, ctx)   # dart visitor
                         recompiled = true
                     end
                 end
