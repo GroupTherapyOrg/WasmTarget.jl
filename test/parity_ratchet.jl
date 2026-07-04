@@ -93,7 +93,7 @@ end
 const METRICS = [
     "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0; ZERO since march4 — see L13)",
         () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
-    "R3_infer_value_type" => ("infer_value_type( re-guess callers (M2 → 0 + delete fn)",
+    "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";

@@ -422,3 +422,47 @@ compile_call/compile_invoke/compile_new/compile_statement builder-native (the
 pre-pushed-args pattern dies; dart visitors emit their own args), which dissolves the
 fronts + junctions (R2 18 → 0), kills the stackifier's drop byte-sniff via real tracked
 heights, then R3 (136) to its floor and the fresh dart certification re-audit.
+
+## MARCH 4 — THE GOD-FN DECOMPOSITION COMPLETE: R2 = 0, LOCK L13 (2026-07-04, branch `wt-parity-march4`)
+
+**THE BYTE-BRIDGE CLASS IS EXTINCT.** Zero `emit_raw!` call sites exist in the codebase —
+every emission is a typed builder method or a machine-tracked merge (`append_builder!`).
+LOCK `L13_no_byte_bridges` holds it at zero forever.
+
+**THE VISITORS (dart code_generator.dart:39 — `CodeGenerator extends
+ExpressionVisitor1<w.ValueType, w.ValueType>`, `wrap` = accept1 + convertType, verified in
+the SDK at close):** `compile_call!` / `compile_invoke!` / `compile_new!` /
+`compile_foreigncall!` / `compile_statement!` / `compile_condition_to_i32!` ARE the
+implementations — they emit INTO the caller's builder exactly as dart visitors emit into
+the function's instruction stream; `emit_value!`/`convert_type!` are `wrap`/`convertType`.
+The try/catch generator family (10 functions) returns builders. Bytes shells remain only
+as one-line delegations for the dwindling byte-era remainder.
+
+**THE FRAGMENT PATTERN** (invoke 2.6k lines, call 4.8k lines, statement 1.4k lines): the
+`bytes` accumulator becomes a tracked fragment builder with EXACT discard semantics;
+returns merge typed. Byte SURGERY extinct: phantom pop-twos and ref-pops became
+don't-merge decisions; the unary-negation prepend is fragment composition; `resize!`
+truncation is a node pop.
+
+**THE BYTE-SCAN DISEASE IS DEAD** (~40 more scans this march): every LEB decode, first/
+last-byte gate, opcode-range heuristic, GC_PREFIX hunt, and the stackifier's DROP sniff
+now read node kinds and tracked types (`InstrIR.LocalGet.idx`, `StructGet.idx/.field`,
+`ArrayGet.op`, `NumOp.op`, stack heights). Entire misparse classes (PURE-306/323/6005/
+6006/6015, gap a6c6091b2a80) cannot exist at the ir/ layer.
+
+**Found by the gates en route:** the sweep-latent `emit_int128_sle!/ule!` UndefVar (fuzz-
+caught — only reachable on Int128-compare paths; all 20 family forms statically verified).
+
+**R3 RECLASSIFIED** (per the M2 endgame decision): `infer_value_type` is dart's
+`node.getStaticType` equivalent — legitimate pre-emit type knowledge (post-emission
+re-guessing stays dead via L4). The ratchet keeps it monotone for consolidation.
+
+**Certification anchors re-verified in the SDK at close:** code_generator.dart:39
+(the visitor class shape), the `wrap`/`convertType` pair, visitStaticInvocation:1775
+(intrinsics-first + visitor-emitted args — WT's intrinsics table + fragment args),
+visitAsExpression:3100 (checked casts, march 3), dispatch_table.dart (M8),
+intrinsics.dart:28-71 (M11), closures.dart:960-1013 (M10).
+
+**Remaining (the standing next phase):** R7@130 (the proven intrinsic floor), R11 sediment,
+the pinned @test_broken (isa over Any[] vs Main-defined hierarchies), the bytes shells'
+final deletion as their callers convert, R5/R3 consolidation floors.
