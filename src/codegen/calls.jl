@@ -128,27 +128,26 @@ end
 # stash the instance in the $current_exn global, then `throw` tag 0 — the same
 # mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
-"""builder-native front for the throw-error emitter."""
-function _emit_throw_error_struct!(b::InstrBuilder, ctx::AbstractCompilationContext, ErrT)
-    _tb = UInt8[]
-    _emit_throw_error_struct!(_tb, ctx, ErrT)
-    emit_raw!(b, _tb)
-    return b
-end
-
-function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, @nospecialize(T))
+"""builder-native (THE implementation): build the error struct, stash, throw."""
+function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
-    info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-    bld = InstrBuilder(; func_name="_emit_throw_error_struct!", mod=ctx.mod)
+    info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     if info !== nothing
-        emit_type_id!(bld, ctx.type_registry, T)
+        emit_type_id!(bld, ctx.type_registry, ErrT)
         struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
     else
         ref_null!(bld, AnyRef)
     end
     global_set!(bld, exn_global)
     throw_!(bld, 0)
+    return bld
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, @nospecialize(T))
+    bld = InstrBuilder(; func_name="_emit_throw_error_struct!", mod=ctx.mod)
+    _emit_throw_error_struct!(bld, ctx, T)
     append!(bytes, builder_code(bld))
     return bytes
 end
@@ -2706,8 +2705,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 emit_value!(_sfgb, obj_arg, ctx)
                 # PURE-701: If obj_arg's local is structref (union of struct types),
                 # insert ref.cast null to narrow before struct_get
-                local _rcb = UInt8[]; emit_ref_cast_if_structref!(_rcb, obj_arg, info.wasm_type_idx, ctx)
-                emit_raw!(_sfgb, _rcb)
+                                emit_ref_cast_if_structref!(_sfgb, obj_arg, info.wasm_type_idx, ctx)
                 struct_get!(_sfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                 append!(bytes, builder_code(_sfgb))
                 return bytes
@@ -3479,8 +3477,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx)
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
-                    local _vrc = UInt8[]; emit_ref_cast_if_structref!(_vrc, obj_arg, info.wasm_type_idx, ctx)
-                    emit_raw!(_vrb, _vrc)
+                                        emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     local_get!(_vrb, temp_local)
                     struct_set!(_vrb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array ref (0=typeId)
                     local_get!(_vrb, temp_local)
@@ -3508,8 +3505,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                 # Now compile obj (struct ref)
                 emit_value!(_vsb, obj_arg, ctx)
                 # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
-                local _vsc = UInt8[]; emit_ref_cast_if_structref!(_vsc, obj_arg, info.wasm_type_idx, ctx)
-                emit_raw!(_vsb, _vsc)
+                                emit_ref_cast_if_structref!(_vsb, obj_arg, info.wasm_type_idx, ctx)
 
                 # Load value from local
                 local_get!(_vsb, temp_local)
@@ -3539,8 +3535,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     local _sfsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                     emit_value!(_sfsb, obj_arg, ctx)
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
-                    local _sfrc = UInt8[]; emit_ref_cast_if_structref!(_sfrc, obj_arg, info.wasm_type_idx, ctx)
-                    emit_raw!(_sfsb, _sfrc)
+                                        emit_ref_cast_if_structref!(_sfsb, obj_arg, info.wasm_type_idx, ctx)
 
                     # PURE-4150: Track if value is a Type reference (used for both struct_set and return value)
                     is_type_value = false
@@ -3685,8 +3680,7 @@ function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Ve
                     # Need a scratch local for the typeId. Use a convention:
                     # allocate one if needed, stored in ctx.
                     temp_local = _ensure_typeof_scratch_local!(ctx)
-                    local _tofs = UInt8[]; emit_typeof_struct_with_local!(_tofs, base_idx, ctx.type_registry, temp_local)
-                    emit_raw!(_tofb, _tofs; pops=1, pushes=WasmValType[AnyRef])
+                    emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
                 else
                     dt_type_idx = get_datatype_type_idx(ctx.type_registry)
                     ref_null!(_tofb, Int64(dt_type_idx), ConcreteRef(UInt32(dt_type_idx), true))

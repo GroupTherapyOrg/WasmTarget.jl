@@ -2181,13 +2181,13 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
 end
 
 """
-    emit_ref_cast_if_structref(bytes, val, target_type_idx, ctx) -> bytes
+    _ref_cast_source_type(val, ctx)
 
-Check if `val` will produce `structref` on the Wasm stack (due to union-typed local),
-and if so, append `ref.cast null \$target_type_idx` to narrow it for struct_get.
+Resolve the DECLARED wasm slot type of `val`'s source (SSA/phi local or parameter) —
+feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/anyref)
+or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
 """
-function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
-    local_wasm_type = nothing
+function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
     if val isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, val.id, nothing)
         if local_idx === nothing
@@ -2196,7 +2196,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         if local_idx !== nothing
             arr_idx = local_idx - ctx.n_params + 1
             if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                local_wasm_type = ctx.locals[arr_idx]
+                return ctx.locals[arr_idx]
             end
         end
     elseif val isa Core.Argument
@@ -2210,12 +2210,29 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             T = ctx.arg_types[arg_idx]
-            local_wasm_type = (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
+            return (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
                 get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
         end
     end
+    return nothing
+end
+
+function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
     b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", mod=ctx.mod)
     seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
+    _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
+    append!(bytes, builder_code(b))
+    return
+end
+
+"""builder-native form: resolve the source's declared wasm type and narrow on `b`."""
+function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
+    _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
+    return b
+end
+
+"""builder-native core: with the source ref on `b`'s stack, narrow per the arm table."""
+function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
         ref_cast!(b, Int64(target_type_idx), true)
@@ -2240,8 +2257,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         # Julia's abstract-dispatch failure).
         ref_cast!(b, Int64(target_type_idx), true)
     end
-    append!(bytes, builder_code(b))
-    return bytes
+    return b
 end
 
 """

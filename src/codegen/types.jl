@@ -1710,24 +1710,26 @@ Emit bytecode for typeof(x) returning a DataType struct ref.
 Uses `temp_local` as scratch space for the typeId.
 Expects a struct ref on the stack. Leaves a (ref null \$DataType) on the stack.
 """
+function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
+                                         registry::TypeRegistry, temp_local::UInt32)
+    registry.type_lookup_global === nothing && return b
+    registry.type_lookup_array_idx === nothing && return b
+    # Extract typeId: ref.cast $JlBase + struct.get → i32
+    emit_typeof!(b, base_idx)
+    # Save typeId to scratch local; look it up in the type table
+    local_set!(b, temp_local)
+    global_get!(b, registry.type_lookup_global, AnyRef)
+    local_get!(b, temp_local)
+    array_get!(b, registry.type_lookup_array_idx, AnyRef)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
                                          registry::TypeRegistry, temp_local::UInt32)
-    registry.type_lookup_global === nothing && return
-    registry.type_lookup_array_idx === nothing && return
-
-    # Extract typeId: ref.cast $JlBase + struct.get → i32
-    emit_typeof!(bytes, base_idx)
-    # Stack: [typeId:i32]
-
     b = InstrBuilder(; func_name="emit_typeof_struct_with_local!")
-    # Save typeId to scratch local
-    local_set!(b, temp_local)
-    # Push type lookup array
-    global_get!(b, registry.type_lookup_global, AnyRef)
-    # Push typeId back
-    local_get!(b, temp_local)
-    # array.get $type_lookup_array → (ref null $DataType)
-    array_get!(b, registry.type_lookup_array_idx, AnyRef)
+    seed_input!(b, WasmValType[AnyRef])
+    emit_typeof_struct_with_local!(b, base_idx, registry, temp_local)
     append!(bytes, builder_code(b))
 end
 
