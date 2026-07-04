@@ -861,15 +861,12 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # is i64 (seed bytes combined into UInt64 words). Append the
                 # signedness-matching extend. Forward-parsed like the struct_get
                 # check below (backward scans misfire on LEB collisions).
-                if !needs_type_safe_default && local_wasm_type === I64 && length(stmt_bytes) >= 3
-                    local _ag_li = _last_instr_start(stmt_bytes)
-                    if _ag_li > 0 && _ag_li + 1 <= length(stmt_bytes) &&
-                       stmt_bytes[_ag_li] == Opcode.GC_PREFIX &&
-                       (stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_U ||
-                        stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_S)
-                        push!(stmt_bytes, stmt_bytes[_ag_li + 1] == Opcode.ARRAY_GET_U ?
-                              Opcode.I64_EXTEND_I32_U : Opcode.I64_EXTEND_I32_S)
-                    end
+                if !needs_type_safe_default && local_wasm_type === I64 &&
+                   !isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.ArrayGet &&
+                   (_sf.instrs[end].op == Opcode.ARRAY_GET_U || _sf.instrs[end].op == Opcode.ARRAY_GET_S)
+                    # march4 Phase B: the tail node's own op picks the extend
+                    push!(stmt_bytes, _sf.instrs[end].op == Opcode.ARRAY_GET_U ?
+                          Opcode.I64_EXTEND_I32_U : Opcode.I64_EXTEND_I32_S)
                 end
 
                 # Check if stmt_bytes ends with struct_get whose result type is incompatible
@@ -1044,11 +1041,12 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                 # Bytes >= 0x80 at the end of stmt_bytes can't be LEB128 terminal bytes (bit 7
                 # clear required), so they're guaranteed to be opcodes. Range 0x80-0xC4 covers
                 # i64 arithmetic (0x79-0x8A) and numeric conversions (0xA7-0xC4).
-                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref && length(stmt_bytes) >= 1
-                    last_byte = stmt_bytes[end]
-                    if last_byte >= 0x80 && last_byte <= 0xC4
-                        needs_type_safe_default = true
-                    end
+                if !needs_type_safe_default && needs_ref_cast_local === nothing && local_is_ref &&
+                   !isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.NumOp &&
+                   0x80 <= _sf.instrs[end].op <= 0xC4
+                    # march4 Phase B: the tail node's op decides (the "bytes >= 0x80
+                    # can't be LEB terminals" heuristic is gone)
+                    needs_type_safe_default = true
                 end
 
                 if needs_ref_cast_local !== nothing
@@ -1056,21 +1054,11 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     # This happens when SSA type is Union{Nothing, T} — ssa_wasm_type maps to T's ConcreteRef,
                     # but the actual value is nothing/integer (e.g., i32.const 0, i64.const 1).
                     # ref.cast requires anyref, not i32/i64. Switch to type_safe_default instead.
-                    ends_with_numeric = false
-                    if length(stmt_bytes) >= 2
-                        # Check for i32.const VALUE or i64.const VALUE where VALUE is a single-byte
-                        # LEB128 (high bit clear = terminal byte, values 0-127).
-                        # PURE-6025: Previous check only caught value==0x00; now catches any small constant.
-                        if (stmt_bytes[end-1] == Opcode.I32_CONST || stmt_bytes[end-1] == Opcode.I64_CONST) && (stmt_bytes[end] & 0x80) == 0
-                            ends_with_numeric = true
-                        end
-                    end
-                    if !ends_with_numeric && length(stmt_bytes) >= 3
-                        # Check for 2-byte LEB128 values (128-16383): opcode + continuation + terminal
-                        if (stmt_bytes[end-2] == Opcode.I32_CONST || stmt_bytes[end-2] == Opcode.I64_CONST) && (stmt_bytes[end-1] & 0x80) != 0 && (stmt_bytes[end] & 0x80) == 0
-                            ends_with_numeric = true
-                        end
-                    end
+                    # march4 Phase B: "ends with a numeric constant" is one node-kind
+                    # test — the 1-byte and 2-byte LEB tail decodes are gone (and ALL
+                    # constant widths are covered now, not just <16384).
+                    ends_with_numeric = !isempty(_sf.instrs) &&
+                        (_sf.instrs[end] isa InstrIR.I32Const || _sf.instrs[end] isa InstrIR.I64Const)
                     if ends_with_numeric
                         # Numeric constant can't be ref_cast'd — use type_safe_default
                         needs_type_safe_default = true
