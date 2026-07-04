@@ -785,45 +785,31 @@ function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vec
                     ssa_is_128bit = (ssa_jt_128 === Int128 || ssa_jt_128 === UInt128)
                 end
                 # PURE-307: Skip for statements that produce ref values (struct/array ops)
-                # Check if stmt_bytes contains GC_PREFIX (0xFB) — all WasmGC struct/array
-                # operations use this prefix, and their LEB128 operands cause false positives.
-                has_gc_prefix = false
-                if !ssa_is_128bit
-                    for bi in 1:length(stmt_bytes)
-                        if stmt_bytes[bi] == Opcode.GC_PREFIX
-                            has_gc_prefix = true
-                            break
-                        end
-                    end
+                # march4 Phase B: "contains GC ops" is an ir/-kind question (RawBytes
+                # sub-products fall back to their bytes). The old GC_PREFIX byte scan's
+                # false-positive worries don't exist at the node level.
+                has_gc_prefix = !ssa_is_128bit && any(_sf.instrs) do i
+                    i isa InstrIR.RawBytes ? any(==(Opcode.GC_PREFIX), i.bytes) :
+                        !(i isa InstrIR.LocalGet || i isa InstrIR.LocalSet || i isa InstrIR.LocalTee ||
+                          i isa InstrIR.GlobalGet || i isa InstrIR.GlobalSet ||
+                          i isa InstrIR.I32Const || i isa InstrIR.I64Const ||
+                          i isa InstrIR.F32Const || i isa InstrIR.F64Const ||
+                          i isa InstrIR.NumOp || i isa InstrIR.Call || i isa InstrIR.CallIndirect ||
+                          i isa InstrIR.Drop || i isa InstrIR.Select ||
+                          i isa InstrIR.Block || i isa InstrIR.Loop || i isa InstrIR.If ||
+                          i isa InstrIR.Else || i isa InstrIR.End || i isa InstrIR.Br ||
+                          i isa InstrIR.BrIf || i isa InstrIR.Return || i isa InstrIR.Unreachable)
                 end
-                if !needs_type_safe_default && !ssa_is_128bit && !has_gc_prefix && length(stmt_bytes) >= 3 &&
-                   stmt_bytes[1] == 0x20 &&  # starts with local.get
+                if !needs_type_safe_default && !ssa_is_128bit && !has_gc_prefix &&
+                   length(_sf.instrs) >= 2 && _sf.instrs[1] isa InstrIR.LocalGet &&
+                   _sf.instrs[end] isa InstrIR.NumOp && 0x45 <= _sf.instrs[end].op <= 0xc4 &&
                    (local_wasm_type isa ConcreteRef || local_wasm_type === StructRef ||
                     local_wasm_type === ArrayRef || local_wasm_type === ExternRef || local_wasm_type === AnyRef ||
                     local_wasm_type === EqRef)
-                    last_byte = stmt_bytes[end]
-                    # PURE-220 / P3-titlecase: the last byte must be a single-byte
-                    # numeric opcode that IS the final instruction — not an immediate
-                    # byte of a trailing call/local.get/const. Forward-parse to the
-                    # true last instruction boundary instead of guessing backward
-                    # (e.g. call 80 → [0x10, 0x50] where 0x50 reads as i64.eqz).
-                    local _cn_li = _last_instr_start(stmt_bytes)
-                    ends_with_leb_operand = !(_cn_li == length(stmt_bytes))
-                    if !ends_with_leb_operand
-                        # Pure stack ops: single-byte opcodes with NO immediate arguments
-                        is_numeric_stack_op = (
-                            last_byte == 0x45 ||  # i32.eqz
-                            last_byte == 0x50 ||  # i64.eqz
-                            (last_byte >= 0x46 && last_byte <= 0x66) ||  # i32/i64/f32/f64 comparisons
-                            (last_byte >= 0x67 && last_byte <= 0x78) ||  # i32 unary/binary arithmetic
-                            (last_byte >= 0x79 && last_byte <= 0x8a) ||  # i64 unary/binary arithmetic
-                            (last_byte >= 0x8b && last_byte <= 0xa6) ||  # f32/f64 arithmetic
-                            (last_byte >= 0xa7 && last_byte <= 0xc4)     # numeric conversions
-                        )
-                        if is_numeric_stack_op
-                            needs_type_safe_default = true
-                        end
-                    end
+                    # PURE-220 / P3-titlecase (march4, ir/): a compound numeric expression
+                    # (starts local.get, ends with a no-immediate numeric op) stored into a
+                    # ref-typed local — the boundary misparse class is gone at the node level.
+                    needs_type_safe_default = true
                 end
 
                 # Check if stmt_bytes ENDS with a local.get of incompatible type
