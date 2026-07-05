@@ -4349,7 +4349,11 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
             reg!(T.parameters[1])
             return
         end
-        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box
+        # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
+        # wasm arrays (an id here admits them as dispatch candidates whose
+        # wrappers then have no struct to cast to — the _la_sub regression)
+        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box &&
+           !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
             push!(out, T)
         end
     end
