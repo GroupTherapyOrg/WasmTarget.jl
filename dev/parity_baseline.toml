@@ -18,18 +18,15 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 678
-R12_try_drivers = 13
-# R13: 14→15 justified 2026-07-05 (march6 slice B): the +1 IS the ONE native
-# lowering's try_table site; the 13 driver sites die in slice C (→2), the typed
-# tag in slice D takes it to ≤1 (the host-exception guard). Falls, never rises again.
-R13_catch_all_clauses = 15
+R11_patch_markers = 664
+R12_try_drivers = 0
+R13_catch_all_clauses = 2
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
 R16_external_convert_ladders = 13
-R17_unwrapped_value_emissions = 256
+R17_unwrapped_value_emissions = 252
 R18_anyref_dispatch_sigs = 5
 R2_emit_raw_bridges = 0
 R3_infer_value_type = 134
-R5_julia_type_reguess = 104
+R5_julia_type_reguess = 102
 R7_raw_coercion_ops = 126

@@ -486,8 +486,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
     region_inner_targets = Dict{Int, Vector{Int}}()  # enter block → sorted targets (desc)
-    for (target, eb) in target_region
-        haskey(target_loop, target) && delete!(target_loop, target)   # region wins
+    for (target, eb) in collect(target_region)
+        if haskey(target_loop, target)
+            # deepest construct wins: if the target's loop header lies INSIDE the
+            # region, the loop label is more inner — the loop keeps the target
+            # (f_l2: try-around-loop; region-always stole the loop's exit target).
+            local _lh = target_loop[target]
+            if _lh > eb
+                delete!(target_region, target)
+                continue
+            end
+            delete!(target_loop, target)   # loop is outside the region — region wins
+        end
         push!(get!(Vector{Int}, region_inner_targets, eb), target)
     end
     for eb in keys(region_inner_targets)
