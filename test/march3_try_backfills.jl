@@ -64,3 +64,40 @@ _m5_cast_box(b::Bool)::Int64 = (x = b ? Any[Int64(9)] : Any["s"];
     @test compare_julia_wasm(_m5_cast_box, true).pass
     @test compare_julia_wasm(_m5_cast_box, false).pass
 end
+
+# march5 (census D9.4): the try/finally differential battery — Julia inlines the
+# finalizer on each exit path; each shape verified native-vs-wasm. f_fin4's shape
+# (nested finally inside catch, non-throwing arm) caught a REAL wrong-value bug:
+# the normal path fell through the outer landing end INTO the handler, whose
+# fall-through phi-edge store overwrote the merge value with the catch edge's
+# (51→57). Fixed with the outer-merge skip machinery in generate_nested_try_catch_2.
+_m5_fin1(x::Int64)::Int64 = (acc = 0; try; try; x > 5 && error("big"); acc += 1
+    finally; acc += 100; end; catch; acc += 7; end; acc)
+_m5_fin2(x::Int64)::Int64 = (acc = 0; try; x > 5 && return acc + 1000; acc += 1
+    finally; acc += 100; end; acc)
+_m5_fin3(n::Int64)::Int64 = (t = 0; for i in 1:n; try; i > 3 && break; t += i
+    finally; t += 10; end; end; t)
+_m5_fin4(x::Int64)::Int64 = (r = 0; try; try; x > 2 && error("inner"); r += 1
+    finally; r += 50; end; catch; r += 7; end; r)
+
+@testset "march5: try/finally battery (D9.4)" begin
+    for (f, xs) in ((_m5_fin1, (3, 9)), (_m5_fin2, (3, 9)), (_m5_fin3, (2, 8)), (_m5_fin4, (1, 5)))
+        for x in xs
+            @test compare_julia_wasm(f, Int64(x)).pass
+        end
+    end
+end
+
+# march5 (census D10.1): async is OUT-OF-SCOPE BY DESIGN — this locks the
+# "sound loud-reject" guarantee (a Task/@async entry must REJECT at compile,
+# never silently miscompile).
+_m5_task(x::Int64)::Int64 = fetch(Threads.@spawn x + 1)
+@testset "march5: async loud-reject conformance (D10.1)" begin
+    rejected = try
+        WasmTarget.compile_multi(Any[(_m5_task, (Int64,), "m5_task")]; strict=true, validate=true)
+        false
+    catch
+        true
+    end
+    @test rejected
+end

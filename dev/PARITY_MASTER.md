@@ -556,3 +556,22 @@ re-implements convertType's arms inline. dart: 100% of expressions through wrap.
 **Out-of-scope by design (documented, sound):** async/generators state machine (DIM 10),
 dynamic forwarders/noSuchMethod (DIM 6 — Julia MethodError = trap), JS glue generation
 (DIM 13 — Therapy owns the host boundary), masquerade classes (Julia typeof is concrete).
+
+## MARCH 5 — the census queue executed (2026-07-05, branch `wt-parity-march5`)
+
+| item | status |
+|---|---|
+| F1 box supertype | ✅ CORRECTED (retrofit existed) + FIXED at creation — boxes `sub $JlBase` from birth |
+| F2 closed classId universe | ✅ `_register_reachable_ir_types!` closes the world before the ONE DFS (dart class_info.dart:583-690); $JlType hierarchy creation moved above the collector; **the pinned isa @test_broken FLIPPED to @test** |
+| F4 typeassert | ✅ the CHECKED cast (dart emitAsCheck): tee → ref.test $JlBase → typeof → classId range → tag-0 throw on mismatch; statically-proven casts pass through; battery covers structs + boxed numerics |
+| F3 constant interning | ✅ short strings (≤64B) → ONE immutable global each (constant array.new_fixed initializer); `===` identity + code size now dart-shaped; long strings stay inline (dart lazies those — deferred: init fns can't be added during body compile) |
+| F5 dead code | ✅ M8.1 SelectorInfo transcription (6.3KB) + its test + emit_box_type_id! + stale FNV comments — deleted |
+| F7 stack-trace infra | ✅ dormant PURE-9036 cluster deleted (zero callers); the rebuild is D9.1's typed tag payload |
+| D9.4 try/finally battery | ✅ committed — **and it caught a real wrong-value miscompile**: nested finally inside catch, non-throwing arm (51→57): the normal path fell through the outer landing end INTO the handler; fixed with the outer-merge skip machinery in generate_nested_try_catch_2 |
+| D10.1 async conformance | ✅ the loud-reject lock committed (a @spawn entry must REJECT at compile) |
+
+**Remaining queue (unchanged ranking):** D9.1/D9.2 typed exception tag + catch_all
+separation (the deep exceptions item) · F8 universal wrap adoption (the arg ladder →
+THE funnel) · D9.5 try-driver family → ONE lowering (f_fin4 is exhibit N that each
+driver re-derives phi handling) · multi-range classId checks · LUB dispatch signatures
+· threshold unification · tuple-per-arity sharing.

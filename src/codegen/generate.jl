@@ -773,46 +773,11 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
     return UInt32(length(mod.globals) - 1)
 end
 
-"""
-PURE-9036: Ensure module has stack trace capture infrastructure.
-Adds `capture_stack` import (env.capture_stack: () → externref) and
-`\$current_stack_trace` global (mut externref). Returns (import_idx, global_idx).
-Idempotent — scans existing imports to avoid duplicates.
-"""
-function ensure_stack_trace_support!(mod::WasmModule)
-    # Check if capture_stack import already exists
-    import_idx = nothing
-    func_count = UInt32(0)
-    for imp in mod.imports
-        if imp.kind == 0x00  # function import
-            if imp.module_name == "env" && imp.field_name == "capture_stack"
-                import_idx = func_count
-            end
-            func_count += 1
-        end
-    end
-
-    if import_idx === nothing
-        import_idx = add_stack_trace_import!(mod)
-    end
-
-    global_idx = ensure_stack_trace_global!(mod)
-    return (import_idx=import_idx, global_idx=global_idx)
-end
-
-"""
-PURE-9036: Emit capture_stack() + global.set at a throw site.
-Call this before emitting the `throw` instruction to capture the stack trace.
-"""
-function emit_capture_stack!(bytes::Vector{UInt8}, capture_import_idx::UInt32, trace_global_idx::UInt32)
-    b = InstrBuilder(; func_name="emit_capture_stack!")
-    # capture_stack() -> externref-on-stack; global.set consumes it. Emitted
-    # mid-stream into a caller buffer, so build into a local builder then splice.
-    call!(b, capture_import_idx, WasmValType[], WasmValType[ExternRef])
-    global_set!(b, trace_global_idx)
-    append!(bytes, builder_code(b))
-    return bytes
-end
+# census F7 (march5): the dormant stack-trace cluster (ensure_stack_trace_support!/
+# emit_capture_stack!) is DELETED — zero callers since introduction (PURE-9036).
+# The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
+# (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
+# source is the reference, not dead scaffolding.
 
 """
 PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
@@ -2607,6 +2572,24 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         ctx.last_stmt_was_stub = false
     end
 
+    # march5 (f_fin4 battery, wrong-value 51→57): phis AFTER outer.catch_dest that
+    # merge a NORMAL edge (< catch_dest) with the CATCH edge — the normal path must
+    # store its edge and br PAST the handler head to the merge; previously it fell
+    # THROUGH the landing-block end INTO the handler (pop_exception's block), whose
+    # fall-through phi-edge store overwrote the value with the catch edge's.
+    outer_merge_start = 0
+    for i in outer.catch_dest:length(code)
+        st = code[i]
+        if st isa Core.PhiNode && haskey(ctx.phi_locals, i) &&
+           any(Int(e) < outer.catch_dest for e in st.edges)
+            outer_merge_start = i
+            break
+        end
+    end
+
+    # === Outer skip block (only when a post-outer merge exists) ===
+    outer_merge_start > 0 && block!(bb)
+
     # === Outer catch landing block (void) ===
     block!(bb)
 
@@ -2810,8 +2793,26 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         end
     end
 
+    # Normal path: store the post-outer merge-phi NORMAL edges, then br past the
+    # landing end AND the handler head to the outer-skip end (the merge).
+    if outer_merge_start > 0
+        for i in outer_merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if Int(e) < outer.catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+    end
+
     # End outer try_table
     end_block!(bb)
+
+    outer_merge_start > 0 && br!(bb, 1)   # normal path → outer-skip end (the merge)
 
     # End outer catch landing block
     end_block!(bb)
@@ -2819,12 +2820,46 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
     # Reset dead code flag — outer catch handler is reachable
     ctx.last_stmt_was_stub = false
 
-    # === Outer catch handler (stmts outer.catch_dest to end) ===
-    # P3: stackified for the same linear-walk reasons as the inner handler.
-    outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
-    if !isempty(outer_catch)
-        generate_stackified_flow!(bb, ctx, outer_catch, code)
-        ctx.last_stmt_was_stub = false
+    if outer_merge_start > 0
+        # === Outer catch handler HEAD (catch_dest .. merge-1), then its merge edges ===
+        outer_head = BasicBlock[]
+        for b in blocks
+            lo = max(b.start_idx, outer.catch_dest)
+            hi = min(b.end_idx, outer_merge_start - 1)
+            lo > hi && continue
+            push!(outer_head, (lo == b.start_idx && hi == b.end_idx) ? b :
+                  BasicBlock(lo, hi, hi == b.end_idx ? b.terminator : nothing))
+        end
+        if !isempty(outer_head)
+            generate_stackified_flow!(bb, ctx, outer_head, code;
+                                                   trailing_unreachable=false)
+            ctx.last_stmt_was_stub = false
+        end
+        for i in outer_merge_start:length(code)
+            st = code[i]
+            st isa Core.PhiNode || break
+            haskey(ctx.phi_locals, i) || continue
+            for (k, e) in enumerate(st.edges)
+                if Int(e) >= outer.catch_dest && isassigned(st.values, k)
+                    emit_phi_local_set!(bb, st.values[k], i, ctx)
+                    break
+                end
+            end
+        end
+        end_block!(bb)   # outer-skip end — BOTH paths at the merge
+        merge_tail = [b for b in blocks if b.start_idx >= outer_merge_start]
+        if !isempty(merge_tail)
+            generate_stackified_flow!(bb, ctx, merge_tail, code)
+            ctx.last_stmt_was_stub = false
+        end
+    else
+        # === Outer catch handler (stmts outer.catch_dest to end) ===
+        # P3: stackified for the same linear-walk reasons as the inner handler.
+        outer_catch = [b for b in blocks if b.start_idx >= outer.catch_dest]
+        if !isempty(outer_catch)
+            generate_stackified_flow!(bb, ctx, outer_catch, code)
+            ctx.last_stmt_was_stub = false
+        end
     end
 
     return bb
