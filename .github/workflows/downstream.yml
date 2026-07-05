@@ -21,6 +21,7 @@ defaults:
     shell: bash
 jobs:
   downstream:
+    timeout-minutes: 60   # hang guard (see ci.yml note)
     name: ${{ matrix.pkg }} (downstream)
     runs-on: ubuntu-latest
     strategy:

@@ -7,6 +7,10 @@ on:
 
 jobs:
   test:
+    # a hung worker must SELF-KILL, not sit on GitHub's 6-hour default —
+    # the normal lane is ~30-45 min; 75 is generous headroom (2026-07-05:
+    # a wedged Windows run sat 3h19m before manual intervention)
+    timeout-minutes: 75
     name: Julia ${{ matrix.version }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
