@@ -12,7 +12,18 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
     # phi init, PURE-314), and generate_loop_code + generate_branched_loops (no-phi loops).
     if has_try_catch(code)
-        append_builder!(b, generate_try_catch(ctx, blocks, code))   # typed merge
+        # march6 slice B (env-gated rollout): try regions FIRST-CLASS in the
+        # stackifier — ONE lowering (dart: one visitTryCatch). Single/sibling
+        # non-overlapping regions route natively; the driver family remains the
+        # fallback until slice C deletes it.
+        local _regions = find_try_regions(code)
+        local _nested = any(a !== b_ && a.enter_idx < b_.enter_idx && b_.catch_dest <= a.catch_dest
+                            for a in _regions, b_ in _regions)
+        if get(ENV, "WT_ONE_TRY", "") == "1" && !isempty(_regions) && !_nested
+            generate_stackified_flow!(b, ctx, blocks, code; try_regions=Vector{Any}(_regions))
+        else
+            append_builder!(b, generate_try_catch(ctx, blocks, code))   # typed merge
+        end
     elseif length(blocks) == 1
         # Single block - just generate statements
         generate_block_code!(b, ctx, blocks[1])

@@ -20,7 +20,10 @@ L9_no_unjustified_untyped_emission = 0
 [metrics]
 R11_patch_markers = 678
 R12_try_drivers = 13
-R13_catch_all_clauses = 14
+# R13: 14→15 justified 2026-07-05 (march6 slice B): the +1 IS the ONE native
+# lowering's try_table site; the 13 driver sites die in slice C (→2), the typed
+# tag in slice D takes it to ≤1 (the host-exception guard). Falls, never rises again.
+R13_catch_all_clauses = 15
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
 R16_external_convert_ladders = 13

@@ -106,8 +106,41 @@ function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationCont
     return b
 end
 
+"""march6 slice B: split blocks so every region's enter_idx ENDS a block and every
+catch_dest STARTS one — the try_table/landing labels then open and close exactly at
+block boundaries and the stackifier's ordinary machinery does the rest."""
+function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{BasicBlock}
+    cuts_after = Set{Int}()          # statement idx that must END a block
+    for r in regions
+        push!(cuts_after, r.enter_idx)
+        r.catch_dest > 1 && push!(cuts_after, r.catch_dest - 1)
+    end
+    out = BasicBlock[]
+    for b in blocks
+        lo = b.start_idx
+        for i in b.start_idx:(b.end_idx - 1)
+            if i in cuts_after
+                push!(out, BasicBlock(lo, i, nothing))
+                lo = i + 1
+            end
+        end
+        push!(out, BasicBlock(lo, b.end_idx, b.terminator))
+    end
+    return out
+end
+
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
-                                  trailing_unreachable::Bool = true)::InstrBuilder
+                                  trailing_unreachable::Bool = true,
+                                  try_regions::Vector = Any[])::InstrBuilder
+    # march6 slice B: try regions are FIRST-CLASS — pre-split at their boundaries,
+    # then the two label events below (open at the enter block's end, close at the
+    # handler block's start) are the ENTIRE try lowering. Handler blocks compile as
+    # plain CFG blocks: the stackifier's phi machinery already owns handler-edge phis.
+    if !isempty(try_regions)
+        blocks = _split_blocks_for_regions(blocks, try_regions)
+        ensure_exception_tag!(ctx.mod)
+        ensure_exception_global!(ctx.mod)
+    end
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================
@@ -166,6 +199,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # (successor edges for regions are added after the terminator walk below)
+    # march6 slice B: region → block-event maps. A region OPENS at the end of the
+    # block containing its EnterNode and CLOSES at the start of its handler block.
+    try_open_at = Dict{Int, Vector{Any}}()   # block_idx (enter block) → regions, outermost first
+    try_close_at = Dict{Int, Vector{Any}}()  # block_idx (handler block) → regions, innermost first
+    for r in try_regions
+        eb = get(stmt_to_block, r.enter_idx, nothing)
+        hb = get(stmt_to_block, r.catch_dest, nothing)
+        (eb === nothing || hb === nothing) && continue
+        push!(get!(Vector{Any}, try_open_at, eb), r)
+        pushfirst!(get!(Vector{Any}, try_close_at, hb), r)
+    end
+
     # Build successor/predecessor maps (block indices)
     successors = Dict{Int, Vector{Int}}()  # block_idx -> successor block indices
     predecessors = Dict{Int, Vector{Int}}()  # block_idx -> predecessor block indices
@@ -221,6 +267,22 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 push!(successors[block_idx], block_idx + 1)
                 push!(predecessors[block_idx + 1], block_idx)
             end
+        end
+    end
+
+    # march6 slice B: handler edges — the enter block flows to BOTH its fall-through
+    # and the handler block (the catch edge), so predecessors/phi analysis see handlers.
+    for r in try_regions
+        eb = get(stmt_to_block, r.enter_idx, nothing)
+        hb = get(stmt_to_block, r.catch_dest, nothing)
+        (eb === nothing || hb === nothing) && continue
+        if !(hb in successors[eb])
+            push!(successors[eb], hb)
+            push!(predecessors[hb], eb)
+        end
+        if eb < length(blocks) && !((eb + 1) in successors[eb])
+            push!(successors[eb], eb + 1)
+            push!(predecessors[eb + 1], eb)
         end
     end
 
@@ -406,8 +468,34 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # march6 slice B: targets INSIDE a try region must open INSIDE its try_table —
+    # a br from within the region to a label opened outside the try would exit the
+    # try entirely (first-contact bug: the normal path br'd into the handler).
+    # Deepest-construct-wins vs loops: a target inside both belongs to whichever
+    # opened later; for the slice-B gate (non-nested, non-overlapping-with-loop
+    # regions) region membership simply overrides.
+    target_region = Dict{Int, Int}()   # target block → region enter block
+    for target in non_trivial_targets
+        for r in try_regions
+            eb = get(stmt_to_block, r.enter_idx, nothing)
+            hb = get(stmt_to_block, r.catch_dest, nothing)
+            (eb === nothing || hb === nothing) && continue
+            if target > eb && target < hb
+                target_region[target] = eb
+            end
+        end
+    end
+    region_inner_targets = Dict{Int, Vector{Int}}()  # enter block → sorted targets (desc)
+    for (target, eb) in target_region
+        haskey(target_loop, target) && delete!(target_loop, target)   # region wins
+        push!(get!(Vector{Int}, region_inner_targets, eb), target)
+    end
+    for eb in keys(region_inner_targets)
+        sort!(region_inner_targets[eb]; rev=true)
+    end
+
     # Split targets into outer (outside all loops) and inner (inside a loop)
-    outer_targets = sort([t for t in non_trivial_targets if !haskey(target_loop, t)]; rev=true)
+    outer_targets = sort([t for t in non_trivial_targets if !haskey(target_loop, t) && !haskey(target_region, t)]; rev=true)
     # Group inner targets by their loop header
     loop_inner_targets = Dict{Int, Vector{Int}}()  # header -> sorted targets (desc)
     for (target, header) in target_loop
@@ -965,6 +1053,28 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     for (block_idx, block) in enumerate(blocks)
         # First, close any blocks whose target is this block
         # (We close BEFORE generating code for the target block)
+        # march6 slice B: a region's handler block starts here → the try_table and
+        # its landing block END exactly at this boundary (the catch br lands at the
+        # handler's first instruction). Innermost regions close first.
+        if haskey(try_close_at, block_idx)
+            for r in try_close_at[block_idx]
+                # any region-inner target labels still open close first (nesting)
+                while !isempty(label_stack) && label_stack[end][1] === :block
+                    pop!(label_stack)
+                    end_block!(b)
+                end
+                if !isempty(label_stack) && label_stack[end][1] === :try
+                    pop!(label_stack)
+                    end_block!(b)          # end try_table
+                end
+                if !isempty(label_stack) && label_stack[end][1] === :landing
+                    pop!(label_stack)
+                    end_block!(b)          # end landing — catch lands here
+                end
+                ctx.last_stmt_was_stub = false   # the handler is reachable
+            end
+        end
+
         # (slice-A exact-semantics note: the old code keyed on the LAST *block*
         # entry regardless of loops above it; replicated via findlast-:block)
         while true
@@ -1368,6 +1478,26 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # The edge for fallthrough is the last statement of this block
                 terminator_idx = block.end_idx
                 set_phi_locals_for_edge!(b, next_block_idx, terminator_idx)
+            end
+        end
+
+        # march6 slice B: this block ends with an EnterNode (post-split guarantee) →
+        # open the region: landing block (the catch's br target ends at the handler)
+        # then the try_table with catch_all → label 0 (the landing). Outermost first.
+        if haskey(try_open_at, block_idx)
+            for r in try_open_at[block_idx]
+                push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0)))
+                block!(b)
+                push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0)))
+                try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
+                # region-inner forward targets open INSIDE the try_table
+                local _eb = get(stmt_to_block, r.enter_idx, 0)
+                if haskey(region_inner_targets, _eb)
+                    for target in region_inner_targets[_eb]
+                        push!(label_stack, (:block, target))
+                        block!(b)
+                    end
+                end
             end
         end
 

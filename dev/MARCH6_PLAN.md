@@ -27,3 +27,10 @@ payload (13 sites, census list); catch binds via catch_clause + local_set; $curr
 + :the_exception die (R13→0; keep catch_all ONLY as the host-exception outer guard).
 ## Slice E — try/finally lowering (dart visitTryFinally finalizer-duplication) + the
 compile.jl:1716 anomaly + full gate via dev/run_full_gate.sh.
+
+
+## GATE CADENCE (Dale, 2026-07-05 — testing had ballooned to ~80% of wall-clock):
+Inner loop = smoke + touched-subsystem battery ONLY (~1 min). Per commit = smoke +
+ratchet, commit, ONE heavy shard IN THE BACKGROUND while dev continues (red ⇒ revert).
+Full gate + fuzz = ONCE per march at PR time, detached behind dev/run_full_gate.sh.
+NOTHING blocks the foreground >2 min. Env-gated changes need NO default-path shards.
