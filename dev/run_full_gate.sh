@@ -8,7 +8,7 @@
 set -u
 LOG="${1:?usage: run_full_gate.sh <logfile>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-STALL_MIN=12
+STALL_MIN=25   # cold test-env precompile is silent ~15-20 min; 12 false-positived
 launch() {
     : > "$LOG"
     WT_TEST_CONCURRENCY=2 julia --project="$REPO" -e "using Pkg; Pkg.test()" >> "$LOG" 2>&1 &
