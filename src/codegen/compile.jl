@@ -1579,16 +1579,16 @@ function compile_module(functions::Vector;
 
     # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
     # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
-    # function's typed IR and register every reachable concrete struct / union member
-    # NOW, so the DFS below sees the closed world and every type gets a real
-    # [low, high] range. Emission-time ensure_type_id! remains the rare fallback
-    # (its max+1 id is range-less — the open-universe drift this pass eliminates
-    # was the root of isa-over-Any[] silently returning false AND typeassert's
-    # checked cast never emitting for runtime-registered types).
-    _register_reachable_ir_types!(mod, type_registry, function_data)
+    # function's typed IR and COLLECT every reachable concrete struct / union member
+    # so the DFS below numbers the closed world (real [low, high] ranges for isa/
+    # typeassert). Collection ONLY — no struct registration: eagerly registering
+    # changed field-resolution ORDER and produced duplicate layouts (caught by
+    # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
+    # registered lazily later receives its pre-assigned id via ensure_type_id!.
+    _reachable = _collect_reachable_ir_types(function_data)
 
-    # PURE-9025: Assign DFS type IDs after all types are registered
-    assign_type_ids!(type_registry)
+    # PURE-9025: Assign DFS type IDs (the closed world = registered + reachable)
+    assign_type_ids!(type_registry; extra_concrete_types=_reachable)
 
     # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
@@ -1804,6 +1804,17 @@ function compile_module(functions::Vector;
     clear_perf_now!()
     clear_char_array_type!()
     clear_utf8_to_js_func!()
+
+    # census F2 (march5, the ORIGINAL isa bug's second root): structs registered
+    # LAZILY during body compilation never received `sub $JlBase` — the early
+    # retrofit ran before bodies, so `ref.test (ref $JlBase)` (the isa/typeof gate)
+    # was FALSE for every late-registered struct at runtime. Re-run the idempotent
+    # retrofit now that every struct exists. (dart declares supertypes at class
+    # definition — class_info.dart:288 — so this second pass has no dart analog;
+    # it exists because WT registers lazily.)
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
 
     # WASMTARGET dynamic dispatch: stub any discovery-added function whose ASSEMBLED
     # bytecode fails validation (invalid-but-non-crashing codegen not caught by the
@@ -2021,6 +2032,13 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
     end
 
     populate_type_constant_globals!(mod, type_registry)
+    # census F2 (march5): the post-body supertype retrofit — lazily-registered
+    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
+    # the main pipeline's note).
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
+
     return mod
 end
 
@@ -2893,6 +2911,13 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
     end
 
     populate_type_constant_globals!(mod, type_registry)
+    # census F2 (march5): the post-body supertype retrofit — lazily-registered
+    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
+    # the main pipeline's note).
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
+
     return mod
 end  # compile_module_from_ir_frozen
 
@@ -4298,17 +4323,18 @@ function _compile_module_trim(functions::Vector; kwargs...)
 end
 
 """
-    _register_reachable_ir_types!(mod, type_registry, function_data)
+    _collect_reachable_ir_types(function_data) -> Set{DataType}
 
 census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
-ClassIdNumbering numbers every class of the component once, before codegen). Walks
-every function's typed-IR ssa/arg/return types, decomposes Unions, and registers
-every eligible concrete struct type so `assign_type_ids!` numbers the whole world
-in one DFS. Best-effort per type: `register_struct_type!` self-filters; a type it
-rejects here may still register lazily during emission (the ensure_type_id!
-fallback), which only costs that type its range.
+number every class of the component once, before codegen). Walks every function's
+typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
+types reachable from the IR so `assign_type_ids!` numbers the whole world in one
+DFS. PURE COLLECTION — registration stays lazy (eager registration reorders field
+resolution and forks layouts); a collected type registered later receives its
+pre-assigned id via `ensure_type_id!`.
 """
-function _register_reachable_ir_types!(mod::WasmModule, type_registry::TypeRegistry, function_data)
+function _collect_reachable_ir_types(function_data)::Set{DataType}
+    out = Set{DataType}()
     seen = Set{Any}()
     function reg!(@nospecialize(T))
         T === nothing && return
@@ -4319,18 +4345,12 @@ function _register_reachable_ir_types!(mod::WasmModule, type_registry::TypeRegis
             return
         end
         T isa DataType || return
-        # Type{X} carries X (type constants / typeof results)
         if T <: Type && T !== Type && length(T.parameters) == 1
             reg!(T.parameters[1])
             return
         end
-        if isconcretetype(T) && isstructtype(T) && !(T <: Function && fieldcount(T) == 0)
-            try
-                register_struct_type!(mod, type_registry, T)
-            catch
-                # best-effort: an exotic type the registrar chokes on keeps its
-                # lazy path; it only forfeits a DFS range
-            end
+        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box
+            push!(out, T)
         end
     end
     for fd in function_data
@@ -4347,5 +4367,5 @@ function _register_reachable_ir_types!(mod::WasmModule, type_registry::TypeRegis
             end
         end
     end
-    return nothing
+    return out
 end

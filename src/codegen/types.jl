@@ -182,7 +182,7 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
 
 IDs start at 1 (0 is reserved for unknown/unassigned).
 """
-function assign_type_ids!(registry::TypeRegistry)
+function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
     for (T, info) in registry.structs
@@ -190,6 +190,10 @@ function assign_type_ids!(registry::TypeRegistry)
             push!(concrete_types, T)
         end
     end
+    # census F2 (march5): the closed world — IR-reachable types enter the numbering
+    # even before (or without) struct registration; their ids/ranges are what isa
+    # and the checked cast read, and lazy registration later reuses the same id.
+    extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
 
     # Also include primitive numeric types that may need boxing/dispatch
     # PURE-9028: Include Nothing for BoxedNothing typeId
