@@ -1266,6 +1266,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         global_get!(b, tn_global_idx, AnyRef)
 
     elseif val isa Module
+        # march7: funnel-first (module) — interned when eager-able
+        local _cg_2 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_2 !== nothing
+            local _ci_2 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_2, ConcreteRef(_ci_2.wasm_type_idx, false))
+            return b
+        end
         # Module constant — empty struct (fieldcount=0), like Function singletons.
         # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
@@ -1275,6 +1282,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
+        # march7: funnel-first (fn-singleton) — interned when eager-able
+        local _cg_0 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_0 !== nothing
+            local _ci_0 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_0, ConcreteRef(_ci_0.wasm_type_idx, false))
+            return b
+        end
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
@@ -1284,6 +1298,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
+        # march7: funnel-first (closure-const) — interned when eager-able
+        local _cg_1 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_1 !== nothing
+            local _ci_1 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_1, ConcreteRef(_ci_1.wasm_type_idx, false))
+            return b
+        end
         # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
         # These are structs that happen to be Functions — compile like regular structs
         T = typeof(val)
