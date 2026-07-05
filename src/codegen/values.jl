@@ -1528,6 +1528,15 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
+        # march7: THE ensureConstant funnel first — an eager-internable immutable
+        # constant reads its ONE deduplicated global (dart constants.dart:427-443);
+        # mutable / non-constant-field values fall through to the inline path.
+        local _cg = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg !== nothing
+            local _cgi = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg, ConcreteRef(_cgi.wasm_type_idx, false))
+            return b
+        end
         # Struct constant - create it with struct.new
         T = typeof(val)
 
