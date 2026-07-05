@@ -27,18 +27,40 @@ _m3_try_rethrow(x::Int64)::Int64 = try; x == 3 ? error("boom") : x; catch e; x +
     @test compare_julia_wasm(_m3_try_rethrow, Int64(7)).pass
 end
 
-# march3 FINDING (pre-existing, silent wrong value — NOT introduced by the march;
-# verified identical on parent 67b09a5^): `isa` over Any[] against a LOCALLY-defined
-# abstract hierarchy returns false for struct members (exp 21, act 3 — each `e isa _AZ`
-# yields false). The registered-at-compile DFS range apparently misses Main-defined
-# hierarchies in the single-entry compile. Track until the isa/classId dimension revisits.
+# march3 FINDING → FIXED by march5's census-F2 closed-world numbering (the
+# _register_reachable_ir_types! pre-pass): Main-defined hierarchies now enter the
+# one whole-world DFS before codegen, so `isa` gets a real [low, high] range.
+# HARD-LOCKED (was @test_broken while the classId universe was open).
 abstract type _M3AZ end
 struct _M3B1 <: _M3AZ; x::Int64; end
 struct _M3B2 <: _M3AZ; y::Float64; end
 _m3_isa_local_hier(x::Int64)::Int64 =
     (v = Any[_M3B1(x), _M3B2(2.5), "s"]; c = 0; for e in v; c += e isa _M3AZ ? 10 : 1; end; c)
 
-@testset "march3: isa over Any[] w/ local abstract hierarchy (documented gap)" begin
+@testset "march5: isa over Any[] w/ local abstract hierarchy (FIXED — closed-world DFS)" begin
     r = try compare_julia_wasm(_m3_isa_local_hier, Int64(1)) catch; (pass=false,) end
-    @test_broken r.pass
+    @test r.pass
+end
+
+# march5 (census F2+F4): the closed-world classId universe + the checked cast.
+# Multi-level Main-defined hierarchies (mid-abstract ranges), typeassert throw-parity
+# over structs and boxed numerics — all through the ONE whole-world DFS.
+abstract type _M5Z end
+abstract type _M5Mid <: _M5Z end
+struct _M5A <: _M5Mid; a::Int64; end
+struct _M5B <: _M5Mid; b::Float64; end
+struct _M5C <: _M5Z; c::Int64; end
+_m5_hier(x::Int64)::Int64 = (v = Any[_M5A(x), _M5B(1.5), _M5C(x), 7]; c = 0;
+    for e in v; c += (e isa _M5Mid ? 100 : 0) + (e isa _M5Z ? 10 : 0) + (e isa Integer ? 1 : 0); end; c)
+_m5_cast_struct(b::Bool)::Int64 = (x = b ? Any[_M5A(3)] : Any[_M5C(4)];
+    try; (x[1]::_M5A).a; catch; -5; end)
+_m5_cast_box(b::Bool)::Int64 = (x = b ? Any[Int64(9)] : Any["s"];
+    try; x[1]::Int64 + 1; catch; -7; end)
+
+@testset "march5: closed-world isa + checked casts" begin
+    @test compare_julia_wasm(_m5_hier, Int64(2)).pass
+    @test compare_julia_wasm(_m5_cast_struct, true).pass
+    @test compare_julia_wasm(_m5_cast_struct, false).pass
+    @test compare_julia_wasm(_m5_cast_box, true).pass
+    @test compare_julia_wasm(_m5_cast_box, false).pass
 end

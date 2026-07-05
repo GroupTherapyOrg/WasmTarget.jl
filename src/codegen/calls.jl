@@ -3708,12 +3708,47 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     end
 
-    # Special case for typeassert - just pass through the value
-    # Core.typeassert(x, T) returns x if type matches, throws otherwise
-    # In Wasm we don't do runtime type checks, so just return the value
+    # Core.typeassert(x, T) — dart's CHECKED cast (census F4, march5; emitAsCheck,
+    # types.dart:437-481: is-check, throw on mismatch). Statically-proven casts stay
+    # pass-through (the common case — inference already narrowed). A runtime check
+    # emits when the value is a GC ref and the target has a DFS classId range:
+    # typeId ∈ [low, high] or throw TypeError. Values the discriminator can't see
+    # (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
     if is_func(func, :typeassert)
         if length(args) >= 1
-            emit_value!(fb, args[1], ctx)
+            local _ta_ty = emit_value!(fb, args[1], ctx)
+            local _ta_target = length(args) >= 2 ? (args[2] isa Type ? args[2] :
+                args[2] isa GlobalRef ? Core.eval(args[2].mod, args[2].name) : nothing) : nothing
+            local _ta_static = get_ssa_type(ctx, args[1])
+            if _ta_target isa Type && isconcretetype(_ta_target) &&
+               !(_ta_static isa Type && _ta_static <: _ta_target) &&
+               (_ta_ty === AnyRef || _ta_ty isa ConcreteRef || _ta_ty === StructRef) &&
+               ctx.type_registry.base_struct_idx !== nothing
+                local _ta_range = get_type_range(ctx.type_registry, _ta_target)
+                if _ta_range !== nothing
+                    local _ta_low, _ta_high = _ta_range
+                    local _ta_base = ctx.type_registry.base_struct_idx
+                    local _ta_tmp = allocate_local!(ctx, AnyRef)
+                    local_tee!(fb, _ta_tmp)
+                    ref_test!(fb, Int64(_ta_base), false)
+                    if_!(fb)                                   # discriminable ($JlBase struct)
+                    local_get!(fb, UInt32(_ta_tmp))
+                    emit_typeof!(fb, _ta_base)
+                    emit_classid_range_check!(fb, _ta_low, _ta_high)
+                    num!(fb, Opcode.I32_EQZ)
+                    if_!(fb)                                   # out of range → THROW
+                    # null-payload throw (the union_bottom_throw_stub shape): TypeError
+                    # carries 4 fields the check site can't populate; throw-PARITY is the
+                    # contract (native throws TypeError, wasm throws tag 0 — both catchable)
+                    ensure_exception_tag!(ctx.mod)
+                    ref_null!(fb, AnyRef)
+                    global_set!(fb, ensure_exception_global!(ctx.mod))
+                    throw_!(fb, 0)
+                    end_block!(fb)
+                    end_block!(fb)
+                    local_get!(fb, UInt32(_ta_tmp))            # the value survives the check
+                end
+            end
         end
         return append_builder!(b, fb)
     end

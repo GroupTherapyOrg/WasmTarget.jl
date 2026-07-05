@@ -1571,14 +1571,27 @@ function compile_module(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
+    # PURE-9063: Create $JlType hierarchy types FIRST (march5 reorder: the closed-world
+    # collector below registers structs whose DataType-typed fields must resolve to
+    # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
+    # which the Any-only patch pass below can't fix)
+    create_jl_type_hierarchy!(mod, type_registry)
+
+    # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
+    # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
+    # function's typed IR and register every reachable concrete struct / union member
+    # NOW, so the DFS below sees the closed world and every type gets a real
+    # [low, high] range. Emission-time ensure_type_id! remains the rare fallback
+    # (its max+1 id is range-less — the open-universe drift this pass eliminates
+    # was the root of isa-over-Any[] silently returning false AND typeassert's
+    # checked cast never emitting for runtime-registered types).
+    _register_reachable_ir_types!(mod, type_registry, function_data)
+
     # PURE-9025: Assign DFS type IDs after all types are registered
     assign_type_ids!(type_registry)
 
     # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
-
-    # PURE-9063: Create $JlType hierarchy types (before type globals use them)
-    create_jl_type_hierarchy!(mod, type_registry)
 
     # PURE-9064: Patch struct types registered before JlType hierarchy existed.
     # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
@@ -4282,4 +4295,57 @@ function _compile_module_trim(functions::Vector; kwargs...)
         TRIM_ENTRY_NAMES[] = nothing
         _TRIM_ACTIVE[] = false
     end
+end
+
+"""
+    _register_reachable_ir_types!(mod, type_registry, function_data)
+
+census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
+ClassIdNumbering numbers every class of the component once, before codegen). Walks
+every function's typed-IR ssa/arg/return types, decomposes Unions, and registers
+every eligible concrete struct type so `assign_type_ids!` numbers the whole world
+in one DFS. Best-effort per type: `register_struct_type!` self-filters; a type it
+rejects here may still register lazily during emission (the ensure_type_id!
+fallback), which only costs that type its range.
+"""
+function _register_reachable_ir_types!(mod::WasmModule, type_registry::TypeRegistry, function_data)
+    seen = Set{Any}()
+    function reg!(@nospecialize(T))
+        T === nothing && return
+        T in seen && return
+        push!(seen, T)
+        if T isa Union
+            reg!(T.a); reg!(T.b)
+            return
+        end
+        T isa DataType || return
+        # Type{X} carries X (type constants / typeof results)
+        if T <: Type && T !== Type && length(T.parameters) == 1
+            reg!(T.parameters[1])
+            return
+        end
+        if isconcretetype(T) && isstructtype(T) && !(T <: Function && fieldcount(T) == 0)
+            try
+                register_struct_type!(mod, type_registry, T)
+            catch
+                # best-effort: an exotic type the registrar chokes on keeps its
+                # lazy path; it only forfeits a DFS range
+            end
+        end
+    end
+    for fd in function_data
+        code_info = fd[4]
+        code_info === nothing && continue
+        for at in fd[2]
+            reg!(at isa Type ? at : typeof(at))
+        end
+        reg!(fd[5])
+        ssats = code_info.ssavaluetypes
+        if ssats isa Vector
+            for t in ssats
+                reg!(Core.Compiler.widenconst(t))
+            end
+        end
+    end
+    return nothing
 end
