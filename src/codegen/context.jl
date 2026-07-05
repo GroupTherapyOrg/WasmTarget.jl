@@ -593,9 +593,21 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
 end
 
 """
-Emit bytecode to convert a value on the stack to f64.
-Used for DOM bindings where all numeric values are passed as f64 for JS compatibility.
+Convert a numeric value on the stack to f64 (no-op when already f64) — builder-native
+(THE implementation). Used for DOM bindings where numerics pass as f64 for JS.
 """
+function emit_convert_to_f64!(b, valtype::WasmValType)
+    if valtype == I32
+        num!(b, 0xB7)  # f64.convert_i32_s
+    elseif valtype == I64
+        num!(b, 0xB9)  # f64.convert_i64_s
+    elseif valtype == F32
+        num!(b, 0xBB)  # f64.promote_f32
+    end
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_convert_to_f64(valtype::WasmValType)::Vector{UInt8}
     if valtype == I32
         return UInt8[0xB7]  # f64.convert_i32_s
@@ -638,6 +650,39 @@ function encode_block_type(result_type::WasmValType)::Vector{UInt8}
         push!(bytes, UInt8(result_type))
     end
     return bytes
+end
+
+# parity(M10b): a CAST carries its target type — dart's `as T`
+# (code_generator.dart:3100 visitAsExpression: a statically-satisfied cast —
+# `omitExplicitTypeChecks || node.isUnchecked` — is EXACTLY `wrap(operand,
+# expectedType)`: the operand through the one wrap channel, typed by the target).
+# `convert(T, x)` / `typeassert(x, T)` results that inference left erased refine
+# to T when the join already proves x carries exactly T (the identity cast the
+# calls.jl arm lowers value-only, = dart's isUnchecked path) — the result local
+# then types as T, so the store and every load agree (the escaping-closure
+# i64-into-anyref invalid store). A genuinely-dynamic cast stays a loud reject
+# (correct-or-loud) until dart's emitAsCheck analog lands.
+function refine_checked_cast_types!(ctx::AbstractCompilationContext, code)
+    _cres(a) = a isa GlobalRef ? (isdefined(a.mod, a.name) ? getglobal(a.mod, a.name) : nothing) : a
+    for (_ck, _cstmt) in enumerate(code)
+        _cstmt isa Expr || continue
+        local _cargs = _cstmt.head === :call ? _cstmt.args :
+                       _cstmt.head === :invoke ? _cstmt.args[2:end] : nothing
+        (_cargs === nothing || length(_cargs) != 3) && continue
+        local _cf = try _cres(_cargs[1]) catch; nothing end
+        local _isconv = _cf === Base.convert
+        local _ista = _cf === Core.typeassert
+        (_isconv || _ista) || continue
+        local _cT = try _cres(_cargs[_isconv ? 2 : 3]) catch; nothing end
+        _cT isa DataType || continue
+        local _cx = _cargs[_isconv ? 3 : 2]
+        _cx isa Core.SSAValue || continue
+        local _corig = get(ctx.ssa_types, _ck, Any)
+        (_corig === Any || _corig isa Union) || continue
+        get(ctx.ssa_types, _cx.id, Any) === _cT || continue
+        ctx.ssa_types[_ck] = _cT
+    end
+    return nothing
 end
 
 """
@@ -726,6 +771,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
+    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
 
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
@@ -976,6 +1022,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
+    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
@@ -2134,13 +2181,13 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
 end
 
 """
-    emit_ref_cast_if_structref(bytes, val, target_type_idx, ctx) -> bytes
+    _ref_cast_source_type(val, ctx)
 
-Check if `val` will produce `structref` on the Wasm stack (due to union-typed local),
-and if so, append `ref.cast null \$target_type_idx` to narrow it for struct_get.
+Resolve the DECLARED wasm slot type of `val`'s source (SSA/phi local or parameter) —
+feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/anyref)
+or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
 """
-function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
-    local_wasm_type = nothing
+function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
     if val isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, val.id, nothing)
         if local_idx === nothing
@@ -2149,7 +2196,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         if local_idx !== nothing
             arr_idx = local_idx - ctx.n_params + 1
             if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                local_wasm_type = ctx.locals[arr_idx]
+                return ctx.locals[arr_idx]
             end
         end
     elseif val isa Core.Argument
@@ -2163,12 +2210,29 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             T = ctx.arg_types[arg_idx]
-            local_wasm_type = (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
+            return (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
                 get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
         end
     end
+    return nothing
+end
+
+function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
     b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", mod=ctx.mod)
     seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
+    _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
+    append!(bytes, builder_code(b))
+    return
+end
+
+"""builder-native form: resolve the source's declared wasm type and narrow on `b`."""
+function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
+    _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
+    return b
+end
+
+"""builder-native core: with the source ref on `b`'s stack, narrow per the arm table."""
+function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
         ref_cast!(b, Int64(target_type_idx), true)
@@ -2193,8 +2257,7 @@ function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx:
         # Julia's abstract-dispatch failure).
         ref_cast!(b, Int64(target_type_idx), true)
     end
-    append!(bytes, builder_code(b))
-    return bytes
+    return b
 end
 
 """
@@ -2251,55 +2314,51 @@ function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::AbstractC
 end
 
 """
-    _narrow_generic_local!(bytes, local_idx, ssa_id, ctx)
+    _narrow_generic_local!(b, local_idx, ssa_id, ctx) -> Bool
 
-PURE-901: When a local has generic type (anyref/structref) but the SSA's Julia type
-maps to a concrete Wasm type, emit `ref.cast null \$concrete_type` to narrow the value
-on the stack. This ensures downstream struct_get/array_get see the correct type.
-
-This is safe because ref.cast null on the correct type is a no-op at runtime,
-and on the wrong type it traps (which indicates a real codegen bug).
+PURE-901 (march4, builder-native — THE implementation): when a local has generic type
+(anyref/structref/externref/eqref) but the SSA's Julia type maps to a concrete Wasm
+type, narrow the value on `b`'s stack (`ref.cast null` for refs — a no-op at runtime
+when correct, a trap on a real codegen bug — and THE funnel-unbox for join-refined
+numerics). Returns false when no narrowing applies.
 """
-function _narrow_generic_local!(bytes::Vector{UInt8}, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)
+function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)::Bool
     arr_idx = local_idx - ctx.n_params + 1
     if arr_idx < 1 || arr_idx > length(ctx.locals)
-        return
+        return false
     end
     local_wasm_type = ctx.locals[arr_idx]
     if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef || local_wasm_type === EqRef)
-        return  # Local is already concrete — no narrowing needed
+        return false  # Local is already concrete — no narrowing needed
     end
     # Look up the SSA's Julia type to find a concrete Wasm type
     ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
     if ssa_julia_type === Any || ssa_julia_type === Union{}
-        return  # Can't narrow — don't know the concrete type
+        return false  # Can't narrow — don't know the concrete type
     end
     # CG-003d: Don't narrow Union{Nothing, T} types — the value may be Nothing,
     # and downstream code (e.g., === nothing comparison) needs the unnarrowed type.
     # Narrowing happens via PiNode after the null check succeeds.
     if ssa_julia_type isa Union
-        return
+        return false
     end
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
-        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
-        seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
         if local_wasm_type === ExternRef
             # PURE-6025: ExternRef needs any_convert_extern before ref.cast
             any_convert_extern!(b)
         end
         ref_cast!(b, Int64(concrete_wasm.type_idx), true)
-        append!(bytes, builder_code(b))
+        return true
     elseif concrete_wasm === I32 || concrete_wasm === I64 ||
            concrete_wasm === F32 || concrete_wasm === F64
         # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
-        b = InstrBuilder(; func_name="_narrow_generic_local!", mod=ctx.mod)
-        seed_input!(b, WasmValType[local_wasm_type])
         convert_type!(b, local_wasm_type, concrete_wasm, ctx; from_julia=ssa_julia_type)
-        append!(bytes, builder_code(b))
+        return true
     end
+    return false
 end
 
 """

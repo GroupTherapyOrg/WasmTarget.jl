@@ -379,3 +379,179 @@ struct.get emissions (prefix+opcode, no immediates — latent invalid wasm on un
 structs) became loud rejects; three regex-induced self-recursions caught by smoke before
 commit (one after — reverted within minutes, root-caused, the lesson re-learned: smoke
 BEFORE commit, no exceptions).
+
+## MARCH 3 — THE GOD-FN INTERIOR CONVERSION (2026-07-03/04, branch `wt-parity-march3`)
+
+**R2: 143 → 18, LOCK L12 flipped.** The overnight march that converted the god-fn
+interior splice mass to typed emission, audit-first.
+
+**THE MECHANISM (`append_builder!`):** builders record their seeds; the typed merge
+replays a fragment's REAL tracked effect at the ir/ layer — human-declared pops/pushes
+lies are impossible at converted seams. Landed with `struct_new!(b, type_idx)`
+(mod-resolved field lists — the empty-list fudge that phantom-tracked every constant's
+operands is dead REPO-WIDE) and zero-byte splices recording no instruction.
+
+**THE METHOD (audit-first):** permanent `WT_AUDIT_VALUE_STACK` hooks in
+compile_value_typed + compile_phi_value enumerate every model liar; the channel
+inversions flipped only after the audit read ZERO across smoke + the heaviest shards.
+The order lesson (interiors before channel inversions) was proven three times by
+one-line wat diffs and is documented at every guarded site.
+
+**DEAD BYTE-SCANNING (the disease this march existed to kill):** ~17 LEB-decode walks
+and ~25 first-byte sniffs deleted across compile_new's field weave, Core.tuple args,
+memoryrefset!/push!/setindex! value channels, the struct-constant branch, PiNode's
+multi-value scan, the isa DFS blocks, and the extern bridges — every decision now reads
+the TRACKED TYPE dart carries with every value.
+
+**FIXED EN ROUTE:** the escaping closure CLOSED (M10b: checked casts carry their target
+type per code_generator.dart:3100 + the identity-convert double-emission); the
+throw-arm-past-the-leave silent miscompile (dispatch to the stackified driver — ONE
+lowering); two latent outer-scope boxing bugs (push!/setindex! boxed ReturnNode-scope
+variables); a latent double extern-convert; the phantom +1 declares in the struct
+field/replaced paths. FINDING pinned (@test_broken): isa over Any[] vs locally-defined
+abstract hierarchies silently false — the DFS range misses Main-defined hierarchies.
+
+**LOCK L12_god_fn_seams_only (the march's exit):** every remaining emit_raw! (15 real
+sites) is a machine-verified annotated god-fn seam or front — the four god-fn junctions,
+compile_statement's products + accumulator exit, the condition/try_catch products, the
+narrow channel, three fronts. The class is CLOSED to new members; R2 falls only by
+killing seams.
+
+**THE REMAINDER (the next march, M4 tail):** the arm-by-arm god-fn decomposition —
+compile_call/compile_invoke/compile_new/compile_statement builder-native (the
+pre-pushed-args pattern dies; dart visitors emit their own args), which dissolves the
+fronts + junctions (R2 18 → 0), kills the stackifier's drop byte-sniff via real tracked
+heights, then R3 (136) to its floor and the fresh dart certification re-audit.
+
+## MARCH 4 — THE GOD-FN DECOMPOSITION COMPLETE: R2 = 0, LOCK L13 (2026-07-04, branch `wt-parity-march4`)
+
+**THE BYTE-BRIDGE CLASS IS EXTINCT.** Zero `emit_raw!` call sites exist in the codebase —
+every emission is a typed builder method or a machine-tracked merge (`append_builder!`).
+LOCK `L13_no_byte_bridges` holds it at zero forever.
+
+**THE VISITORS (dart code_generator.dart:39 — `CodeGenerator extends
+ExpressionVisitor1<w.ValueType, w.ValueType>`, `wrap` = accept1 + convertType, verified in
+the SDK at close):** `compile_call!` / `compile_invoke!` / `compile_new!` /
+`compile_foreigncall!` / `compile_statement!` / `compile_condition_to_i32!` ARE the
+implementations — they emit INTO the caller's builder exactly as dart visitors emit into
+the function's instruction stream; `emit_value!`/`convert_type!` are `wrap`/`convertType`.
+The try/catch generator family (10 functions) returns builders. Bytes shells remain only
+as one-line delegations for the dwindling byte-era remainder.
+
+**THE FRAGMENT PATTERN** (invoke 2.6k lines, call 4.8k lines, statement 1.4k lines): the
+`bytes` accumulator becomes a tracked fragment builder with EXACT discard semantics;
+returns merge typed. Byte SURGERY extinct: phantom pop-twos and ref-pops became
+don't-merge decisions; the unary-negation prepend is fragment composition; `resize!`
+truncation is a node pop.
+
+**THE BYTE-SCAN DISEASE IS DEAD** (~40 more scans this march): every LEB decode, first/
+last-byte gate, opcode-range heuristic, GC_PREFIX hunt, and the stackifier's DROP sniff
+now read node kinds and tracked types (`InstrIR.LocalGet.idx`, `StructGet.idx/.field`,
+`ArrayGet.op`, `NumOp.op`, stack heights). Entire misparse classes (PURE-306/323/6005/
+6006/6015, gap a6c6091b2a80) cannot exist at the ir/ layer.
+
+**Found by the gates en route:** the sweep-latent `emit_int128_sle!/ule!` UndefVar (fuzz-
+caught — only reachable on Int128-compare paths; all 20 family forms statically verified).
+
+**R3 RECLASSIFIED** (per the M2 endgame decision): `infer_value_type` is dart's
+`node.getStaticType` equivalent — legitimate pre-emit type knowledge (post-emission
+re-guessing stays dead via L4). The ratchet keeps it monotone for consolidation.
+
+**Certification anchors re-verified in the SDK at close:** code_generator.dart:39
+(the visitor class shape), the `wrap`/`convertType` pair, visitStaticInvocation:1775
+(intrinsics-first + visitor-emitted args — WT's intrinsics table + fragment args),
+visitAsExpression:3100 (checked casts, march 3), dispatch_table.dart (M8),
+intrinsics.dart:28-71 (M11), closures.dart:960-1013 (M10).
+
+**Remaining (the standing next phase):** R7@130 (the proven intrinsic floor), R11 sediment,
+the pinned @test_broken (isa over Any[] vs Main-defined hierarchies), the bytes shells'
+final deletion as their callers convert, R5/R3 consolidation floors.
+
+# ═══════════════════════════════════════════════════════════════════
+# CERTIFICATION CENSUS 2026-07-04 — the fresh full-dimension audit
+# ═══════════════════════════════════════════════════════════════════
+
+Instrument: 6 parallel auditors + self-audit, every claim verified in BOTH sources
+(dart = /Users/daleblack/Documents/sdk/pkg/dart2wasm, WT = src/), doc claims
+re-verified in code. Baseline: the 2026-06-30 census scored ~25-30%.
+
+## THE NUMBER: ~55/100 structural parity (15-dim mean; was ~25-30)
+
+| # | dimension | score | one-line verdict |
+|---|-----------|-------|------------------|
+| 14 | instruction builder (wasm_builder) | **88** | 3-layer ir/builder/serialize faithfully reproduced; validation STRONGER than dart (always-on vs assert-gated) |
+| 6 | dynamic (uninferred) calls | **78** | loud-reject = the architecturally correct Julia answer; the closed-union classId switch mirrors the forwarder core |
+| 11 | records/tuples | **75** | per-concrete-Tuple struct w/ typeId ≡ dart per-shape record class; divergences monomorphization-justified |
+| 12 | value boxing + strings | **72** | box/unbox byte-faithful to convertType; BUT numeric boxes don't subtype $JlBase (see F1) |
+| 2 | translator/type mapping | **70** | funnel real (translateType/convertType equivalents); nullability not first-class, funnel not single-path |
+| 15 | compilation driver (functions/globals) | **70** | worklist tree-shaking ethos matches; allocation-gated compile + lazy static init absent |
+| 1 | visitor architecture + coverage | **68** | visitors/dispatch/intrinsics/stackifier honest equivalents; expectedType threading PARTIAL (~27 wrap sites vs dart's 100%) |
+| 5 | virtual dispatch | **60** | ONE flat table + classId+offset + first-fit faithfully replicated; threshold=9 split, no LUB sigs, dead transcription |
+| 9 | exceptions | **55** | sound try/catch/throw/rethrow; void tag + $current_exn global vs dart's typed (exn,stackTrace) tag payload |
+| 3 | class metadata/layout | **55** | field-0 classId + DFS ranges 1:1; flat `sub $JlBase` graph, OPEN classId universe (F2), no identity-hash |
+| 4 | runtime type system | **45** | range-check isa 1:1 w/ dart; $JlType hierarchy RICHER than dart's _Type; RTI tables absent; typeassert is a NO-OP (F4) |
+| 13 | JS interop | **38** | dart's whole js/ glue-gen subsystem absent by host-model design (Therapy owns glue); fixed-ABI imports instead |
+| 7 | closures | **35** | no vtable/context-chain/call_ref — monomorphization-justified BUT caps first-class-function support; F3 capture typing = genuine cited mirror |
+| 8 | constants | **20** | dart's dedup-into-globals architecture nearly absent; strings re-emit a NEW data segment per use (F3) |
+| 10 | async/generators | **5** | entirely absent (~5000 LOC in dart); sound loud-reject; defensibly out-of-scope for single-threaded WasmGC |
+
+## LOAD-BEARING FINDINGS (doc-vs-code corrections + rooted bugs)
+
+**F1 — numeric boxes do NOT subtype $JlBase (docstring claims they do — FALSE).**
+`get_numeric_box_type!` (types.jl:1113) adds a plain struct with NO supertype while the
+$JlString struct DOES subtype base (types.jl:990) — the two box families are inconsistent,
+and dart subtypes EVERY class struct (class_info.dart:288). Boxed numerics can only flow
+via anyref. THE concrete blocker for the typed-value-channel north-star. values.jl:499-500
+docstring must be fixed or (better) the claim made true.
+
+**F2 — the isa-over-Any[] @test_broken ROOT CAUSE (pinned in code).** WT numbers classIds
+from an OPEN registry snapshot: `assign_type_ids!` freezes each abstract's [low,high] one-shot
+(types.jl:143-249); later registrations get `ensure_type_id!` = max+1 OUTSIDE every frozen
+range (types.jl:283-295) → no covering range → isa emits const 0 (calls.jl:1548-1551).
+dart numbers the CLOSED whole program once, before codegen (class_info.dart:583-690).
+ONE fix (close/recompute the DFS after all types known) lifts DIM 3+4 and clears the test.
+
+**F3 — string/heap constants are not interned.** Every string constant use appends a NEW
+passive data segment (instructions.jl:756-760) + fresh allocation; dart deduplicates every
+constant into ONE global (eager or lazy, constants.dart:427-476). Code-size blowup + `===`
+semantics divergence (equal constants not identical in WT, identical in dart).
+
+**F4 — typeassert/as is a silent pass-through.** calls.jl:3711-3719 never emits a check;
+dart's emitAsCheck THROWS (types.dart:437-481). Masked because inference usually proves the
+type — a soundness gap when it can't.
+
+**F5 — dead parity code.** (a) The faithful M8 SelectorInfo transcription
+(selector_table.jl:21-176) has ZERO callers — the LIVE packer is pack_dispatch_selectors!
+on DispatchTableRegistry; PARITY_MASTER's M8 claims citing SelectorInfo cite dead code.
+(b) emit_box_type_id! has 0 real callers (fully dead, not "private fallback").
+(c) Stale "FNV probe" comments (dispatch.jl:49, selector_table.jl:190) — FNV is deleted;
+the comments predate M8.3. All three → delete/fix.
+
+**F6 — EH proposal correction.** dart uses the LEGACY wasm EH (try_/catch_/catch_all,
+code_generator.dart:1163-1279); WT uses the NEWER try_table. The divergence runs OPPOSITE
+to prior doc assumptions. WT is not "behind" here — but the payload channel is (D9.1):
+dart carries (exn, stackTrace) as a TYPED tag payload; WT stashes in a mutable global
+(re-entrancy-fragile; catch_all also conflates host exceptions with Julia ones, D9.2).
+
+**F7 — stack-trace infra exists but is UNWIRED.** capture_stack import + $current_stack_trace
+global exist (strings.jl:218-235, generate.jl:781-814); emit_capture_stack! has ZERO callers.
+
+**F8 — expectedType threading is per-sink, not universal.** The 4-arg wrap chokepoint
+(values.jl:813, ~27 sites) + convert_type! (21 sites) exist and are dart-anchored, but the
+~277-site 3-arg path doesn't coerce, and the call-arg ladder (invoke.jl:2028-2205)
+re-implements convertType's arms inline. dart: 100% of expressions through wrap.
+
+## THE NEXT-PHASE QUEUE (ranked by leverage)
+
+1. **Close the classId universe** (F2) — one fix, lifts 2 dims, clears the @test_broken.
+2. **Box supertype** (F1) — make numeric boxes `sub $JlBase`; unblocks the typed channel.
+3. **Constant interning** (F3) — dedup strings/heap constants into globals (dart constants.dart shape).
+4. **Universal wrap adoption** (F8) — route the 3-arg path + the arg ladder through THE chokepoint.
+5. **Typed exception tag** (D9.1/D9.2) — carry the exception as tag payload; reserve catch_all for host exns; wire stack traces (F7) or delete the dead infra.
+6. **typeassert check** (F4) — emit the throwing check when inference can't prove.
+7. **Dead-code deletion** (F5) + try/finally differential battery (D9.4) + async loud-reject conformance test (D10.1).
+8. Multi-range classId checks, LUB dispatch signatures, threshold unification (DIM 5), tuple-per-arity sharing.
+
+**Out-of-scope by design (documented, sound):** async/generators state machine (DIM 10),
+dynamic forwarders/noSuchMethod (DIM 6 — Julia MethodError = trap), JS glue generation
+(DIM 13 — Therapy owns the host boundary), masquerade classes (Julia typeof is concrete).

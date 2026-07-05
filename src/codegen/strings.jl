@@ -161,26 +161,29 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
 end
 
 """
-    emit_jl_string_to_js!(bytes, decode_func_idx, tmp_local)
+    emit_jl_string_to_js!(b, decode_func_idx)
 
-Emit bytecode to convert a Julia string (WasmGC i8 array on stack) to a
-JS string (externref). Calls the module-level `\$utf8_to_js` helper function.
+Convert a Julia string (WasmGC i8 array on stack) to a JS string via the
+module-level `\$utf8_to_js` helper — builder-native (THE implementation).
 
-**Stack effect:** `[(ref \$str_arr)] → [externref]`
+**Stack effect:** `[(ref \$str_arr)] → [(ref extern)]`
 """
-function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
+function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
     helper_idx = _UTF8_TO_JS_FUNC_IDX[]
     if helper_idx === nothing
         error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
     end
-    # Stack: [i8_arr_ref]
-    # Call $utf8_to_js(i8_arr_ref) → (ref extern)
-    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(helper_idx), byte-identical.
-    # This is an external emit_*!(bytes,...) helper that mutates the caller's buffer, so we
-    # build into a local collect-mode builder and splice the result (no seeding needed; the
-    # caller's bridge already declares the [i8_arr_ref] → [externref] stack effect).
+    # Call $utf8_to_js(i8_arr_ref) → (ref extern), the REAL declared effect.
+    call!(b, helper_idx, WasmValType[ArrayRef], WasmValType[NonNullExternRef])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them).
+`tmp_local` is historical and unused."""
+function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
     ib = InstrBuilder(; func_name="emit_jl_string_to_js")
-    call!(ib, helper_idx, WasmValType[], WasmValType[])
+    seed_input!(ib, WasmValType[ArrayRef])
+    emit_jl_string_to_js!(ib, decode_func_idx)
     append!(bytes, builder_code(ib))
 end
 
@@ -414,15 +417,8 @@ function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
 
     rng_indices = UInt32[]
     for seed in seeds
-        # MIGRATED to InstrBuilder (typed). Const-expr init = (i64.const seed) (end).
-        # Byte-identical: i64_const! emits I64_CONST + leb_s(seed); the const-expr END
-        # terminator (0x0B) is bridged (no open block in a const expr to balance).
-        ib = InstrBuilder(; func_name="ensure_rng_globals!", mod=mod)
-        i64_const!(ib, seed)
-        emit_raw!(ib, UInt8[Opcode.END])
-        init = builder_code(ib)
-        push!(mod.globals, WasmGlobalDef(I64, true, init))
-        push!(rng_indices, UInt32(length(mod.globals) - 1))
+        # const-expr init via the builder's ONE global-def channel (i64.const seed; end)
+        push!(rng_indices, add_global!(mod, I64, true, seed))
     end
 
     rng = RNGGlobals(rng_indices[1], rng_indices[2], rng_indices[3], rng_indices[4], seed_idx)
@@ -473,7 +469,11 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
 # array.copy. Byte-identical to before.
-function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
+compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
+    builder_code(compile_string_concat_b(str1, str2, ctx))
+
+"""builder-returning core (march3): callers merge via append_builder!."""
+function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -517,7 +517,7 @@ function compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationC
     array_copy!(b, str_type_idx, str_type_idx)
 
     local_get!(b, result_local)                             # return result
-    return builder_code(b)
+    return b
 end
 
 """
@@ -527,7 +527,11 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
 # control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
+compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
+    builder_code(compile_string_equal_b(str1, str2, ctx))
+
+"""builder-returning core (march3): callers merge via append_builder!."""
+function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
@@ -584,6 +588,6 @@ function compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vect
         end_block!(b)                                      # end result block
     end_block!(b)                                          # end if-else
 
-    return builder_code(b)
+    return b
 end
 

@@ -509,13 +509,13 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
     push!(ctx.locals, wasm_type)
     builder_set_local_type!(b, sc, wasm_type)
     local_set!(b, sc)                       # save the value
-    let tid = UInt8[]
-        if julia_type === nothing
-            emit_box_type_id!(tid, ctx.type_registry, wasm_type)   # fallback: wasm-rep id
-        else
-            emit_type_id!(tid, ctx.type_registry, julia_type)      # REAL classId
-        end
-        emit_raw!(b, tid; pushes=WasmValType[I32])                 # field 0 = classId
+    if julia_type === nothing
+        # fallback: wasm-rep id (the width's default Julia type)
+        emit_type_id!(b, ctx.type_registry,
+                      wasm_type === I32 ? Int32 : wasm_type === I64 ? Int64 :
+                      wasm_type === F32 ? Float32 : wasm_type === F64 ? Float64 : Any)
+    else
+        emit_type_id!(b, ctx.type_registry, julia_type)            # REAL classId
     end
     local_get!(b, sc)                       # reload the value (field 1)
     # Declare the REAL stack effect ([classId:i32, value] → box ref) — an empty field list
@@ -688,22 +688,15 @@ ref.cast + struct.get when needed.
 # MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
-"""builder-native variant: emit the i32 condition directly into the target builder."""
+"""THE condition visitor (march4): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
-    emit_raw!(b, compile_condition_to_i32(cond, ctx); pushes=WasmValType[I32])
-    return b
-end
-
-function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
     if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
             println(stderr, "   ", fr)
         end
     end
-    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
     set_context!(b, "GotoIfNot cond → i32")
-    # bridge the (still-raw) compile_value with its known pushed type
     emit_value!(b, cond, ctx)
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
@@ -738,6 +731,13 @@ function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector
             end
         end
     end
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
+    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
+    compile_condition_to_i32!(b, cond, ctx)
     return builder_code(b)
 end
 
@@ -767,6 +767,12 @@ the emit produced no single result — e.g. an unreachable/dead path). Callers c
 """
 function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
     b = _compile_value_b(val, ctx)
+    # march3 audit: a value emission must track exactly ONE pushed value (or zero
+    # for dead paths). More means an interior splice lied to the model — the
+    # blocker list for the channel inversion. Enumerate, don't guess.
+    if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(b.v.stack) > 1
+        println(stderr, "VALUE-STACK-LIAR n=$(length(b.v.stack)) stack=$(b.v.stack) val=$(first(repr(val), 80))")
+    end
     return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
 end
 
@@ -781,8 +787,12 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
-    bytes, ty = compile_value_typed(val, ctx)
-    emit_raw!(b, bytes; pushes=(ty === nothing ? WasmValType[] : WasmValType[ty]))
+    # march3: THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
+    # proved _compile_value_b's tracked stack honest (zero liars across smoke +
+    # the heaviest shards after the struct_new! mod-resolving fix).
+    vb = _compile_value_b(val, ctx)
+    ty = isempty(vb.v.stack) ? nothing : vb.v.stack[end]
+    append_builder!(b, vb)
     return ty
 end
 
@@ -842,18 +852,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
-    function _narrow!(li, sid)
-        nb = UInt8[]
-        _narrow_generic_local!(nb, li, sid, ctx)
-        isempty(nb) && return
-        local _nt = get(ctx.ssa_types, sid, Any)
-        # numerics declare their refined type (join-refined loads); refs keep legacy shape
-        local _nw = _nt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
-                    julia_to_wasm_type(_nt) : nothing
-        local _decl = _nw !== nothing && !_wt_is_ref(_nw)
-        emit_raw!(b, nb; pops=(_decl ? 1 : 0),
-                  pushes=(_decl ? WasmValType[_nw] : WasmValType[]))
-    end
+    # march4: THE narrow channel emits direct — the cast/unbox is tracked (the
+    # declared pops/pushes contract died with the bytes buffer).
+    _narrow!(li, sid) = _narrow_generic_local!(b, li, sid, ctx)
 
     # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
@@ -988,13 +989,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     # orphan-prevention skip for multi-arg memoryrefnew.
                     local _ssa_t = WasmValType[static_wasm_type(val, ctx)]
                     if stmt.head === :call
-                        emit_raw!(b, compile_call(stmt, val.id, ctx); pushes=_ssa_t)
+                        compile_call!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :invoke
-                        emit_raw!(b, compile_invoke(stmt, val.id, ctx); pushes=_ssa_t)
+                        compile_invoke!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :new
-                        emit_raw!(b, compile_new(stmt, val.id, ctx); pushes=_ssa_t)
+                        compile_new!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     elseif stmt.head === :foreigncall
-                        emit_raw!(b, compile_foreigncall(stmt, val.id, ctx); pushes=_ssa_t)
+                        compile_foreigncall!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
                     end
                 end
             end
@@ -1138,7 +1139,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     emit_value!(b, field_val, ctx)
                 end
             end
-            struct_new!(b, type_idx, WasmValType[])
+            struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         else
             emit_value!(b, inner, ctx)
         end
@@ -1230,7 +1231,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Type
         # PURE-4151: Type constant — each unique Type gets a unique Wasm global
@@ -1253,7 +1254,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(Module)
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
@@ -1262,7 +1263,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         type_idx = info.wasm_type_idx
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(T)
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
         # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
@@ -1285,7 +1286,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             emit_value!(b, field_val, ctx)
         end
 
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif typeof(val) <: Dict
         # Dict constant with pre-populated data — materialize Memory fields as arrays
@@ -1380,7 +1381,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, Int64(getfield(val, :maxprobe)))
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
 
     elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
         # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
@@ -1416,31 +1417,27 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             if needs_extern_convert
                 elem_val = val[i]
                 # typed channel: the emission's own type replaces the GC_PREFIX/const-first-byte scans.
-                elem_bytes, _el_ty = compile_value_typed(elem_val, ctx)
+                local _el_b = _compile_value_b(elem_val, ctx)
+                local _el_ty = isempty(_el_b.v.stack) ? nothing : _el_b.v.stack[end]
                 is_numeric_elem = _el_ty === I32 || _el_ty === I64 || _el_ty === F32 || _el_ty === F64
                 if is_numeric_elem
                     # Box numeric value into a struct then convert to externref
-                    val_wasm_elem = elem_bytes[1] == Opcode.I32_CONST ? I32 :
-                                    elem_bytes[1] == Opcode.I64_CONST ? I64 :
-                                    elem_bytes[1] == Opcode.F32_CONST ? F32 : F64
-                    nb = UInt8[]; emit_numeric_to_externref!(nb, elem_val, val_wasm_elem, ctx)
-                    emit_raw!(b, nb; pushes=WasmValType[ExternRef])
-                elseif !isempty(elem_bytes) && elem_bytes[end] == UInt8(ExternRef) &&
-                       length(elem_bytes) >= 2 && elem_bytes[end-1] == Opcode.REF_NULL
-                    # Already externref (ref.null extern) — no conversion needed
-                    emit_raw!(b, elem_bytes; pushes=WasmValType[ExternRef])
+                    emit_numeric_to_externref!(b, elem_val, _el_ty, ctx)
+                elseif _el_ty === ExternRef
+                    # Already externref — no conversion needed (was a REF_NULL byte sniff)
+                    append_builder!(b, _el_b)
                 else
-                    emit_raw!(b, elem_bytes; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _el_b)
                     extern_convert_any!(b)
                 end
             else
-                elem_bytes_plain, _elp_ty = compile_value_typed(val[i], ctx)
-                if isempty(elem_bytes_plain)
-                    # TRUE-INT-002-impl2-impl: compile_value returned empty bytes.
+                local _elp_b = _compile_value_b(val[i], ctx)
+                if isempty(_elp_b.instrs)
+                    # TRUE-INT-002-impl2-impl: compile_value returned empty.
                     # Push ref.null as placeholder to maintain array_new_fixed stack balance.
                     ref_null!(b, AnyRef)  # 0x6E any heap type
                 else
-                    emit_raw!(b, elem_bytes_plain; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _elp_b)
                 end
             end
             # PURE-6022: Check after each element in case compile_value hit a stub
@@ -1462,10 +1459,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
         _emit_tid!(Tuple{Int64})
         i64_const!(b, Int64(length(val)))
-        struct_new!(b, size_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
         # struct.new for Vector{T}
-        struct_new!(b, vec_info.wasm_type_idx, WasmValType[])
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
@@ -1483,14 +1480,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         else
             arr_type_def = ctx.mod.types[array_type_idx + 1]
             for i in 1:n_mem
-                # el_bytes holds the recursive compile_value result and is INSPECTED
-                # via isempty below — keep it as a local buffer (byte-inspecting branch).
-                el_bytes = UInt8[]
+                local _el_vb = nothing
                 defined = isassigned(mem, i)
                 if defined
-                    el_bytes, _ = compile_value_typed(mem[i], ctx)
+                    _el_vb = _compile_value_b(mem[i], ctx)
                 end
-                if !defined || isempty(el_bytes)
+                if !defined || isempty(_el_vb.instrs)
                     # undef slot (or uncompilable element) — type-correct default.
                     # Straight-line emission: emit the typed default directly on `b`.
                     evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
@@ -1508,7 +1503,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         ref_null!(b, AnyRef)  # 0x6E any
                     end
                 else
-                    emit_raw!(b, el_bytes; pushes=WasmValType[AnyRef])
+                    append_builder!(b, _el_vb)   # typed merge
                 end
             end
             array_new_fixed!(b, array_type_idx, n_mem, AnyRef)
@@ -1590,13 +1585,15 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 continue
             end
             field_val = getfield(val, field_name)
-            field_val_bytes, _fv_ty = compile_value_typed(field_val, ctx)
+            local _fvc_b = _compile_value_b(field_val, ctx)
+            local _fv_ty = isempty(_fvc_b.v.stack) ? nothing : _fvc_b.v.stack[end]
+            local _fvc_done = false
             # B4/U2: the union-typed-field tagged-union-wrapper box-coercion is RETIRED — a
             # union field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
             # wrapper, so the constant's field value (a ref) is already anyref-compatible.
             # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
             # emit ref.null for the field's expected type
-            if isempty(field_val_bytes)
+            if isempty(_fvc_b.instrs)
                 local _empty_fi = fi + Int(info.field_offset)
                 if struct_type_def isa StructType && _empty_fi <= length(struct_type_def.fields)
                     empty_field_type = struct_type_def.fields[_empty_fi].valtype
@@ -1616,58 +1613,28 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     continue
                 end
             end
-            # Check field type compatibility
+            # Check field type compatibility — decided by the emission's TRACKED type
+            # (march3: the struct.new LEB re-decode and the 0x41/0x42/0x20 first-byte
+            # scans are DELETED; _fv_ty is the byproduct dart carries with every value).
             replaced = false
             local _wasm_fi = fi + Int(info.field_offset)  # PURE-9024: skip typeId
             if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
                 expected_wasm = struct_type_def.fields[_wasm_fi].valtype
                 if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
-                    # Field expects a ref type — check if field_val_bytes produces something incompatible
                     need_replace = false
-                    if length(field_val_bytes) >= 3
-                        # Check if ends with struct_new of incompatible type
-                        for scan_pos in (length(field_val_bytes)-2):-1:1
-                            if field_val_bytes[scan_pos] == 0xFB && field_val_bytes[scan_pos+1] == 0x00
-                                sn_type_idx = 0; sn_shift = 0
-                                for bi in (scan_pos+2):length(field_val_bytes)
-                                    byt = field_val_bytes[bi]
-                                    sn_type_idx |= (Int(byt & 0x7f) << sn_shift)
-                                    sn_shift += 7
-                                    if (byt & 0x80) == 0
-                                        if bi == length(field_val_bytes)
-                                            if expected_wasm isa ConcreteRef && sn_type_idx != expected_wasm.type_idx
-                                                need_replace = true
-                                            elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
-                                                # ArrayRef: struct is not an array
-                                                # ExternRef: struct ref needs extern.convert_any
-                                                # AnyRef/StructRef: struct refs are valid subtypes, no replace needed
-                                                need_replace = true
-                                            end
-                                        end
-                                        break
-                                    end
-                                end
-                                break
-                            end
-                        end
-                    end
-                    if !need_replace && length(field_val_bytes) >= 1
-                        # Check if field produces a numeric value (i32/i64 const or local.get of numeric)
-                        # BUT NOT if the bytes end with struct.new or array.new_fixed (GC_PREFIX + opcode)
-                        # which indicates a complex ref value (String, Symbol, struct), not a simple numeric.
-                        # String constants start with i32.const (char 1) but end with array.new_fixed.
-                        first_byte = field_val_bytes[1]
-                        ends_with_ref_producing_gc = _fv_ty !== nothing && _wt_is_ref(_fv_ty)
-                        if (first_byte == 0x41 || first_byte == 0x42) && !ends_with_ref_producing_gc  # I32_CONST or I64_CONST
+                    if _fv_ty isa ConcreteRef && _wt_heap_kind(_fv_ty, ctx.mod) === :concrete_struct
+                        # behavior-preserving: the old scan fired only on values ENDING in
+                        # struct.new — struct-kind refs, never the array-kind (string data)
+                        if expected_wasm isa ConcreteRef && _fv_ty.type_idx != expected_wasm.type_idx
+                            # mismatched concrete struct ref (exact-idx test, as before)
                             need_replace = true
-                        elseif first_byte == 0x20  # LOCAL_GET
-                            # dart2wasm carries the type with the value: derive the source's
-                            # wasm type from the inferred value type rather than decoding the local.
-                            local src_type = _fv_ty
-                            if src_type === I64 || src_type === I32
-                                need_replace = true
-                            end
+                        elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
+                            # a GC struct ref where an array/extern slot is expected
+                            need_replace = true
                         end
+                    elseif _fv_ty === I32 || _fv_ty === I64
+                        # numeric value meeting a ref-typed field slot
+                        need_replace = true
                     end
                     if need_replace
                         if expected_wasm isa ConcreteRef
@@ -1679,12 +1646,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         else
                             ref_null!(b, StructRef)
                         end
-                        field_val_bytes = UInt8[]
+                        _fvc_done = true
                         replaced = true
                     end
                 end
             end
-            emit_raw!(b, field_val_bytes; pushes=WasmValType[AnyRef])
+            _fvc_done || isempty(_fvc_b.instrs) || append_builder!(b, _fvc_b)   # typed merge
             # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
             # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
             # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
@@ -1692,40 +1659,19 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             if !replaced && struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
                 local _ef = struct_type_def.fields[_wasm_fi2].valtype
                 if _ef === ExternRef
-                    # Check not already externref (ends with 0xFB 0x1B = EXTERN_CONVERT_ANY)
-                    already_extern = length(field_val_bytes) >= 2 &&
-                                     field_val_bytes[end-1] == 0xFB &&
-                                     field_val_bytes[end] == Opcode.EXTERN_CONVERT_ANY
-                    if !already_extern && _fv_ty !== nothing && _wt_is_ref(_fv_ty)
+                    # march3: decided by the TRACKED type — an internal (anyref-family)
+                    # ref bridges via extern.convert_any; an ExternRef value is already
+                    # there (this also covers global.get of Type constants, whose tracked
+                    # type is the global's declared valtype — the LEB re-decode is gone).
+                    if _fv_ty !== nothing && _fv_ty !== ExternRef && _wt_is_ref(_fv_ty)
                         extern_convert_any!(b)
-                    elseif !already_extern && length(field_val_bytes) >= 2 && field_val_bytes[1] == 0x23
-                        # PURE-6025: global.get produces a concrete ref (e.g., Type constant)
-                        # but field expects externref — need extern.convert_any.
-                        # global.get has no GC prefix; the inferred-type check above may not
-                        # have flagged it as a ref, so handle the global.get case explicitly.
-                        _g_idx = 0; _g_shift = 0
-                        for _gbi in 2:length(field_val_bytes)
-                            _gb = field_val_bytes[_gbi]
-                            _g_idx |= (Int(_gb & 0x7f) << _g_shift)
-                            _g_shift += 7
-                            (_gb & 0x80) == 0 && break
-                        end
-                        if _g_idx + 1 <= length(ctx.mod.globals)
-                            _g_type = ctx.mod.globals[_g_idx + 1].valtype
-                            if _g_type !== ExternRef
-                                extern_convert_any!(b)
-                            end
-                        else
-                            # Unknown global — conservatively emit conversion
-                            extern_convert_any!(b)
-                        end
                     end
                 end
             end
         end
 
         # Create the struct
-        struct_new!(b, type_idx, WasmValType[])
+        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         finally
             pop!(_VALUE_COMPILE_STACK)
         end

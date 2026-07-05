@@ -14,7 +14,7 @@
 # See dev/WASM_BUILDER_MIGRATION.md.
 
 export InstrBuilder, builder_code, builder_disasm, set_strict!, StackImbalanceError,
-       set_context!, builder_diagnose
+       set_context!, builder_diagnose, append_builder!
 
 """
     StackImbalanceError
@@ -57,6 +57,7 @@ mutable struct InstrBuilder
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
+    seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
 end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
@@ -72,14 +73,21 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace)
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
     code = UInt8[]
-    for instr in b.instrs
-        encode!(code, instr)
+    for i in eachindex(b.instrs)
+        if !isassigned(b.instrs, i)
+            around = [isassigned(b.instrs, j) ? string(nameof(typeof(b.instrs[j]))) : "#undef"
+                      for j in max(1, i-3):min(length(b.instrs), i+3)]
+            nundef = count(j -> !isassigned(b.instrs, j), eachindex(b.instrs))
+            lastundef = findlast(j -> !isassigned(b.instrs, j), eachindex(b.instrs))
+            error("builder_code($(b.func_name)): UNDEF instr slot $i of $(length(b.instrs)); n_undef=$nundef last_undef=$lastundef; window=$(join(around, ","))")
+        end
+        encode!(code, b.instrs[i])
     end
     code
 end
@@ -347,6 +355,10 @@ ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
 # single on-wire heaptype byte (dart2wasm encodes HeapType directly).
 ref_null!(b::InstrBuilder, rt::RefType) =
     (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
+# ref.null none (heaptype 0x71, the bottom of the any hierarchy — not a RefType enum
+# value; tracked as anyref, which every none ref is a subtype of).
+ref_null_none!(b::InstrBuilder) =
+    (validate_push!(b.v, AnyRef); _emit!(b, InstrIR.RefNullAbstract(0x71)))
 ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefFunc(UInt32(func_idx))))
 ref_is_null!(b::InstrBuilder) = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
@@ -362,6 +374,19 @@ end
 function struct_new!(b::InstrBuilder, type_idx::Integer, field_types::Vector{<:Any})
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types]))
     _emit!(b, InstrIR.StructNew(UInt32(type_idx)))
+end
+# march3: mod-resolving form (dart wasm_builder — the instruction knows its type).
+# Pops the REAL declared field list from the module; the empty-list fudge (which
+# left every operand phantom-tracked — the value-channel liar class) has no home here.
+function struct_new!(b::InstrBuilder, type_idx::Integer)
+    local _mod = b.v.mod
+    local _ft = if _mod !== nothing && type_idx + 1 >= 1 && type_idx + 1 <= length(_mod.types) &&
+                   _mod.types[type_idx + 1] isa StructType
+        WasmValType[f.valtype for f in _mod.types[type_idx + 1].fields]
+    else
+        error("struct_new!(b, $type_idx): module type definition unavailable — pass the field list explicitly")
+    end
+    struct_new!(b, type_idx, _ft)
 end
 function struct_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
@@ -522,13 +547,72 @@ end
 function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])
     for _ in 1:pops; validate_pop_any!(b.v); end
     for p in pushes; validate_push!(b.v, p); end
+    # A zero-byte splice records NO instruction (the declared effects above still
+    # apply to the model) — `isempty(b.instrs)` keeps meaning "emits nothing",
+    # exactly like the byte-era `isempty(bytes)` tests it replaced.
+    isempty(raw) && return _check!(b)
     _emit!(b, InstrIR.RawBytes(raw))
 end
 
 # Seed the model with stack values produced UPSTREAM (no instruction emitted). For
 # fragment emitters that consume a value the (not-yet-migrated) caller already left on
 # the stack, so the model starts from the true incoming stack rather than empty.
+# Seeds are RECORDED so append_builder! can replay the fragment's true stack effect.
 function seed_input!(b::InstrBuilder, types::Vector{<:Any})
-    for t in types; validate_push!(b.v, t); end
+    for t in types
+        validate_push!(b.v, t)
+        push!(b.seeded, t)
+    end
     b
+end
+
+"""
+    append_builder!(dst, src)
+
+Typed builder merge — the machine-tracked replacement for
+`emit_raw!(dst, builder_code(src); pops=…, pushes=…)`. `dst` pops exactly what
+`src` was seeded with (`src.seeded`, in reverse) and pushes `src`'s tracked final
+stack; the instruction stream transfers at the ir/ layer. No byte round-trip and
+NO human-declared effects — the fragment's real, validator-tracked stack shape
+transfers, so a mis-declared splice is impossible at these seams.
+"""
+function append_builder!(dst::InstrBuilder, src::InstrBuilder)
+    if length(src.v.labels) != 1
+        # locate the underflow: depth trace over the instr kinds
+        local _d = 1
+        local _report = ""
+        for (_ix, _ins) in enumerate(src.instrs)
+            if _ins isa InstrIR.Block || _ins isa InstrIR.Loop || _ins isa InstrIR.If || _ins isa InstrIR.TryTable
+                _d += 1
+            elseif _ins isa InstrIR.End
+                _d -= 1
+                if _d <= 0 && isempty(_report)
+                    local _w = [string(nameof(typeof(src.instrs[j]))) for j in max(1,_ix-6):min(length(src.instrs),_ix+4)]
+                    _report = "UNDERFLOW at instr $_ix/$(length(src.instrs)); window=$(join(_w, ","))"
+                end
+            end
+        end
+        error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
+              "$(length(src.v.labels)) labels; $_report")
+    end
+    for t in Iterators.reverse(src.seeded)
+        validate_pop!(dst.v, t)
+    end
+    # Transfer the tracked stack ALWAYS — downstream emission decisions read
+    # dst.v.stack (the wrap chokepoint's actual-type). An unreachable tail
+    # additionally poisons reachability (polymorphic stack, wasm-spec style).
+    for t in src.v.stack
+        validate_push!(dst.v, t)
+    end
+    src.v.reachable || (dst.v.reachable = false)
+    # JULIA-113-RC1 WORKAROUND: bulk `append!` on these abstract-eltype Memory-backed
+    # vectors nondeterministically leaves an UNDEF TAIL in the copied region under
+    # 1.13.0-rc1 (clean source verified immediately before; holes end exactly at the
+    # append boundary; GC-timing dependent; not reproducible in isolation). Element-wise
+    # push! writes each slot at transfer time and is immune. Semantically identical.
+    sizehint!(dst.instrs, length(dst.instrs) + length(src.instrs))
+    for ins in src.instrs
+        push!(dst.instrs, ins)
+    end
+    return _check!(dst)
 end

@@ -356,27 +356,18 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     return result
 end
 
-"""builder-native: push the type's DFS id as i32."""
+"""builder-native (THE implementation): push the type's DFS id as i32.
+E2E-001: uses ensure_type_id! so types registered after assign_type_ids!()
+(isa checks / struct constants) still get unique, matching typeIds."""
 function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
-    tb = UInt8[]
-    emit_type_id!(tb, registry, T)
-    emit_raw!(b, tb; pushes=WasmValType[I32])
+    i32_const!(b, Int64(ensure_type_id!(registry, T)))
     return b
 end
 
-"""
-    emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
-
-Emit `i32.const <typeId>` bytecode for type T.
-Uses the DFS-assigned type ID, or 0 if T has no assigned ID.
-"""
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
-    # E2E-001: Use ensure_type_id! so that types registered after assign_type_ids!()
-    # (e.g., types appearing only in isa checks or struct constants) still get unique
-    # typeIds that match between struct construction and isa dispatch.
-    id = ensure_type_id!(registry, T)
     b = InstrBuilder(; func_name="emit_type_id!")
-    i32_const!(b, Int64(id))
+    emit_type_id!(b, registry, T)
     append!(bytes, builder_code(b))
 end
 
@@ -434,12 +425,19 @@ Emit bytecode to extract typeId (field 0) from a struct reference on the stack.
 Assumes the value on top of the stack is a struct ref (or anyref that can be cast).
 Result: i32 typeId on the stack.
 """
-function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
-    b = InstrBuilder(; func_name="emit_typeof!")
+function emit_typeof!(b::InstrBuilder, base_idx::UInt32)
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
     # struct.get $JlBase 0 — extract typeId field
     struct_get!(b, base_idx, UInt32(0), I32)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_typeof!(bytes::Vector{UInt8}, base_idx::UInt32)
+    b = InstrBuilder(; func_name="emit_typeof!")
+    seed_input!(b, WasmValType[AnyRef])
+    emit_typeof!(b, base_idx)
     append!(bytes, builder_code(b))
 end
 
@@ -895,8 +893,7 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         struct_new!(b, vec_info.wasm_type_idx, WasmValType[I32, ConcreteRef(arr_of_str_type_idx, true), ConcreteRef(size_tuple_idx, true)])
     elseif val === nothing
         # For Nothing type, we use ref.null none (bottom of any hierarchy)
-        # 0x71 = none heaptype (NOT 0x6E which is any); not a RefType enum value → bridge.
-        emit_raw!(b, UInt8[Opcode.REF_NULL, 0x71]; pushes=WasmValType[AnyRef])
+        ref_null_none!(b)
     else
         # For other types, try to push as integer if small enough
         T = typeof(val)
@@ -1167,10 +1164,7 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     box_type = get_nothing_box_type!(mod, registry)
     # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
     b = InstrBuilder(; func_name="get_nothing_global!")
-    # emit_type_id! mutates a raw buffer (pushes 1 i32) — bridge it.
-    tb = UInt8[]
-    emit_type_id!(tb, registry, Nothing)
-    emit_raw!(b, tb; pushes=WasmValType[I32])
+    emit_type_id!(b, registry, Nothing)
     struct_new!(b, box_type, WasmValType[I32])
     init_expr = builder_code(b)
     # Use add_global_ref! which handles non-null concrete ref type + END byte
@@ -1408,16 +1402,11 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     for (tn, tn_global_idx) in registry.typename_constant_globals
         # Field 0: name → string (i8 array)
         name_str = string(tn.name)
-        # _emit_typename_string_field! mutates a raw buffer (net-0 stack) — bridge it.
-        tb0 = UInt8[]
-        _emit_typename_string_field!(tb0, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(0), name_str)
-        emit_raw!(b, tb0)
+        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(0), name_str)
 
         # Field 1: module_name → string (i8 array)
         mod_name = tn.module !== nothing ? string(nameof(tn.module)) : ""
-        tb1 = UInt8[]
-        _emit_typename_string_field!(tb1, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(1), mod_name)
-        emit_raw!(b, tb1)
+        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(1), mod_name)
 
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper
@@ -1430,10 +1419,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     end
 
     # PURE-9063: Populate the type lookup table (typeId → DataType struct ref)
-    # populate_type_lookup_table! mutates a raw buffer (net-0 stack) — bridge it.
-    tlt = UInt8[]
-    populate_type_lookup_table!(tlt, registry)
-    emit_raw!(b, tlt)
+    populate_type_lookup_table!(b, registry)
 
     isempty(builder_code(b)) && return
 
@@ -1447,13 +1433,12 @@ end
 Emit bytecode to set a string field on a \$JlTypeName global.
 Creates an i8 array from UTF-8 bytes of the string.
 """
-function _emit_typename_string_field!(body::Vector{UInt8}, tn_global_idx::UInt32,
+function _emit_typename_string_field!(b::InstrBuilder, tn_global_idx::UInt32,
                                        tn_type_idx::UInt32, str_arr_idx::UInt32,
                                        field_idx::UInt32, str::String)
     utf8 = Vector{UInt8}(str)
     n = length(utf8)
 
-    b = InstrBuilder(; func_name="_emit_typename_string_field!")
     global_get!(b, tn_global_idx, AnyRef)
 
     if n == 0
@@ -1467,7 +1452,7 @@ function _emit_typename_string_field!(body::Vector{UInt8}, tn_global_idx::UInt32
     end
 
     struct_set!(b, tn_type_idx, field_idx, ConcreteRef(str_arr_idx, true))
-    append!(body, builder_code(b))
+    return b
 end
 
 """
@@ -1546,10 +1531,7 @@ function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
     end
 
     # Populate the type lookup table (typeId → DataType struct ref)
-    # populate_type_lookup_table! mutates a raw buffer (net-0 stack) — bridge it.
-    tlt = UInt8[]
-    populate_type_lookup_table!(tlt, registry)
-    emit_raw!(b, tlt)
+    populate_type_lookup_table!(b, registry)
 
     isempty(builder_code(b)) && return
 
@@ -1638,9 +1620,9 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 end
 
 """
-    populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry)
+    populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
 
-Emit bytecode into a start function body to populate the type lookup array.
+Emit into a start-function builder to populate the type lookup array.
 For each type with a DFS ID and a DataType global, emits:
   global.get \$type_table
   i32.const <typeId>
@@ -1649,9 +1631,9 @@ For each type with a DFS ID and a DataType global, emits:
 
 Must be called from within populate_type_constant_globals! (appended to the body).
 """
-function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry)
-    registry.type_lookup_global === nothing && return
-    registry.type_lookup_array_idx === nothing && return
+function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
+    registry.type_lookup_global === nothing && return b
+    registry.type_lookup_array_idx === nothing && return b
 
     table_global = registry.type_lookup_global
     arr_type_idx = registry.type_lookup_array_idx
@@ -1660,8 +1642,6 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
     # Types registered after create_type_lookup_table! (via ensure_type_id! during body
     # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
     table_size = registry.type_lookup_table_size
-
-    b = InstrBuilder(; func_name="populate_type_lookup_table!")
 
     # For each concrete type with a DFS ID and a DataType global, populate the table
     for (T, type_id) in registry.type_ids
@@ -1679,8 +1659,7 @@ function populate_type_lookup_table!(body::Vector{UInt8}, registry::TypeRegistry
         # array.set $arr_type
         array_set!(b, arr_type_idx, AnyRef)
     end
-
-    append!(body, builder_code(b))
+    return b
 end
 
 """
@@ -1731,24 +1710,26 @@ Emit bytecode for typeof(x) returning a DataType struct ref.
 Uses `temp_local` as scratch space for the typeId.
 Expects a struct ref on the stack. Leaves a (ref null \$DataType) on the stack.
 """
+function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
+                                         registry::TypeRegistry, temp_local::UInt32)
+    registry.type_lookup_global === nothing && return b
+    registry.type_lookup_array_idx === nothing && return b
+    # Extract typeId: ref.cast $JlBase + struct.get → i32
+    emit_typeof!(b, base_idx)
+    # Save typeId to scratch local; look it up in the type table
+    local_set!(b, temp_local)
+    global_get!(b, registry.type_lookup_global, AnyRef)
+    local_get!(b, temp_local)
+    array_get!(b, registry.type_lookup_array_idx, AnyRef)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_typeof_struct_with_local!(bytes::Vector{UInt8}, base_idx::UInt32,
                                          registry::TypeRegistry, temp_local::UInt32)
-    registry.type_lookup_global === nothing && return
-    registry.type_lookup_array_idx === nothing && return
-
-    # Extract typeId: ref.cast $JlBase + struct.get → i32
-    emit_typeof!(bytes, base_idx)
-    # Stack: [typeId:i32]
-
     b = InstrBuilder(; func_name="emit_typeof_struct_with_local!")
-    # Save typeId to scratch local
-    local_set!(b, temp_local)
-    # Push type lookup array
-    global_get!(b, registry.type_lookup_global, AnyRef)
-    # Push typeId back
-    local_get!(b, temp_local)
-    # array.get $type_lookup_array → (ref null $DataType)
-    array_get!(b, registry.type_lookup_array_idx, AnyRef)
+    seed_input!(b, WasmValType[AnyRef])
+    emit_typeof_struct_with_local!(b, base_idx, registry, temp_local)
     append!(bytes, builder_code(b))
 end
 

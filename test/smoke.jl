@@ -44,6 +44,11 @@ _g("controlflow", Any[
     ("for_break", (n::Int64) -> (s = 0; for i in 1:n; i > 5 && break; s += i; end; s), Int64(10)),
     ("for_continue", (n::Int64) -> (s = 0; for i in 1:n; i % 2 == 0 && continue; s += i; end; s), Int64(10)),
     ("nested_loop", (n::Int64) -> (s = 0; for i in 1:n, j in 1:n; s += i * j; end; s), Int64(4)),
+    # multi-back-edge loop (2+ continues → 2+ back edges to ONE header): the loop
+    # label must close at the LAST back-edge source only — firing at every source
+    # emitted a spurious End per extra edge (1.13 Base `print` shape, fixed 2026-07-04)
+    ("multi_continue", (n::Int64) -> (s = 0; i = 0; while i < n; i += 1; i % 2 == 0 && continue; i % 3 == 0 && continue; s += i; end; s), Int64(100)),
+    ("multi_continue_nested", (n::Int64) -> (t = 0; for i in 1:n, j in 1:n; j % 2 == 0 && continue; i % 3 == 0 && continue; t += i * j; end; t), Int64(7)),
 ])
 
 # ---- phi / union (the boxing channel) -------------------------------------

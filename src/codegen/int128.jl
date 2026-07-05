@@ -4,17 +4,19 @@
 # 128-bit integers are stored as structs with fields: lo (i64), hi (i64)
 # ============================================================================
 
+# parity(march 3, R5→floor): Int128/UInt128's concrete wasm type IS its registered
+# two-i64 struct — resolved at the registration point, no post-hoc re-guess.
+_int128_structref(ctx, T::Type) = ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, T), true)
+
 """
 Emit bytecode for 128-bit addition.
 Stack: [a_struct, b_struct] -> [result_struct]
 Algorithm: result_lo = a_lo + b_lo; carry = (result_lo < a_lo); result_hi = a_hi + b_hi + carry
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
-function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_add", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     # struct locals (pop from stack) then i64 locals for extracted values
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -56,6 +58,15 @@ function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     local_get!(b, result_lo_local)
     local_get!(b, hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_add", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_add!(b, ctx, result_type)
     return builder_code(b)
 end
 
@@ -63,13 +74,11 @@ end
 Emit bytecode for 128-bit subtraction.
 Stack: [a_struct, b_struct] -> [result_struct]
 Algorithm: result_lo = a_lo - b_lo; borrow = (a_lo < b_lo); result_hi = a_hi - b_hi - borrow
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
-function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_sub", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -109,6 +118,15 @@ function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_sub", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_sub!(b, ctx, result_type)
     return builder_code(b)
 end
 
@@ -118,13 +136,11 @@ Stack: [a_struct, b_struct] -> [result_struct]
 Uses the identity: (a_lo + a_hi*2^64) * (b_lo + b_hi*2^64)
 = a_lo*b_lo + (a_lo*b_hi + a_hi*b_lo)*2^64 + a_hi*b_hi*2^128
 Since we only need low 128 bits: result_lo = low64(a_lo*b_lo), result_hi = high64(a_lo*b_lo) + low64(a_lo*b_hi) + low64(a_hi*b_lo)
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes a*b (low 128 bits).
-function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_mul", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -191,19 +207,25 @@ function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_mul", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_mul!(b, ctx, result_type)
     return builder_code(b)
 end
 
 """
-Emit 128-bit negation: -x = ~x + 1 = (0, 0) - x
-Stack: [x_struct] -> [result_struct]
+Emit 128-bit negation: -x = ~x + 1 = (0, 0) - x.
+Builder-native (THE implementation): consumes [x_struct] from `b`'s stack, pushes -x.
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct], pushes -x struct (two's complement).
-function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
+    structref = _int128_structref(ctx, result_type)
 
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -231,92 +253,94 @@ function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_neg!(b, ctx, result_type)
     return builder_code(b)
 end
 
-"""
-Emit 128-bit signed less than: a < b (signed)
-Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
-"""
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
-function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
+# parity(march 3, R2→0): the builder-native comparator core. With [a_struct, b_struct]
+# on `b`'s stack, spill to locals and extract (a_lo, a_hi, b_lo, b_hi) — the shared
+# preamble of slt/ult/eq. Returns the four value-local indices.
+function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    structref = _int128_structref(ctx, arg_type)
+
+    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
+    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
+    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
+                   (b_struct_local, structref), (a_struct_local, structref))
+        builder_set_local_type!(b, i, t)
+    end
+
+    # Pop structs to locals
+    local_set!(b, b_struct_local)
+    local_set!(b, a_struct_local)
+
+    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
+    for (struct_local, lo_local, hi_local) in ((a_struct_local, a_lo_local, a_hi_local),
+                                               (b_struct_local, b_lo_local, b_hi_local))
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+    end
+    return (a_lo_local, a_hi_local, b_lo_local, b_hi_local)
+end
+
+"""
+Emit 128-bit signed less than: a < b (signed).
+Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
+"""
+function emit_int128_slt!(b::InstrBuilder, ctx, arg_type::Type)
+    a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
+    # Signed 128-bit a < b: (a_hi <_s b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
+    local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_LT_S)
+    local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_lo); local_get!(b, b_lo); num!(b, Opcode.I64_LT_U)
+    num!(b, Opcode.I32_AND)
+    num!(b, Opcode.I32_OR)
+    return b
+end
+
+# bytes shell for the remaining byte-region callers (dies with them)
+function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
     b = InstrBuilder(; func_name="emit_int128_slt", strict=_wt_builder_strict())
     seed_input!(b, WasmValType[structref, structref])
-
-    # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
-
-    # Pop structs to locals
-    local_set!(b, b_struct_local)
-    local_set!(b, a_struct_local)
-
-    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
-    end
-
-    # Signed 128-bit a < b: (a_hi <_s b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
-    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_LT_S)
-    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
-    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_LT_U)
-    num!(b, Opcode.I32_AND)
-    num!(b, Opcode.I32_OR)
+    emit_int128_slt!(b, ctx, arg_type)
     return builder_code(b)
 end
 
 """
-Emit 128-bit unsigned less than: a < b (unsigned)
-Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
+Emit 128-bit unsigned less than: a < b (unsigned).
+Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
-function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
-    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ult", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
-
-    # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
-
-    # Pop structs to locals
-    local_set!(b, b_struct_local)
-    local_set!(b, a_struct_local)
-
-    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
-    end
-
+function emit_int128_ult!(b::InstrBuilder, ctx, arg_type::Type)
+    a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
     # Unsigned a < b: (a_hi <_u b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
-    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_LT_U)
-    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
-    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_LT_U)
+    local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_LT_U)
+    local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_lo); local_get!(b, b_lo); num!(b, Opcode.I64_LT_U)
     num!(b, Opcode.I32_AND)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+# bytes shell for the remaining byte-region callers (dies with them)
+function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ult", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_ult!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -326,10 +350,8 @@ Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_s b) || (a == b)
 """
 # MIGRATED to InstrBuilder. (a <_s b) || (a == b); composes slt + eq via emit_raw!.
-function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+function emit_int128_sle!(b::InstrBuilder, ctx, arg_type::Type)
+    structref = _int128_structref(ctx, arg_type)
 
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -338,14 +360,23 @@ function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
     local_set!(b, b_struct_local)
     local_set!(b, a_struct_local)
 
-    # a <_s b (reuse emit_int128_slt, which consumes the two structs)
+    # a <_s b (builder-native comparator; consumes the two structs)
     local_get!(b, a_struct_local); local_get!(b, b_struct_local)
-    emit_raw!(b, emit_int128_slt(ctx, arg_type); pops=2, pushes=WasmValType[I32])
-    # a == b (reuse emit_int128_eq)
+    emit_int128_slt!(b, ctx, arg_type)
+    # a == b
     local_get!(b, a_struct_local); local_get!(b, b_struct_local)
-    emit_raw!(b, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
+    emit_int128_eq!(b, ctx, arg_type)
     # (a < b) || (a == b)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_sle!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -355,10 +386,8 @@ Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
 Implementation: (a <_u b) || (a == b)
 """
 # MIGRATED to InstrBuilder. (a <_u b) || (a == b); composes ult + eq via emit_raw!.
-function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+function emit_int128_ule!(b::InstrBuilder, ctx, arg_type::Type)
+    structref = _int128_structref(ctx, arg_type)
 
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -367,14 +396,23 @@ function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
     local_set!(b, b_struct_local)
     local_set!(b, a_struct_local)
 
-    # a <_u b (reuse emit_int128_ult, which consumes the two structs)
+    # a <_u b (builder-native comparator; consumes the two structs)
     local_get!(b, a_struct_local); local_get!(b, b_struct_local)
-    emit_raw!(b, emit_int128_ult(ctx, arg_type); pops=2, pushes=WasmValType[I32])
-    # a == b (reuse emit_int128_eq)
+    emit_int128_ult!(b, ctx, arg_type)
+    # a == b
     local_get!(b, a_struct_local); local_get!(b, b_struct_local)
-    emit_raw!(b, emit_int128_eq(ctx, arg_type); pops=2, pushes=WasmValType[I32])
+    emit_int128_eq!(b, ctx, arg_type)
     # (a < b) || (a == b)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_ule!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -386,13 +424,11 @@ WBUILD-5001: WASM shift amounts are mod 64, so i64.shl(x, 64) = i64.shl(x, 0) = 
 Must handle n >= 64 and n == 0 edge cases with select.
 
 select(val1, val2, cond): cond != 0 → val1 (deeper), cond == 0 → val2 (shallower)
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x<<n (mod-64 edge-safe).
-function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_shl", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, I64])
+    structref = _int128_structref(ctx, result_type)
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -440,6 +476,15 @@ function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_shl", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
+    emit_int128_shl!(b, ctx, result_type)
     return builder_code(b)
 end
 
@@ -448,13 +493,11 @@ Emit 128-bit logical right shift: x >> n (unsigned, where n is 64-bit)
 Stack: [x_struct, n_i64] -> [result_struct]
 
 WBUILD-5001: Same mod-64 edge case handling as emit_int128_shl.
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x >>u n (mod-64 edge-safe).
-function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_lshr", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, I64])
+    structref = _int128_structref(ctx, result_type)
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -501,6 +544,15 @@ function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_lshr", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
+    emit_int128_lshr!(b, ctx, result_type)
     return builder_code(b)
 end
 
@@ -515,13 +567,11 @@ The low word's own bits are still logical (i64.shr_u); only bits arriving FROM
 the high word (cross / the n>=64 lo) carry the sign. Was MISSING — signed
 `Int128 >>` fell through to the i64 guard (`i64.shr_s` on the struct ref →
 validation failure; WasmMakie TwicePrecision range/tick widemul path).
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct, n_i64], pushes x >>s n (sign-filled).
-function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ashr", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, I64])
+    structref = _int128_structref(ctx, result_type)
 
     n_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
@@ -570,6 +620,15 @@ function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_ashr", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, I64])
+    emit_int128_ashr!(b, ctx, result_type)
     return builder_code(b)
 end
 
@@ -578,13 +637,11 @@ Emit 128-bit count leading zeros
 Stack: [x_struct] -> [result_struct (UInt128)]
 
 WBUILD-5001: Cleaned up dead code from first attempt that wasted 3 locals.
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [x_struct], pushes ctlz(x) as a UInt128 struct.
-function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ctlz", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
+    structref = _int128_structref(ctx, arg_type)
 
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -615,6 +672,15 @@ function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     local_get!(b, result_local)
     i64_const!(b, 0)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ctlz", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_ctlz!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -622,12 +688,11 @@ end
 Emit 128-bit count trailing zeros (F11). Stack: [x_struct] -> [result_struct].
 tz(x) = lo==0 ? 64 + ctz(hi) : ctz(lo). Mirrors emit_int128_ctlz (lo/hi roles swapped);
 the prior code emitted a single i64.ctz on a 128-bit value → invalid wasm.
+Builder-native (THE implementation, march4).
 """
-function emit_int128_cttz(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_cttz", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
+    structref = _int128_structref(ctx, arg_type)
 
     x_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -656,6 +721,15 @@ function emit_int128_cttz(ctx, arg_type::Type)::Vector{UInt8}
     local_get!(b, result_local)
     i64_const!(b, 0)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_cttz(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_cttz", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_cttz!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -663,12 +737,11 @@ end
 Emit 128-bit population count (F11). Stack: [x_struct] -> [result_struct].
 popcnt(x) = popcnt(lo) + popcnt(hi). The prior code emitted a single i64.popcnt on a
 128-bit value → invalid wasm.
+Builder-native (THE implementation, march4).
 """
-function emit_int128_ctpop(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ctpop", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
+    structref = _int128_structref(ctx, arg_type)
 
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     builder_set_local_type!(b, x_struct_local, structref)
@@ -686,6 +759,15 @@ function emit_int128_ctpop(ctx, arg_type::Type)::Vector{UInt8}
     local_get!(b, result_local)
     i64_const!(b, 0)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ctpop(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ctpop", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_ctpop!(b, ctx, arg_type)
     return builder_code(b)
 end
 
@@ -693,12 +775,11 @@ end
 Emit 128-bit bitwise NOT (F11). Stack: [x_struct] -> [result_struct].
 ~x = {~lo, ~hi}. The prior code emitted a single i64.xor -1 on a 128-bit value → invalid
 wasm; surfaced via count_zeros (= count_ones(~x)).
+Builder-native (THE implementation, march4).
 """
-function emit_int128_not(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_not!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_not", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref])
+    structref = _int128_structref(ctx, arg_type)
 
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     builder_set_local_type!(b, x_struct_local, structref)
@@ -709,19 +790,26 @@ function emit_int128_not(ctx, arg_type::Type)::Vector{UInt8}
     local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
     local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_not(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_not", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref])
+    emit_int128_not!(b, ctx, arg_type)
     return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise AND
 Stack: [a_struct, b_struct] -> [result_struct]
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
-function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_and!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_and", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     # Allocate locals
     a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -751,19 +839,26 @@ function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_AND)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_AND)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_and", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_and!(b, ctx, result_type)
     return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise OR
 Stack: [a_struct, b_struct] -> [result_struct]
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
-function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_or!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_or", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     # Allocate locals
     a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -793,19 +888,26 @@ function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_OR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_OR)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_or", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_or!(b, ctx, result_type)
     return builder_code(b)
 end
 
 """
 Emit 128-bit bitwise XOR
 Stack: [a_struct, b_struct] -> [result_struct]
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct], pushes result struct.
-function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
+function emit_int128_xor!(b::InstrBuilder, ctx, result_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
-    structref = julia_to_wasm_type_concrete(result_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_xor", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, result_type)
 
     # Allocate locals
     a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -835,60 +937,48 @@ function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_XOR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_XOR)
     struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, result_type)
+    b = InstrBuilder(; func_name="emit_int128_xor", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_xor!(b, ctx, result_type)
     return builder_code(b)
 end
 
 """
-Emit 128-bit equality comparison
-Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
+Emit 128-bit equality comparison.
+Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
+function emit_int128_eq!(b::InstrBuilder, ctx, arg_type::Type)
+    a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
+    # (a_lo == b_lo) && (a_hi == b_hi)
+    local_get!(b, a_lo); local_get!(b, b_lo); num!(b, Opcode.I64_EQ)
+    local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_EQ)
+    num!(b, Opcode.I32_AND)
+    return b
+end
+
+# bytes shell for the remaining byte-region callers (dies with them)
 function emit_int128_eq(ctx, arg_type::Type)::Vector{UInt8}
-    type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
+    structref = _int128_structref(ctx, arg_type)
     b = InstrBuilder(; func_name="emit_int128_eq", strict=_wt_builder_strict())
     seed_input!(b, WasmValType[structref, structref])
-
-    # Allocate locals
-    a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    a_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
-
-    # Pop structs to locals
-    local_set!(b, b_struct_local)
-    local_set!(b, a_struct_local)
-
-    # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
-    for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
-                                                (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
-    end
-
-    # (a_lo == b_lo) && (a_hi == b_hi)
-    local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_EQ)
-    local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_EQ)
-    num!(b, Opcode.I32_AND)
+    emit_int128_eq!(b, ctx, arg_type)
     return builder_code(b)
 end
 
 """
 Emit 128-bit not-equal comparison
 Stack: [a_struct, b_struct] -> [i32 result (0 or 1)]
+Builder-native (THE implementation, march4).
 """
-# MIGRATED to InstrBuilder. Consumes [a_struct, b_struct] from the stack, pushes i32.
-function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
+function emit_int128_ne!(b::InstrBuilder, ctx, arg_type::Type)
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-    structref = julia_to_wasm_type_concrete(arg_type, ctx)
-    b = InstrBuilder(; func_name="emit_int128_ne", strict=_wt_builder_strict())
-    seed_input!(b, WasmValType[structref, structref])
+    structref = _int128_structref(ctx, arg_type)
 
     # Allocate locals
     a_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -917,6 +1007,15 @@ function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_NE)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_NE)
     num!(b, Opcode.I32_OR)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
+    structref = _int128_structref(ctx, arg_type)
+    b = InstrBuilder(; func_name="emit_int128_ne", strict=_wt_builder_strict())
+    seed_input!(b, WasmValType[structref, structref])
+    emit_int128_ne!(b, ctx, arg_type)
     return builder_code(b)
 end
 

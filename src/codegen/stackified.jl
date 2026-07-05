@@ -43,16 +43,12 @@ function _value_julia_type(val, ctx::AbstractCompilationContext)
     return nothing
 end
 
-function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
-    # local builder, then append its code to the caller-supplied buffer (byte-identical).
-    # compile_value / emit_box_type_id! splices bridge in via emit_raw!. strict=false.
-    b = InstrBuilder(; func_name="emit_numeric_to_externref!", mod=ctx.mod)
+"""builder-native (THE implementation): value → classId box → externref.
+`nothing` values become ref.null extern (dart: null, not a boxed zero)."""
+function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
-        # return nothing → ref.null extern
         ref_null!(b, ExternRef)
-        append!(target_bytes, builder_code(b))
-        return
+        return b
     end
     # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
@@ -62,24 +58,28 @@ function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::
     emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
+    return b
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    b = InstrBuilder(; func_name="emit_numeric_to_externref!", mod=ctx.mod)
+    emit_numeric_to_externref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
     return
 end
 
 """
-    emit_numeric_to_anyref!(target_bytes, val, val_wasm, ctx)
+    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
 
-Like emit_numeric_to_externref! but produces anyref (no extern_convert_any).
-Used when storing into AnyRef-typed struct fields (JlType hierarchy active).
+Like emit_numeric_to_externref! but produces anyref (no extern_convert_any) —
+builder-native (THE implementation): value → real-classId box (already anyref).
+`nothing` values become ref.null any (dart: null, not a boxed zero).
 """
-function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    # MIGRATED to InstrBuilder: straight-line emitter (no byte inspection). Build into a
-    # local builder, then append its code to the caller-supplied buffer (byte-identical).
-    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", mod=ctx.mod)
+function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
     if is_nothing_value(val, ctx)
         ref_null!(b, AnyRef)  # any heap type (0x6E)
-        append!(target_bytes, builder_code(b))
-        return
+        return b
     end
     # The value's static Julia type (for the box's real classId).
     local _jl_type = _value_julia_type(val, ctx)
@@ -88,19 +88,26 @@ function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::Was
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_value!(b, val, ctx)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    return b  # No extern_convert_any — struct ref is already anyref
+end
+
+"""bytes shell for the remaining byte-region callers (dies with them)."""
+function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", mod=ctx.mod)
+    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
-    return  # No extern_convert_any — struct ref is already anyref
+    return
 end
 
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
 function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
-    emit_raw!(b, generate_stackified_flow(ctx, args...; kwargs...))   # THE front seam
+    append_builder!(b, generate_stackified_flow(ctx, args...; kwargs...))   # typed merge
     return b
 end
 
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
-                                  trailing_unreachable::Bool = true)::Vector{UInt8}
+                                  trailing_unreachable::Bool = true)::InstrBuilder
     # ========================================================================
     # STEP 0: BOUNDSCHECK PATTERN DETECTION
     # ========================================================================
@@ -548,17 +555,23 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # For SSAValues without locals, we need to recompute the value
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
     function compile_phi_value(val, phi_idx::Int,
-                               temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{Vector{UInt8},Union{WasmValType,Nothing},Int}
-        # parity(M2) typed channel: emits into `pvb`, returns (bytes, pushed_type, npushed) —
-        # the type is the emission BYPRODUCT (pvb.v.stack), so callers wrap+store through
-        # convert_type! instead of byte-sniffing the output. `temp_map` substitutes circular-
-        # phi temp locals at the plain local.get branches (replaces the callers' byte-REWRITE
-        # of pure local.get outputs, PURE-1001).
+                               temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{InstrBuilder,Union{WasmValType,Nothing},Int}
+        # parity(M2 -> march3) typed channel: emits into `pvb` and returns THE BUILDER
+        # (pushed_type, npushed are its tracked byproducts) -- callers merge with
+        # append_builder!, so the fragment's REAL stack effect transfers (no declared
+        # pushes; the pv_ty===nothing guess that let an invalid module through WT's
+        # own validation is structurally impossible now). `temp_map` substitutes
+        # circular-phi temp locals at the plain local.get branches (PURE-1001).
         pvb = InstrBuilder(; func_name="compile_phi_value", mod=ctx.mod)
         _seed_builder_locals!(pvb, ctx)
-        _cpv_ret() = (builder_code(pvb),
-                      isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
-                      length(pvb.v.stack))
+        _cpv_ret() = begin
+            if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
+                println(stderr, "PHI-VALUE-LIAR n=$(length(pvb.v.stack)) stack=$(pvb.v.stack) val=$(first(repr(val), 80)) phi=$phi_idx instrs=$(join(builder_disasm(pvb), "; ")) philoc=$(haskey(ctx.phi_locals, phi_idx) ? ctx.locals[ctx.phi_locals[phi_idx] - ctx.n_params + 1] : :none) errs=$(pvb.v.errors)")
+            end
+            (pvb,
+             isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
+             length(pvb.v.stack))
+        end
         if val isa Core.SSAValue
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
@@ -582,8 +595,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # converter (source = local.get of the SSA local). The unbox arm is
                         # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
                         local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                        _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
-                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, builder_code(_srcb))
+                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, _srcb)
                             emit_phi_type_default!(pvb, phi_local_wasm_type)
                         end
                     end
@@ -607,8 +621,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
                     # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
                     local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                    _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, builder_code(_srcb))
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, _srcb)
                         emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 else
@@ -629,8 +644,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                    _seed_builder_locals!(_sb, ctx)
                     emit_value!(_sb, val, ctx)
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, builder_code(_sb))
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
                         emit_phi_type_default!(pvb, phi_local_wasm_type)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
@@ -639,7 +655,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    emit_raw!(pvb, compile_statement(stmt, val.id, ctx); pushes=WasmValType[ssa_wasm_type])   # pops=1-style typed splice (declared push)
+                    compile_statement!(pvb, stmt, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)
@@ -685,9 +701,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 edge_val_type = get_phi_edge_wasm_type(val)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
-                    local _ne_vb, _ne_vty = compile_value_typed(val, ctx)
+                    local _ne_b = _compile_value_b(val, ctx)
+                    local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
-                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_vb)
+                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b)
                         # Type mismatch with no conversion arm: emit a type-safe default —
                         # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
                         record_unsupported!(ctx, :unsupported_type,
@@ -906,14 +923,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # convert_type! funnel → local.set. Replaces the arm-chain +
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
                                 # (cpv takes needs_temp) + the "safety check" re-derivation.
-                                pv_bytes, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
+                                pv_b, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
+                                # march3: typed merge — the audit proved the channel honest
+                                # (pv_n is now trustworthy; the phantom declared-push is gone).
                                 if pv_n >= 2
                                     # multi-value emission can't feed one local.set — type-safe default
                                     emit_phi_type_default!(b, phi_local_type)
                                     local_set!(b, local_idx)
                                     phi_count += 1
-                                elseif !isempty(pv_bytes)
-                                    emit_raw!(b, pv_bytes; pushes=(pv_ty === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty]))
+                                elseif !isempty(pv_b.instrs)
+                                    append_builder!(b, pv_b)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
                                         convert_type!(b, pv_ty, phi_local_type, ctx)
                                     end
@@ -1072,12 +1091,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
-                                pv_bytes2, pv_ty2, pv_n2 = compile_phi_value(val, i)
+                                pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
                                     emit_phi_type_default!(bb, phi_local_type)
                                     local_set!(bb, local_idx)
-                                elseif !isempty(pv_bytes2)
-                                    emit_raw!(bb, pv_bytes2; pushes=(pv_ty2 === nothing ? WasmValType[phi_local_type] : WasmValType[pv_ty2]))
+                                elseif !isempty(pv_b2.instrs)
+                                    append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
                                         convert_type!(bb, pv_ty2, phi_local_type, ctx)
                                     end
@@ -1096,15 +1115,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Nothing statement
 
             else
-                stmt_bytes = compile_statement(stmt, i, ctx)
-                emit_raw!(bb, stmt_bytes)
+                # march4 Phase C: THE statement visitor emits directly; the drop
+                # logic reads the emission's node window (byte sniffs are gone).
+                local _stmt_i0 = length(bb.instrs)
+                compile_statement!(bb, stmt, i, ctx)
+                local _stmt_emitted = length(bb.instrs) > _stmt_i0
 
-                # DEBUG: trace DROP emissions
+                # DEBUG: trace DROP emissions (node count)
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
-                    _drop_count = count(byt -> byt == 0x1a, stmt_bytes)
+                    _drop_count = count(x -> x isa InstrIR.Drop, @view bb.instrs[_stmt_i0+1:end])
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops_in_stmt_bytes=$(_drop_count) stmt_bytes_len=$(length(stmt_bytes)) last2=$(length(stmt_bytes) >= 2 ? (stmt_bytes[end-1], stmt_bytes[end]) : ()) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
+                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end
                 end
 
@@ -1119,12 +1141,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
 
                 if !haskey(ctx.ssa_locals, i)
-                    # PURE-220: Skip if compile_statement already emitted a DROP
-                    # PURE-6006: Guard against call instruction false-positive (func_idx 0x1a == DROP)
-                    already_dropped = !isempty(stmt_bytes) && stmt_bytes[end] == Opcode.DROP &&
-                                      !(length(stmt_bytes) >= 2 && stmt_bytes[end-1] == Opcode.CALL)
+                    # PURE-220 (march4, node): skip if the visitor already emitted a DROP.
+                    # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
+                    already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
-                        if !already_dropped && !isempty(stmt_bytes) && statement_produces_wasm_value(stmt, i, ctx)
+                        if !already_dropped && _stmt_emitted && statement_produces_wasm_value(stmt, i, ctx)
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1133,7 +1154,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 end
                             end
                         end
-                    elseif stmt isa Core.PiNode && !isempty(stmt_bytes)
+                    elseif stmt isa Core.PiNode && _stmt_emitted
                         # PiNode without ssa_local pushed a value onto the stack.
                         # Drop it if it's only used by phi edges (phi stores re-compute
                         # the value via compile_phi_value, so this stack value is orphaned).
@@ -1145,7 +1166,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
             end
         end
-        emit_raw!(b, builder_code(bb))
+        append_builder!(b, bb)   # typed merge — the block's real tracked effect
 
         # Handle the terminator
         term = block.terminator
@@ -1192,9 +1213,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
             end
 
-            # Compile condition
-            cond_bytes = compile_condition_to_i32(term.cond, ctx)
-            emit_raw!(b, cond_bytes; pushes=WasmValType[I32])
+            # Compile condition (THE condition front)
+            compile_condition_to_i32!(b, term.cond, ctx)
 
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
@@ -1370,9 +1390,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         end
 
-        # Close loop if this is the last block of the loop (back edge source)
+        # Close loop if this is the LAST back-edge source of the loop. A loop
+        # with several `continue`-style branches has MULTIPLE back-edge sources
+        # to the same header (1.13 Base IR does this in print); the loop label
+        # closes only at the maximal one — earlier sources just `br` back
+        # (their terminators already emitted it). Firing at every source emitted
+        # one spurious End per extra edge, eating outer labels (the byte era
+        # spliced this silently; the typed merge rejects it).
         for (src, dst) in back_edges
-            if src == block_idx
+            if src == block_idx && block_idx == maximum(s for (s, d) in back_edges if d == dst)
                 # Close any inner target blocks that are still open for this loop
                 if haskey(loop_inner_targets, dst)
                     for target in loop_inner_targets[dst]
@@ -1382,6 +1408,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         end
                     end
                 end
+                _debug_stackified && @warn "  END-OF-LOOP fires at block=$block_idx src=$src dst=$dst open_loops=$open_loops labels=$(length(b.v.labels))"
                 end_block!(b)  # End of loop
                 # Remove from open_loops
                 filter!(h -> h != dst, open_loops)
@@ -1391,6 +1418,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Close any remaining open blocks
     while !isempty(open_blocks)
+        _debug_stackified && @warn "  FINAL-SWEEP close $(last(open_blocks)) labels=$(length(b.v.labels))"
         pop!(open_blocks)
         end_block!(b)
     end
@@ -1408,6 +1436,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # here, i.e. exactly at the caller's continuation.
     needs_exit_block && end_block!(b)
 
-    return builder_code(b)
+    return b
 end
 

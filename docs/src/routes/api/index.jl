@@ -7,7 +7,6 @@
         ("compile", "Core Compilation"),
         ("types", "Types"),
         ("module-building", "Module Building"),
-        ("packages", "Package Extensions"),
         ("caching", "Caching"),
         ("source-maps", "Source Maps"),
         ("low-level", "Low-Level / Advanced"),
@@ -106,25 +105,6 @@
         api_entry(
             "add_memory!(mod, pages) / add_data_segment!(mod, offset, bytes)",
             "Linear-memory escape hatch. Prefer WasmGC structs/arrays over linear memory for new code."
-        ),
-
-        # ── Package Extensions ──
-        H2(:id => "packages", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Package Extensions"),
-        api_entry(
-            "register_package!(mod_name, fns) / list_packages() / package_functions(name)",
-            "Register a Julia package's compilable function set with WasmTarget so its overlays + entry-points are \
-             discoverable. Powers the auto-discovery that lets a notebook do `using SomePackage` and have its \
-             WASM-compatible functions show up automatically."
-        ),
-        api_entry(
-            "compile_with_packages(functions; packages=[…])",
-            "Compile against a set of pre-registered packages so their overlays + helper definitions are visible to the \
-             Julia compiler before IR extraction."
-        ),
-        api_entry(
-            "register_builtin_packages!() / detect_using_statements(...)",
-            "Internal hooks — register WasmTarget's built-in package overlays at module load, and detect `using`/`import` \
-             statements in source for auto-registration."
         ),
 
         # ── Caching ──

@@ -91,9 +91,9 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0)",
-        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!")),
-    "R3_infer_value_type" => ("infer_value_type( re-guess callers (M2 → 0 + delete fn)",
+    "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0; ZERO since march4 — see L13)",
+        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
         () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
@@ -150,9 +150,14 @@ const LOCKS = [
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
         () -> count_sites(r"infer_value_wasm_type\(")),
+    "L13_no_byte_bridges" => ("THE byte-bridge class is EXTINCT — zero emit_raw! call sites exist; every emission is a typed method or a tracked merge (march4 COMPLETE; locked 2026-07-04)",
+        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "L12_god_fn_seams_only" => ("every emit_raw! splice is an ANNOTATED god-fn seam or front — the byte-bridge class is closed to new members; R2 falls only by killing seams (march3; locked 2026-07-04)",
+        () -> count_sites(r"emit_raw!\(";
+                          exclude_line=r"function emit_raw!|god-fn seam|THE front seam|`emit_raw!")),
     "L11_driver_fronts" => ("driver-level byte splices flow ONLY through the declared fronts (compile_statement!/generate_stackified_flow!/_compile_catch_region! builder methods) — no raw driver splices at call sites (M11.3; locked 2026-07-03)",
         () -> count_sites(r"emit_raw!\(\w+, (?:generate_stackified_flow|compile_statement|generate_branch_split_try)\(";
-                          exclude_line=r"THE front seam|pops=1|declared push")),
+                          exclude_line=r"THE front seam|pops=1|declared push|god-fn seam")),
     "L10_no_fnv_dispatch" => ("the FNV-1a hash-dispatch apparatus is DELETED — dispatch is dart's ONE selector table, classId + offset + call_indirect (M8.4; locked 2026-07-03)",
         () -> count_sites(r"fnv1a_hash\(|FNV_OFFSET_BASIS\b|FNV_PRIME\b|_emit_table_probe_body|OverlayRegistry\b";
                           exclude_files=["codegen/types.jl"])),

@@ -38,6 +38,7 @@ Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
 """
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
+    ENV["WT_CUR_FN"] = try first(string(ctx.func_ref), 80) catch; "?" end   # debug context for builder errors
     code = ctx.code_info.code
     n = length(code)
 
@@ -833,16 +834,16 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
-"""builder-native front for the catch-region compiler."""
-function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
-    _tb = UInt8[]
-    _compile_catch_region!(_tb, ctx, code, from, to)
-    emit_raw!(b, _tb)
-    return b
-end
-
+"""bytes shell for the remaining byte-region callers (dies with them)."""
 function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     b = InstrBuilder(; func_name="_compile_catch_region!", mod=ctx.mod)
+    _compile_catch_region!(b, ctx, code, from, to)
+    append!(bytes, builder_code(b))
+    return bytes
+end
+
+"""builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
+function _compile_catch_region!(b::InstrBuilder, ctx::AbstractCompilationContext, code, from::Int, to::Int)
     i = from
     while i <= to
         stmt = code[i]
@@ -885,11 +886,10 @@ function _compile_catch_region!(bytes::Vector{UInt8}, ctx::AbstractCompilationCo
             i += 1
         end
     end
-    append!(bytes, builder_code(b))
-    return bytes
+    return b
 end
 
-function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::Vector{UInt8}
+function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code, region::TryRegion)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_try_catch_stackified", mod=ctx.mod)
     catch_dest = region.catch_dest
 
@@ -1142,7 +1142,7 @@ function generate_try_catch_stackified(ctx::AbstractCompilationContext, blocks::
         end
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # P2-batch18: does the outer region's normal path (between :leave and the catch
@@ -1184,14 +1184,14 @@ end
 #   <else arm: try_table B / catch Y>     ;; all paths return
 """builder-native front for the branch-split try generator."""
 function generate_branch_split_try!(b::InstrBuilder, args...; kwargs...)
-    emit_raw!(b, generate_branch_split_try(args...; kwargs...))   # THE front seam
+    append_builder!(b, generate_branch_split_try(args...; kwargs...))   # typed merge
     return b
 end
 
 function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                    code, then_chain::Vector{TryRegion},
                                    else_chain::Vector{TryRegion},
-                                   branch_idx::Int)::Vector{UInt8}
+                                   branch_idx::Int)::InstrBuilder
     b = InstrBuilder(; func_name="generate_branch_split_try", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1240,7 +1240,7 @@ function generate_branch_split_try(ctx::AbstractCompilationContext, blocks::Vect
     _emit_arm!(branch_idx + 1, then_chain, else_start - 1)   # then arm — all paths return
     end_block!(b)   # $else
     _emit_arm!(else_start, else_chain, length(code))          # else arm — all paths return
-    return builder_code(b)
+    return b
 end
 
 # P2-batch18 (generalised to N levels in P2-batch24, gap a38002fd0ef2):
@@ -1259,7 +1259,7 @@ end
 # catch-subset blocks.
 function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                   code, outer::TryRegion, arm_regions::Vector{TryRegion},
-                                  branch_idx::Int)::Vector{UInt8}
+                                  branch_idx::Int)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_catch_arm_split", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1300,7 +1300,7 @@ function generate_catch_arm_split(ctx::AbstractCompilationContext, blocks::Vecto
     arm_blocks = [b for b in blocks if b.start_idx >= r.catch_dest]
     generate_branch_split_try!(bb, ctx, arm_blocks, code, then_chain,
                                             else_chain, branch_idx)
-    return builder_code(bb)
+    return bb
 end
 
 # P3 gap 10cc64efe535: catch-arm split with a GotoNode skip and MERGING arms.
@@ -1320,7 +1320,7 @@ end
 #   <post-merge [merge ..]: phi reads, pop_exception, return>
 function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
                                        code, outer::TryRegion, inner::TryRegion,
-                                       gin_idx::Int, skip_idx::Int, merge_idx::Int)::Vector{UInt8}
+                                       gin_idx::Int, skip_idx::Int, merge_idx::Int)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_catch_arm_skip_merge", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1463,11 +1463,11 @@ function generate_catch_arm_skip_merge(ctx::AbstractCompilationContext, blocks::
             end
         end
     end
-    return builder_code(bb)
+    return bb
 end
 
 function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                  code, chain::Vector{TryRegion})::Vector{UInt8}
+                                  code, chain::Vector{TryRegion})::InstrBuilder
     b = InstrBuilder(; func_name="generate_catch_try_chain", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
@@ -1488,7 +1488,7 @@ function generate_catch_try_chain(ctx::AbstractCompilationContext, blocks::Vecto
 
     _emit_chain_levels!(b, ctx, blocks, code, chain, 1, length(code),
                         _emit_try_table_region!)
-    return builder_code(b)
+    return b
 end
 
 # Shared chain emission bounded to [lo, hi] (P2-batch25: arms of a branch-split
@@ -1557,12 +1557,12 @@ end
 # A level whose normal path returns (no merge phi) emits the plain
 # return-style block and recurses into its catch arm.
 function generate_catch_try_chain_merge(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                        code, chain::Vector{TryRegion})::Vector{UInt8}
+                                        code, chain::Vector{TryRegion})::InstrBuilder
     b = InstrBuilder(; func_name="generate_catch_try_chain_merge", mod=ctx.mod)
     ensure_exception_tag!(ctx.mod)
     ensure_exception_global!(ctx.mod)
     _emit_merge_chain_level!(b, ctx, blocks, code, chain, 1, 1, length(code))
-    return builder_code(b)
+    return b
 end
 
 function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationContext,
@@ -1626,9 +1626,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             for (j, e) in enumerate(st.edges)
                 ei = Int(e)
                 if r.enter_idx < ei && ei < r.catch_dest && isassigned(st.values, j)
-                    tmp = UInt8[]
-                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
-                    emit_raw!(b, tmp)
+                    emit_phi_local_set!(b, st.values[j], i, ctx)   # THE builder front
                     break
                 end
             end
@@ -1666,9 +1664,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
             haskey(ctx.phi_locals, i) || continue
             for (j, e) in enumerate(st.edges)
                 if r.catch_dest <= Int(e) < mk && isassigned(st.values, j)
-                    tmp = UInt8[]
-                    emit_phi_local_set!(tmp, st.values[j], i, ctx)
-                    emit_raw!(b, tmp)
+                    emit_phi_local_set!(b, st.values[j], i, ctx)   # THE builder front
                     break
                 end
             end
@@ -1694,7 +1690,7 @@ function _emit_merge_chain_level!(b::InstrBuilder, ctx::AbstractCompilationConte
     return b
 end
 
-function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::Vector{UInt8}
+function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_try_catch", mod=ctx.mod)
     regions = find_try_regions(code)
 
@@ -2001,6 +1997,21 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         n_gin = count(i -> code[i] isa Core.GotoIfNot, (enter_idx + 1):(catch_dest - 1))
         n_gin >= 2 && (has_phi = true)
     end
+    # march3 (silent wrong value, `y = try; x > 5 ? x : throw(...); catch; 0; end`):
+    # a GotoIfNot arm whose dest lies PAST the leave (in (leave_idx, catch_dest))
+    # is a throw arm the linear walk can never visit — its range is bounded by
+    # leave_idx, so the arm compiled to an EMPTY if/else and the try-exit phi
+    # store ran unconditionally (the catch never fired; wrong value flowed out).
+    # The shape belongs to the stackifier (ONE lowering).
+    if !has_phi
+        for i in (enter_idx + 1):(leave_idx - 1)
+            st = code[i]
+            if st isa Core.GotoIfNot && st.dest > leave_idx && st.dest < catch_dest
+                has_phi = true
+                break
+            end
+        end
+    end
     # P2-batch19: CATCH-INTERNAL phis (all edges ≥ catch_dest — inlined diamonds
     # or loops inside the catch arm, e.g. `catch; mod(typemin, x)`) need the
     # stackified catch compilation; the linear walk misplaced their edge
@@ -2092,7 +2103,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                _compile_try_body_gotoifnot!(bb, stmt, i, leave_idx, code, ctx)
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
                 compile_statement!(bb, stmt, i, ctx)
@@ -2212,7 +2223,7 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
                 continue
             end
             if stmt isa Core.GotoIfNot
-                emit_raw!(bb, _compile_try_body_gotoifnot(stmt, i, leave_idx, code, ctx))
+                _compile_try_body_gotoifnot!(bb, stmt, i, leave_idx, code, ctx)
                 i = _advance_past_gotoifnot(stmt, i, leave_idx, code)
             else
                 compile_statement!(bb, stmt, i, ctx)
@@ -2316,14 +2327,14 @@ function generate_try_catch(ctx::AbstractCompilationContext, blocks::Vector{Basi
         end_block!(bb)
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # PURE-9033: Generate sequential (non-nested) try/catch regions.
 # Each region gets its own try_table block structure, processed in order.
 # Example: two sequential try/catch blocks in one function.
 function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                       code, regions::Vector{TryRegion})::Vector{UInt8}
+                                       code, regions::Vector{TryRegion})::InstrBuilder
     bb = InstrBuilder(; func_name="generate_sequential_try_catch", mod=ctx.mod)
 
     # Ensure exception infrastructure
@@ -2384,7 +2395,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti, leave_idx, code, ctx))
+                    _compile_try_body_gotoifnot!(bb, stmt, _ti, leave_idx, code, ctx)
                     _ti = _advance_past_gotoifnot(stmt, _ti, leave_idx, code)
                 else
                     compile_statement!(bb, stmt, _ti, ctx)
@@ -2495,7 +2506,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
                     continue
                 end
                 if stmt isa Core.GotoIfNot
-                    emit_raw!(bb, _compile_try_body_gotoifnot(stmt, _ti2, leave_idx, code, ctx))
+                    _compile_try_body_gotoifnot!(bb, stmt, _ti2, leave_idx, code, ctx)
                     _ti2 = _advance_past_gotoifnot(stmt, _ti2, leave_idx, code)
                 else
                     compile_statement!(bb, stmt, _ti2, ctx)
@@ -2549,7 +2560,7 @@ function generate_sequential_try_catch(ctx::AbstractCompilationContext, blocks::
         end
     end
 
-    return builder_code(bb)
+    return bb
 end
 
 # PURE-9033: Generate nested try/catch (2-level nesting: inner try/catch inside outer try/catch).
@@ -2571,7 +2582,7 @@ end
 #   ; outer catch handler
 #
 function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock},
-                                     code, outer::TryRegion, inner::TryRegion)::Vector{UInt8}
+                                     code, outer::TryRegion, inner::TryRegion)::InstrBuilder
     bb = InstrBuilder(; func_name="generate_nested_try_catch_2", mod=ctx.mod)
 
     # Ensure exception infrastructure
@@ -2816,12 +2827,12 @@ function generate_nested_try_catch_2(ctx::AbstractCompilationContext, blocks::Ve
         ctx.last_stmt_was_stub = false
     end
 
-    return builder_code(bb)
+    return bb
 end
 
-# PURE-9031: Helper — compile a GotoIfNot inside the try body
-function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="_compile_try_body_gotoifnot", mod=ctx.mod)
+# PURE-9031: Helper — compile a GotoIfNot inside the try body.
+# Builder-native front: emits directly into the caller's builder.
+function _compile_try_body_gotoifnot!(b::InstrBuilder, stmt::Core.GotoIfNot, i::Int, leave_idx::Int, code, ctx::AbstractCompilationContext)
     else_target = stmt.dest
 
     compile_condition_to_i32!(b, stmt.cond, ctx)
@@ -2894,7 +2905,7 @@ function _compile_try_body_gotoifnot(stmt::Core.GotoIfNot, i::Int, leave_idx::In
         end_block!(b)
         ctx.last_stmt_was_stub = false
     end
-    return builder_code(b)
+    return b
 end
 
 # PURE-9031: Helper — advance past a GotoIfNot in the try body
