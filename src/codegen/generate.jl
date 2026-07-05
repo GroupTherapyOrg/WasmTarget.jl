@@ -748,10 +748,13 @@ WASM structure:
 # PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
 # PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
 function ensure_exception_tag!(mod::WasmModule)
+    # march6 slice D: THE TYPED TAG — dart's createExceptionTag carries
+    # (exception, stackTrace) as the tag payload (translator.dart:485-491);
+    # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
+    # Payload: (anyref exn, externref stackTrace — null until traces wire).
     if isempty(mod.tags)
-        void_ft = FuncType(WasmValType[], WasmValType[])
-        void_type_idx = add_type!(mod, void_ft)
-        add_tag!(mod, void_type_idx)
+        tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
+        add_tag!(mod, add_type!(mod, tag_ft))
     end
 end
 

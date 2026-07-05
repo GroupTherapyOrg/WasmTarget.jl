@@ -1713,7 +1713,9 @@ function compile_module(functions::Vector;
             _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub")
             ref_null!(_stub_b, AnyRef)                     # ref.null any (0xD0 0x6E)
             global_set!(_stub_b, _exn_g)                  # global.set _exn_g
-            throw_!(_stub_b, 0; inputs=WasmValType[AnyRef])  # throw 0 (tag pops the exnref)
+            global_get!(_stub_b, _exn_g, AnyRef)
+            ref_null!(_stub_b, ExternRef)
+            throw_!(_stub_b, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
             end_block!(_stub_b)                           # end
             body = builder_code(_stub_b)
             locals = WasmValType[]

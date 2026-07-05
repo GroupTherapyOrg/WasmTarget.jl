@@ -1076,10 +1076,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :try
                     pop!(label_stack)
                     end_block!(b)          # end try_table
+                    unreachable!(b)  # structural trap (the landing end is catch-arrival ONLY; normal paths br out)
                 end
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
-                    end_block!(b)          # end landing — catch lands here
+                    end_block!(b)          # end landing — the catch payload arrives here
+                    # bind the payload: trace (unused yet) dropped; exn → $current_exn
+                    # (written AT CATCH from the unwound value — re-entrancy-safe; the
+                    # global dies entirely when :the_exception reads a local instead)
+                    drop!(b)                                            # stackTrace
+                    global_set!(b, ensure_exception_global!(ctx.mod))   # exn
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end
@@ -1496,10 +1502,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # then the try_table with catch_all → label 0 (the landing). Outermost first.
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
+                # march6 slice D: the TYPED catch — the landing block carries the tag
+                # payload (exn, stackTrace) as its results; catch_clause(tag 0 → label 0)
+                # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
+                local _lbt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[AnyRef, ExternRef]))
                 push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0)))
-                block!(b)
+                block!(b, Int(_lbt); results=WasmValType[AnyRef, ExternRef])
                 push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0)))
-                try_table!(b, InstrIR.TryCatch[catch_all_clause(0)])
+                try_table!(b, InstrIR.TryCatch[catch_clause(0, 0)])
                 # region-inner forward targets open INSIDE the try_table
                 local _eb = get(stmt_to_block, r.enter_idx, 0)
                 if haskey(region_inner_targets, _eb)

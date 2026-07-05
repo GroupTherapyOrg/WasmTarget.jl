@@ -140,7 +140,7 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
         ref_null!(bld, AnyRef)
     end
     global_set!(bld, exn_global)
-    throw_!(bld, 0)
+    global_get!(bld, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bld, ExternRef); throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
     return bld
 end
 
@@ -3743,7 +3743,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     ensure_exception_tag!(ctx.mod)
                     ref_null!(fb, AnyRef)
                     global_set!(fb, ensure_exception_global!(ctx.mod))
-                    throw_!(fb, 0)
+                    global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                     end_block!(fb)
                     end_block!(fb)
                     local_get!(fb, UInt32(_ta_tmp))            # the value survives the check
@@ -5636,7 +5636,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        throw_!(_thrb, 0)  # tag index 0
+        global_get!(_thrb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(_thrb, ExternRef); throw_!(_thrb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
     # Base.add_ptr - pointer arithmetic (used in string operations)
@@ -5704,7 +5704,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         fb = InstrBuilder(; func_name="compile_call.frag", mod=ctx.mod); _seed_builder_locals!(fb, ctx)
         ensure_exception_tag!(ctx.mod)
         let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            throw_!(ib, 0)  # tag index 0
+            global_get!(ib, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(ib, ExternRef); throw_!(ib, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
             append_builder!(fb, ib)
         end
         ctx.last_stmt_was_stub = true  # PURE-908
