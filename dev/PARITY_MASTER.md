@@ -497,12 +497,13 @@ re-verified in code. Baseline: the 2026-06-30 census scored ~25-30%.
 
 ## LOAD-BEARING FINDINGS (doc-vs-code corrections + rooted bugs)
 
-**F1 — numeric boxes do NOT subtype $JlBase (docstring claims they do — FALSE).**
-`get_numeric_box_type!` (types.jl:1113) adds a plain struct with NO supertype while the
-$JlString struct DOES subtype base (types.jl:990) — the two box families are inconsistent,
-and dart subtypes EVERY class struct (class_info.dart:288). Boxed numerics can only flow
-via anyref. THE concrete blocker for the typed-value-channel north-star. values.jl:499-500
-docstring must be fixed or (better) the claim made true.
+**F1 — numeric boxes subtype $JlBase only via the finalization RETROFIT (CORRECTED +
+FIXED, march5).** The audit's strong claim was wrong: `set_struct_supertypes!` retrofits
+every plain struct to `sub $JlBase` at module finalization, so the EMITTED module was
+already correct (verified in wat: boxes are `(sub 0 …)`). The REAL gap was creation-time —
+during emission the strict builder couldn't use the subtype relation because it was
+declared only at the end. Fixed: `get_numeric_box_type!` now declares `sub $JlBase` AT
+CREATION (dart class_info.dart:288 shape), the typed-channel prerequisite.
 
 **F2 — the isa-over-Any[] @test_broken ROOT CAUSE (pinned in code).** WT numbers classIds
 from an OPEN registry snapshot: `assign_type_ids!` freezes each abstract's [low,high] one-shot

@@ -371,30 +371,9 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
     append!(bytes, builder_code(b))
 end
 
-"""
-    emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
-
-PURE-9028: Emit `i32.const <typeId>` for a boxed primitive value.
-Maps WasmValType → default Julia type → DFS typeId.
-INTERNAL: the sole caller is now `emit_classid_box!`'s `julia_type === nothing` fallback (the
-site sweep routed every former direct caller through that one producer). Because it maps to the
-*default* Julia type per width (every i64→Int64), it only distinguishes by width — a box that
-carries the value's real classId must pass `julia_type` to `emit_classid_box!` instead.
-"""
-function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
-    julia_type = if wasm_type === I32
-        Int32
-    elseif wasm_type === I64
-        Int64
-    elseif wasm_type === F32
-        Float32
-    elseif wasm_type === F64
-        Float64
-    else
-        Any
-    end
-    emit_type_id!(bytes, registry, julia_type)
-end
+# census F5 (march5): emit_box_type_id! DELETED — zero callers (the docstring's
+# "sole caller is emit_classid_box!'s fallback" was stale: that fallback inlines
+# emit_type_id! with the width-default type directly, values.jl:513).
 
 # (B4: the i31 boxing helpers emit_box_i31! / emit_unbox_i31_s! / emit_unbox_i31_u! /
 # should_use_i31 were DELETED — dart2wasm uses no i31, and B4 routed every former i31 site
@@ -1110,7 +1089,14 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     end
     # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
-    type_idx = add_struct_type!(mod, fields)
+    # census F1 (march5): declare `sub $JlBase` AT CREATION (dart class_info.dart:288 —
+    # every class struct subtypes its super at definition). The finalization retrofit
+    # (set_struct_supertypes!) already made this true in the EMITTED module; creating it
+    # true lets the strict builder use the subtype relation DURING emission (a box-typed
+    # ref validates where a $JlBase ref is expected — the typed-channel prerequisite).
+    base = registry.base_struct_idx
+    type_idx = base === nothing ? add_struct_type!(mod, fields) :
+               add_type!(mod, StructType(fields, base))
     registry.numeric_boxes[wasm_type] = type_idx
     return type_idx
 end

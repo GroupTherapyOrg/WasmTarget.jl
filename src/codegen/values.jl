@@ -488,7 +488,7 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 # ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41
 # scattered emit_box_type_id!+struct_new ladders (flow/conditionals/statements return boxes,
 # stackified phi-edge boxes, calls/invoke arg+ret boxes, tuple-field boxes) have ALL been
-# collapsed onto this producer; emit_box_type_id! survives only as this producer's private
+# collapsed onto this producer; the old emit_box_type_id! helper is DELETED (census F5) — its
 # wasm-rep classId fallback (values.jl below). Added DORMANT in F-i (byte-identical); wired via
 # convert_type!'s box/unbox arms + the isa sites in F-ii; the site sweep finished in Loop C.
 # ============================================================================
@@ -498,7 +498,7 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 
 Box the numeric value on the stack into a `{classId:i32, value:wasm_type}` struct (the
 canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type classId when
-`julia_type` is given; otherwise the wasm-rep id fallback (`emit_box_type_id!`) for sites
+`julia_type` is given; otherwise the inline wasm-rep-id fallback (width-default type) for sites
 that don't yet carry the Julia type — those distinguish only by width until they migrate.
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
 """
