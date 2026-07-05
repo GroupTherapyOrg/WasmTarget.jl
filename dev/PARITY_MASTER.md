@@ -562,7 +562,7 @@ dynamic forwarders/noSuchMethod (DIM 6 — Julia MethodError = trap), JS glue ge
 | item | status |
 |---|---|
 | F1 box supertype | ✅ CORRECTED (retrofit existed) + FIXED at creation — boxes `sub $JlBase` from birth |
-| F2 closed classId universe | ✅ `_register_reachable_ir_types!` closes the world before the ONE DFS (dart class_info.dart:583-690); $JlType hierarchy creation moved above the collector; **the pinned isa @test_broken FLIPPED to @test** |
+| F2 closed classId universe | ✅ (rebuilt after a WasmMakie-caught regression): `_collect_reachable_ir_types` feeds `assign_type_ids!` a PURE collection — numbering without registration (eager registration forked layouts via field-resolution order). The rebuild exposed the isa bug's SECOND root: `set_struct_supertypes!` ran before bodies, so lazily-registered structs never got `sub $JlBase` and the ref.test gate was false — the idempotent retrofit now re-runs post-bodies in all three pipelines. **The pinned isa @test_broken FLIPPED to @test** |
 | F4 typeassert | ✅ the CHECKED cast (dart emitAsCheck): tee → ref.test $JlBase → typeof → classId range → tag-0 throw on mismatch; statically-proven casts pass through; battery covers structs + boxed numerics |
 | F3 constant interning | ✅ short strings (≤64B) → ONE immutable global each (constant array.new_fixed initializer); `===` identity + code size now dart-shaped; long strings stay inline (dart lazies those — deferred: init fns can't be added during body compile) |
 | F5 dead code | ✅ M8.1 SelectorInfo transcription (6.3KB) + its test + emit_box_type_id! + stale FNV comments — deleted |
