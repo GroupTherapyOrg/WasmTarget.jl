@@ -580,3 +580,77 @@ catch_all for host exceptions (translator.dart:481-491) · D9.5 the try-driver f
 ONE lowering (f_fin4 = exhibit N that each driver re-derives phi handling). Minor floors:
 multi-range classId checks (value mostly obsoleted by F2's closed world) · LUB dispatch
 signatures · threshold unification · tuple-per-arity sharing · long-string lazy interning.
+
+# ═══════════════════════════════════════════════════════════════════
+# MARCHES 6-10 — THE ROAD TO THE TAG (mapped 2026-07-05, discovery-grounded)
+# ═══════════════════════════════════════════════════════════════════
+
+**THE TARGET (Dale-confirmed 2026-07-05):** the raw 15-dim mean's ceiling is ~72-75 —
+async (~10) and JS-interop (~45) are DIVERGENT-JUSTIFIED and drag it arithmetically.
+THE TAG = **every ACTIONABLE dimension at its documented ceiling ≈ 85-90 mean over the
+12 actionable dims.** Permanent documented deltas (locked as loud/sound, never scored
+against): the async state machine · dynamic forwarders/noSuchMethod (Julia MethodError
+= trap) · JS glue generation (Therapy owns the host boundary) · masquerade classes.
+Ratchets R12-R18 below make each march's progress machine-visible in CI.
+
+## MARCH 6 — EXCEPTIONS (exceptions 58→~85; the bug-richest subsystem)
+Discovery: **13 drivers, ~2,278 LOC = 76% of generate.jl** behind a 643-LOC shape
+selector (dart: visitTryCatch 127 + visitTryFinally 84). 13 throw sites ALL void-tag-0 +
+`$current_exn` stash; 13 try_table sites ALL catch_all; **the typed-catch builder API is
+fully built with ZERO callers** (instr_builder.jl:321-349) — this march is pure codegen.
+Phases: (1) **ONE lowering** — collapse the driver family into one structured try
+lowering (both of the week's real miscompiles lived here) · (2) **the typed tag** —
+`FuncType([exn, stackTrace],[])` (translator.dart:485-491); throw sites push the payload;
+catch sites bind via catch_clause + local_set; `$current_exn` dies (1 read,
+statements.jl:629) · (3) **try/finally lowering** (visitTryFinally 1287-1370 finalizer
+stacks; WT relies on Julia's inlining today — D9.4 battery holds the line) · (4) verify
+the compile.jl:1716 void-tag `inputs=[AnyRef]` anomaly.
+EXITS: R12 13→1 · R13 13→0 · typed catch emissions 0→≥1 · tag arity 0→2.
+
+## MARCH 7 — CONSTANTS (constants 35→~80)
+Discovery: **12 fresh-heap arms** in `_compile_value_b` (Int128/long-String/QuoteNode/
+Symbol[ignores the intern registry!]/Tuple/Module/Fn/closure/Dict/Vector/Memory/generic-
+struct) vs **3 dedup registries + 1 singleton** (dart: ONE constantInfo map for ALL kinds,
+constants.dart:49). No lazy constants (dart 445-476/322-339). **The lazy blocker:** fn
+indices freeze at compile.jl:1641 (PURE-9065) — init fns must pre-create via a
+literal-collection pre-pass (clone the compile.jl:1527-1560 loop; the F2 collector walks
+types, not literals).
+Phases: (1) ONE ensureConstant funnel unifying the registries + routing all 12 arms ·
+(2) the literal pre-pass (unblocks init-fn pre-creation) · (3) lazy constants
+(br_on_non_null use-shape) for large strings/arrays w/ maxArrayNewFixedLength · (4) shared
+string segments + Symbol joins the intern registry · (5) boxed-scalar constant dedup when
+expected is a ref (dart 361-376).
+EXITS: R14 12→2 (helpers only) · R15 2→0 · deduped kinds 3/15→15/15 · br_on_non_null ≥1.
+
+## MARCH 8 — UNIVERSAL WRAP, honestly scoped (visitors 75→~85, translator 78→~85)
+Discovery REFRAME: the generic arg path ALREADY collapsed (march 5); **R3/R5 largely
+SURVIVE as legitimate getStaticType/expectedType surface** (only ~3-9 of R3's 135 callers
+are wrap-collapse targets). The real work: (1) fold the **13 external emit+convert_type!
+ladders** into 4-arg wrap — gated on solving the Nothing-phantom `_ab.instrs` inspection
+(invoke.jl:2135 / calls.jl:6041) generically inside the funnel · (2) the long tail:
+route the **~200 bespoke intrinsic-operand 3-arg emits** through 4-arg wrap with their
+structurally-known expected types (array eltype / index i32 / ref field...) · (3) the
+return channel is nearly done (emit_return_coerced! + 2 callers) — finish it.
+Floor: ~30-40 genuinely-no-expected sites (drops/conditions/pass-throughs).
+EXITS: R17 256→~40 · R16 13→0 · 4-arg adoption 33→rising.
+
+## MARCH 9 — DISPATCH SIGNATURES + TYPES FLOOR + THE CLOSURES DECISION (dispatch 60→~78)
+Discovery: (1) **per-param LUB** (dart _computeSignature dispatch_table.dart:86-205 w/
+the unboxed-primitive fast lane; WT = fill(AnyRef, arity) ×2; hierarchy DAG for the
+struct join exists; the kwargs half is N/A — pre-positionalized) · (2) **the 9-cliff**
+(dispatch.jl:80): dart tables ALL targetCount>1; unification ALSO CLOSES A REAL HOLE —
+**multi-axis 2-8-candidate dispatch falls to `unreachable` today** (calls.jl:1593
+single-axis-only inline) · (3) **multi-range classId checks** (dart 3862-3883): makes isa
+sound INDEPENDENT of numbering order (F2 closed the drift empirically, not structurally;
+46 ensure_type_id! callers survive as synthetic box ids) · (4) **THE CLOSURES DECISION:
+record + DEFER** — closures are 100% static; call_ref! is built with zero callers;
+nothing on the critical path needs first-class function values; the dart layouter
+(closures.dart:41-118,147+) is LARGE net-new — build when a dynamic function-value flow
+lands, recorded as DEFERRED (not justified-forever).
+EXITS: R18 2→0 · threshold=9 1→0 · "multi-arg dispatch unsupported" 1→0 ·
+multi-range support ≥1 · the closures decision recorded (this paragraph).
+
+## MARCH 10 — THE CERTIFICATION CLOSE
+The fresh scored re-audit (the 2026-07-04 instrument, same 6-auditor method), every
+actionable dimension's floor → a LOCK, PARITY_MASTER final record, **THE TAG declared**
+when every actionable dim sits at its documented ceiling.
