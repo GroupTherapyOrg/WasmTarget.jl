@@ -34,3 +34,10 @@ Inner loop = smoke + touched-subsystem battery ONLY (~1 min). Per commit = smoke
 ratchet, commit, ONE heavy shard IN THE BACKGROUND while dev continues (red ⇒ revert).
 Full gate + fuzz = ONCE per march at PR time, detached behind dev/run_full_gate.sh.
 NOTHING blocks the foreground >2 min. Env-gated changes need NO default-path shards.
+
+## SLICE E VERDICT (2026-07-05): try/finally lowering = DIVERGENT-JUSTIFIED.
+Julia's FRONT-END inlines finalizers on every exit path at lowering time — the typed
+IR has NO runtime finally construct (dart lowers TryFinally itself because Kernel
+carries the node). WT sees only the already-duplicated paths, which the ONE lowering
+handles as plain CFG. The D9.4 differential battery (8 arms incl. the fixed f_fin4)
+is the permanent guard. Recorded as a documented ceiling item, not a gap.
