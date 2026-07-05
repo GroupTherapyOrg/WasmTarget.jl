@@ -1075,6 +1075,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
+        # march7: funnel-first (int128)
+        local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgint128 !== nothing
+            local _ciint128 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            _ciint128 !== nothing && (global_get!(b, _cgint128, ConcreteRef(_ciint128.wasm_type_idx, false)); return b)
+        end
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
         result_type = typeof(val)
         type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
@@ -1205,6 +1211,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         emit_string_wrap!(b, ctx)   # parity(M9): Symbols share the classed string rep
 
     elseif typeof(val) <: Tuple
+        # march7: funnel-first (tuple) — tuples of constant-expressible fields intern
+        local _cgtp = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgtp !== nothing
+            local _citp = get(ctx.type_registry.structs, typeof(val), nothing)
+            _citp !== nothing && (global_get!(b, _cgtp, ConcreteRef(_citp.wasm_type_idx, false)); return b)
+        end
         # Tuple constant - create it with struct.new
         T = typeof(val)
 
