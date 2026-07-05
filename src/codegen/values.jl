@@ -1087,6 +1087,14 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         f64_const!(b, val)
 
     elseif val isa String
+        # census F3 (march5): short literals read the ONE interned global (dart
+        # constants.dart dedup — code size + `===` identity); the inline
+        # data-segment path remains for long strings (dart lazies those).
+        local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _sg !== nothing
+            global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
+            return b
+        end
         # PURE-9013: String constant via passive data segment + array.new_data
         # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)

@@ -81,6 +81,10 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
+    # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
+    # every use of an equal short string literal reads ONE deduplicated global
+    # (code size + `===` identity like dart). Keyed by the string value.
+    string_constant_globals::Union{Nothing, Dict{String, UInt32}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -92,7 +96,8 @@ TypeRegistry() = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
-    Dict{Type, WasmValType}()     # box_contents_types (F3 L2)
+    Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
+    Dict{String, UInt32}()        # string_constant_globals (census F3)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -107,8 +112,45 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
     nothing,  # box_types (F3)
-    nothing   # box_contents_types (F3 L2)
+    nothing,  # box_contents_types (F3 L2)
+    nothing   # string_constant_globals (census F3)
 )
+
+"""
+    get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}
+
+census F3 (march5) — INTERNED string constants, dart's constant→deduplicated-global
+architecture (constants.dart:427-443 ensureConstant; small strings eager via
+array_new_fixed, :512-564). Every use of an equal short literal reads ONE global,
+matching dart's code-size and `===`-identity semantics. Strings longer than the
+eager threshold return `nothing` (they keep the inline data-segment path — dart
+handles those with LAZY init functions, deferred here because init functions
+cannot be added during body compilation without shifting function indices).
+"""
+function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s::String)::Union{UInt32, Nothing}
+    registry.string_constant_globals === nothing && return nothing
+    ncodeunits(s) > 64 && return nothing   # eager threshold (dart lazies large constants)
+    haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    # constant initializer: i32.const classId; per-byte i32.const; array.new_fixed; struct.new
+    init = UInt8[]
+    push!(init, Opcode.I32_CONST)
+    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, String))))
+    bytes = codeunits(s)
+    for b in bytes
+        push!(init, Opcode.I32_CONST)
+        append!(init, encode_leb128_signed(Int64(b)))
+    end
+    push!(init, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_FIXED)
+    append!(init, encode_leb128_unsigned(UInt64(arr_idx)))
+    append!(init, encode_leb128_unsigned(UInt64(length(bytes))))
+    push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+    append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
+    g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
+    registry.string_constant_globals[s] = g
+    return g
+end
 
 """
     get_datatype_type_idx(registry::TypeRegistry) → UInt32
