@@ -6020,7 +6020,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 for (arg_idx, arg) in enumerate(args)
                     local _cab = _compile_value_b(arg, ctx)
                     local _cw_arg_ty = isempty(_cab.v.stack) ? nothing : _cab.v.stack[end]
-                    local _cab_is_local = length(_cab.instrs) == 1 && _cab.instrs[1] isa InstrIR.LocalGet
                     local _cab_merged = false
                     # Check if arg type matches expected param type (the merge happens
                     # AFTER the phantom/numeric-replacement decisions — the pop! surgeries
@@ -6051,102 +6050,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             end
                         end
 
-                        # merge the arg now (unless replaced) so the bridging casts land after it;
-                        # the numeric-expected arm below REPLACES instead (sets the flag first)
-                        local _cab_numeric_replace = (expected_wasm === I32 || expected_wasm === I64 ||
-                                                      expected_wasm === F32 || expected_wasm === F64) &&
-                                                     (actual_wasm === ExternRef || actual_wasm === AnyRef ||
-                                                      actual_wasm isa ConcreteRef || actual_wasm === StructRef)
-                        (_cab_merged || _cab_numeric_replace) || (append_builder!(fb, _cab); _cab_merged = true)
-                        if expected_wasm isa ConcreteRef && actual_wasm isa ConcreteRef
-                            if expected_wasm.type_idx != actual_wasm.type_idx
-                                # Different ref types — insert ref.cast null to expected type
-                                local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                                ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
-                                append_builder!(fb, _bb)
-                            end
-                        elseif expected_wasm isa ConcreteRef && (actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
-                            # Abstract ref to concrete ref — insert ref.cast null
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            ref_cast!(_bb, Int64(expected_wasm.type_idx), true)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm isa ConcreteRef && actual_wasm === ExternRef
-                            # PURE-036bj: externref to concrete ref — convert to anyref first, then cast
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            any_convert_extern!(_bb)                 # externref → anyref
-                            ref_cast!(_bb, Int64(expected_wasm.type_idx), true)  # anyref → (ref null X)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm isa ConcreteRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                            # PURE-6025: Numeric value to tagged union struct — wrap via emit_wrap_union_value.
-                            # This happens when a function expects a Union param (represented as tagged union struct)
-                            # but the actual value is a numeric type (e.g., NumType passed to Dict{WasmValType,...} key).
-                            # B4/M3: numeric → ref. THE single-source funnel (box arm) — boxes
-                            # with the real classId, then coerces to the expected ref; a genuine
-                            # type mismatch traps LOUDLY (no silent truncation). (The dead
-                            # tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false.)
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            convert_type!(_bb, actual_wasm, expected_wasm, ctx;
-                                          from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm === ExternRef && (actual_wasm isa ConcreteRef || actual_wasm === StructRef || actual_wasm === ArrayRef || actual_wasm === AnyRef)
-                            # Concrete or abstract ref to externref — insert extern.convert_any
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            extern_convert_any!(_bb)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm === AnyRef && actual_wasm === ExternRef
-                            # PURE-9022: externref to anyref — insert any.convert_extern
-                            # Occurs when JS import returns externref but internal code expects anyref
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            any_convert_extern!(_bb)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm === AnyRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                            # PURE-9022: Numeric value (on the stack) to anyref via THE single box emitter.
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            emit_classid_box!(_bb, ctx, actual_wasm, nothing)
-                            append_builder!(fb, _bb)
-                        elseif expected_wasm === ExternRef && (actual_wasm === I32 || actual_wasm === I64 || actual_wasm === F32 || actual_wasm === F64)
-                            # PURE-6025: Numeric value to externref — box via the one emitter, then extern.convert_any.
-                            local _bb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            emit_classid_box!(_bb, ctx, actual_wasm, nothing)
-                            extern_convert_any!(_bb)
-                            append_builder!(fb, _bb)
-                        elseif (expected_wasm === I32 || expected_wasm === I64 || expected_wasm === F32 || expected_wasm === F64) &&
-                               (actual_wasm === ExternRef || actual_wasm === AnyRef || actual_wasm isa ConcreteRef || actual_wasm === StructRef)
-                            # PURE-906: Expected numeric but actual is ref-typed.
-                            # This happens when Julia type inference reports arg type as Any
-                            # but the callee's param is a concrete numeric type (Bool, Int, etc.).
-                            # Zero default REPLACES the ref-typed arg (no pop! surgery —
-                            # the un-merged fragment is simply dropped).
-                            _cab_merged = true
-                            local _zb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                            if expected_wasm === I32
-                                i32_const!(_zb, 0)
-                            elseif expected_wasm === I64
-                                i64_const!(_zb, 0)
-                            elseif expected_wasm === F32
-                                f32_const!(_zb, 0.0f0)
-                            elseif expected_wasm === F64
-                                f64_const!(_zb, 0.0)
-                            end
-                            append_builder!(fb, _zb)
-                        elseif expected_wasm === ExternRef && actual_wasm === ExternRef
-                            # PURE-036z: Julia type inference says Any→ExternRef for both, but the actual
-                            # Wasm local might be a ConcreteRef. Check if arg_bytes is local.get of a
-                            # non-externref local and insert extern.convert_any if needed.
-                            if _cab_is_local
-                                # dart2wasm carries the type with the value: derive the actual
-                                # wasm type from the inferred value type rather than the local index.
-                                actual_local_wasm = _cw_arg_ty
-                                if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                                    # Actual local is a ref type but not externref — insert conversion
-                                    local _ecb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                                    extern_convert_any!(_ecb)
-                                    append_builder!(fb, _ecb)
-                                end
-                            end
+                        # march5 F8 (twin of the invoke collapse): the bridging chain IS
+                        # one convertType call (dart code_generator.dart:879). The tracked
+                        # emission type refines `actual`; replaced arms incl. the phantom
+                        # handled above.
+                        _cw_arg_ty isa WasmValType && actual_julia_type !== Nothing && (actual_wasm = _cw_arg_ty)
+                        _cab_merged || (append_builder!(fb, _cab); _cab_merged = true)
+                        convert_type!(fb, actual_wasm, expected_wasm, ctx;
+                                      from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                         end
-                    end
-                end
+             end
                 # Cross-function call - emit call instruction with target index
                 local _xcb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
                 call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
