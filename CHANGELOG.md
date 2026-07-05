@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.4...v0.4.5) (2026-07-05)
+
+
+### Bug Fixes
+
+* **march5, F2:** exclude Memory/MemoryRef from the closed-world collector — the _la_sub regression ([3862ba9](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3862ba9ae07379813734768b284ee04ccc61f8ec))
+* **march5, F2:** the closed world COLLECTS, never registers — and the isa bug's SECOND root falls ([9af563c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9af563c5e9818da3470fab82c7a417af588d182f))
+
 ## [0.4.4](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.3...v0.4.4) (2026-07-05)
 
 
