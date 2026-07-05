@@ -1185,22 +1185,23 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif val isa Symbol
-        # Symbol constant - represent as string via passive data segment
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # march7 M7-c: Symbols share the classed string rep AND its intern registry —
+        # equal symbol literals read the ONE deduplicated global (dart: one constantInfo
+        # map for all kinds). Long names keep the inline data-segment path.
         name_str = String(val)
-        n_bytes = ncodeunits(name_str)
-
-        if n_bytes == 0
-            array_new_fixed!(b, type_idx, 0, I32)
-        else
-            utf8_bytes = Vector{UInt8}(codeunits(name_str))
-            seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
-
-            i32_const!(b, 0)
-            # i32.const operands are SIGNED LEB128 (see String path above).
-            i32_const!(b, Int32(n_bytes))
-            array_new_data!(b, type_idx, seg_idx)
+        local _syg = get_string_constant_global!(ctx.mod, ctx.type_registry, name_str)
+        if _syg !== nothing
+            global_get!(b, _syg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
+            return b
         end
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        n_bytes = ncodeunits(name_str)
+        utf8_bytes = Vector{UInt8}(codeunits(name_str))
+        seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
+        i32_const!(b, 0)
+        # i32.const operands are SIGNED LEB128 (see String path above).
+        i32_const!(b, Int32(n_bytes))
+        array_new_data!(b, type_idx, seg_idx)
         emit_string_wrap!(b, ctx)   # parity(M9): Symbols share the classed string rep
 
     elseif typeof(val) <: Tuple
