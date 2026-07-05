@@ -1571,14 +1571,27 @@ function compile_module(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # PURE-9025: Assign DFS type IDs after all types are registered
-    assign_type_ids!(type_registry)
+    # PURE-9063: Create $JlType hierarchy types FIRST (march5 reorder: the closed-world
+    # collector below registers structs whose DataType-typed fields must resolve to
+    # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
+    # which the Any-only patch pass below can't fix)
+    create_jl_type_hierarchy!(mod, type_registry)
+
+    # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
+    # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
+    # function's typed IR and COLLECT every reachable concrete struct / union member
+    # so the DFS below numbers the closed world (real [low, high] ranges for isa/
+    # typeassert). Collection ONLY — no struct registration: eagerly registering
+    # changed field-resolution ORDER and produced duplicate layouts (caught by
+    # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
+    # registered lazily later receives its pre-assigned id via ensure_type_id!.
+    _reachable = _collect_reachable_ir_types(function_data)
+
+    # PURE-9025: Assign DFS type IDs (the closed world = registered + reachable)
+    assign_type_ids!(type_registry; extra_concrete_types=_reachable)
 
     # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
-
-    # PURE-9063: Create $JlType hierarchy types (before type globals use them)
-    create_jl_type_hierarchy!(mod, type_registry)
 
     # PURE-9064: Patch struct types registered before JlType hierarchy existed.
     # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
@@ -1791,6 +1804,17 @@ function compile_module(functions::Vector;
     clear_perf_now!()
     clear_char_array_type!()
     clear_utf8_to_js_func!()
+
+    # census F2 (march5, the ORIGINAL isa bug's second root): structs registered
+    # LAZILY during body compilation never received `sub $JlBase` — the early
+    # retrofit ran before bodies, so `ref.test (ref $JlBase)` (the isa/typeof gate)
+    # was FALSE for every late-registered struct at runtime. Re-run the idempotent
+    # retrofit now that every struct exists. (dart declares supertypes at class
+    # definition — class_info.dart:288 — so this second pass has no dart analog;
+    # it exists because WT registers lazily.)
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
 
     # WASMTARGET dynamic dispatch: stub any discovery-added function whose ASSEMBLED
     # bytecode fails validation (invalid-but-non-crashing codegen not caught by the
@@ -2008,6 +2032,13 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
     end
 
     populate_type_constant_globals!(mod, type_registry)
+    # census F2 (march5): the post-body supertype retrofit — lazily-registered
+    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
+    # the main pipeline's note).
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
+
     return mod
 end
 
@@ -2880,6 +2911,13 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
     end
 
     populate_type_constant_globals!(mod, type_registry)
+    # census F2 (march5): the post-body supertype retrofit — lazily-registered
+    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
+    # the main pipeline's note).
+    if type_registry.base_struct_idx !== nothing
+        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
+    end
+
     return mod
 end  # compile_module_from_ir_frozen
 
@@ -4282,4 +4320,56 @@ function _compile_module_trim(functions::Vector; kwargs...)
         TRIM_ENTRY_NAMES[] = nothing
         _TRIM_ACTIVE[] = false
     end
+end
+
+"""
+    _collect_reachable_ir_types(function_data) -> Set{DataType}
+
+census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
+number every class of the component once, before codegen). Walks every function's
+typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
+types reachable from the IR so `assign_type_ids!` numbers the whole world in one
+DFS. PURE COLLECTION — registration stays lazy (eager registration reorders field
+resolution and forks layouts); a collected type registered later receives its
+pre-assigned id via `ensure_type_id!`.
+"""
+function _collect_reachable_ir_types(function_data)::Set{DataType}
+    out = Set{DataType}()
+    seen = Set{Any}()
+    function reg!(@nospecialize(T))
+        T === nothing && return
+        T in seen && return
+        push!(seen, T)
+        if T isa Union
+            reg!(T.a); reg!(T.b)
+            return
+        end
+        T isa DataType || return
+        if T <: Type && T !== Type && length(T.parameters) == 1
+            reg!(T.parameters[1])
+            return
+        end
+        # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
+        # wasm arrays (an id here admits them as dispatch candidates whose
+        # wrappers then have no struct to cast to — the _la_sub regression)
+        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box &&
+           !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
+            push!(out, T)
+        end
+    end
+    for fd in function_data
+        code_info = fd[4]
+        code_info === nothing && continue
+        for at in fd[2]
+            reg!(at isa Type ? at : typeof(at))
+        end
+        reg!(fd[5])
+        ssats = code_info.ssavaluetypes
+        if ssats isa Vector
+            for t in ssats
+                reg!(Core.Compiler.widenconst(t))
+            end
+        end
+    end
+    return out
 end

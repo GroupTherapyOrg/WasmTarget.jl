@@ -81,6 +81,10 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
+    # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
+    # every use of an equal short string literal reads ONE deduplicated global
+    # (code size + `===` identity like dart). Keyed by the string value.
+    string_constant_globals::Union{Nothing, Dict{String, UInt32}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -92,7 +96,8 @@ TypeRegistry() = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
-    Dict{Type, WasmValType}()     # box_contents_types (F3 L2)
+    Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
+    Dict{String, UInt32}()        # string_constant_globals (census F3)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -107,8 +112,45 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
     nothing,  # box_types (F3)
-    nothing   # box_contents_types (F3 L2)
+    nothing,  # box_contents_types (F3 L2)
+    nothing   # string_constant_globals (census F3)
 )
+
+"""
+    get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}
+
+census F3 (march5) — INTERNED string constants, dart's constant→deduplicated-global
+architecture (constants.dart:427-443 ensureConstant; small strings eager via
+array_new_fixed, :512-564). Every use of an equal short literal reads ONE global,
+matching dart's code-size and `===`-identity semantics. Strings longer than the
+eager threshold return `nothing` (they keep the inline data-segment path — dart
+handles those with LAZY init functions, deferred here because init functions
+cannot be added during body compilation without shifting function indices).
+"""
+function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s::String)::Union{UInt32, Nothing}
+    registry.string_constant_globals === nothing && return nothing
+    ncodeunits(s) > 64 && return nothing   # eager threshold (dart lazies large constants)
+    haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    # constant initializer: i32.const classId; per-byte i32.const; array.new_fixed; struct.new
+    init = UInt8[]
+    push!(init, Opcode.I32_CONST)
+    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, String))))
+    bytes = codeunits(s)
+    for b in bytes
+        push!(init, Opcode.I32_CONST)
+        append!(init, encode_leb128_signed(Int64(b)))
+    end
+    push!(init, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_FIXED)
+    append!(init, encode_leb128_unsigned(UInt64(arr_idx)))
+    append!(init, encode_leb128_unsigned(UInt64(length(bytes))))
+    push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+    append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
+    g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
+    registry.string_constant_globals[s] = g
+    return g
+end
 
 """
     get_datatype_type_idx(registry::TypeRegistry) → UInt32
@@ -140,7 +182,7 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
 
 IDs start at 1 (0 is reserved for unknown/unassigned).
 """
-function assign_type_ids!(registry::TypeRegistry)
+function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
     for (T, info) in registry.structs
@@ -148,6 +190,10 @@ function assign_type_ids!(registry::TypeRegistry)
             push!(concrete_types, T)
         end
     end
+    # census F2 (march5): the closed world — IR-reachable types enter the numbering
+    # even before (or without) struct registration; their ids/ranges are what isa
+    # and the checked cast read, and lazy registration later reuses the same id.
+    extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
 
     # Also include primitive numeric types that may need boxing/dispatch
     # PURE-9028: Include Nothing for BoxedNothing typeId
@@ -371,30 +417,9 @@ function emit_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, T::Type)
     append!(bytes, builder_code(b))
 end
 
-"""
-    emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
-
-PURE-9028: Emit `i32.const <typeId>` for a boxed primitive value.
-Maps WasmValType → default Julia type → DFS typeId.
-INTERNAL: the sole caller is now `emit_classid_box!`'s `julia_type === nothing` fallback (the
-site sweep routed every former direct caller through that one producer). Because it maps to the
-*default* Julia type per width (every i64→Int64), it only distinguishes by width — a box that
-carries the value's real classId must pass `julia_type` to `emit_classid_box!` instead.
-"""
-function emit_box_type_id!(bytes::Vector{UInt8}, registry::TypeRegistry, wasm_type::WasmValType)
-    julia_type = if wasm_type === I32
-        Int32
-    elseif wasm_type === I64
-        Int64
-    elseif wasm_type === F32
-        Float32
-    elseif wasm_type === F64
-        Float64
-    else
-        Any
-    end
-    emit_type_id!(bytes, registry, julia_type)
-end
+# census F5 (march5): emit_box_type_id! DELETED — zero callers (the docstring's
+# "sole caller is emit_classid_box!'s fallback" was stale: that fallback inlines
+# emit_type_id! with the width-default type directly, values.jl:513).
 
 # (B4: the i31 boxing helpers emit_box_i31! / emit_unbox_i31_s! / emit_unbox_i31_u! /
 # should_use_i31 were DELETED — dart2wasm uses no i31, and B4 routed every former i31 site
@@ -1110,7 +1135,14 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     end
     # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
-    type_idx = add_struct_type!(mod, fields)
+    # census F1 (march5): declare `sub $JlBase` AT CREATION (dart class_info.dart:288 —
+    # every class struct subtypes its super at definition). The finalization retrofit
+    # (set_struct_supertypes!) already made this true in the EMITTED module; creating it
+    # true lets the strict builder use the subtype relation DURING emission (a box-typed
+    # ref validates where a $JlBase ref is expected — the typed-channel prerequisite).
+    base = registry.base_struct_idx
+    type_idx = base === nothing ? add_struct_type!(mod, fields) :
+               add_type!(mod, StructType(fields, base))
     registry.numeric_boxes[wasm_type] = type_idx
     return type_idx
 end

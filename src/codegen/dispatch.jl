@@ -45,8 +45,8 @@ Registry of dispatch tables for a module.
 mutable struct DispatchTableRegistry
     tables::Dict{Any, DispatchTable}  # func_ref -> DispatchTable
     # parity(M8.2): the dart selector bridge — single-axis tables dispatch via
-    # receiver.classId + offset into the ONE flat table (dispatch_table.dart:445-458)
-    # instead of the FNV probe. Multi-axis tables keep the probe until M8.3.
+    # receiver.classId + offset into the ONE flat table (dispatch_table.dart:445-458);
+    # multi-axis tables via the M8.3 cascade through the SAME table (FNV deleted, M8.4).
     selector_axis::Dict{Any,Int}                      # func_ref → dispatch-axis position
     selector_offset::Dict{Any,Int}                    # func_ref → packed table offset
     selector_positions::Dict{Any,Vector{Tuple{Int,Int}}}  # func_ref → [(table_pos, entry_i)]

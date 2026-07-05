@@ -212,41 +212,8 @@ end
 # Stack Trace Support — JS new Error().stack Import
 # ============================================================================
 
-"""
-    add_stack_trace_import!(mod) -> func_idx
-
-Add a `capture_stack` import that returns an externref containing the JS
-stack trace string from `new Error().stack`. Used for backtrace support
-in exception handling.
-
-Returns the import function index.
-"""
-function add_stack_trace_import!(mod::WasmModule)
-    # capture_stack: () → externref
-    func_idx = add_import!(mod, "env", "capture_stack",
-        WasmValType[],
-        WasmValType[ExternRef])
-    return func_idx
-end
-
-"""
-    ensure_stack_trace_global!(mod) -> global_idx
-
-Ensure a module-level `\$current_stack_trace (mut externref)` global exists.
-Returns the global index.
-"""
-function ensure_stack_trace_global!(mod::WasmModule)
-    # Check if already added
-    for (i, g) in enumerate(mod.globals)
-        if g.valtype === ExternRef && g.mutable
-            return UInt32(i - 1)
-        end
-    end
-    # Add new global: (global $current_stack_trace (mut externref) ref.null extern)
-    init_expr = UInt8[0xD0, 0x6F, 0x0B]  # ref.null extern, end
-    idx = add_global!(mod, ExternRef, true, init_expr)
-    return idx
-end
+# census F7 (march5): add_stack_trace_import!/ensure_stack_trace_global! deleted
+# with the dormant PURE-9036 cluster (see generate.jl note; rebuild = D9.1 typed tag).
 
 # ============================================================================
 # IO Bridge — println/print via JS Imports

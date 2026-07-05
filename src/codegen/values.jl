@@ -398,6 +398,9 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         return b
     elseif _wt_is_ref(from) && !_wt_is_ref(to)
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
+        # march5 F8: an externref source crosses the boundary first (the box lives
+        # under anyref; ref.cast from externref is not wasm-valid).
+        from === ExternRef && any_convert_extern!(b)
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
@@ -470,6 +473,12 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             num!(b, Opcode.F32_CONVERT_I64_S)
         elseif from === I32 && to === F32
             num!(b, Opcode.F32_CONVERT_I32_S)
+        # march5 F8: the NARROWING arms (dart throws here; Julia call boundaries
+        # genuinely narrow — e.g. an Int64 value meeting an Int32 param)
+        elseif from === I64 && to === I32
+            num!(b, Opcode.I32_WRAP_I64)
+        elseif from === F64 && to === F32
+            num!(b, Opcode.F32_DEMOTE_F64)
         end
     end
     return b
@@ -488,7 +497,7 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 # ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41
 # scattered emit_box_type_id!+struct_new ladders (flow/conditionals/statements return boxes,
 # stackified phi-edge boxes, calls/invoke arg+ret boxes, tuple-field boxes) have ALL been
-# collapsed onto this producer; emit_box_type_id! survives only as this producer's private
+# collapsed onto this producer; the old emit_box_type_id! helper is DELETED (census F5) — its
 # wasm-rep classId fallback (values.jl below). Added DORMANT in F-i (byte-identical); wired via
 # convert_type!'s box/unbox arms + the isa sites in F-ii; the site sweep finished in Loop C.
 # ============================================================================
@@ -498,7 +507,7 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 
 Box the numeric value on the stack into a `{classId:i32, value:wasm_type}` struct (the
 canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type classId when
-`julia_type` is given; otherwise the wasm-rep id fallback (`emit_box_type_id!`) for sites
+`julia_type` is given; otherwise the inline wasm-rep-id fallback (width-default type) for sites
 that don't yet carry the Julia type — those distinguish only by width until they migrate.
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
 """
@@ -1087,6 +1096,14 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         f64_const!(b, val)
 
     elseif val isa String
+        # census F3 (march5): short literals read the ONE interned global (dart
+        # constants.dart dedup — code size + `===` identity); the inline
+        # data-segment path remains for long strings (dart lazies those).
+        local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _sg !== nothing
+            global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
+            return b
+        end
         # PURE-9013: String constant via passive data segment + array.new_data
         # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)

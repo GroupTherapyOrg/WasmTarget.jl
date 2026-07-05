@@ -18,8 +18,15 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 691
+R11_patch_markers = 678
+R12_try_drivers = 13
+R13_catch_all_clauses = 14
+R14_fresh_constant_structs = 12
+R15_constant_data_segments = 2
+R16_external_convert_ladders = 13
+R17_unwrapped_value_emissions = 256
+R18_anyref_dispatch_sigs = 5
 R2_emit_raw_bridges = 0
 R3_infer_value_type = 134
 R5_julia_type_reguess = 104
-R7_raw_coercion_ops = 130
+R7_raw_coercion_ops = 126
