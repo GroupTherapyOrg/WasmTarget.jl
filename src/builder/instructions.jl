@@ -754,6 +754,15 @@ Add a passive data segment (used with array.new_data or memory.init).
 Returns the 0-based index of the data segment.
 """
 function add_passive_data_segment!(mod::WasmModule, data::Vector{UInt8})::UInt32
+    # march7 (dart constants.dart:541 — shared segments): passive segments are
+    # read-only sources for array.new_data, so CONTENT-equal segments are
+    # semantically identical — dedup by content. Repeated string/symbol
+    # constants stop minting fresh segments.
+    for (i, seg) in enumerate(mod.data_segments)
+        if seg.passive && seg.data == data
+            return UInt32(i - 1)
+        end
+    end
     idx = UInt32(length(mod.data_segments))
     push!(mod.data_segments, WasmDataSegment(UInt32(0), UInt32(0), data, true))
     return idx
