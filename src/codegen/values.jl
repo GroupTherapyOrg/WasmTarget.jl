@@ -398,6 +398,9 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         return b
     elseif _wt_is_ref(from) && !_wt_is_ref(to)
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
+        # march5 F8: an externref source crosses the boundary first (the box lives
+        # under anyref; ref.cast from externref is not wasm-valid).
+        from === ExternRef && any_convert_extern!(b)
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
@@ -470,6 +473,12 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             num!(b, Opcode.F32_CONVERT_I64_S)
         elseif from === I32 && to === F32
             num!(b, Opcode.F32_CONVERT_I32_S)
+        # march5 F8: the NARROWING arms (dart throws here; Julia call boundaries
+        # genuinely narrow — e.g. an Int64 value meeting an Int32 param)
+        elseif from === I64 && to === I32
+            num!(b, Opcode.I32_WRAP_I64)
+        elseif from === F64 && to === F32
+            num!(b, Opcode.F32_DEMOTE_F64)
         end
     end
     return b
