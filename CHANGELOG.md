@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.4](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.3...v0.4.4) (2026-07-05)
+
+
+### Features
+
+* **parity:** the 2026-07-04 certification census — 15 dims scored, ~55% structural parity (was ~25-30%) ([dd98983](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/dd98983e01ced4be3e83057f71823179ea245b56))
+
+
+### Bug Fixes
+
+* **1.13-rc1:** element-wise builder transfer — works around a Julia 1.13.0-rc1 append! UNDEF-tail bug ([cf0898c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cf0898c85c4da037f6ebdf5f13f976b8f75c7837))
+* **march4:** emit_int128_sle!/ule! builder forms — the sweep's latent UndefVar (fuzz-caught) ([d78a1b2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/d78a1b2b3fe5be2905c58e6cf748fe66cc67f1f9))
+* **stackifier:** a loop closes at its LAST back-edge source — multi-continue loops miscompiled ([0018e90](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0018e90c3934bdd0480c9d2b6645cd6a5ee17436))
+* **try:** route throw-arm-past-the-leave shapes to THE stackified try driver (silent wrong value) ([1debe19](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1debe19a4a268a253249a2fc5da10c8d67f5edb7))
+
 ## [0.4.3](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.2...v0.4.3) (2026-07-03)
 
 
