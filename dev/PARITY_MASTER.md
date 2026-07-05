@@ -570,8 +570,13 @@ dynamic forwarders/noSuchMethod (DIM 6 — Julia MethodError = trap), JS glue ge
 | D9.4 try/finally battery | ✅ committed — **and it caught a real wrong-value miscompile**: nested finally inside catch, non-throwing arm (51→57): the normal path fell through the outer landing end INTO the handler; fixed with the outer-merge skip machinery in generate_nested_try_catch_2 |
 | D10.1 async conformance | ✅ the loud-reject lock committed (a @spawn entry must REJECT at compile) |
 
-**Remaining queue (unchanged ranking):** D9.1/D9.2 typed exception tag + catch_all
-separation (the deep exceptions item) · F8 universal wrap adoption (the arg ladder →
-THE funnel) · D9.5 try-driver family → ONE lowering (f_fin4 is exhibit N that each
-driver re-derives phi handling) · multi-range classId checks · LUB dispatch signatures
-· threshold unification · tuple-per-arity sharing.
+| F8 wrap adoption | ✅ BOTH arg ladders — invoke's (10.9KB, 14 arms) and compile_call's twin (8.2KB, 12 arms) — are ONE convert_type! call each, with tracked-type refinement of `actual`; THE funnel gained its missing quadrants (i64→i32 wrap, f64→f32 demote, externref-source unbox bridge); the two silent drop+zero arms became LOUD funnel traps |
+
+**MARCH 5 CLOSED at the queue's floor.** Two real miscompiles fixed en route (the
+nested-finally wrong-value + march-4-tail's multi-back-edge loop); the pinned isa bug
+flipped to a hard lock. **Remaining (the deep pair, next-phase material):**
+D9.1/D9.2 typed exception tag — carry (exn, stackTrace) as the TAG PAYLOAD, reserve
+catch_all for host exceptions (translator.dart:481-491) · D9.5 the try-driver family →
+ONE lowering (f_fin4 = exhibit N that each driver re-derives phi handling). Minor floors:
+multi-range classId checks (value mostly obsoleted by F2's closed world) · LUB dispatch
+signatures · threshold unification · tuple-per-arity sharing · long-string lazy interning.
