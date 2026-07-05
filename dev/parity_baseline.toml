@@ -20,7 +20,7 @@ L9_no_unjustified_untyped_emission = 0
 [metrics]
 R11_patch_markers = 664
 R12_try_drivers = 0
-R13_catch_all_clauses = 1
+R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
 R16_external_convert_ladders = 13

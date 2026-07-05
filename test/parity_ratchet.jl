@@ -107,7 +107,7 @@ const METRICS = [
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
     "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`")),
+        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::Integer\)")),
     "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7 → 2: the ONE ensureConstant funnel dedups; 2 = the wrap/box helper sites)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7 → 0: interned/shared segments, dart constants.dart:541)",
