@@ -94,6 +94,11 @@ mutable struct TypeRegistry
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
     lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
+    # march9: post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
+    # (ensure_type_id! max+1) lies outside every abstract's [low,high]; each abstract
+    # ancestor records it here so isa checks the range PLUS these (dart's multi-range,
+    # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
+    type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -108,7 +113,8 @@ TypeRegistry() = TypeRegistry(
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
-    Dict{String, Tuple{UInt32, UInt32}}()   # lazy_string_globals (march7)
+    Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
+    Dict{Type, Vector{Int32}}()             # type_extra_ids (march9)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -126,7 +132,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals (march7)
     nothing,  # string_constant_globals (census F3)
-    nothing   # lazy_string_globals (march7)
+    nothing,  # lazy_string_globals (march7)
+    nothing   # type_extra_ids (march9)
 )
 
 """
@@ -452,6 +459,16 @@ function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
     end
     new_id = max_id + Int32(1)
     registry.type_ids[T] = new_id
+    # march9: record the drift id on every abstract ancestor — isa checks the DFS
+    # range PLUS these extras (dart's multi-range), so numbering order can't break it.
+    if registry.type_extra_ids !== nothing && T isa DataType && isconcretetype(T)
+        anc = supertype(T)
+        while anc !== Any && anc isa DataType
+            base = isempty(anc.parameters) ? anc : anc.name.wrapper
+            base isa DataType && push!(get!(Vector{Int32}, registry.type_extra_ids, base), new_id)
+            anc = supertype(anc)
+        end
+    end
     return new_id
 end
 

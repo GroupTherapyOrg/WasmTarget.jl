@@ -622,6 +622,25 @@ function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
     return b
 end
 
+"""march9 — dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
+plus the post-DFS drift ids. typeId is on the stack; result i32. Uses a scratch local
+when extras exist."""
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                              low::Integer, high::Integer, extras::Vector{Int32})
+    isempty(extras) && return emit_classid_range_check!(b, low, high)
+    sc = allocate_local!(ctx, I32)
+    local_tee!(b, sc)
+    emit_classid_range_check!(b, low, high)
+    for x in extras
+        (low <= x <= high) && continue
+        local_get!(b, UInt32(sc))
+        i32_const!(b, Int64(x))
+        num!(b, Opcode.I32_EQ)
+        num!(b, Opcode.I32_OR)
+    end
+    return b
+end
+
 """
     emit_isa_classid!(b, ctx, box_idx, check_type)
 
