@@ -693,3 +693,39 @@ threshold** — the coordinated change spans FOUR sites (metadata sig, wrapper p
 caller body, AND the dispatch fn's own signature → ripples to every call site of every
 dispatched generic); requires the full fuzz corpus per change. The multi-axis-2-8
 unreachable hole closes WITH the threshold work (they're the same change).
+
+# ═══════════════════════════════════════════════════════════════════
+# CERTIFICATION CENSUS 2 — 2026-07-06 (march 10, post-marches-5-9)
+# ═══════════════════════════════════════════════════════════════════
+
+Same instrument as 2026-07-04 (parallel auditors, both codebases, doc claims
+re-verified in code, strict bar). Nothing claimed for the marches was found
+stale or dead-coded; no regressions found.
+
+## THE NUMBER: raw-15 mean 55.6 → **66.0** (+10.4) · actionable mean → **72.8**
+
+| # | dimension | 07-04 | NOW | movement |
+|---|-----------|------|-----|----------|
+| 9 | exceptions | 55 | **82** | ONE lowering (13 drivers deleted) + the typed (exn,stackTrace) tag; R12=R13=0 verified against src |
+| 8 | constants | 20 | **78** | THE ensureConstant funnel + eager/lazy interning + shared segments — the night's largest mover |
+| 1 | visitors | 68 | **82** | the ONE lowering killed the largest control-flow divergence AND a live miscompiler |
+| 2 | translator | 70 | **81** | funnel quadrants complete; interning absent→eager+lazy |
+| 12 | boxes/strings | 72 | **82** | F1 closed at creation; multi-range discriminator |
+| 4 | runtime types | 45 | **65** | the checked cast (F4 closed) + structurally-sound multi-range isa + the flipped test |
+| 3 | class metadata | 55 | **68** | closed universe + post-body retrofit + box supertype |
+| 5 | dispatch | 60 | **63** | honest: multi-range + dead-code only; LUB/threshold/multi-axis DEFERRED (4-site ripple map) |
+| 6/7/10/11/13/14/15 | unchanged | 78/35/5/75/38/88/70 | same | — |
+
+Actionable mean (the 13 dims excluding async·interop): **72.8**; with the closures
+DEFER honored (call_ref built, nothing needs it), the working set sits at **76.0**.
+THE TAG (~85-90 actionable) remains 2-3 focused sessions away.
+
+## THE RANKED REMAINDER (to the tag)
+1. **LUB signatures + threshold unification** (dispatch 63→~78; closes the multi-axis-
+   2-8 unreachable hole) — the mapped 4-site ripple; needs full fuzz per change.
+2. **The wrap tail** (R17 ~252→~40) + boxed-scalar constant dedup (unblocks on it).
+3. **Nullability first-class** (translator's main residual).
+4. **The exceptions residuals**: :the_exception → payload-bound local (kills
+   $current_exn), real stack traces in the trace slot.
+5. **The class-DAG subtype graph** (flat $JlBase → per-class hierarchy) + identityHash.
+6. The closures DECISION point when first-class function values reach the critical path.
