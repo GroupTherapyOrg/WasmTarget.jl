@@ -742,3 +742,12 @@ overnight and root-fixed — the instrument working exactly as designed:
    contexts) — rebuild WITH the weave folds, keyed on ctx.ssa_types.
 Lesson recorded: one flake-misled bisect (a bad "good" bound) cost a detour — verify
 both bounds before bisecting.
+
+## MARCH 11 — the LUB numeric fast lane (2026-07-06)
+dart _computeSignature's unboxed-primitive lane (dispatch_table.dart:172-205): per-slot
+signature types computed at table build; ALL FOUR ripple sites read them (metadata sig,
+wrapper prologues w/ pass-through, the caller's call_indirect, cascade trampolines) —
+fill(AnyRef) is GONE from dispatch (R18→0). Full gate: 10 shards + 9 fuzz green.
+PINNED (pre-existing, @test_broken battery): two-arg megamorphic dispatch traps — the
+next dispatch slice (threshold/multi-axis) owns it. Remaining there: threshold=9 cliff,
+multi-axis 2-8 → unreachable, full struct-LUB (non-primitive joins via the hierarchy DAG).
