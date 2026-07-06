@@ -116,3 +116,13 @@ _m11_disp(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3),
     r = try compare_julia_wasm(_m11_disp, Int64(3)) catch; (pass=false,) end
     @test r.pass
 end
+
+# march15: :the_exception reads the ENCLOSING region's payload local (dart's named
+# catch local) — nested regions never clobber each other's exception.
+_m15_nest(n::Int64)::Int64 = (r = 0; try; try; throw(ErrorException("inner")); catch e1; r += e1 isa ErrorException ? 10 : 0; end; n > 2 && throw(ArgumentError("outer")); catch e2; r += e2 isa ArgumentError ? 100 : 0; end; r + n)
+@testset "march15: per-region exception payload locals (nested no-clobber)" begin
+    for a in (Int64(4), Int64(1))
+        r = try compare_julia_wasm(_m15_nest, a) catch; (pass=false,) end
+        @test r.pass
+    end
+end

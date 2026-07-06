@@ -577,8 +577,21 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             # Julia IR emits :the_exception in catch blocks to get the caught exception.
             # We stash exception values into a (mut anyref) global before throw,
             # and retrieve them here with global.get.
-            exn_global = ensure_exception_global!(ctx.mod)
-            global_get!(_sf, exn_global, AnyRef)
+            # march15: read the ENCLOSING region's payload local (dart's named catch
+            # local); the global remains the fallback for reads outside any known region.
+            local _exn_src_local = nothing
+            for (_enter, _loc) in ctx.exn_region_locals
+                # the innermost region whose enter precedes this read wins
+                if _enter < idx && (_exn_src_local === nothing || _enter > _exn_src_local[1])
+                    _exn_src_local = (_enter, _loc)
+                end
+            end
+            if _exn_src_local !== nothing
+                local_get!(_sf, UInt32(_exn_src_local[2]))
+            else
+                exn_global = ensure_exception_global!(ctx.mod)
+                global_get!(_sf, exn_global, AnyRef)
+            end
             # The global is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
             # Downcast anyref → structref so the local.set is type-valid.
             local _exn_local_wasm = nothing

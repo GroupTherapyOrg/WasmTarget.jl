@@ -775,3 +775,14 @@ arms → ONE wrap; the funnel's quadrant table was re-implemented inline). Recor
 NOT-convertible: multi-value memoryref sites (rep divergence, own march), the
 nothing-vs-null ReturnNode arms (march-8 semantics), the Core.Box tracked site.
 Full gate 10+9 green.
+
+## MARCH 15 — exceptions residuals (2026-07-06)
+(a) DONE: :the_exception binds to the region's OWN payload local (per-region, keyed by
+enter_idx; nested no-clobber battery). $current_exn = legacy copy until the rethrow
+path migrates.
+(b) RECORDED DIVERGENT-JUSTIFIED: the stackTrace tag slot stays ref.null — Julia-wasm
+has no trace-capture runtime; faking frames would be dishonest structure. dart fills it
+from its runtime; the SLOT parity (2-arity tag) is what matters and is done.
+(c) SURVEYED → DEFERRED (own campaign): first-class nullability = 63 hard-coded
+nullable=true ConcreteRef sites in types.jl + every consumer assuming nullable; a
+full-fuzz ripple. Not blocking the closures build; schedule after THE TAG measurement.
