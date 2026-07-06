@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.8](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.7...v0.4.8) (2026-07-06)
+
+
+### Bug Fixes
+
+* **march7:** interned Char fields use Julia's LEFT-PACKED bits, not the codepoint (gate-caught) ([98126bd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/98126bdd6d8adfa5aa1dadeea1629aea46295267))
+* **march8:** the Nothing decide-before-emit keeps the SEMANTIC SPLIT — null for concrete refs, the BoxedNothing singleton for generic refs ([b4f2bbf](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/b4f2bbf1fccd68cbaaec679f3465b2783000d034))
+
 ## [0.4.7](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.6...v0.4.7) (2026-07-06)
 
 
