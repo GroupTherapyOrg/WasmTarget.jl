@@ -90,6 +90,10 @@ mutable struct TypeRegistry
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
     string_constant_globals::Union{Nothing, Dict{String, UInt32}}
+    # march7 LAZY constants (dart constants.dart:445-476/322-339): long strings get an
+    # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
+    # + call init. Keyed by value → (global_idx, init_fn_idx).
+    lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -103,7 +107,8 @@ TypeRegistry() = TypeRegistry(
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
-    Dict{String, UInt32}()        # string_constant_globals (census F3)
+    Dict{String, UInt32}(),       # string_constant_globals (census F3)
+    Dict{String, Tuple{UInt32, UInt32}}()   # lazy_string_globals (march7)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -120,8 +125,45 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals (march7)
-    nothing   # string_constant_globals (census F3)
+    nothing,  # string_constant_globals (census F3)
+    nothing   # lazy_string_globals (march7)
 )
+
+"""
+    get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
+
+march7 LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
+(ref null \$JlString) global + an init function that builds the string once, stores
+it, and returns it. MUST be called BEFORE function-index assignment (the PURE-9065
+constraint) — the literal pre-pass in compile.jl does.
+"""
+function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::String)::Tuple{UInt32, UInt32}
+    haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    g = add_global_ref!(mod, struct_idx, true, UInt8[Opcode.REF_NULL, 0x40 + 0x23 - 0x23])  # placeholder; fixed below
+    # init: ref.null $struct — build the real init expr
+    mod.globals[end] = WasmGlobalDef(ConcreteRef(struct_idx, true), true,
+        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)), UInt8[Opcode.END]))
+    bytes = codeunits(s)
+    seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
+    results = WasmValType[ConcreteRef(struct_idx, true)]
+    b = InstrBuilder(WasmValType[ConcreteRef(arr_idx, true)], results;
+                     func_name="lazy_string_init")
+    i32_const!(b, 0)
+    i32_const!(b, Int64(length(bytes)))
+    array_new_data!(b, arr_idx, seg_idx)
+    emit_string_wrap!(b, mod, registry, 0)   # local 0 = the scratch
+    global_set_peek = length(b.instrs)
+    # store AND return: local.tee via global — global.set then global.get
+    global_set!(b, g)
+    global_get!(b, g, ConcreteRef(struct_idx, true))
+    return_!(b)
+    end_block!(b)
+    fidx = add_function!(mod, WasmValType[], results, WasmValType[ConcreteRef(arr_idx, true)], builder_code(b))
+    registry.lazy_string_globals[s] = (g, fidx)
+    return (g, fidx)
+end
 
 """
     ensure_constant_global!(mod, registry, val) -> Union{UInt32, Nothing}

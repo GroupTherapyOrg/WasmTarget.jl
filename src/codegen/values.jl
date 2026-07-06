@@ -1110,6 +1110,20 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
             return b
         end
+        # march7 LAZY: a pre-passed long literal reads its global, initializing on
+        # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
+        local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
+                    get(ctx.type_registry.lazy_string_globals, val, nothing)
+        if _lz !== nothing
+            local _lzs = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            local _lzt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[ConcreteRef(_lzs, true)]))
+            block!(b, Int(_lzt); results=WasmValType[ConcreteRef(_lzs, true)])
+            global_get!(b, _lz[1], ConcreteRef(_lzs, true))
+            br_on_non_null!(b, 0)
+            call!(b, _lz[2], WasmValType[], WasmValType[ConcreteRef(_lzs, true)])
+            end_block!(b)
+            return b
+        end
         # PURE-9013: String constant via passive data segment + array.new_data
         # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
