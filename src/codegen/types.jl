@@ -141,7 +141,7 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
 
 march7 LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
 (ref null \$JlString) global + an init function that builds the string once, stores
-it, and returns it. MUST be called BEFORE function-index assignment (the PURE-9065
+it, and returns it. MUST be called BEFORE function-index assignment (the index-freeze
 constraint) — the literal pre-pass in compile.jl does.
 """
 function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::String)::Tuple{UInt32, UInt32}

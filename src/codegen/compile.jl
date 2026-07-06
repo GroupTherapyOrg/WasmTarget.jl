@@ -1639,7 +1639,7 @@ function compile_module(functions::Vector;
     end
 
     # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
-    # their init functions NOW — the same PURE-9065 constraint (functions cannot be
+    # their init functions NOW — the same index-freeze constraint (functions cannot be
     # added during body compilation without shifting indices). dart constants.dart:454.
     for (_, _, _, code_info, _, _, _) in function_data
         code_info === nothing && continue
