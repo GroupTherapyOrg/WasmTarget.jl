@@ -2172,8 +2172,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             size_local = allocate_local!(ctx, Int64)
 
             local _pshb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            # Store vec in local
-            emit_value!(_pshb, vec_arg, ctx)
+            # march14 (wrap tail): the vector arrives AS the registered struct
+            emit_value!(_pshb, vec_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
             local_tee!(_pshb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
@@ -2282,8 +2282,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             elem_local = allocate_local!(ctx, elem_type)
 
             local _popb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            # Store vec in local
-            emit_value!(_popb, vec_arg, ctx)
+            # march14 (wrap tail): the vector arrives AS the registered struct
+            emit_value!(_popb, vec_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
             local_tee!(_popb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
@@ -2461,9 +2461,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if field_sym === :ref
                 # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
                 local _refb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_refb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
+                    # march14 (wrap tail): typed arrival when the struct is registered
+                    emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_refb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array (0=typeId)
                 else
                     # parity(M11): an unregistered struct previously emitted an INCOMPLETE
@@ -2477,9 +2478,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # :size returns a Tuple containing the dimensions (field 2 of struct; field 0 = typeId)
                 # For Vector: Tuple{Int64}, for Matrix: Tuple{Int64, Int64}, etc.
                 local _szfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_szfb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
+                    # march14 (wrap tail): typed arrival when the struct is registered
+                    emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_szfb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
                 else
                     record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
@@ -2512,7 +2514,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     field_idx = findfirst(==(field_sym), info.field_names)
                     if field_idx !== nothing
                         local _sfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                        emit_value!(_sfb, obj_arg, ctx)
+                        # march14 (wrap tail): the object arrives AS the registered struct
+                        emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
