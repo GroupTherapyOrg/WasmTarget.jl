@@ -120,6 +120,9 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             all_valid || continue
 
             h = UInt32(0)   # parity(M8.4): hashing DELETED — the selector table keys on classId
+            # march13: dedup by tuple — the un-capped discovery can register a candidate
+            # COPY of an explicit specialization; first registration wins (M8.4 rule).
+            any(e -> e.type_ids == type_ids, entries) && continue
             push!(entries, DispatchEntry(type_ids, h, info.wasm_idx, UInt32(0), info.return_type))
         end
 
@@ -326,13 +329,33 @@ function find_dispatch_call(code_info::Core.CodeInfo,
             call_args = stmt.args[2:end]
             length(call_args) == dt.arity || continue
             all(k -> call_args[k] isa Core.Argument && call_args[k].n == k + 1, 1:length(call_args)) || continue
-            # and the call's value is what the function returns
+            # and the call's value is what the function returns — possibly through the
+            # ::T-annotation lowering (convert/typeassert/PiNode and the φ(call, converted)
+            # join; M8.3's caller2 taught us the phi)
+            local chases_to_call = function(vid::Int, depth::Int)
+                vid == i && return true
+                depth <= 0 && return false
+                local st = code[vid]
+                if st isa Core.PiNode && st.val isa Core.SSAValue
+                    return chases_to_call(st.val.id, depth - 1)
+                elseif st isa Core.PhiNode
+                    for k in 1:length(st.values)
+                        isassigned(st.values, k) || continue
+                        local ev = st.values[k]
+                        ev isa Core.SSAValue && chases_to_call(ev.id, depth - 1) && return true
+                    end
+                    return false
+                elseif st isa Expr && st.head === :call && length(st.args) >= 2
+                    local pay = (st.args[1] isa GlobalRef && st.args[1].name === :typeassert) ?
+                                st.args[2] : st.args[end]
+                    pay isa Core.SSAValue && return chases_to_call(pay.id, depth - 1)
+                end
+                return false
+            end
             local returned = false
             for st2 in code
-                if st2 isa Core.ReturnNode && isdefined(st2, :val) &&
-                   st2.val isa Core.SSAValue && st2.val.id == i
-                    returned = true
-                    break
+                if st2 isa Core.ReturnNode && isdefined(st2, :val) && st2.val isa Core.SSAValue
+                    chases_to_call(st2.val.id, 4) && (returned = true; break)
                 end
             end
             returned || continue
