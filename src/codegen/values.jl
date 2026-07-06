@@ -821,6 +821,23 @@ shape stays consistent, matching dart's posture that unreachable code still vali
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
                      expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
+    # march8: DECIDE-BEFORE-EMIT for the Nothing phantom — a Nothing value meeting a
+    # ref-typed expectation emits ref.null DIRECTLY (the callers' post-hoc _ab.instrs
+    # i32.const-inspection surgeries die; this was THE blocker for folding the arg
+    # weaves into this one chokepoint).
+    local _is_nothing_val = val === nothing || (val isa GlobalRef && val.name === :nothing) ||
+        (val isa Core.SSAValue && (begin
+            local _st = ctx.code_info.code[val.id]
+            (_st isa GlobalRef && _st.name === :nothing) || (_st isa Core.PiNode && _st.typ === Nothing)
+        end)) || from_julia === Nothing
+    if _is_nothing_val && _wt_is_ref(expected)
+        if expected isa ConcreteRef
+            ref_null!(b, Int64(expected.type_idx), ConcreteRef(expected.type_idx, true))
+        else
+            ref_null!(b, expected)
+        end
+        return expected
+    end
     ty = emit_value!(b, val, ctx)
     ty === nothing && return expected
     ty === expected || convert_type!(b, ty, expected, ctx; from_julia=from_julia)

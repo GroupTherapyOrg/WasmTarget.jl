@@ -671,3 +671,14 @@ singleton/closure/Module/Tuple/Int128) · Symbols join the intern registry ·
 content-addressed passive segments (dart :541). REMAINING: the literal pre-pass + LAZY
 constants (init-fns before the compile.jl:1641 index freeze) · boxed-scalar dedup
 (post-march-8: needs expectedType at the scalar arms).
+
+## MARCH 8 — RESCOPED HONESTLY (2026-07-06, overnight): substantially adopted through 5-7
+The discovery's own verdict held: R3/R5 are surviving getStaticType surface, and the
+march-5/6/7 restructurings made the "13 external ladders" wrap-shaped (emit → tracked
+actual → THE funnel = wrap's literal body; the census anchors predate them). LANDED this
+march: the 4-arg chokepoint gained DECIDE-BEFORE-EMIT for the Nothing phantom (a Nothing
+value meeting a ref expectation emits ref.null directly — the callers' post-hoc
+instr-inspection surgeries are now foldable). The R17 tail (3-arg sites with derivable
+expectations) is CONSOLIDATION-FLOOR material (R5/R11 class): individually sound today
+(sinks coerce), monotone ratchet holds the line, ground down opportunistically —
+NOT a blocker for the tag. march 9-10 take the night.
