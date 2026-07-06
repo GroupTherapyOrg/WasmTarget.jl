@@ -4461,6 +4461,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
             end
             _op1!(_it_e.opcode)
+            # march13 (the rebox link): a numeric intrinsic whose SSA LOCAL is
+            # ref-typed (the boxed accumulator: Any-joined phi) must REBOX its
+            # result — keyed on the REAL local type, never inference (the sink's
+            # re-guess said anyref≡anyref while raw i64 sat on the stack).
+            local _rbx_li = get(ctx.ssa_locals, idx, nothing)
+            if _rbx_li !== nothing
+                local _rbx_off = _rbx_li - ctx.n_params
+                if _rbx_off >= 0 && _rbx_off < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off + 1]) &&
+                   _it_e.result in (I32, I64, F32, F64)
+                    emit_classid_box!(fb, ctx, _it_e.result,
+                                      arg_type isa Type && isconcretetype(arg_type) ? arg_type : nothing)
+                end
+            end
             return append_builder!(b, fb)
         end
     end

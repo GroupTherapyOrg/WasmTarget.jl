@@ -49,3 +49,14 @@ pre-pass + LAZY constants (init-fns before the compile.jl:1641 index freeze —
 the one big M7 piece) · boxed-scalar dedup (dart 361-376, needs expectedType
 at the scalar arms = post-march-8 material). R14/R15 prose revised to the
 honest mutable floor.
+
+## MARCH-13 CHAIN STATE (the two-arg megamorphic bug, links verified forward):
+1-3 ✓ (discovery cliff / export dedup / forwarder gate — committed 0a05dd3).
+4 ✓ safe (intrinsic-binop rebox when the SSA local is ref-typed — keyed on the REAL
+local type). NEXT LINK (the failing store at 0x981): the value flows through the PHI
+machinery — compile_phi_value / set_phi_locals_for_edge! re-emits the add at the edge
+and its store-convert re-guesses (Any→anyref ≡ anyref) while raw i64 sits on the stack.
+THE FIX = the phi-store funnel reads the RE-EMISSION's tracked type (the _pv_vb
+builder's stack top — it already exists at flow.jl's emit_phi_local_set! path!) instead
+of get_phi_edge_wasm_type's guess. THEN link 6: the phi-INIT null (t=0 entry edge).
+GATING LAW: exit codes only.
