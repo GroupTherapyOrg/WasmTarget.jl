@@ -46,3 +46,9 @@ Gate per slice; the march-13b staging notes anticipate E.
   then the probe should go green (or reveal the runtime links: vtable init order,
   call_ref sig match, the result-anyref → +='s unbox).
 WT_DBG_DYN instrumentation is IN PLACE (DYN-CALL-CHECK / WRAP-CHECK / NEW-SCAN prints).
+
+## MARCH 17 QUEUED (Dale, 2026-07-06): THE ENFORCING BUILDER — dart's wasm_builder
+typechecks at EMISSION (ill-typed emit = crash at the line); WT's InstrBuilder tracks
+(v.stack) but records instead of enforcing → post-hoc wasm-tools loops. Flip the
+tracker to THROW on operand mismatch + frame accounting at end_block!. wasm-tools
+retreats to the independent CI oracle. (The missing half of the migration.)
