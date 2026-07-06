@@ -704,8 +704,8 @@ function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::In
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -807,8 +807,8 @@ function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -822,7 +822,7 @@ function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::Inst
         i32_const!(b, Int32(UInt32(char_arg)))
     else
         # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
-        emit_value!(b, char_arg, ctx)
+        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
@@ -915,8 +915,8 @@ function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, s_len_local)
 
     # Store n as i32
-    emit_value!(b, args[2], ctx)
     n_type = infer_value_type(args[2], ctx)
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -927,7 +927,7 @@ function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::Inst
     if char_arg isa Char
         i32_const!(b, Int32(UInt32(char_arg)))
     else
-        emit_value!(b, char_arg, ctx)
+        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
