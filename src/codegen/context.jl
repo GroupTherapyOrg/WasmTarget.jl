@@ -69,6 +69,10 @@ mutable struct CompilationContext <: AbstractCompilationContext
     strict::Bool
     # Diagnostics accumulated during compilation (see diagnostics.jl).
     diagnostics::Vector{WasmDiagnostic}
+    # march15: per-try-region exception payload locals (dart binds each catch's
+    # exception to its OWN local; keyed by the region's enter_idx). :the_exception
+    # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
+    exn_region_locals::Dict{Int, Int}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -116,7 +120,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         skip_stmts,             # Skip statements (Therapy.jl js() interop)
         invoke_imports,         # Invoke imports (Therapy.jl js() as WASM imports)
         strict,                 # Soundness: raise on unsupported constructs (default true)
-        WasmDiagnostic[]        # Diagnostics accumulated during compilation
+        WasmDiagnostic[],        # Diagnostics accumulated during compilation
+        Dict{Int, Int}()        # march15: exn_region_locals
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -2632,6 +2637,10 @@ mutable struct InplaceCompilationContext <: AbstractCompilationContext
     typeof_scratch_local::Nothing
     strict::Bool
     diagnostics::Vector{WasmDiagnostic}
+    # march15: per-try-region exception payload locals (dart binds each catch's
+    # exception to its OWN local; keyed by the region's enter_idx). :the_exception
+    # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
+    exn_region_locals::Dict{Int, Int}
 end
 
 function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -2653,7 +2662,8 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing, nothing,          # scratch_locals, memoryref_offsets
         false, nothing, nothing, nothing,  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
-        strict, WasmDiagnostic[]            # strict mode + diagnostics
+        strict, WasmDiagnostic[],            # strict mode + diagnostics
+        Dict{Int, Int}()                     # march15: exn_region_locals
     )
     analyze_ssa_types!(ctx)
     analyze_control_flow!(ctx)

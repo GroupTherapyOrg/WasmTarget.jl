@@ -1081,11 +1081,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
                     end_block!(b)          # end landing — the catch payload arrives here
-                    # bind the payload: trace (unused yet) dropped; exn → $current_exn
-                    # (written AT CATCH from the unwound value — re-entrancy-safe; the
-                    # global dies entirely when :the_exception reads a local instead)
+                    # march15: bind the payload to the REGION's OWN local (dart binds each
+                    # catch's exception to a named local — nested regions never clobber).
+                    # $current_exn still receives a copy while non-local readers remain.
                     drop!(b)                                            # stackTrace
-                    global_set!(b, ensure_exception_global!(ctx.mod))   # exn
+                    local _rex = get!(ctx.exn_region_locals, Int(r.enter_idx)) do
+                        allocate_local!(ctx, AnyRef)
+                    end
+                    local_tee!(b, UInt32(_rex))
+                    global_set!(b, ensure_exception_global!(ctx.mod))   # exn (legacy copy)
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end
