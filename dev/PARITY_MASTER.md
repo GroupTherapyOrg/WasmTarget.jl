@@ -682,3 +682,14 @@ instr-inspection surgeries are now foldable). The R17 tail (3-arg sites with der
 expectations) is CONSOLIDATION-FLOOR material (R5/R11 class): individually sound today
 (sinks coerce), monotone ratchet holds the line, ground down opportunistically —
 NOT a blocker for the tag. march 9-10 take the night.
+
+## MARCH 9 — CLOSED WITH REMAINDER (2026-07-06, overnight)
+LANDED: **multi-range classId checks** — drift ids record onto abstract ancestors at
+ensure_type_id!; isa/typeassert check the DFS range PLUS extras (dart 3862-3883); the
+F2 drift class is now closed STRUCTURALLY, not just empirically. **Closures: defer
+RECORDED** (§MARCH 9 mapping — 100% static, call_ref built+unused, nothing needs it).
+REMAINDER (scoped, next session — NOT blind-overnight material): **LUB fast lane +
+threshold** — the coordinated change spans FOUR sites (metadata sig, wrapper prologues,
+caller body, AND the dispatch fn's own signature → ripples to every call site of every
+dispatched generic); requires the full fuzz corpus per change. The multi-axis-2-8
+unreachable hole closes WITH the threshold work (they're the same change).
