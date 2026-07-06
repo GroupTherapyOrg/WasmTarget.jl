@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.10](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.9...v0.4.10) (2026-07-06)
+
+
+### Bug Fixes
+
+* **march12:** the sizeof site's stale trailing convert removed — the wrap already lands the array ([5a16ac1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5a16ac14b576207b7f52d0d4a22256b2f4b066df))
+
 ## [0.4.9](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.8...v0.4.9) (2026-07-06)
 
 
