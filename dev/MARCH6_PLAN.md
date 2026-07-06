@@ -60,3 +60,11 @@ THE FIX = the phi-store funnel reads the RE-EMISSION's tracked type (the _pv_vb
 builder's stack top — it already exists at flow.jl's emit_phi_local_set! path!) instead
 of get_phi_edge_wasm_type's guess. THEN link 6: the phi-INIT null (t=0 entry edge).
 GATING LAW: exit codes only.
+
+## LINK-5 SURGICAL POINTER: compile_phi_value's SSA arm (stackified.jl ~650-770) —
+the += SSA's phi-edge store: it reads ssa_local_type/get_phi_edge_wasm_type (guesses)
+where the RE-EMISSION path exists; the non-SSA arm (770+) already has the tracked
+_ne_vty pattern — MIRROR IT in the SSA arm: recompute via _compile_value_b, use its
+stack-top as the actual, _emit_phi_edge_convert! to the phi local type. The 0x981
+store ([unbox,unbox,add,set anyref-110]) comes from the SSA recompute path emitting
+the RAW add without the convert.
