@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.11](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.10...v0.4.11) (2026-07-06)
+
+
+### Bug Fixes
+
+* **march13:** the forwarder chase handles the ::T-annotation phi join (M8.3 gate catch) + tuple dedup at table build ([96e8010](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/96e8010f76af24384a3a3b35921009626038ac80))
+
+
+### Reverts
+
+* **march13:** the tracked-type sink was too blunt — the stack top isn't always the stored value (25 smoke errors) ([3872af5](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3872af5738058071ed18591a4d12385039eb563d))
+
 ## [0.4.10](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.9...v0.4.10) (2026-07-06)
 
 
