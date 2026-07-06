@@ -37,6 +37,10 @@ mutable struct DispatchTable
     func_table_idx::UInt32     # funcref table index for call_indirect
     i32_array_type_idx::UInt32 # Type idx for (array (mut i32))
     result_wasm_type::WasmValType  # Return type of dispatch
+    # march11 (dart _computeSignature's unboxed-primitive fast lane,
+    # dispatch_table.dart:172-205): per-slot signature types — a slot where ALL
+    # specializations agree on ONE primitive stays UNBOXED; everything else AnyRef.
+    slot_types::Vector{WasmValType}
 end
 
 """
