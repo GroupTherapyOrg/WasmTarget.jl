@@ -851,9 +851,16 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
         end)) || from_julia === Nothing
     if _is_nothing_val && _wt_is_ref(expected)
         if expected isa ConcreteRef
+            # the original phantom semantics: a concrete ref param takes null
             ref_null!(b, Int64(expected.type_idx), ConcreteRef(expected.type_idx, true))
         else
-            ref_null!(b, expected)
+            # gate-caught (Dates corpus): generic ref expectations got ref.null where
+            # the old path BOXED Nothing — downstream non-null consumers trapped.
+            # The BoxedNothing SINGLETON is the correct value (dart: the null constant
+            # is still an object in the box world).
+            local _ng = get_nothing_global!(ctx.mod, ctx.type_registry)
+            global_get!(b, _ng, AnyRef)
+            expected === ExternRef && extern_convert_any!(b)
         end
         return expected
     end
