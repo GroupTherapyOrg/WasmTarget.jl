@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.6](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.5...v0.4.6) (2026-07-06)
+
+
+### Bug Fixes
+
+* **dev:** gate watchdog threshold 12→25 min — cold precompile false-positive ([87cc686](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/87cc6864cb08651e7fcfb3efa00389295f64e853))
+* **dev:** the gate runs in an ISOLATED WORKTREE — dev continues on the main tree (the pipeline mechanics) ([5721b8c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5721b8c2ba89d67a0acee8a7684b241c1fadcfcc))
+
 ## [0.4.5](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.4...v0.4.5) (2026-07-05)
 
 
