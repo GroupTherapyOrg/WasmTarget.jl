@@ -2616,7 +2616,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     local _clfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                    emit_value!(_clfb, obj_arg, ctx)
+                    emit_value!(_clfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
                     struct_get!(_clfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append_builder!(fb, _clfb)
                     return append_builder!(b, fb)
@@ -2657,10 +2657,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 local _sfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_sfgb, obj_arg, ctx)
-                # PURE-701: If obj_arg's local is structref (union of struct types),
-                # insert ref.cast null to narrow before struct_get
-                                emit_ref_cast_if_structref!(_sfgb, obj_arg, info.wasm_type_idx, ctx)
+                # march14: the typed wrap subsumes the PURE-701 structref-narrow helper
+                emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                 struct_get!(_sfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
@@ -2876,7 +2874,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
                     local _tfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                    emit_value!(_tfgb, obj_arg, ctx)
+                    emit_value!(_tfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
                     struct_get!(_tfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append_builder!(fb, _tfgb)
                     return append_builder!(b, fb)
@@ -3383,7 +3381,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
                 local _rsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_rsb, value_arg, ctx)
+                emit_value!(_rsb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)   # march14
                 global_set!(_rsb, rng_global)
                 append_builder!(fb, _rsb)
                 return append_builder!(b, fb)
