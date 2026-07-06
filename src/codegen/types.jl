@@ -240,7 +240,9 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
         elseif fv isa Bool
             push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv ? 1 : 0)))
         elseif fv isa Char
-            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, UInt32(fv)))))
+            # STACK-003 convention: Julia's LEFT-PACKED UTF-8 bits, NOT the codepoint
+            # (gate-caught: DateFormat delimiters interned as codepoints → parse trap)
+            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, reinterpret(UInt32, fv)))))
         elseif fv isa Int8 || fv isa Int16 || fv isa Int32
             push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv)))
         elseif fv isa UInt8 || fv isa UInt16 || fv isa UInt32
