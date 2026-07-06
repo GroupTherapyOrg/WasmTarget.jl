@@ -184,9 +184,9 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
             res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                 WasmValType[dt.result_wasm_type] : WasmValType[]
             call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
-                           fill(AnyRef, arity), res)
+                           copy(dt.slot_types), res)
             end_block!(tb)
-            tramp_idx = add_function!(mod, fill(AnyRef, arity), res, WasmValType[], builder_code(tb))
+            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[], builder_code(tb))
             push!(entries, (c.l1_pos, tramp_idx))
             for (pos2, entry_i) in c.rows2
                 push!(entries, (pos2, dt.entries[entry_i].wrapper_idx))
@@ -236,7 +236,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
         i32_const!(b, Int64(offset))
         num!(b, Opcode.I32_ADD)
     end
-    sig = FuncType(fill(AnyRef, arity),
+    sig = FuncType(copy(dt.slot_types),   # march11: the per-slot LUB (was fill(AnyRef))
                    dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                        WasmValType[dt.result_wasm_type] : WasmValType[])
     call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
