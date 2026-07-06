@@ -2806,8 +2806,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 emit_value!(bsc, args[1], ctx)
 
                 # Compile index and convert to 0-based
-                emit_value!(bsc, args[2], ctx)
                 idx_type = infer_value_type(args[2], ctx)
+                emit_value!(bsc, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
                 if idx_type === Int64 || idx_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
                 end
@@ -2815,8 +2815,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 num!(bsc, Opcode.I32_SUB)
 
                 # Compile char value
-                emit_value!(bsc, args[3], ctx)
                 char_type = infer_value_type(args[3], ctx)
+                emit_value!(bsc, args[3], ctx, (char_type === Int64 || char_type === Int) ? I64 : I32)   # march14
                 if char_type === Int64 || char_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
                 end
@@ -2861,8 +2861,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # dst array
                 emit_value!(bcp, args[3], ctx)
                 # dst offset (0-based)
-                emit_value!(bcp, args[4], ctx)
                 dst_idx_type = infer_value_type(args[4], ctx)
+                emit_value!(bcp, args[4], ctx, (dst_idx_type === Int64 || dst_idx_type === Int) ? I64 : I32)   # march14
                 if dst_idx_type === Int64 || dst_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2872,8 +2872,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # src array
                 emit_value!(bcp, args[1], ctx)
                 # src offset (0-based)
-                emit_value!(bcp, args[2], ctx)
                 src_idx_type = infer_value_type(args[2], ctx)
+                emit_value!(bcp, args[2], ctx, (src_idx_type === Int64 || src_idx_type === Int) ? I64 : I32)   # march14
                 if src_idx_type === Int64 || src_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2881,8 +2881,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 num!(bcp, Opcode.I32_SUB)
 
                 # length
-                emit_value!(bcp, args[5], ctx)
                 len_type = infer_value_type(args[5], ctx)
+                emit_value!(bcp, args[5], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
                 if len_type === Int64 || len_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2926,8 +2926,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local_get!(bss, src_local)
 
                 # src_off = start - 1 (convert to 0-based)
-                emit_value!(bss, args[2], ctx)
                 start_type = infer_value_type(args[2], ctx)
+                emit_value!(bss, args[2], ctx, (start_type === Int64 || start_type === Int) ? I64 : I32)   # march14
                 if start_type === Int64 || start_type === Int
                     num!(bss, Opcode.I32_WRAP_I64)
                 end
@@ -2935,8 +2935,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 num!(bss, Opcode.I32_SUB)
 
                 # len
-                emit_value!(bss, args[3], ctx)
                 len_type2 = infer_value_type(args[3], ctx)
+                emit_value!(bss, args[3], ctx, (len_type2 === Int64 || len_type2 === Int) ? I64 : I32)   # march14
                 if len_type2 === Int64 || len_type2 === Int
                     num!(bss, Opcode.I32_WRAP_I64)
                 end
@@ -3019,8 +3019,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 ban = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
 
                 # Compile length arg
-                emit_value!(ban, args[2], ctx)
                 len_type = infer_value_type(args[2], ctx)
+                emit_value!(ban, args[2], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
                 if len_type === Int64 || len_type === Int
                     num!(ban, Opcode.I32_WRAP_I64)
                 end
@@ -3065,8 +3065,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 emit_value!(bas, args[1], ctx)
 
                 # Index (convert to 0-based)
-                emit_value!(bas, args[2], ctx)
                 idx_type = infer_value_type(args[2], ctx)
+                emit_value!(bas, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
                 if idx_type === Int64 || idx_type === Int
                     num!(bas, Opcode.I32_WRAP_I64)
                 end
