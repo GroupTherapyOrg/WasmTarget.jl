@@ -68,3 +68,12 @@ _ne_vty pattern — MIRROR IT in the SSA arm: recompute via _compile_value_b, us
 stack-top as the actual, _emit_phi_edge_convert! to the phi local type. The 0x981
 store ([unbox,unbox,add,set anyref-110]) comes from the SSA recompute path emitting
 the RAW add without the convert.
+
+## LINK 5b STATE: the tail rebox RESURRECTED (was dead-by-scoping). Two-arg still red —
+the box now emits at the CALL tail but the wat earlier showed the failing add inside a
+RECOMPUTED phi-edge sequence ([unbox,unbox,add,set]) — the phi-edge RECOMPUTE path
+(compile_phi_value on the += SSA re-EMITS the call via compile_statement? or the
+fall-through store at stackified ~1083) bypasses compile_call's tail. NEXT: dump the
+CURRENT wat, locate the (possibly moved) failing site, identify WHICH emitter owns it
+(the boxes now emitted at tail may have MOVED the mismatch), iterate. The chain is
+long but every link is a real pre-existing hole on new coverage.
