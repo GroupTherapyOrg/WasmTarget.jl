@@ -231,10 +231,8 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
             elseif func_ret_wasm === AnyRef && is_numeric_val
-                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float}) via THE single
-                # box emitter (was a copy-pasted return box, same as flow.jl/conditionals.jl).
-                emit_value!(b, stmt.val, ctx)
-                emit_classid_box!(b, ctx, val_wasm, nothing)
+                # march14: the 4-arg wrap = emit typed + funnel box (byte-equivalent here)
+                emit_value!(b, stmt.val, ctx, AnyRef)
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
@@ -296,8 +294,9 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
-                            # MIGRATED: compile_value bridges via emit_raw!; local.set typed.
-                            emit_value!(b, stmt.val, ctx)
+                            # march14: the upsilon store wraps to the PhiC local's declared type
+                            emit_value!(b, stmt.val, ctx,
+                                        ctx.locals[ctx.phi_locals[phic_idx] - ctx.n_params + 1])
                             local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
                         end
