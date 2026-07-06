@@ -99,6 +99,12 @@ mutable struct TypeRegistry
     # ancestor records it here so isa checks the range PLUS these (dart's multi-range,
     # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
     type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
+    # march16 (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
+    # {classId, context anyref, vtable}, per-max-arity vtable struct idxs, and per-
+    # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
+    closure_base_idx::Union{Nothing, UInt32}
+    closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct
+    closure_vtable_globals::Union{Nothing, Dict{Any, UInt32}}          # closure body key -> global
 end
 
 TypeRegistry() = TypeRegistry(
@@ -114,7 +120,8 @@ TypeRegistry() = TypeRegistry(
     Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
-    Dict{Type, Vector{Int32}}()             # type_extra_ids (march9)
+    Dict{Type, Vector{Int32}}(),            # type_extra_ids (march9)
+    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}()   # march16 closure layouter
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -133,7 +140,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # constant_globals (march7)
     nothing,  # string_constant_globals (census F3)
     nothing,  # lazy_string_globals (march7)
-    nothing   # type_extra_ids (march9)
+    nothing,  # type_extra_ids (march9)
+    nothing, nothing, nothing   # march16 closure layouter
 )
 
 """
@@ -2151,3 +2159,45 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
     end
 end
 
+
+
+# ═══ march16: THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
+
+"""
+    get_closure_base_struct!(mod, registry) -> UInt32
+
+The closure-base struct: {classId:i32, context:anyref, vtable:(ref null struct)}.
+dart: class_info.dart FieldIndex closureContext=2/closureVtable=3 (WT drops the
+identityHash + runtimeType slots — deferred with the hash-slot and RTI campaigns).
+`sub \$JlBase` so closures live in the classId world (typeof/isa discriminate).
+"""
+function get_closure_base_struct!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.closure_base_idx !== nothing && return registry.closure_base_idx
+    fields = FieldType[
+        FieldType(I32, false),       # classId
+        FieldType(AnyRef, false),    # context (the captured-fields struct)
+        FieldType(StructRef, false), # vtable (covariant per-arity structs; cast at use)
+    ]
+    base = registry.base_struct_idx
+    idx = UInt32(add_type!(mod, base === nothing ? StructType(fields) : StructType(fields, base)))
+    registry.closure_base_idx = idx
+    return idx
+end
+
+"""
+    get_closure_vtable_struct!(mod, registry, max_arity) -> UInt32
+
+Per-max-arity vtable struct: one (ref null func) entry per positional arity
+0..max_arity (dart: vtableBaseIndex + posArgCount; named combinations N/A — WT
+kwargs are pre-positionalized).
+"""
+function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max_arity::Int)::UInt32
+    d = registry.closure_vtable_struct_idxs
+    d === nothing && error("closure layouter unavailable on a minimal registry")
+    haskey(d, max_arity) && return d[max_arity]
+    # (ref null func) entries — set once at vtable-global creation, read at call_ref
+    fields = FieldType[FieldType(UInt8(FuncRef), false) for _ in 0:max_arity]
+    idx = UInt32(add_type!(mod, StructType(fields)))
+    d[max_arity] = idx
+    return idx
+end
