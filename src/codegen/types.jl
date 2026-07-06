@@ -202,6 +202,29 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
     (T === String || T === Symbol) && return nothing  # the string registry owns these
     info = register_struct_type!(mod, registry, T)
     info === nothing && return nothing
+    # LAYOUT GUARD (gate-caught, Statistics corpus): the registrar may skip or
+    # transform fields (unions, vectors, Nothing slots) — the funnel emits ONLY
+    # when the REGISTERED layout is exactly [typeId, then one slot per Julia
+    # field] AND the wasm struct's field list agrees; any other shape → inline path.
+    info.field_offset == 1 || return nothing
+    length(info.field_names) == fieldcount(T) || return nothing
+    local _wst = mod.types[info.wasm_type_idx + 1]
+    _wst isa StructType || return nothing
+    length(_wst.fields) == fieldcount(T) + 1 || return nothing
+    for k in 1:fieldcount(T)
+        local _fw = _wst.fields[k + 1].valtype
+        local _fv = isdefined(val, k) ? getfield(val, k) : nothing
+        _fv === nothing && return nothing
+        local _want = _fv isa Int64 || _fv isa UInt64 ? I64 :
+                      _fv isa Float64 ? F64 : _fv isa Float32 ? F32 :
+                      (_fv isa Integer || _fv isa Bool || _fv isa Char) ? I32 : nothing
+        if _want === nothing
+            # nested immutable: the registered slot must be a concrete ref
+            (_fw isa ConcreteRef) || return nothing
+        else
+            _fw === _want || return nothing
+        end
+    end
     # field 0: the typeId
     push!(init, Opcode.I32_CONST)
     append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
