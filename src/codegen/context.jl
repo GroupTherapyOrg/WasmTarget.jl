@@ -628,6 +628,11 @@ Encode a block result type (for if/block/loop).
 Handles both simple types (i32/i64/f32/f64) and concrete reference types.
 Returns a vector of bytes to append to the instruction stream.
 """
+# march6 slice D: MULTI-VALUE blocktype — a function-type INDEX encoded as s33
+# (wasm spec). Used by the typed-catch landing block (results = the tag payload).
+# Int specifically (not Integer): UInt8 0x40/void keeps its raw single-byte path.
+encode_block_type(type_idx::Int)::Vector{UInt8} = encode_leb128_signed(Int64(type_idx))
+
 function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     bytes = UInt8[]
     if result_type isa NumType

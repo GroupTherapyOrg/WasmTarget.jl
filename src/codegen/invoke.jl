@@ -2573,7 +2573,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 exn_global = ensure_exception_global!(ctx.mod)
                 ref_null!(bt, AnyRef)        # ref.null any
                 global_set!(bt, exn_global)
-                throw_!(bt, 0)               # tag index 0
+                global_get!(bt, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bt, ExternRef); throw_!(bt, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true  # PURE-908
                 return append_builder!(b, bt)
 
@@ -3117,7 +3117,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 exn_global = ensure_exception_global!(ctx.mod)
                 ref_null!(bdm, AnyRef)        # ref.null any
                 global_set!(bdm, exn_global)
-                throw_!(bdm, 0)               # tag index 0
+                global_get!(bdm, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bdm, ExternRef); throw_!(bdm, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true  # PURE-908
                 return append_builder!(b, bdm)
 
@@ -3507,13 +3507,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # PURE-9034: rethrow() preserves the exception in the global —
                     # just re-throw without overwriting. The caught exception is
                     # already in $current_exn from the original throw.
-                    throw_!(bthr2, 0)  # tag index 0
+                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 else
                     # PURE-9032: Stash ref.null any as exception placeholder
                     exn_global = ensure_exception_global!(ctx.mod)
                     ref_null!(bthr2, AnyRef)  # ref.null any (0xD0 0x6E)
                     global_set!(bthr2, exn_global)
-                    throw_!(bthr2, 0)  # tag index 0
+                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 end
                 append_builder!(fb, bthr2)
                 ctx.last_stmt_was_stub = true  # PURE-908
@@ -3736,7 +3736,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
                     global_set!(berr, exn_global)
                 end
-                throw_!(berr, 0)
+                global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true
                 return append_builder!(b, berr)
             elseif name === :throw || name === :throw_boundserror ||
@@ -3762,7 +3762,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         global_set!(bthr, exn_global)
                     end
                 end
-                throw_!(bthr, 0)
+                global_get!(bthr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr, ExternRef); throw_!(bthr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true  # PURE-908
                 return append_builder!(b, bthr)
 
@@ -3967,7 +3967,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             elseif name === :_tuple_error
                 bte = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)  # Clear pre-pushed args
                 ensure_exception_tag!(ctx.mod)
-                throw_!(bte, 0)
+                global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true  # PURE-908
                 return append_builder!(b, bte)
 
@@ -4095,7 +4095,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 exn_global = ensure_exception_global!(ctx.mod)
                 ref_null!(bi32, AnyRef)        # ref.null any
                 global_set!(bi32, exn_global)
-                throw_!(bi32, 0)
+                global_get!(bi32, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bi32, ExternRef); throw_!(bi32, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true  # PURE-908
                 return append_builder!(b, bi32)
             elseif name === :padding && length(args) == 2 &&

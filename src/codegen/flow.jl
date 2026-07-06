@@ -12,7 +12,12 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
     # phi init, PURE-314), and generate_loop_code + generate_branched_loops (no-phi loops).
     if has_try_catch(code)
-        append_builder!(b, generate_try_catch(ctx, blocks, code))   # typed merge
+        # march6 slice C: try regions are FIRST-CLASS in the stackifier — THE ONE
+        # lowering (dart: one visitTryCatch). The 13-driver family + its 643-LOC
+        # shape selector are DELETED; handler blocks are plain CFG blocks and the
+        # phi machinery owns their edges.
+        generate_stackified_flow!(b, ctx, blocks, code;
+                                  try_regions=Vector{Any}(find_try_regions(code)))
     elseif length(blocks) == 1
         # Single block - just generate statements
         generate_block_code!(b, ctx, blocks[1])
