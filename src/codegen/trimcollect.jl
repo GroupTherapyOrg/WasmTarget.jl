@@ -69,7 +69,6 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 local _nt = stmt.args[1]
                 local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
                            _nt isa DataType ? _nt : nothing
-                haskey(ENV, "WT_DBG_DYN") && _T isa DataType && println(stderr, "NEW-SCAN T=", _T, " closure=", is_closure_type(_T))
                 # scope: USERLAND closures only — Base/stdlib-internal closures are
                 # statically called (never through the vtable); enrolling them all
                 # exploded the blast radius (a _growend! trampoline mis-built).
@@ -78,7 +77,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     while parentmodule(_r) !== _r; _r = parentmodule(_r); end
                     _r === Main
                 end
-                if _T isa DataType && is_closure_type(_T) && _T_user
+                if _T isa DataType && is_closure_type(_T) && _T_user &&
+                   !haskey(ENV, "WT_NO_CLOSURE_ENROLL")
                     push!(closure_types, _T)
                 end
                 continue
@@ -175,7 +175,6 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 cmi in seen && continue
                 push!(seen, cmi)
                 push!(out, cmi)
-                haskey(ENV, "WT_DBG_DYN") && println(stderr, "ENROLLED-TYPED cmi=", cmi.specTypes)
             end
         end
     end
@@ -310,7 +309,6 @@ function trim_compile_plan(entries_named::Vector)
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
         mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         sig = mi.specTypes
-        haskey(ENV, "WT_DBG_DYN") && occursin("f_dyn4##", string(sig)) && println(stderr, "PAIR-SEEN sig=", sig)
         (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) || continue
         ftyp = sig.parameters[1]
         f = nothing

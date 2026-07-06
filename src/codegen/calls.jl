@@ -1904,7 +1904,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # never reach here — the existing paths outrank.
     if func isa Core.SSAValue
         local _dfc_t = infer_value_type(func, ctx)
-        haskey(ENV, "WT_DBG_DYN") && println(stderr, "DYN-CALL-CHECK ssa=", func.id, " t=", _dfc_t, " nargs=", length(args))
         if (_dfc_t === Any || _dfc_t === Function) &&
            emit_dynamic_closure_call!(fb, ctx, func, args, idx) === true
             return append_builder!(b, fb)

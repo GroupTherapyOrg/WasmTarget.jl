@@ -97,7 +97,7 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
                             body_params::Vector{WasmValType}, body_results::Vector{WasmValType})
     base_idx = get_closure_base_struct!(ctx.mod, ctx.type_registry)
     # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
-    # would add functions mid-body-compile (the PURE-9065 skew).
+    # would add functions mid-body-compile (the index-freeze skew).
     local cache = ctx.type_registry.closure_vtable_globals
     (cache !== nothing && haskey(cache, closure_type)) || return nothing
     g, _ = ensure_closure_vtable!(ctx.mod, ctx.type_registry, closure_type, body_idx,
@@ -155,7 +155,6 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     is_closure_type(from_julia) || return false
     haskey(ctx.type_registry.structs, from_julia) || return false
     local body = _closure_body_for(ctx, from_julia)
-    haskey(ENV, "WT_DBG_DYN") && println(stderr, "WRAP-CHECK t=", from_julia, " body=", body === nothing ? "NONE" : "found")
     body === nothing && return false
     return emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3]) !== nothing
 end

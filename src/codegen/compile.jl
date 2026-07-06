@@ -1675,7 +1675,7 @@ function compile_module(functions::Vector;
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
-    # march16: THE CLOSURE VTABLE PRE-PASS (the PURE-9065 index-freeze rule: nothing
+    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).
@@ -1703,7 +1703,6 @@ function compile_module(functions::Vector;
     # switch (by_ref) but invisible to get_function cross-call resolution.
     _disp_cands = _TRIM_ISOLATED_FUNCS[]
     for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        haskey(ENV, "WT_DBG_DYN") && occursin("f_dyn4#", string(name)) && println(stderr, "FDATA name=", name, " f=", typeof(f))
         func_idx = UInt32(n_imports + n_existing + i - 1)
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
