@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.6...v0.4.7) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ratchet:** R15 scoped to values.jl (the lazy creator's segment site is dart-shaped); two marker citations de-jargoned (R11 monotone holds) ([712c7dd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/712c7ddd2307dfee25b5e978f640f4e720bfbeb4))
+
 ## [0.4.6](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.5...v0.4.6) (2026-07-06)
 
 
