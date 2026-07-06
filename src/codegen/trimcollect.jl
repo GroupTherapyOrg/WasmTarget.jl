@@ -65,22 +65,37 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
                            _nt isa DataType ? _nt : nothing
                 haskey(ENV, "WT_DBG_DYN") && _T isa DataType && println(stderr, "NEW-SCAN T=", _T, " closure=", is_closure_type(_T))
-                if _T isa DataType && is_closure_type(_T)
+                # scope: USERLAND closures only — Base/stdlib-internal closures are
+                # statically called (never through the vtable); enrolling them all
+                # exploded the blast radius (a _growend! trampoline mis-built).
+                local _T_user = _T isa DataType && begin
+                    local _r = _T.name.module
+                    while parentmodule(_r) !== _r; _r = parentmodule(_r); end
+                    _r === Main
+                end
+                if _T isa DataType && is_closure_type(_T) && _T_user
                     local _mms = try
                         Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
-                    catch; nothing end
+                    catch _e
+                        haskey(ENV, "WT_DBG_DYN") && println(stderr, "MBF-ERR ", first(sprint(showerror, _e), 100))
+                        nothing
+                    end
+                    haskey(ENV, "WT_DBG_DYN") && println(stderr, "MBF T=", _T, " n=", _mms === nothing ? -1 : length(_mms))
                     for mm in (_mms === nothing ? () : _mms)
                         local m = mm.method
                         local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
                         msig isa DataType || continue
                         local mps = collect(msig.parameters)
-                        (length(mps) >= 1 && mps[1] === _T) || continue
-                        local ssig = try Tuple{mps...} catch; continue end
+                        # the method sig's slot 1 is the UNAPPLIED wrapper; specialize
+                        # with the APPLIED closure type at slot 1
+                        (length(mps) >= 1 && _T <: mps[1]) || continue
+                        local ssig = try Tuple{_T, mps[2:end]...} catch; continue end
                         local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
                         cmi === nothing && continue
                         cmi in seen && continue
                         push!(seen, cmi)
                         push!(out, cmi)
+                        haskey(ENV, "WT_DBG_DYN") && println(stderr, "ENROLLED cmi=", cmi.specTypes)
                     end
                 end
                 continue
@@ -268,6 +283,7 @@ function trim_compile_plan(entries_named::Vector)
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
         mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         sig = mi.specTypes
+        haskey(ENV, "WT_DBG_DYN") && occursin("f_dyn4##", string(sig)) && println(stderr, "PAIR-SEEN sig=", sig)
         (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) || continue
         ftyp = sig.parameters[1]
         f = nothing

@@ -1675,12 +1675,35 @@ function compile_module(functions::Vector;
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
+    # march16: THE CLOSURE VTABLE PRE-PASS (the PURE-9065 index-freeze rule: nothing
+    # may add functions during body compilation). Trampolines + vtable globals for
+    # every type-keyed userland closure are created NOW; their bodies' FINAL indices
+    # are computable deterministically (bodies start after the K trampolines).
+    local _cvp = Tuple{Int, DataType}[]   # (function_data position, closure type)
+    for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
+        f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
+    end
+    if !isempty(_cvp)
+        local _n_now = length(mod.functions)
+        local _K = length(_cvp)   # trampolines to pre-create (one per closure body)
+        for (_slot, (_i, _T)) in enumerate(_cvp)
+            local _entry = function_data[_i]
+            local _ats, _rt = _entry[2], _entry[5]
+            local _body_idx = UInt32(n_imports + _n_now + _K + _i - 1)
+            local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
+            local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
+                         WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
+            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs)
+        end
+    end
+
     n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
     _disp_cands = _TRIM_ISOLATED_FUNCS[]
     for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
+        haskey(ENV, "WT_DBG_DYN") && occursin("f_dyn4#", string(name)) && println(stderr, "FDATA name=", name, " f=", typeof(f))
         func_idx = UInt32(n_imports + n_existing + i - 1)
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))

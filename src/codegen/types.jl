@@ -784,6 +784,14 @@ function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32; registry::Uni
         for idx in (registry.jl_type_idx, registry.jl_typename_idx)
             idx !== nothing && push!(jl_exclude, idx)
         end
+        # march16: closure VTABLE structs hold funcref fields — they are layout
+        # tables, not objects; they can never subtype {classId:i32} (dart's vtable
+        # structs subtype their own #Vtable base, not the object base).
+        if registry.closure_vtable_struct_idxs !== nothing
+            for (_, vti) in registry.closure_vtable_struct_idxs
+                push!(jl_exclude, vti)
+            end
+        end
     end
     for (i, ct) in enumerate(mod.types)
         ti = UInt32(i - 1)

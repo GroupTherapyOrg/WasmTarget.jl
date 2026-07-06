@@ -22,7 +22,7 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                 body_results::Vector{WasmValType})::Tuple{UInt32, UInt32}
     cache = registry.closure_vtable_globals
     cache === nothing && error("closure layouter unavailable on a minimal registry")
-    key = (closure_type, Int(body_idx))
+    key = closure_type   # T-keyed: the wrap looks up by type alone
     if haskey(cache, key)
         cached = cache[key]
         return (cached, get_closure_vtable_struct!(mod, registry, length(body_params) - 1))
@@ -65,10 +65,11 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     else
         tramp_locals = WasmValType[]
     end
+    end_block!(tb)   # the function frame's own end
     tramp_params = WasmValType[AnyRef for _ in 0:arity]
     tramp_results = isempty(body_results) ? WasmValType[] : WasmValType[AnyRef]
     tramp_idx = add_function!(mod, tramp_params, tramp_results, tramp_locals, builder_code(tb))
-        declare_funcs!(mod, UInt32[tramp_idx])
+    declare_funcs!(mod, UInt32[tramp_idx])
 
     # ── the vtable global: entries 0..arity-1 null, entry[arity] = the trampoline ──
     init = UInt8[]
@@ -95,6 +96,10 @@ erasure seam — convertType when a closure meets a top type).
 function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
                             body_params::Vector{WasmValType}, body_results::Vector{WasmValType})
     base_idx = get_closure_base_struct!(ctx.mod, ctx.type_registry)
+    # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
+    # would add functions mid-body-compile (the PURE-9065 skew).
+    local cache = ctx.type_registry.closure_vtable_globals
+    (cache !== nothing && haskey(cache, closure_type)) || return nothing
     g, _ = ensure_closure_vtable!(ctx.mod, ctx.type_registry, closure_type, body_idx,
                                   body_params, body_results)
     # stack: [captured] → {classId, captured-as-context, vtable}
@@ -120,14 +125,20 @@ function _closure_body_for(ctx, closure_type::Type)
     for (k, info) in fr.functions
         # keyed by the closure TYPE (capturing closures have no instance; compile.jl
         # registers their MI-compiled bodies under func_ref = the DataType)
-        (info.func_ref === closure_type ||
-         (!isempty(info.arg_types) && info.arg_types[1] === closure_type)) || continue
-        local n_imp = num_imported_funcs(ctx.mod)
-        local fi = Int(info.wasm_idx) - n_imp
-        (fi >= 0 && fi < length(ctx.mod.functions)) || continue
-        local ft = ctx.mod.types[Int(ctx.mod.functions[fi + 1].type_idx) + 1]
-        ft isa FuncType || continue
-        return (info.wasm_idx, ft.params, ft.results)
+        # PRECISE match only: the type-keyed registration (the arg_types[1]
+        # heuristic once matched throw_boundserror taking the closure as arg 1)
+        info.func_ref === closure_type || continue
+        # derive the wasm signature from the REGISTRATION (Julia types) — at wrap
+        # time the body may not be pushed into mod.functions yet (indices are
+        # assigned before bodies compile)
+        local ps = WasmValType[]
+        for T in info.arg_types
+            push!(ps, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
+        end
+        local rs = (info.return_type === Nothing || info.return_type === Union{}) ?
+                   WasmValType[] :
+                   WasmValType[get_concrete_wasm_type(info.return_type, ctx.mod, ctx.type_registry)]
+        return (info.wasm_idx, ps, rs)
     end
     return nothing
 end
@@ -146,8 +157,7 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     local body = _closure_body_for(ctx, from_julia)
     haskey(ENV, "WT_DBG_DYN") && println(stderr, "WRAP-CHECK t=", from_julia, " body=", body === nothing ? "NONE" : "found")
     body === nothing && return false
-    emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3])
-    return true
+    return emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3]) !== nothing
 end
 
 
@@ -183,5 +193,12 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     struct_get!(b, vt_struct, UInt32(arity), UInt8(FuncRef)) # entry[arity]
     ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)
     call_ref!(b, sig_idx, sig.params, sig.results)
+    # the uniform result (anyref) converts to the call's inferred type (the funnel
+    # unboxes numerics / casts refs — dart converts at the same seam)
+    local _rt = get(ctx.ssa_types, idx, Any)
+    if _rt isa Type && _rt !== Any && _rt !== Union{}
+        local _rw = get_concrete_wasm_type(_rt, ctx.mod, ctx.type_registry)
+        _rw !== AnyRef && convert_type!(b, AnyRef, _rw, ctx; from_julia=nothing)
+    end
     return true
 end
