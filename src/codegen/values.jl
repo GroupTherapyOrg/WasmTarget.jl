@@ -1075,6 +1075,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
+        # march7: funnel-first (int128)
+        local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgint128 !== nothing
+            local _ciint128 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            _ciint128 !== nothing && (global_get!(b, _cgint128, ConcreteRef(_ciint128.wasm_type_idx, false)); return b)
+        end
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
         result_type = typeof(val)
         type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
@@ -1102,6 +1108,20 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
         if _sg !== nothing
             global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
+            return b
+        end
+        # march7 LAZY: a pre-passed long literal reads its global, initializing on
+        # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
+        local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
+                    get(ctx.type_registry.lazy_string_globals, val, nothing)
+        if _lz !== nothing
+            local _lzs = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            local _lzt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[ConcreteRef(_lzs, true)]))
+            block!(b, Int(_lzt); results=WasmValType[ConcreteRef(_lzs, true)])
+            global_get!(b, _lz[1], ConcreteRef(_lzs, true))
+            br_on_non_null!(b, 0)
+            call!(b, _lz[2], WasmValType[], WasmValType[ConcreteRef(_lzs, true)])
+            end_block!(b)
             return b
         end
         # PURE-9013: String constant via passive data segment + array.new_data
@@ -1185,25 +1205,32 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif val isa Symbol
-        # Symbol constant - represent as string via passive data segment
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        # march7 M7-c: Symbols share the classed string rep AND its intern registry —
+        # equal symbol literals read the ONE deduplicated global (dart: one constantInfo
+        # map for all kinds). Long names keep the inline data-segment path.
         name_str = String(val)
-        n_bytes = ncodeunits(name_str)
-
-        if n_bytes == 0
-            array_new_fixed!(b, type_idx, 0, I32)
-        else
-            utf8_bytes = Vector{UInt8}(codeunits(name_str))
-            seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
-
-            i32_const!(b, 0)
-            # i32.const operands are SIGNED LEB128 (see String path above).
-            i32_const!(b, Int32(n_bytes))
-            array_new_data!(b, type_idx, seg_idx)
+        local _syg = get_string_constant_global!(ctx.mod, ctx.type_registry, name_str)
+        if _syg !== nothing
+            global_get!(b, _syg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
+            return b
         end
+        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        n_bytes = ncodeunits(name_str)
+        utf8_bytes = Vector{UInt8}(codeunits(name_str))
+        seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
+        i32_const!(b, 0)
+        # i32.const operands are SIGNED LEB128 (see String path above).
+        i32_const!(b, Int32(n_bytes))
+        array_new_data!(b, type_idx, seg_idx)
         emit_string_wrap!(b, ctx)   # parity(M9): Symbols share the classed string rep
 
     elseif typeof(val) <: Tuple
+        # march7: funnel-first (tuple) — tuples of constant-expressible fields intern
+        local _cgtp = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgtp !== nothing
+            local _citp = get(ctx.type_registry.structs, typeof(val), nothing)
+            _citp !== nothing && (global_get!(b, _cgtp, ConcreteRef(_citp.wasm_type_idx, false)); return b)
+        end
         # Tuple constant - create it with struct.new
         T = typeof(val)
 
@@ -1265,6 +1292,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         global_get!(b, tn_global_idx, AnyRef)
 
     elseif val isa Module
+        # march7: funnel-first (module) — interned when eager-able
+        local _cg_2 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_2 !== nothing
+            local _ci_2 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_2, ConcreteRef(_ci_2.wasm_type_idx, false))
+            return b
+        end
         # Module constant — empty struct (fieldcount=0), like Function singletons.
         # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
@@ -1274,6 +1308,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
+        # march7: funnel-first (fn-singleton) — interned when eager-able
+        local _cg_0 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_0 !== nothing
+            local _ci_0 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_0, ConcreteRef(_ci_0.wasm_type_idx, false))
+            return b
+        end
         # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
@@ -1283,6 +1324,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
+        # march7: funnel-first (closure-const) — interned when eager-able
+        local _cg_1 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_1 !== nothing
+            local _ci_1 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_1, ConcreteRef(_ci_1.wasm_type_idx, false))
+            return b
+        end
         # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
         # These are structs that happen to be Functions — compile like regular structs
         T = typeof(val)
@@ -1527,6 +1575,15 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
+        # march7: THE ensureConstant funnel first — an eager-internable immutable
+        # constant reads its ONE deduplicated global (dart constants.dart:427-443);
+        # mutable / non-constant-field values fall through to the inline path.
+        local _cg = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg !== nothing
+            local _cgi = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg, ConcreteRef(_cgi.wasm_type_idx, false))
+            return b
+        end
         # Struct constant - create it with struct.new
         T = typeof(val)
 

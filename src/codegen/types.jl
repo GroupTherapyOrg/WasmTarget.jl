@@ -81,10 +81,19 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
+    # march7: THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
+    # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
+    # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
+    # identity that structural keying would wrongly merge.
+    constant_globals::Union{Nothing, Dict{Any, UInt32}}
     # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
     string_constant_globals::Union{Nothing, Dict{String, UInt32}}
+    # march7 LAZY constants (dart constants.dart:445-476/322-339): long strings get an
+    # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
+    # + call init. Keyed by value → (global_idx, init_fn_idx).
+    lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -97,7 +106,9 @@ TypeRegistry() = TypeRegistry(
     nothing,  # string_hash_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
-    Dict{String, UInt32}()        # string_constant_globals (census F3)
+    Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
+    Dict{String, UInt32}(),       # string_constant_globals (census F3)
+    Dict{String, Tuple{UInt32, UInt32}}()   # lazy_string_globals (march7)
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -113,8 +124,112 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # string_hash_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
-    nothing   # string_constant_globals (census F3)
+    nothing,  # constant_globals (march7)
+    nothing,  # string_constant_globals (census F3)
+    nothing   # lazy_string_globals (march7)
 )
+
+"""
+    get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
+
+march7 LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
+(ref null \$JlString) global + an init function that builds the string once, stores
+it, and returns it. MUST be called BEFORE function-index assignment (the PURE-9065
+constraint) — the literal pre-pass in compile.jl does.
+"""
+function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::String)::Tuple{UInt32, UInt32}
+    haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
+    struct_idx = get_string_struct_type!(mod, registry)
+    arr_idx = get_string_array_type!(mod, registry)
+    g = add_global_ref!(mod, struct_idx, true, UInt8[Opcode.REF_NULL, 0x40 + 0x23 - 0x23])  # placeholder; fixed below
+    # init: ref.null $struct — build the real init expr
+    mod.globals[end] = WasmGlobalDef(ConcreteRef(struct_idx, true), true,
+        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)), UInt8[Opcode.END]))
+    bytes = codeunits(s)
+    seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
+    results = WasmValType[ConcreteRef(struct_idx, true)]
+    b = InstrBuilder(WasmValType[ConcreteRef(arr_idx, true)], results;
+                     func_name="lazy_string_init")
+    i32_const!(b, 0)
+    i32_const!(b, Int64(length(bytes)))
+    array_new_data!(b, arr_idx, seg_idx)
+    emit_string_wrap!(b, mod, registry, 0)   # local 0 = the scratch
+    global_set_peek = length(b.instrs)
+    # store AND return: local.tee via global — global.set then global.get
+    global_set!(b, g)
+    global_get!(b, g, ConcreteRef(struct_idx, true))
+    return_!(b)
+    end_block!(b)
+    fidx = add_function!(mod, WasmValType[], results, WasmValType[ConcreteRef(arr_idx, true)], builder_code(b))
+    registry.lazy_string_globals[s] = (g, fidx)
+    return (g, fidx)
+end
+
+"""
+    ensure_constant_global!(mod, registry, val) -> Union{UInt32, Nothing}
+
+march7 — THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
+map deduplicating EVERY constant kind). Returns the interned global for `val`, creating
+it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
+is not eager-internable (mutable kinds keep per-object identity; non-constant fields
+keep the inline path). IMMUTABLE kinds only.
+"""
+function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
+    registry.constant_globals === nothing && return nothing
+    haskey(registry.constant_globals, val) && return registry.constant_globals[val]
+    init = UInt8[]
+    info = _const_init_bytes!(init, mod, registry, val)
+    info === nothing && return nothing
+    g = add_global_ref!(mod, info, false, init; nullable=false)
+    registry.constant_globals[val] = g
+    return g
+end
+
+# Recursively build a CONSTANT-EXPRESSION initializer for `val`; returns the struct
+# type idx, or nothing when val is not eager-internable. Wasm constant exprs allow
+# i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
+function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
+    T = typeof(val)
+    (isconcretetype(T) && isstructtype(T) && !ismutabletype(T)) || return nothing
+    T <: Type && return nothing                       # Type constants have their own registry
+    (T === String || T === Symbol) && return nothing  # the string registry owns these
+    info = register_struct_type!(mod, registry, T)
+    info === nothing && return nothing
+    # field 0: the typeId
+    push!(init, Opcode.I32_CONST)
+    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
+    # fields: every one must itself be constant-expressible
+    for i in 1:fieldcount(T)
+        isdefined(val, i) || return nothing
+        fv = getfield(val, i)
+        FT = typeof(fv)
+        if fv isa Int64
+            push!(init, Opcode.I64_CONST); append!(init, encode_leb128_signed(fv))
+        elseif fv isa UInt64
+            push!(init, Opcode.I64_CONST); append!(init, encode_leb128_signed(reinterpret(Int64, fv)))
+        elseif fv isa Bool
+            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv ? 1 : 0)))
+        elseif fv isa Char
+            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, UInt32(fv)))))
+        elseif fv isa Int8 || fv isa Int16 || fv isa Int32
+            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv)))
+        elseif fv isa UInt8 || fv isa UInt16 || fv isa UInt32
+            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, UInt32(fv)))))
+        elseif fv isa Float64
+            push!(init, Opcode.F64_CONST)
+            append!(init, reinterpret(UInt8, [fv]))
+        elseif fv isa Float32
+            push!(init, Opcode.F32_CONST)
+            append!(init, reinterpret(UInt8, [fv]))
+        else
+            # nested immutable struct constant: recurse (its bytes inline here)
+            _const_init_bytes!(init, mod, registry, fv) === nothing && return nothing
+        end
+    end
+    push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+    append!(init, encode_leb128_unsigned(UInt64(info.wasm_type_idx)))
+    return UInt32(info.wasm_type_idx)
+end
 
 """
     get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}

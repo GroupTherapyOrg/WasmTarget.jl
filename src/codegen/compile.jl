@@ -1638,6 +1638,23 @@ function compile_module(functions::Vector;
         get_or_create_string_hash_func!(mod, type_registry)
     end
 
+    # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
+    # their init functions NOW — the same PURE-9065 constraint (functions cannot be
+    # added during body compilation without shifting indices). dart constants.dart:454.
+    for (_, _, _, code_info, _, _, _) in function_data
+        code_info === nothing && continue
+        for stmt in code_info.code
+            for lit in (stmt isa Expr ? stmt.args : (stmt,))
+                v = lit isa QuoteNode ? lit.value : lit
+                if v isa String && ncodeunits(v) > 64
+                    get_or_create_lazy_string!(mod, type_registry, v)
+                elseif v isa Symbol && ncodeunits(String(v)) > 64
+                    get_or_create_lazy_string!(mod, type_registry, String(v))
+                end
+            end
+        end
+    end
+
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)

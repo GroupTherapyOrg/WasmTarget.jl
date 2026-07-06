@@ -6,9 +6,9 @@
 # kill + relaunch (once); write EXIT= to the log either way.
 # Usage: dev/run_full_gate.sh <logfile>
 set -u
-LOG="${1:?usage: run_full_gate.sh <logfile>}"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
-STALL_MIN=12
+LOG="${1:?usage: run_full_gate.sh <logfile> [repo-worktree]}"
+REPO="${2:-$(cd "$(dirname "$0")/.." && pwd)}"   # optional arg 2: an isolated worktree — dev continues on the main tree
+STALL_MIN=25   # cold test-env precompile is silent ~15-20 min; 12 false-positived
 launch() {
     : > "$LOG"
     WT_TEST_CONCURRENCY=2 julia --project="$REPO" -e "using Pkg; Pkg.test()" >> "$LOG" 2>&1 &

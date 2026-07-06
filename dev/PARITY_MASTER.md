@@ -654,3 +654,20 @@ multi-range support ≥1 · the closures decision recorded (this paragraph).
 The fresh scored re-audit (the 2026-07-04 instrument, same 6-auditor method), every
 actionable dimension's floor → a LOCK, PARITY_MASTER final record, **THE TAG declared**
 when every actionable dim sits at its documented ceiling.
+
+## MARCH 6 — CLOSED (2026-07-05, PR #87): exceptions 58→~85
+ONE lowering: the 13-driver/2,278-LOC family + 643-LOC selector DELETED (generate.jl
+2,988→818; R12 13→0); try regions first-class in the stackifier (~80 lines) on the
+unified emission-ordered label stack (slice A, byte-identical). THE TYPED TAG:
+(exn, stackTrace) travels with the unwind (translator.dart:485-491); typed catch_clause
+w/ payload-carrying landing (s33 blocktype); $current_exn written AT CATCH; R13 14→0.
+try/finally = front-end-inlined, DIVERGENT-JUSTIFIED (D9.4 battery guards). Close gate:
+10 shards + 9 fuzz in an isolated worktree, EXIT=0.
+
+## MARCH 7 — IN FLIGHT (pipelined on 6): constants
+DONE: THE ensureConstant funnel (ensure_constant_global!, VALUE-keyed, immutable-only —
+mutables keep per-object identity, documented) · SIX arms funnel-first (struct/fn-
+singleton/closure/Module/Tuple/Int128) · Symbols join the intern registry ·
+content-addressed passive segments (dart :541). REMAINING: the literal pre-pass + LAZY
+constants (init-fns before the compile.jl:1641 index freeze) · boxed-scalar dedup
+(post-march-8: needs expectedType at the scalar arms).

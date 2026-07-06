@@ -41,3 +41,11 @@ IR has NO runtime finally construct (dart lowers TryFinally itself because Kerne
 carries the node). WT sees only the already-duplicated paths, which the ONE lowering
 handles as plain CFG. The D9.4 differential battery (8 arms incl. the fixed f_fin4)
 is the permanent guard. Recorded as a documented ceiling item, not a gap.
+
+
+## MARCH 7 STATE (pipelined; see memory): funnel + 6 arms + Symbol interning +
+content-addressed segments DONE. REMAINING (next session/slice): the literal
+pre-pass + LAZY constants (init-fns before the compile.jl:1641 index freeze —
+the one big M7 piece) · boxed-scalar dedup (dart 361-376, needs expectedType
+at the scalar arms = post-march-8 material). R14/R15 prose revised to the
+honest mutable floor.
