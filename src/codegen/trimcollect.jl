@@ -55,6 +55,36 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
         ssat = src.ssavaluetypes
         for stmt in src.code
+            # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
+            # closure enrolls its callable body — the erased/dynamic call site rides
+            # the vtable trampoline, which needs the body compiled. Specialized with
+            # the method's own sig (abstract slots stay erased; the trampoline passes
+            # anyref and the body's funnel machinery narrows internally).
+            if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
+                local _nt = stmt.args[1]
+                local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
+                           _nt isa DataType ? _nt : nothing
+                haskey(ENV, "WT_DBG_DYN") && _T isa DataType && println(stderr, "NEW-SCAN T=", _T, " closure=", is_closure_type(_T))
+                if _T isa DataType && is_closure_type(_T)
+                    local _mms = try
+                        Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
+                    catch; nothing end
+                    for mm in (_mms === nothing ? () : _mms)
+                        local m = mm.method
+                        local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
+                        msig isa DataType || continue
+                        local mps = collect(msig.parameters)
+                        (length(mps) >= 1 && mps[1] === _T) || continue
+                        local ssig = try Tuple{mps...} catch; continue end
+                        local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                        cmi === nothing && continue
+                        cmi in seen && continue
+                        push!(seen, cmi)
+                        push!(out, cmi)
+                    end
+                end
+                continue
+            end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
             cref isa GlobalRef || continue
@@ -246,6 +276,12 @@ function trim_compile_plan(entries_named::Vector)
         elseif ftyp isa DataType && ftyp <: Type && length(ftyp.parameters) >= 1
             f = ftyp.parameters[1]       # constructors: Type{T} → T
             (f isa DataType || f isa UnionAll) || (f = nothing)
+        elseif ftyp isa DataType && is_closure_type(ftyp)
+            # march16: a CAPTURING closure has no instance — key its body by the
+            # closure TYPE (the vtable machinery resolves by type; no static
+            # caller resolves these by value). dart: creating a Lambda compiles
+            # its target.
+            f = ftyp
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig

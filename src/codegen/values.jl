@@ -439,6 +439,8 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         end
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
         if to === ExternRef && from !== ExternRef
+            # march16: a KNOWN closure crossing to extern wraps first (the seam)
+            from isa ConcreteRef && maybe_wrap_closure!(b, ctx, from_julia)
             # any→extern at the JS boundary.
             extern_convert_any!(b)
         elseif from === ExternRef && to !== ExternRef

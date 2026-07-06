@@ -1897,6 +1897,20 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
+    # march16 slice D: a DYNAMIC function-value call — the callee is a runtime value
+    # whose static type is erased (Any/Function). Ride the closure vtable: the OBJECT
+    # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
+    # Signature + call_ref). Devirtualizable callees (concrete/small-union types)
+    # never reach here — the existing paths outrank.
+    if func isa Core.SSAValue
+        local _dfc_t = infer_value_type(func, ctx)
+        haskey(ENV, "WT_DBG_DYN") && println(stderr, "DYN-CALL-CHECK ssa=", func.id, " t=", _dfc_t, " nargs=", length(args))
+        if (_dfc_t === Any || _dfc_t === Function) &&
+           emit_dynamic_closure_call!(fb, ctx, func, args, idx) === true
+            return append_builder!(b, fb)
+        end
+    end
+
     # Special case for getfield on closure (_1) accessing captured signal fields
     # These produce intermediate SSA values (getter/setter functions)
     # Skip them - the actual read/write happens when the function is invoked
@@ -2229,6 +2243,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     emit_numeric_to_externref!(_pshb, item_arg, item_ty, ctx)
                 else
                     append_builder!(_pshb, _item_b)
+                    # march16: the closure-object wrap at the push! erasure seam
+                    item_ty === ExternRef || maybe_wrap_closure!(_pshb, ctx, infer_value_type(item_arg, ctx))
                     # PURE-048: Skip extern_convert_any if value is already externref
                     item_ty === ExternRef || extern_convert_any!(_pshb)
                 end
@@ -3062,6 +3078,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 emit_numeric_to_anyref!(_msb, value_arg, mset_src_wasm_any, ctx)
             else
                 append_builder!(_msb, _mv_b)
+                # march16: a KNOWN closure erasing into a Memory{Any} slot wraps into
+                # the closure OBJECT (dart convertType at the erasure seam)
+                maybe_wrap_closure!(_msb, ctx, infer_value_type(value_arg, ctx))
                 if !is_already_anyref && mset_src_wasm_any === ExternRef
                     any_convert_extern!(_msb)
                 end

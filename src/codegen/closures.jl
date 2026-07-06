@@ -34,7 +34,9 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     captured_info = get(registry.structs, closure_type, nothing)
     captured_info === nothing && error("closure type not registered: $closure_type")
 
-    # ── the trampoline ──
+    # ── the trampoline: the UNIFORM DYNAMIC SIGNATURE (anyref^(1+arity)) → anyref
+    # (dart's dynamic-call entries: args arrive boxed/erased; the trampoline
+    # unboxes/casts per the body's REAL signature and re-boxes the result).
     tb = InstrBuilder(; func_name="closure_trampoline", mod=mod)
     local_get!(tb, UInt32(0))
     ref_cast!(tb, Int64(base_idx), false)
@@ -42,11 +44,31 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     ref_cast!(tb, Int64(captured_info.wasm_type_idx), false)   # the captured struct
     for j in 1:arity
         local_get!(tb, UInt32(j))
+        local pt = body_params[j + 1]
+        if pt in (I32, I64, F32, F64)
+            emit_classid_unbox!(tb, mod, registry, pt)
+        elseif pt isa ConcreteRef
+            ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
+        end   # anyref/eq/struct params take the value as-is
     end
     call!(tb, body_idx, WasmValType[], body_results)
-    tramp_params = WasmValType[AnyRef; body_params[2:end]]
-    tramp_idx = add_function!(mod, tramp_params, body_results, WasmValType[], builder_code(tb))
-    declare_funcs!(mod, UInt32[tramp_idx])
+    if !isempty(body_results) && body_results[1] in (I32, I64, F32, F64)
+        # re-box the numeric result (inline shape — no ctx here; scratch local 1+arity)
+        local rw = body_results[1]
+        local box_idx = get_numeric_box_type!(mod, registry, rw)
+        local scratch = UInt32(1 + arity)
+        local_set!(tb, scratch)
+        i32_const!(tb, Int64(0))          # width-default classId (un-migrated callers discriminate by width)
+        local_get!(tb, scratch)
+        struct_new!(tb, box_idx)
+        tramp_locals = WasmValType[rw]
+    else
+        tramp_locals = WasmValType[]
+    end
+    tramp_params = WasmValType[AnyRef for _ in 0:arity]
+    tramp_results = isempty(body_results) ? WasmValType[] : WasmValType[AnyRef]
+    tramp_idx = add_function!(mod, tramp_params, tramp_results, tramp_locals, builder_code(tb))
+        declare_funcs!(mod, UInt32[tramp_idx])
 
     # ── the vtable global: entries 0..arity-1 null, entry[arity] = the trampoline ──
     init = UInt8[]
@@ -96,7 +118,10 @@ function _closure_body_for(ctx, closure_type::Type)
     fr = ctx.func_registry
     fr === nothing && return nothing
     for (k, info) in fr.functions
-        (!isempty(info.arg_types) && info.arg_types[1] === closure_type) || continue
+        # keyed by the closure TYPE (capturing closures have no instance; compile.jl
+        # registers their MI-compiled bodies under func_ref = the DataType)
+        (info.func_ref === closure_type ||
+         (!isempty(info.arg_types) && info.arg_types[1] === closure_type)) || continue
         local n_imp = num_imported_funcs(ctx.mod)
         local fi = Int(info.wasm_idx) - n_imp
         (fi >= 0 && fi < length(ctx.mod.functions)) || continue
@@ -119,7 +144,44 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     is_closure_type(from_julia) || return false
     haskey(ctx.type_registry.structs, from_julia) || return false
     local body = _closure_body_for(ctx, from_julia)
+    haskey(ENV, "WT_DBG_DYN") && println(stderr, "WRAP-CHECK t=", from_julia, " body=", body === nothing ? "NONE" : "found")
     body === nothing && return false
     emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3])
+    return true
+end
+
+
+"""
+    emit_dynamic_closure_call!(b, ctx, func, args, idx) -> Bool
+
+march16 slice D: the DYNAMIC function-value call (dart: vtable entry at
+vtableBaseIndex+argCount → call_ref). The callee value is the closure OBJECT
+(wrapped at the erasure seam); args ride the UNIFORM dynamic signature
+(everything anyref). Returns false when the shape doesn't apply.
+"""
+function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int)::Bool
+    base_idx = ctx.type_registry.closure_base_idx
+    base_idx === nothing && return false   # no closures wrapped in this module
+    arity = length(args)
+    vt_struct = get_closure_vtable_struct!(ctx.mod, ctx.type_registry, arity)
+    # the uniform dynamic signature
+    sig = FuncType(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef])
+    sig_idx = add_type!(ctx.mod, sig)
+
+    local scratch = allocate_local!(ctx, AnyRef)
+    emit_value!(b, func, ctx, AnyRef)             # the closure OBJECT (seam-wrapped)
+    ref_cast!(b, Int64(base_idx), false)
+    local_set!(b, UInt32(scratch))
+    local_get!(b, UInt32(scratch))                # arg0: the base (anyref, upcast free)
+    for a in args
+        emit_value!(b, a, ctx, AnyRef)            # each arg boxed/erased by the funnel
+    end
+    local_get!(b, UInt32(scratch))
+    ref_cast!(b, Int64(base_idx), false)
+    struct_get!(b, base_idx, UInt32(2), StructRef)          # .vtable
+    ref_cast!(b, Int64(vt_struct), false)
+    struct_get!(b, vt_struct, UInt32(arity), UInt8(FuncRef)) # entry[arity]
+    ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)
+    call_ref!(b, sig_idx, sig.params, sig.results)
     return true
 end
