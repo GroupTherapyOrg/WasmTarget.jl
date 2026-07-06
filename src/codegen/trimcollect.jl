@@ -45,6 +45,11 @@ const TRIM_ENTRY_NAMES = Ref{Union{Nothing, Set{String}}}(nothing)
 # Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     out = Any[]
+    # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
+    # closure bodies specialize against these (dart's typed vtable entries; Julia's
+    # inference makes the body REAL instead of an any-erased stub).
+    dyn_sigs = Set{Tuple}()
+    closure_types = Set{DataType}()
     i = 1
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
@@ -74,31 +79,24 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     _r === Main
                 end
                 if _T isa DataType && is_closure_type(_T) && _T_user
-                    local _mms = try
-                        Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
-                    catch _e
-                        haskey(ENV, "WT_DBG_DYN") && println(stderr, "MBF-ERR ", first(sprint(showerror, _e), 100))
-                        nothing
-                    end
-                    haskey(ENV, "WT_DBG_DYN") && println(stderr, "MBF T=", _T, " n=", _mms === nothing ? -1 : length(_mms))
-                    for mm in (_mms === nothing ? () : _mms)
-                        local m = mm.method
-                        local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
-                        msig isa DataType || continue
-                        local mps = collect(msig.parameters)
-                        # the method sig's slot 1 is the UNAPPLIED wrapper; specialize
-                        # with the APPLIED closure type at slot 1
-                        (length(mps) >= 1 && _T <: mps[1]) || continue
-                        local ssig = try Tuple{_T, mps[2:end]...} catch; continue end
-                        local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
-                        cmi === nothing && continue
-                        cmi in seen && continue
-                        push!(seen, cmi)
-                        push!(out, cmi)
-                        haskey(ENV, "WT_DBG_DYN") && println(stderr, "ENROLLED cmi=", cmi.specTypes)
-                    end
+                    push!(closure_types, _T)
                 end
                 continue
+            end
+            # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
+            if stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
+                local _dargs = Any[]
+                local _dok = true
+                for a in stmt.args[2:end]
+                    local t = a isa Core.SSAValue ?
+                                ((ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any) :
+                              a isa Core.Argument ?
+                                ((a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any) :
+                                Core.Typeof(a)
+                    (t isa DataType && isconcretetype(t)) || (_dok = false; break)
+                    push!(_dargs, t)
+                end
+                _dok && !isempty(_dargs) && push!(dyn_sigs, Tuple(_dargs))
             end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
@@ -149,6 +147,35 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 cmi in seen && continue
                 push!(seen, cmi)
                 push!(out, cmi)
+            end
+        end
+    end
+
+    # cross-product: each userland closure type × each observed dynamic-call
+    # signature of matching arity → a TYPED body specialization (the vtable's
+    # typed entry; inference compiles the body for real)
+    for _T in closure_types
+        local _mms2 = try
+            Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
+        catch; nothing end
+        for mm in (_mms2 === nothing ? () : _mms2)
+            local m = mm.method
+            local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
+            msig isa DataType || continue
+            local mps = collect(msig.parameters)
+            (length(mps) >= 1 && _T <: mps[1]) || continue
+            local marity = length(mps) - 1
+            for ds in dyn_sigs
+                length(ds) == marity || continue
+                local ssig = try Tuple{_T, ds...} catch; continue end
+                # the observed args must be admissible for the method
+                (ssig <: m.sig) || continue
+                local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                cmi === nothing && continue
+                cmi in seen && continue
+                push!(seen, cmi)
+                push!(out, cmi)
+                haskey(ENV, "WT_DBG_DYN") && println(stderr, "ENROLLED-TYPED cmi=", cmi.specTypes)
             end
         end
     end
