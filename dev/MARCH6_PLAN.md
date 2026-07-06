@@ -49,3 +49,31 @@ pre-pass + LAZY constants (init-fns before the compile.jl:1641 index freeze —
 the one big M7 piece) · boxed-scalar dedup (dart 361-376, needs expectedType
 at the scalar arms = post-march-8 material). R14/R15 prose revised to the
 honest mutable floor.
+
+## MARCH-13 CHAIN STATE (the two-arg megamorphic bug, links verified forward):
+1-3 ✓ (discovery cliff / export dedup / forwarder gate — committed 0a05dd3).
+4 ✓ safe (intrinsic-binop rebox when the SSA local is ref-typed — keyed on the REAL
+local type). NEXT LINK (the failing store at 0x981): the value flows through the PHI
+machinery — compile_phi_value / set_phi_locals_for_edge! re-emits the add at the edge
+and its store-convert re-guesses (Any→anyref ≡ anyref) while raw i64 sits on the stack.
+THE FIX = the phi-store funnel reads the RE-EMISSION's tracked type (the _pv_vb
+builder's stack top — it already exists at flow.jl's emit_phi_local_set! path!) instead
+of get_phi_edge_wasm_type's guess. THEN link 6: the phi-INIT null (t=0 entry edge).
+GATING LAW: exit codes only.
+
+## LINK-5 SURGICAL POINTER: compile_phi_value's SSA arm (stackified.jl ~650-770) —
+the += SSA's phi-edge store: it reads ssa_local_type/get_phi_edge_wasm_type (guesses)
+where the RE-EMISSION path exists; the non-SSA arm (770+) already has the tracked
+_ne_vty pattern — MIRROR IT in the SSA arm: recompute via _compile_value_b, use its
+stack-top as the actual, _emit_phi_edge_convert! to the phi local type. The 0x981
+store ([unbox,unbox,add,set anyref-110]) comes from the SSA recompute path emitting
+the RAW add without the convert.
+
+## LINK 5b STATE: the tail rebox RESURRECTED (was dead-by-scoping). Two-arg still red —
+the box now emits at the CALL tail but the wat earlier showed the failing add inside a
+RECOMPUTED phi-edge sequence ([unbox,unbox,add,set]) — the phi-edge RECOMPUTE path
+(compile_phi_value on the += SSA re-EMITS the call via compile_statement? or the
+fall-through store at stackified ~1083) bypasses compile_call's tail. NEXT: dump the
+CURRENT wat, locate the (possibly moved) failing site, identify WHICH emitter owns it
+(the boxes now emitted at tail may have MOVED the mismatch), iterate. The chain is
+long but every link is a real pre-existing hole on new coverage.

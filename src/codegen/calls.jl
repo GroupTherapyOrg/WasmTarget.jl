@@ -1727,6 +1727,7 @@ same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = InstrBuilder(; func_name="compile_call.frag", mod=ctx.mod)
+    _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
     args = expr.args[2:end]
@@ -4391,6 +4392,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _ub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_classid_unbox!(_ub, ctx, _aa_target; nullable=true)
             append_builder!(fb, _ub)
+            _boxed_operand_unboxed = true   # march13: function-scoped (the tail rebox keys on this)
         end
         # PURE-904: Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
@@ -4461,6 +4463,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
             end
             _op1!(_it_e.opcode)
+            # march13 (the rebox link): a numeric intrinsic whose SSA LOCAL is
+            # ref-typed (the boxed accumulator: Any-joined phi) must REBOX its
+            # result — keyed on the REAL local type, never inference (the sink's
+            # re-guess said anyref≡anyref while raw i64 sat on the stack).
+            local _rbx_li = get(ctx.ssa_locals, idx, nothing)
+            if _rbx_li !== nothing
+                local _rbx_off = _rbx_li - ctx.n_params
+                if _rbx_off >= 0 && _rbx_off < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off + 1]) &&
+                   _it_e.result in (I32, I64, F32, F64)
+                    emit_classid_box!(fb, ctx, _it_e.result,
+                                      arg_type isa Type && isconcretetype(arg_type) ? arg_type : nothing)
+                end
+            end
             return append_builder!(b, fb)
         end
     end
@@ -6411,8 +6426,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
     # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
-    if (@isdefined _arg_anyref) && (@isdefined is_numeric_intrinsic) && (@isdefined _generic_arith) &&
-       (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !ctx.last_stmt_was_stub
+    # march13: keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a
+    # LOOP-scoped variable made this arm silently dead for every call since introduction.
+    if (@isdefined _boxed_operand_unboxed) && _boxed_operand_unboxed && !ctx.last_stmt_was_stub
         local _dl = get(ctx.ssa_locals, idx, nothing)
         if _dl !== nothing
             local _doff = _dl - ctx.n_params
