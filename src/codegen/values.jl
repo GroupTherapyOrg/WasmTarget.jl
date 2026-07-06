@@ -416,6 +416,8 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
             if _to_is_sarr && !_from_is_sarr
                 # any string-ish ref → its data array: narrow to $JlString, read data
+                # (march12: an externref source crosses the boundary first)
+                from === ExternRef && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(_sai), true))
                 return b
