@@ -112,7 +112,7 @@ for i in 1:10
     @eval _m11dv(x::$(Symbol("_M11D", i)), k::Int64)::Int64 = x.v * $i + k
 end
 _m11_disp(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3), _M11D4(4), _M11D5(5), _M11D6(6), _M11D7(7), _M11D8(8), _M11D9(9), _M11D10(10)]; for x in xs; t += _m11dv(x, n); end; t)
-@testset "march11: two-arg megamorphic dispatch (pinned pre-existing gap)" begin
+@testset "march13: two-arg megamorphic dispatch (FIXED — the six-link chain)" begin
     r = try compare_julia_wasm(_m11_disp, Int64(3)) catch; (pass=false,) end
-    @test_broken r.pass
+    @test r.pass
 end

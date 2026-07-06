@@ -1727,6 +1727,7 @@ same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = InstrBuilder(; func_name="compile_call.frag", mod=ctx.mod)
+    _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
     args = expr.args[2:end]
@@ -4364,7 +4365,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
         # them raw in i64 arithmetic failed validation. Mirror of the
         # externref unbox below, minus any_convert_extern. Gated on the
-    _boxed_operand_unboxed = false   # march13: survives the arg loop (the old flag was loop-scoped → the tail rebox was DEAD)
         # ACTUAL local type (type-derived guesses say I64 for these unions).
         local _arg_anyref = false
         if !_is_externref_value(arg, ctx) && arg isa Core.SSAValue
