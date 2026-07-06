@@ -4364,6 +4364,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
         # them raw in i64 arithmetic failed validation. Mirror of the
         # externref unbox below, minus any_convert_extern. Gated on the
+    _boxed_operand_unboxed = false   # march13: survives the arg loop (the old flag was loop-scoped → the tail rebox was DEAD)
         # ACTUAL local type (type-derived guesses say I64 for these unions).
         local _arg_anyref = false
         if !_is_externref_value(arg, ctx) && arg isa Core.SSAValue
@@ -4391,6 +4392,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _ub = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             emit_classid_unbox!(_ub, ctx, _aa_target; nullable=true)
             append_builder!(fb, _ub)
+            _boxed_operand_unboxed = true   # march13: function-scoped (the tail rebox keys on this)
         end
         # PURE-904: Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
@@ -6424,8 +6426,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
     # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
-    if (@isdefined _arg_anyref) && (@isdefined is_numeric_intrinsic) && (@isdefined _generic_arith) &&
-       (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !ctx.last_stmt_was_stub
+    # march13: keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a
+    # LOOP-scoped variable made this arm silently dead for every call since introduction.
+    if (@isdefined _boxed_operand_unboxed) && _boxed_operand_unboxed && !ctx.last_stmt_was_stub
         local _dl = get(ctx.ssa_locals, idx, nothing)
         if _dl !== nothing
             local _doff = _dl - ctx.n_params
