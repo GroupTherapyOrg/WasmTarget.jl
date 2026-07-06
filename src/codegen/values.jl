@@ -404,6 +404,13 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
+        # march16 (dart convertType, closure meets a top type): a KNOWN closure's
+        # captured struct erasing to any/eq/struct becomes the closure OBJECT
+        # {classId, context, vtable} — the value stays dynamically callable.
+        if (to === AnyRef || to === EqRef || to === StructRef) && from isa ConcreteRef &&
+           maybe_wrap_closure!(b, ctx, from_julia)
+            return b
+        end
         # parity(M9): the STRING arms — the classed string {classId,data} vs its byte
         # array. Ops consume/produce the array; values carry the class (dart: methods
         # read the class's array field; convertType adjusts at every boundary).
@@ -455,7 +462,36 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         else
             # Downcast.
             if to isa ConcreteRef
-                ref_cast!(b, Int64(to.type_idx), to.nullable)
+                # march16: a downcast to a CLOSURE's captured struct may receive the
+                # closure OBJECT (the erasure seam wrapped it) — unwrap via .context
+                # when the runtime value is the object; direct cast otherwise.
+                local _cbase = ctx.type_registry.closure_base_idx
+                local _to_closure = _cbase !== nothing && begin
+                    local _tcj = nothing
+                    for (T, info) in ctx.type_registry.structs
+                        if info.wasm_type_idx == to.type_idx && is_closure_type(T)
+                            _tcj = T; break
+                        end
+                    end
+                    _tcj !== nothing
+                end
+                if _to_closure
+                    # if (ref.test base) → base.context → cast; else → cast direct
+                    local _uw = allocate_local!(ctx, AnyRef)
+                    local_tee!(b, UInt32(_uw))
+                    ref_test!(b, Int64(_cbase), false)
+                    if_!(b, to)
+                    local_get!(b, UInt32(_uw))
+                    ref_cast!(b, Int64(_cbase), false)
+                    struct_get!(b, _cbase, UInt32(1), AnyRef)   # .context
+                    ref_cast!(b, Int64(to.type_idx), to.nullable)
+                    else_!(b)
+                    local_get!(b, UInt32(_uw))
+                    ref_cast!(b, Int64(to.type_idx), to.nullable)
+                    end_block!(b)
+                else
+                    ref_cast!(b, Int64(to.type_idx), to.nullable)
+                end
             elseif to isa RefType && _wt_gc_refkind(to)
                 ref_cast!(b, to, true)
             end
