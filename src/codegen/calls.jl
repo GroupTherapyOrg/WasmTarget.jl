@@ -1820,7 +1820,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_idx = ctx.signal_ssa_setters[idx]
         value_arg = args[3]
         local _setb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-        emit_value!(_setb, value_arg, ctx)
+        # march14 (wrap tail): the signal cell's declared type IS the expected
+        emit_value!(_setb, value_arg, ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)
         global_set!(_setb, global_idx)
 
         # Inject DOM update calls for this signal (Therapy.jl reactive updates)
@@ -2172,8 +2173,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             size_local = allocate_local!(ctx, Int64)
 
             local _pshb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            # Store vec in local
-            emit_value!(_pshb, vec_arg, ctx)
+            # march14 (wrap tail): the vector arrives AS the registered struct
+            emit_value!(_pshb, vec_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
             local_tee!(_pshb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
@@ -2282,8 +2283,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             elem_local = allocate_local!(ctx, elem_type)
 
             local _popb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            # Store vec in local
-            emit_value!(_popb, vec_arg, ctx)
+            # march14 (wrap tail): the vector arrives AS the registered struct
+            emit_value!(_popb, vec_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
             local_tee!(_popb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
@@ -2461,9 +2462,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if field_sym === :ref
                 # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
                 local _refb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_refb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
+                    # march14 (wrap tail): typed arrival when the struct is registered
+                    emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_refb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array (0=typeId)
                 else
                     # parity(M11): an unregistered struct previously emitted an INCOMPLETE
@@ -2477,9 +2479,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # :size returns a Tuple containing the dimensions (field 2 of struct; field 0 = typeId)
                 # For Vector: Tuple{Int64}, for Matrix: Tuple{Int64, Int64}, etc.
                 local _szfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_szfb, obj_arg, ctx)
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
+                    # march14 (wrap tail): typed arrival when the struct is registered
+                    emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_szfb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
                 else
                     record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
@@ -2512,7 +2515,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     field_idx = findfirst(==(field_sym), info.field_names)
                     if field_idx !== nothing
                         local _sfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                        emit_value!(_sfb, obj_arg, ctx)
+                        # march14 (wrap tail): the object arrives AS the registered struct
+                        emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
@@ -2612,7 +2616,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     local _clfb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                    emit_value!(_clfb, obj_arg, ctx)
+                    emit_value!(_clfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
                     struct_get!(_clfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append_builder!(fb, _clfb)
                     return append_builder!(b, fb)
@@ -2653,10 +2657,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 local _sfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_sfgb, obj_arg, ctx)
-                # PURE-701: If obj_arg's local is structref (union of struct types),
-                # insert ref.cast null to narrow before struct_get
-                                emit_ref_cast_if_structref!(_sfgb, obj_arg, info.wasm_type_idx, ctx)
+                # march14: the typed wrap subsumes the PURE-701 structref-narrow helper
+                emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                 struct_get!(_sfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
@@ -2872,7 +2874,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
                     local _tfgb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                    emit_value!(_tfgb, obj_arg, ctx)
+                    emit_value!(_tfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
                     struct_get!(_tfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     append_builder!(fb, _tfgb)
                     return append_builder!(b, fb)
@@ -3198,7 +3200,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             i32_const!(_mnb, actual_size)
         else
             # SSA or other expression - compile, convert to i32, apply minimum
-            emit_value!(_mnb, size_arg, ctx)
+            emit_value!(_mnb, size_arg, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_mnb, Opcode.I32_WRAP_I64)
             # Ensure minimum capacity: max(size, min_capacity)
             local cap_check_local = allocate_local!(ctx, I32)
@@ -3379,7 +3381,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
                 local _rsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-                emit_value!(_rsb, value_arg, ctx)
+                emit_value!(_rsb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)   # march14
                 global_set!(_rsb, rng_global)
                 append_builder!(fb, _rsb)
                 return append_builder!(b, fb)
@@ -3858,7 +3860,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             # parity(M9): the classed string → its DATA array (the funnel adjusts)
             emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
-            emit_value!(_prsb, idx_ssa, ctx)
+            emit_value!(_prsb, idx_ssa, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_prsb, Opcode.I32_WRAP_I64)
             i32_const!(_prsb, 1)
             num!(_prsb, Opcode.I32_SUB)
@@ -4107,7 +4109,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _psb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
-            emit_value!(_psb, _ps_ptr, ctx)
+            emit_value!(_psb, _ps_ptr, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_psb, Opcode.I32_WRAP_I64)
             emit_value!(_psb, args[2], ctx)
             array_set!(_psb, _ps_arr_t, I32)

@@ -231,10 +231,8 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
                 ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
             elseif func_ret_wasm === AnyRef && is_numeric_val
-                # PURE-9030: Box numeric value for AnyRef return (Union{Int,Float}) via THE single
-                # box emitter (was a copy-pasted return box, same as flow.jl/conditionals.jl).
-                emit_value!(b, stmt.val, ctx)
-                emit_classid_box!(b, ctx, val_wasm, nothing)
+                # march14: the 4-arg wrap = emit typed + funnel box (byte-equivalent here)
+                emit_value!(b, stmt.val, ctx, AnyRef)
             elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
                 # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
                 ref_null!(b, func_ret_wasm)
@@ -296,8 +294,9 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
-                            # MIGRATED: compile_value bridges via emit_raw!; local.set typed.
-                            emit_value!(b, stmt.val, ctx)
+                            # march14: the upsilon store wraps to the PhiC local's declared type
+                            emit_value!(b, stmt.val, ctx,
+                                        ctx.locals[ctx.phi_locals[phic_idx] - ctx.n_params + 1])
                             local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
                         end
@@ -358,67 +357,14 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     # on `b`; compile_value / emit_unwrap_union_value bridge through emit_raw!.
                     # PURE-324: I64→I32 narrowing — PiNode narrows a widened phi (I64) to a
                     # smaller numeric type (I32). Emit the actual value with i32_wrap_i64.
-                    if !is_multi_value_src && val_wasm_type === I64 && pi_local_type === I32
-                        emit_value!(b, stmt.val, ctx)
-                        num!(b, Opcode.I32_WRAP_I64)
-                    # PURE-9030: F64→I32 narrowing — PiNode narrows a widened phi (F64) to I32.
-                    # Occurs in Union{Int32, Float64} dispatch where phi is F64 (widened).
-                    elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I32
-                        emit_value!(b, stmt.val, ctx)
-                        num!(b, Opcode.I32_TRUNC_F64_S)
-                    # PURE-9030: F64→I64 narrowing — PiNode narrows a widened phi (F64) to I64.
-                    elseif !is_multi_value_src && val_wasm_type === F64 && pi_local_type === I64
-                        emit_value!(b, stmt.val, ctx)
-                        num!(b, Opcode.I64_TRUNC_F64_S)
-                    # PURE-9030: F32→I32 narrowing — PiNode narrows a widened phi (F32) to I32.
-                    elseif !is_multi_value_src && val_wasm_type === F32 && pi_local_type === I32
-                        emit_value!(b, stmt.val, ctx)
-                        num!(b, Opcode.I32_TRUNC_F32_S)
-                    # PURE-325: PiNode narrowing from ExternRef → numeric (I64/I32/F64/F32).
-                    # The externref holds a boxed numeric value. Unbox via any_convert_extern +
-                    # ref_cast to box type + struct_get field 0.
-                    elseif !is_multi_value_src && val_wasm_type === ExternRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        emit_value!(b, stmt.val, ctx)
-                        # externref holds a boxed numeric — extern→any, then unbox via the one consumer.
-                        any_convert_extern!(b)
-                        emit_classid_unbox!(b, ctx, pi_local_type; nullable=true)
-                    # PURE-9030: PiNode narrowing from AnyRef → numeric (I64/I32/F64/F32).
-                    # The anyref holds a boxed numeric value (WasmGC struct with typeId + value).
-                    # Unbox via ref.cast to box type + struct_get field 1.
-                    # This handles Union{Int32, Float64} dispatch where the param is anyref.
-                    elseif !is_multi_value_src && val_wasm_type === AnyRef && (pi_local_type === I64 || pi_local_type === I32 || pi_local_type === F64 || pi_local_type === F32)
-                        emit_value!(b, stmt.val, ctx)
-                        # anyref holds a boxed numeric — unbox via THE single consumer (non-null: isa-guarded).
-                        emit_classid_unbox!(b, ctx, pi_local_type)
-                    # PURE-9030: PiNode narrowing from AnyRef → ConcreteRef.
-                    # Example: anyref → String, anyref → MyStruct
-                    elseif !is_multi_value_src && val_wasm_type === AnyRef && pi_local_type isa ConcreteRef
-                        emit_value!(b, stmt.val, ctx)
-                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
-                    # PURE-321: PiNode narrowing from ExternRef → ConcreteRef means the value
-                    # IS available as externref and just needs conversion (not ref.null).
-                    # Example: PiNode(%198, String) narrows Any (externref) → String (array<i32>).
-                    elseif !is_multi_value_src && val_wasm_type === ExternRef && pi_local_type isa ConcreteRef
-                        emit_value!(b, stmt.val, ctx)
-                        any_convert_extern!(b)
-                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
-                    # PURE-9032: PiNode narrowing from ArrayRef → ConcreteRef.
-                    # Example: arrayref (from struct field typed AbstractString) → (ref null $str_array)
-                    # This occurs when getfield returns an abstract ref type but PiNode narrows it.
-                    elseif !is_multi_value_src && val_wasm_type === ArrayRef && pi_local_type isa ConcreteRef
-                        emit_value!(b, stmt.val, ctx)
-                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
-                    # PURE-9032: PiNode narrowing from StructRef → ConcreteRef.
-                    # Example: structref (from :the_exception with Union type) → concrete exception struct
-                    elseif !is_multi_value_src && val_wasm_type === StructRef && pi_local_type isa ConcreteRef
-                        emit_value!(b, stmt.val, ctx)
-                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
-                    # CG-003d: PiNode narrowing from EqRef → ConcreteRef.
-                    # Example: Union{Nothing, TestNode} (eqref local) → TestNode after null check.
-                    # This occurs because Union{Nothing, T} locals use EqRef (RC1 fix).
-                    elseif !is_multi_value_src && val_wasm_type === EqRef && pi_local_type isa ConcreteRef
-                        emit_value!(b, stmt.val, ctx)
-                        ref_cast!(b, Int64(pi_local_type.type_idx), true)
+                    if !is_multi_value_src && (
+                        (val_wasm_type in (I64, F64, F32, ExternRef, AnyRef, ArrayRef, StructRef, EqRef) &&
+                         (pi_local_type in (I32, I64, F64, F32) || pi_local_type isa ConcreteRef)))
+                        # march14: THE PiNode COLLAPSE — eleven hand-rolled narrowing arms
+                        # (numeric wrap/trunc, extern/anyref unbox, five ref-cast flavors)
+                        # were the funnel's quadrants re-implemented inline. ONE 4-arg wrap:
+                        # emit typed, convert through convert_type! (dart wrap + convertType).
+                        emit_value!(b, stmt.val, ctx, pi_local_type)
                     # PURE-6024: Tagged union unwrapping — PiNode narrows Union{A,B} to variant.
                     # Source is a ConcreteRef (tagged union struct), target is the extracted variant.
                     # Example: π(%53::Union{AbstractString,Symbol}, Symbol) needs struct.get + cast.
