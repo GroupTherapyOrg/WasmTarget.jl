@@ -2045,9 +2045,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _szb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
             emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-            # parity(M9): the classed string → its DATA array before array.len
-            convert_type!(_szb, AnyRef,
-                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
             array_len!(_szb)
             # array.len returns i32, extend to i64 for Julia's Int
             num!(_szb, Opcode.I64_EXTEND_I32_S)
