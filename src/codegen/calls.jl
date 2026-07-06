@@ -1820,7 +1820,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_idx = ctx.signal_ssa_setters[idx]
         value_arg = args[3]
         local _setb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-        emit_value!(_setb, value_arg, ctx)
+        # march14 (wrap tail): the signal cell's declared type IS the expected
+        emit_value!(_setb, value_arg, ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)
         global_set!(_setb, global_idx)
 
         # Inject DOM update calls for this signal (Therapy.jl reactive updates)
@@ -3201,7 +3202,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             i32_const!(_mnb, actual_size)
         else
             # SSA or other expression - compile, convert to i32, apply minimum
-            emit_value!(_mnb, size_arg, ctx)
+            emit_value!(_mnb, size_arg, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_mnb, Opcode.I32_WRAP_I64)
             # Ensure minimum capacity: max(size, min_capacity)
             local cap_check_local = allocate_local!(ctx, I32)
@@ -3861,7 +3862,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             # parity(M9): the classed string → its DATA array (the funnel adjusts)
             emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
-            emit_value!(_prsb, idx_ssa, ctx)
+            emit_value!(_prsb, idx_ssa, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_prsb, Opcode.I32_WRAP_I64)
             i32_const!(_prsb, 1)
             num!(_prsb, Opcode.I32_SUB)
@@ -4110,7 +4111,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _psb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
-            emit_value!(_psb, _ps_ptr, ctx)
+            emit_value!(_psb, _ps_ptr, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
             num!(_psb, Opcode.I32_WRAP_I64)
             emit_value!(_psb, args[2], ctx)
             array_set!(_psb, _ps_arr_t, I32)
