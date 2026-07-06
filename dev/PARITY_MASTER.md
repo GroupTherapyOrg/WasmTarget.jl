@@ -767,3 +767,11 @@ fallback (dart wrapper shape) · class-axis requirement (primitive-only groups =
 compile-time overloads) · closure-selector exclusion (vtable territory) · tuple dedup.
 Default stays 9 until closures rebuilds the invoke/wrapper interplay → then a
 ONE-LINE flip (the staging note lives at build_dispatch_tables). Gate 10+9 green.
+
+## MARCH 14 — the wrap tail (2026-07-06)
+R17 249→205, all gated: vector/field/signal/RNG/IO-write/string-builder/index-idiom
+clusters through the 4-arg wrap + THE PiNODE COLLAPSE (eleven hand-rolled narrowing
+arms → ONE wrap; the funnel's quadrant table was re-implemented inline). Recorded
+NOT-convertible: multi-value memoryref sites (rep divergence, own march), the
+nothing-vs-null ReturnNode arms (march-8 semantics), the Core.Box tracked site.
+Full gate 10+9 green.
