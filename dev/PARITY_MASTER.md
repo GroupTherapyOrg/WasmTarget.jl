@@ -760,3 +760,10 @@ hijacking loop bodies) + the ::T-annotation phi chase (M8.3 gate catch) · the i
 table rebox · the tail rebox arm RESURRECTED (dead-by-scoping since introduction,
 debug-proven 1224/1224 skips) · the function-top scope fix. Tuple dedup guards candidate
 copies. @test_broken FLIPPED. Full gate 10+9 green ×2 (the M8.3 catch in between).
+
+## MARCH 13b — the 2-8 dispatch-table machinery PROVEN (2026-07-06)
+Exercised at threshold=2, fixed, kept: wrapper VOID-DROP · target-signature cast
+fallback (dart wrapper shape) · class-axis requirement (primitive-only groups =
+compile-time overloads) · closure-selector exclusion (vtable territory) · tuple dedup.
+Default stays 9 until closures rebuilds the invoke/wrapper interplay → then a
+ONE-LINE flip (the staging note lives at build_dispatch_tables). Gate 10+9 green.

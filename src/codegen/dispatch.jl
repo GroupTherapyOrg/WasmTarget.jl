@@ -78,10 +78,38 @@ get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
                                 threshold::Int=9)::DispatchTableRegistry
+    # march13b: the 2-8 TABLE MACHINERY is now PROVEN (threshold=2 exercised the
+    # wrapper void-drop, the target-signature cast fallback, the class-axis
+    # requirement, and tuple dedup — all landed below; M8+two-arg+smoke green at 2).
+    # The DEFAULT flip 9→2 (dart: every targetCount>1, dispatch_table.dart:401-403)
+    # is SEQUENCED AFTER the closures march: the remaining holes at 2 live in the
+    # closure/invoke wrapper interplay that march rebuilds (Dates parse internals
+    # unbalanced at fn#35 was the stopper). One-line flip when that lands.
     dt_registry = DispatchTableRegistry()
 
     for (func_ref, infos) in func_registry.by_ref
         length(infos) < threshold && continue
+        # march13b: CLOSURE selectors don't belong in the class-selector table —
+        # dart dispatches function values through the closure VTABLE
+        # (closures.dart:147+), not the classId table. The closures march owns
+        # them; tabling them here at threshold=2 met the un-migrated invoke path
+        # (unbalanced wrapper bodies). Loud + temporary by design.
+        any(i -> occursin("#", string(i.name)), infos) && continue
+        # march13b: the selector table dispatches on receiver.classId — a group needs
+        # at least one CLASS axis (every specialization's type at that slot is a real
+        # struct with a classId header). Primitive-only groups (process(Int32)/
+        # process(Int64)) are compile-time-resolved overloads, not runtime dispatch —
+        # dart tables class receivers only.
+        local _has_class_axis = false
+        local _min_ar = minimum(length(i.arg_types) for i in infos)
+        for j in 1:_min_ar
+            if all(i -> (local T = i.arg_types[j]; T isa DataType && isstructtype(T) &&
+                         !isprimitivetype(T) && !(T <: Number)), infos)
+                _has_class_axis = true
+                break
+            end
+        end
+        _has_class_axis || continue
 
         # Determine arity (skip the function type itself if present in arg_types)
         # In func_registry, arg_types includes the function type for closures
@@ -243,6 +271,23 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                         # Cast to concrete struct type
                         struct_info = type_registry.structs[concrete_type]
                         ref_cast!(b, Int64(struct_info.wasm_type_idx), false)
+                    else
+                        # march13b (dart wrapper shape: cast to the TARGET's declared
+                        # param, dispatch_table.dart wrapper gen): the tid resolved no
+                        # registered struct (spelling/synthetic ids) — read the target's
+                        # own wasm signature and cast to its declared param when narrower
+                        # than anyref (raw-anyref pass-through failed validation).
+                        local _tsig_ft = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
+                        if _tsig_ft isa FuncType && j <= length(_tsig_ft.params)
+                            local _tp = _tsig_ft.params[j]
+                            if _tp isa ConcreteRef
+                                ref_cast!(b, Int64(_tp.type_idx), false)
+                            elseif _tp === StructRef
+                                ref_cast!(b, StructRef, false)
+                            elseif _tp === ArrayRef
+                                ref_cast!(b, ArrayRef, false)
+                            end
+                        end
                     end
                 end
             end
@@ -269,6 +314,13 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     local_get!(b, UInt32(Int(dt.arity)))
                     struct_new!(b, box_idx)   # mod-resolved fields (march3)
                 end
+            elseif dt.result_wasm_type ∉ (I32, I64, F32, F64, AnyRef) &&
+                   entry.return_type !== Nothing && entry.return_type !== Union{}
+                # march13b: a VOID dispatch signature over value-returning targets
+                # (non-core-rep result_wasm_type → results=[]) must DROP the target's
+                # return — the 2-entry tables surfaced wrappers left unbalanced
+                # ("values remaining on stack"; Base.get's wrapper, func 9).
+                drop!(b)
             end
 
             end_block!(b)
