@@ -729,3 +729,16 @@ THE TAG (~85-90 actionable) remains 2-3 focused sessions away.
    $current_exn), real stack traces in the trace slot.
 5. **The class-DAG subtype graph** (flat $JlBase → per-class hierarchy) + identityHash.
 6. The closures DECISION point when first-class function values reach the critical path.
+
+## CENSUS-2 CERTIFIED BY THE FULL GATE (2026-07-06, overnight close)
+All 10 shards + all 9 fuzz suites green on main @ 98126bd. THREE bugs were gate-caught
+overnight and root-fixed — the instrument working exactly as designed:
+1. The ensureConstant funnel's LAYOUT GUARD (registrar-transformed slots misaligned
+   struct.new — Statistics corpus).
+2. Interned Char fields used the codepoint, not Julia's left-packed bits (STACK-003) —
+   DateFormat delimiters parsed as garbage (Dates corpus). A char-field constant battery
+   joined the suite.
+3. The march-8 decide-before-emit arm REVERTED (SSA-shape detection misfired across
+   contexts) — rebuild WITH the weave folds, keyed on ctx.ssa_types.
+Lesson recorded: one flake-misled bisect (a bad "good" bound) cost a detour — verify
+both bounds before bisecting.
