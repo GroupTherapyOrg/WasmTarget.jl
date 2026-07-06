@@ -751,3 +751,12 @@ fill(AnyRef) is GONE from dispatch (R18→0). Full gate: 10 shards + 9 fuzz gree
 PINNED (pre-existing, @test_broken battery): two-arg megamorphic dispatch traps — the
 next dispatch slice (threshold/multi-axis) owns it. Remaining there: threshold=9 cliff,
 multi-axis 2-8 → unreachable, full struct-LUB (non-primitive joins via the hierarchy DAG).
+
+## MARCH 13 — two-arg megamorphic dispatch FIXED (2026-07-06)
+The six-link chain (each a real pre-existing hole exposed by new coverage): discovery's
+circular-abandonment cliff (≤8 cap fed nothing to the table it deferred to) · export-name
+dedup at THE chokepoint (add_export!) · forwarder-only whole-body replacement (was
+hijacking loop bodies) + the ::T-annotation phi chase (M8.3 gate catch) · the intrinsic-
+table rebox · the tail rebox arm RESURRECTED (dead-by-scoping since introduction,
+debug-proven 1224/1224 skips) · the function-top scope fix. Tuple dedup guards candidate
+copies. @test_broken FLIPPED. Full gate 10+9 green ×2 (the M8.3 catch in between).
