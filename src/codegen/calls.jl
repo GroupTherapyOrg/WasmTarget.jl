@@ -2043,24 +2043,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if arg_type === String || arg_type <: AbstractVector || arg_type === Any
             # For strings and arrays, sizeof is the array length
             local _szb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_value!(_szb, arg, ctx)
-            # If the value's wasm local is externref (either because arg_type is Any,
-            # or because a String-typed value came from an Any-typed struct field),
-            # cast to arrayref before array.len
-            needs_cast = arg_type === Any || arg_type === Union{}
-            if !needs_cast && arg isa Core.SSAValue
-                local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
-                if local_idx !== nothing
-                    arr_idx = local_idx - ctx.n_params + 1
-                    if arr_idx >= 1 && arr_idx <= length(ctx.locals) && ctx.locals[arr_idx] === ExternRef
-                        needs_cast = true
-                    end
-                end
-            end
-            if needs_cast
-                any_convert_extern!(_szb)            # externref → anyref
-                ref_cast!(_szb, ArrayRef, true)      # anyref → (ref null array)
-            end
+            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
+            emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             # parity(M9): the classed string → its DATA array before array.len
             convert_type!(_szb, AnyRef,
                           ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
@@ -2080,31 +2064,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         arg_type = infer_value_type(arg, ctx)
         if arg_type === String || arg_type <: AbstractString
             local _ncb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_value!(_ncb, arg, ctx)
-            # If value is in an externref or anyref local, cast to arrayref
-            local _nc_needs_cast = false
-            if arg isa Core.SSAValue
-                local _nc_local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
-                if _nc_local_idx !== nothing
-                    local _nc_arr_idx = _nc_local_idx - ctx.n_params + 1
-                    if _nc_arr_idx >= 1 && _nc_arr_idx <= length(ctx.locals)
-                        local _nc_lt = ctx.locals[_nc_arr_idx]
-                        if _nc_lt === ExternRef
-                            _nc_needs_cast = true
-                        elseif _nc_lt === AnyRef
-                            ref_cast!(_ncb, ArrayRef, true)
-                            _nc_needs_cast = false
-                        end
-                    end
-                end
-            end
-            if _nc_needs_cast
-                any_convert_extern!(_ncb)
-                ref_cast!(_ncb, ArrayRef, true)
-            end
-            # parity(M9): the classed string → its DATA array before array.len
-            convert_type!(_ncb, AnyRef,
-                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
+            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
+            emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             array_len!(_ncb)
             # Return as Int (i64) to match Julia's ncodeunits return type
             num!(_ncb, Opcode.I64_EXTEND_I32_S)
@@ -2121,22 +2082,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if arg_type === String
             # For strings, length is the array length (each char is one element)
             local _lnb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-            emit_value!(_lnb, arg, ctx)
-            # If the value's wasm local is externref (e.g. from an Any-typed struct field),
-            # cast to arrayref before array.len
-            if arg isa Core.SSAValue
-                local_idx = get(ctx.ssa_locals, arg.id, get(ctx.phi_locals, arg.id, nothing))
-                if local_idx !== nothing
-                    arr_idx = local_idx - ctx.n_params + 1
-                    if arr_idx >= 1 && arr_idx <= length(ctx.locals) && ctx.locals[arr_idx] === ExternRef
-                        any_convert_extern!(_lnb)        # externref → anyref
-                        ref_cast!(_lnb, ArrayRef, true)  # anyref → (ref null array)
-                    end
-                end
-            end
-            # parity(M9): the classed string → its DATA array before array.len
-            convert_type!(_lnb, AnyRef,
-                          ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true), ctx)
+            # march12 (wrap tail): ONE 4-arg wrap — the tracked type replaces the
+            # ssa-local externref sniff; the funnel's string arm lands the DATA array
+            emit_value!(_lnb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             array_len!(_lnb)
             # array.len returns i32, extend to i64 for Julia's Int
             num!(_lnb, Opcode.I64_EXTEND_I32_S)
