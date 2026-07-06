@@ -83,13 +83,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             length(absp) == 1 || continue
             p = absp[1]
             ms = try collect(methods(g, Tuple{atypes...})) catch; Method[] end
-            # Reconcile with PURE-9060: a function with ≥9 applicable methods is
-            # MEGAMORPHIC and handled by the existing call_indirect dispatch table
-            # (build_dispatch_tables threshold=9). Leave those to PURE-9060 — adding
-            # inline-typeId candidates for them both double-handles the call AND pulls
-            # in unreachable specializations that collide with the megamorphic export
-            # naming (duplicate-export). Discovery owns only the ≤8-method case.
-            (0 < length(ms) <= 8) || continue
+            # march13 (dart: ALL targetCount>1 dispatch through the table,
+            # dispatch_table.dart:401-403): the old ≤8 cap CIRCULARLY ABANDONED
+            # ≥9-method dynamic sites — it "left them to the dispatch table", but the
+            # table only builds from registered specializations, which only register
+            # through THIS discovery → nothing registered, no table, unreachable stub
+            # (the pinned two-arg megamorphic bug). Discovery now feeds BOTH mechanisms;
+            # the inline-vs-table split happens downstream by count (threshold=9).
+            # 64 = an explosion sanity guard, not a mechanism cliff.
+            (0 < length(ms) <= 64) || continue
             for m in ms
                 msig = try collect(Base.unwrap_unionall(m.sig).parameters) catch; continue end
                 length(msig) == length(atypes) + 1 || continue

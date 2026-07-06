@@ -1273,7 +1273,13 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 # DROP the value and emit a type-safe default instead of causing validation error.
                 # PURE-4151: If extern_convert_any was already appended above (line ~15272),
                 # the stack type is now ExternRef regardless of the original value_wasm_type.
-                value_wasm_type = needs_extern_convert_any ? ExternRef : get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
+                # march13: the TRACKED emission type rules the store sink (dart: the value
+                # carries its type) — the inference re-guess said anyref for a generic-+
+                # on Any operands while the actual emission left RAW i64 (unbox·op with
+                # no rebox), so the M10 box arm never fired and the store was invalid.
+                value_wasm_type = needs_extern_convert_any ? ExternRef :
+                    (!isempty(_sf.v.stack) ? _sf.v.stack[end] :
+                     get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry))
                 if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
                     # PURE-908: externref↔anyref conversion instead of drop+default
                     if value_wasm_type === ExternRef && local_type === AnyRef

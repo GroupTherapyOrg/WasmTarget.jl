@@ -302,20 +302,41 @@ Returns the dispatch table if found, nothing otherwise.
 """
 function find_dispatch_call(code_info::Core.CodeInfo,
                              dt_registry::DispatchTableRegistry)
-    for stmt in code_info.code
+    # march13: this feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
+    # for pure FORWARDERS (a body that IS the dispatch call: the call's args are
+    # exactly the function's params in order, and the call's result is returned).
+    # It used to fire on ANY body containing a megamorphic call (f2-the-loop got
+    # its entire body replaced by a 2-param trampoline — validation failure once
+    # discovery started registering ≥9-method candidates). In-body megamorphic
+    # call SITES are the inline-switch / call-site path's job.
+    code = code_info.code
+    for (i, stmt) in enumerate(code)
         if stmt isa Expr && stmt.head === :call
             callee = stmt.args[1]
-            if callee isa GlobalRef
-                callee_func = try
-                    getfield(callee.mod, callee.name)
-                catch
-                    nothing
-                end
-                if callee_func !== nothing
-                    dt = get_dispatch_table(dt_registry, callee_func)
-                    dt !== nothing && return dt
+            callee isa GlobalRef || continue
+            callee_func = try
+                getfield(callee.mod, callee.name)
+            catch
+                nothing
+            end
+            callee_func === nothing && continue
+            dt = get_dispatch_table(dt_registry, callee_func)
+            dt === nothing && continue
+            # forwarder shape: args are exactly the params, in order
+            call_args = stmt.args[2:end]
+            length(call_args) == dt.arity || continue
+            all(k -> call_args[k] isa Core.Argument && call_args[k].n == k + 1, 1:length(call_args)) || continue
+            # and the call's value is what the function returns
+            local returned = false
+            for st2 in code
+                if st2 isa Core.ReturnNode && isdefined(st2, :val) &&
+                   st2.val isa Core.SSAValue && st2.val.id == i
+                    returned = true
+                    break
                 end
             end
+            returned || continue
+            return dt
         end
     end
     return nothing

@@ -601,7 +601,18 @@ Add an export entry to the module.
 - kind: 0=func, 1=table, 2=memory, 3=global
 """
 function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
-    push!(mod.exports, WasmExport(name, UInt8(kind), UInt32(idx)))
+    # march13: export-name dedup at THE one chokepoint — wasm requires unique export
+    # names, and two independent minting paths (megamorphic wrappers + discovery
+    # candidates) collided. Suffix _dN until unique.
+    final = name
+    if any(e -> e.name == final, mod.exports)
+        local k = 2
+        while any(e -> e.name == string(name, "_d", k), mod.exports)
+            k += 1
+        end
+        final = string(name, "_d", k)
+    end
+    push!(mod.exports, WasmExport(final, UInt8(kind), UInt32(idx)))
     return mod
 end
 
