@@ -130,11 +130,32 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
 
         result_wasm = mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
 
+        # march11: per-slot LUB — dart's unboxed-primitive fast lane
+        # (dispatch_table.dart:172-205). A slot stays unboxed iff EVERY
+        # specialization declares the SAME primitive Julia type there.
+        slot_types = WasmValType[]
+        for j in 1:arity
+            _tys = Set{Type}()
+            for info in infos
+                length(info.arg_types) >= j && push!(_tys, info.arg_types[j])
+            end
+            if length(_tys) == 1
+                _t = first(_tys)
+                push!(slot_types,
+                    _t === Int64 || _t === UInt64 ? I64 :
+                    _t === Float64 ? F64 :
+                    _t === Int32 || _t === UInt32 || _t === Bool || _t === Char ? I32 :
+                    _t === Float32 ? F32 : AnyRef)
+            else
+                push!(slot_types, AnyRef)
+            end
+        end
+
         dt = DispatchTable(
             func_ref, Int32(arity), entries,
             table_size, table_size - Int32(1),
             UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0),
-            result_wasm
+            result_wasm, slot_types
         )
         dt_registry.tables[func_ref] = dt
     end
@@ -157,7 +178,7 @@ function emit_dispatch_metadata!(mod::WasmModule,
     # tables) is DELETED — the selector table is the only dispatch structure. All this
     # phase does now is create each selector's uniform call_indirect signature.
     for (func_ref, dt) in dt_registry.tables
-        param_types = fill(AnyRef, Int(dt.arity))
+        param_types = copy(dt.slot_types)   # march11: the per-slot LUB (was fill(AnyRef))
         result_types = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
             WasmValType[dt.result_wasm_type] : WasmValType[]
         dt.dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
@@ -175,7 +196,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
     isempty(dt_registry.tables) && return
 
     for (func_ref, dt) in dt_registry.tables
-        param_types = fill(AnyRef, Int(dt.arity))
+        param_types = copy(dt.slot_types)   # march11: the per-slot LUB
         # Dispatch signature result type
         is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
         is_anyref_return = dt.result_wasm_type == AnyRef
@@ -204,7 +225,9 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
                 local_get!(b, UInt32(j - 1))
 
-                if concrete_type !== nothing
+                if dt.slot_types[j] !== AnyRef
+                    # march11 fast lane: the slot arrives UNBOXED — pass through
+                elseif concrete_type !== nothing
                     arg_wasm_type = julia_to_wasm_type(concrete_type)
                     if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
                         # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).

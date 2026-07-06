@@ -101,3 +101,18 @@ _m5_task(x::Int64)::Int64 = fetch(Threads.@spawn x + 1)
     end
     @test rejected
 end
+
+# march11 FINDING (pre-existing, verified on pre-march11 main): the ≥9-specialization
+# dispatch-table path traps (runtime unreachable) when the dispatched call carries a
+# SECOND (non-axis) argument. Single-arg dispatch works (the corpus shape). Pinned
+# until the dispatch dimension's next slice (the same session as threshold/multi-axis).
+abstract type _M11Z end
+for i in 1:10
+    @eval struct $(Symbol("_M11D", i)) <: _M11Z; v::Int64; end
+    @eval _m11dv(x::$(Symbol("_M11D", i)), k::Int64)::Int64 = x.v * $i + k
+end
+_m11_disp(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3), _M11D4(4), _M11D5(5), _M11D6(6), _M11D7(7), _M11D8(8), _M11D9(9), _M11D10(10)]; for x in xs; t += _m11dv(x, n); end; t)
+@testset "march11: two-arg megamorphic dispatch (pinned pre-existing gap)" begin
+    r = try compare_julia_wasm(_m11_disp, Int64(3)) catch; (pass=false,) end
+    @test_broken r.pass
+end
