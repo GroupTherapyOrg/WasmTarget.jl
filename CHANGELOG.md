@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.8...v0.4.9) (2026-07-06)
+
+
+### Bug Fixes
+
+* **march11:** the slot_types FIELD actually lands (the edit had searched without saving) ([cba4ae4](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cba4ae49eed1afcab0ba884031fd22e7757edcda))
+
 ## [0.4.8](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.7...v0.4.8) (2026-07-06)
 
 
