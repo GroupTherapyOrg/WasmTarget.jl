@@ -1433,17 +1433,17 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 # (ref extern) is subtype of externref — no conversion needed
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, I64)   # march14
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Int32
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, I32)   # march14
                 num!(b, Opcode.I64_EXTEND_I32_S)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Float64
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, F64)   # march14
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Float32
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, F32)   # march14
                 num!(b, Opcode.F64_PROMOTE_F32)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
