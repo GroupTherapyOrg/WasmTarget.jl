@@ -505,23 +505,12 @@ function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set
                     # compiled to `unreachable`. The method belongs to the
                     # singleton INSTANCE — use it.
                     (f0 isa Type && f0 === func_type && isdefined(func_type, :instance)) ?
-                        func_type.instance :
-                    # march16: a CAPTURING closure's binding is its UnionAll wrapper —
-                    # key the body by the APPLIED closure DataType (no instance exists;
-                    # the vtable machinery resolves by type, nothing resolves by value)
-                    (f0 isa Type && is_closure_type(func_type) && !isdefined(func_type, :instance)) ?
-                        func_type : f0
+                        func_type.instance : f0
                 catch
                     # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
                     # For singleton callable structs (zero-field closures like overflow_case),
                     # use the type's singleton instance instead.
-                    # march16: CAPTURING closures have no .instance — the body still
-                    # compiles from the MI's codeinfo; key it by the closure TYPE so
-                    # the vtable machinery (_closure_body_for) finds it by
-                    # arg_types[1] === T. No static caller resolves by value — safe.
-                    try func_type.instance catch
-                        is_closure_type(func_type) ? func_type : nothing
-                    end
+                    try func_type.instance catch; nothing end
                 end
                 arg_types = Tuple(sig.parameters[2:end])
             elseif func_type isa DataType && func_type <: Type

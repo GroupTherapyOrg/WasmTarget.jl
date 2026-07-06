@@ -468,7 +468,11 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 # closure OBJECT (the erasure seam wrapped it) — unwrap via .context
                 # when the runtime value is the object; direct cast otherwise.
                 local _cbase = ctx.type_registry.closure_base_idx
-                local _to_closure = _cbase !== nothing && begin
+                # unwrap exists ONLY where wrapping exists: no vtable globals in this
+                # module → no closure objects can flow → the plain downcast (the arm
+                # changed emission for Base-internal closure structs otherwise)
+                local _cvg = ctx.type_registry.closure_vtable_globals
+                local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
                     local _tcj = nothing
                     for (T, info) in ctx.type_registry.structs
                         if info.wasm_type_idx == to.type_idx && is_closure_type(T)
