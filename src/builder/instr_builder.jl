@@ -57,6 +57,10 @@ mutable struct InstrBuilder
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
+    # fullstrict: LIVE locals provider (a codegen-supplied closure idx→WasmValType) —
+    # the static b.locals snapshot goes stale when locals are allocated AFTER builder
+    # creation (the tracker then guessed AnyRef and every downstream op mismatched).
+    locals_fn::Union{Nothing, Function}
     seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
 end
 
@@ -73,7 +77,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, WasmValType[])
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, nothing, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
@@ -225,15 +229,25 @@ drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
 select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
 
 # ── Variable ────────────────────────────────────────────────────────────────────
+# fullstrict: the LIVE type for a local — the provider (fresh truth) outranks the
+# static snapshot; AnyRef only when neither knows.
+@inline _local_type(b::InstrBuilder, idx::Integer)::WasmValType = begin
+    if b.locals_fn !== nothing
+        local t = b.locals_fn(Int(idx))
+        t isa WasmValType && return t
+    end
+    (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
+end
+
 function local_get!(b::InstrBuilder, idx::Integer)
-    validate_push!(b.v, (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef)
+    validate_push!(b.v, _local_type(b, idx))
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
 function local_set!(b::InstrBuilder, idx::Integer)
     # dart parity: local.set validates the value against the LOCAL's type when known
     # (a store is [local.type] → []; pop_any hid ill-typed stores until instantiation).
-    if (idx + 1) <= length(b.locals)
-        validate_pop!(b.v, b.locals[idx + 1])
+    if b.locals_fn !== nothing || (idx + 1) <= length(b.locals)
+        validate_pop!(b.v, _local_type(b, idx))
     else
         validate_pop_any!(b.v)
     end
@@ -241,7 +255,7 @@ function local_set!(b::InstrBuilder, idx::Integer)
 end
 function local_tee!(b::InstrBuilder, idx::Integer)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
-    lt = (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
+    lt = _local_type(b, idx)   # fullstrict: the live provider
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
     _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end

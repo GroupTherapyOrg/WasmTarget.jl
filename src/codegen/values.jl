@@ -913,6 +913,14 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
     for (k, t) in enumerate(ctx.locals)
         builder_set_local_type!(b, ctx.n_params + k - 1, t)
     end
+    # fullstrict: the LIVE provider — locals allocated AFTER this builder's creation
+    # resolve to their true types (the stale-snapshot AnyRef guesses poisoned the
+    # tracker downstream of every mid-emission allocate_local!).
+    b.locals_fn = function(idx::Int)
+        idx < ctx.n_params && return nothing   # params: the static seed rules
+        local off = idx - ctx.n_params + 1
+        (off >= 1 && off <= length(ctx.locals)) ? ctx.locals[off] : nothing
+    end
     return b
 end
 
