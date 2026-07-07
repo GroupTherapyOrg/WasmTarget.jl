@@ -2302,7 +2302,7 @@ The synthetic {classId:i32} struct for an ABSTRACT Julia type, `sub` its parent'
 synthetic (recursion roots at \$JlBase = Any). Parents recurse FIRST → their indices
 precede the child's (the wasm ordering rule).
 """
-function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)::UInt32
+function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)
     (A === Any || !(A isa DataType)) && return registry.base_struct_idx
     d = registry.abstract_struct_idxs
     d === nothing && return registry.base_struct_idx
@@ -2319,7 +2319,8 @@ end
 The wasm supertype for a CONCRETE type's struct: its nearest abstract parent's
 synthetic (the class-DAG), falling back to \$JlBase.
 """
-function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::UInt32
+function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::Union{UInt32, Nothing}
+    registry.base_struct_idx === nothing && return nothing   # bare registries (probes)
     (T isa DataType && registry.abstract_struct_idxs !== nothing) || return registry.base_struct_idx
     local P = supertype(T)
     (P === Any || !(P isa DataType)) && return registry.base_struct_idx
