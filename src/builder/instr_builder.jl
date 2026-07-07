@@ -435,13 +435,30 @@ function struct_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
 end
+# fullstrict (valid-by-construction): the MODULE knows every struct's field types —
+# DERIVE the truth there instead of trusting the caller's declaration (dozens of sites
+# declared AnyRef over typed fields, silently poisoning the tracker downstream). The
+# declared param stays as the fallback when the module/type is unavailable.
+@inline function _true_field_type(b::InstrBuilder, type_idx::Integer, field_idx::Integer, declared::WasmValType)::WasmValType
+    m = b.v.mod
+    m === nothing && return declared
+    (type_idx + 1) <= length(m.types) || return declared
+    local ct = m.types[type_idx + 1]
+    ct isa StructType || return declared
+    (field_idx + 1) <= length(ct.fields) || return declared
+    local ft = ct.fields[field_idx + 1].valtype
+    # packed i8/i16 storage reads as i32
+    ft isa UInt8 && ft in (0x78, 0x77) && return I32
+    return ft isa WasmValType ? ft : declared
+end
+
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
-    validate_gc_instruction!(b.v, op, (type_idx, field_type))
+    validate_gc_instruction!(b.v, op, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
 end
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, field_type))
+    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
 end
 function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
