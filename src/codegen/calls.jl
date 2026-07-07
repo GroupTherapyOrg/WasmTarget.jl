@@ -716,7 +716,9 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
 
-    bld = _sub_builder(fb, ctx, "_compile_call_flipsign", 2; narrow_to=(is_32bit ? I32 : I64))
+    # 128-bit operands are STRUCT refs — never entry-narrow them to a scalar width
+    bld = _sub_builder(fb, ctx, "_compile_call_flipsign", 2;
+                       narrow_to=(is_128bit ? nothing : (is_32bit ? I32 : I64)))
     if is_128bit
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
