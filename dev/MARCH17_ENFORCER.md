@@ -23,3 +23,17 @@
 3. Ratchet: R6 (per-builder opt-outs) drives; add R-strict = # sites constructed
    non-strict, monotone down to 0.
 4. FLIP the ctor default when smoke+batteries+gate pass strict; wasm-tools → CI-only.
+
+## BURN-DOWN LEDGER (2026-07-06 evening)
+14307 → 184 underflows (+ ~4k type-mismatches = the typed-channel campaign, staged).
+DONE: _populate 96k→0 (declared truth + consumer narrows) · _op1! direct · SSA/slot
+stores direct · drops direct · _rcb direct · egaleq seeded-from-tracked · the
+_sub_builder seeder (div/shift/flipsign/isa/narrow-pair) · error propagation at merge ·
+context threading · STAGED enforcement (_check!: UNDERFLOW throws, mismatch collects).
+LAST 184: (a) generate_stackified_flow "GotoIfNot cond → i32" family (~56) — the
+tracker opens the label BEFORE the cond pop while the bytes pop first (ordering nuance
+in the stackifier's GotoIfNot emission — find where block! opens vs where the cond
+emits, align the tracker ordering); (b) compile_call int128 sext family; (c) a few
+compile_statement.frag tails. THEN: flip the ctor default (strict=_wt_builder_strict()),
+run the FULL ladder, L-strict LOCK test (a default builder THROWS on an ill-typed emit),
+gate, PR with march-16.
