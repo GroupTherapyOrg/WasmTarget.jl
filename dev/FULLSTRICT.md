@@ -51,3 +51,15 @@ underflows (~48, all ⟨GotoIfNot cond⟩ — the whole-body tracking completion
 value crossing label boundaries in the tracker's view; complete the inter-block
 contracts, then strict=false DIES). Then: _uf=true in main, the L-lock extension
 (mismatch @test_throws + opt-out-count=0), ladder, gate, PR.
+
+## THE LAST 4 (total-strict smoke, warm-3):
+- dicts ×3: in the ht_keyindex2 invoke's statement frag — `ref.cast null $19` on an
+  I64-tracked operand (the invoke's DERIVED result = I64 truth) — the SSA-store safety
+  layer casts because the SSA LOCAL was allocated as the ARRAY ref (ssa_types vs the
+  invoke's physical return disagree upstream). Find the needs_ref_cast arm's decision
+  for invoke results; the cast should be preceded by the funnel (I64→box→?) or the
+  local allocation should follow the physical return. THE BYTES VALIDATE → find what
+  the real stream does differently at this site (dump + compare).
+- higherorder/filter_count ×1: flow.block residual.
+THEN: flip _uf=true in main _check! + DELETE stackified's strict=false + the L-lock
+extension (mismatch @test_throws + opt-out=0) + ladder + gate + PR.
