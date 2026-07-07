@@ -87,7 +87,7 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
     if length(v.stack) <= _base(v)
         # march17: name the CURE — a fragment consuming the parent's stack must
         # DECLARE the input via seeding (append_builder! settles the contract).
-        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected) " *
+        push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow (past block base) — expected $(expected) " *
               "[ctx: $(v.context_hint)]. FIX: seed the fragment's input so the merge settles it.")
         return expected
     end
@@ -107,7 +107,7 @@ Returns `nothing` on underflow.
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.enabled || return nothing
     if length(v.stack) <= _base(v)
-        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base) " *
+        push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow on pop_any (past block base) " *
               "[ctx: $(v.context_hint)]. FIX: seed the fragment's input.")
         return nothing
     end

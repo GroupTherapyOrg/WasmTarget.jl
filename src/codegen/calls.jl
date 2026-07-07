@@ -103,10 +103,23 @@ end
 # but div_u/rem_u divide the WIDE value (gap: div(0xa5 + x, 0x04)::UInt8 gave
 # 0x69, native 0x29). Unsigned → mask to width; signed → sign-extend in
 # register. Stack: [a, b] → [norm(a), norm(b)]. No-op for full-width operands.
+"""
+    _sub_builder(fb, ctx, name, n) -> InstrBuilder
+
+march17: a fragment that consumes the parent's top `n` stack values DECLARES them
+(seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
+"""
+function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int)
+    local b = InstrBuilder(; func_name=name, mod=ctx.mod)
+    local h = length(fb.v.stack)
+    n > 0 && h >= n && seed_input!(b, WasmValType[fb.v.stack[h - n + i] for i in 1:n])
+    return b
+end
+
 function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                                       signed::Bool, julia_width::Int)
     julia_width < 32 || return fb
-    bld = InstrBuilder(; func_name="_emit_normalise_narrow_pair!", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_emit_normalise_narrow_pair!", 2)
     li = UInt32(allocate_local!(ctx, I32))
     function norm!()
         if signed
@@ -169,7 +182,7 @@ function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is3
     weq    = is32 ? Opcode.I32_EQ : Opcode.I64_EQ
     la = UInt32(allocate_local!(ctx, lt))
     lb = UInt32(allocate_local!(ctx, lt))
-    bld = InstrBuilder(; func_name="_emit_div_guard!", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_emit_div_guard!", 2)
     local_set!(bld, lb)  # [a]
     local_set!(bld, la)  # []
     # b == 0 → throw DivideError
@@ -239,7 +252,7 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
     shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
              kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
                               (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
-    bld = InstrBuilder(; func_name="_emit_shift_guarded!", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_emit_shift_guarded!", 2)
     _lset(op, i) = op === Opcode.LOCAL_SET ? local_set!(bld, i) :
                    op === Opcode.LOCAL_TEE ? local_tee!(bld, i) : local_get!(bld, i)
     _wc(v) = is32 ? i32_const!(bld, Int64(v)) : i64_const!(bld, Int64(v))
@@ -666,7 +679,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
 
-    bld = InstrBuilder(; func_name="_compile_call_flipsign", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_compile_call_flipsign", 2)
     if is_128bit
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
@@ -1321,7 +1334,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # Get the type of the value being checked (for detecting tagged unions)
     value_type = get_ssa_type(ctx, value_arg)
 
-    bld = InstrBuilder(; func_name="_compile_call_isa", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
 
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
