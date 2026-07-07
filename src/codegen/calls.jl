@@ -5601,9 +5601,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _prsb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
             # parity(M9): the classed string → its DATA array (the funnel adjusts)
             emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
-            emit_value!(_prsb, idx_ssa, ctx)
+            local _prs_it = infer_value_type(idx_ssa, ctx)
+            local _prs_w = (_prs_it === Int64 || _prs_it === Int || _prs_it === UInt64) ? I64 : I32
+            emit_value!(_prsb, idx_ssa, ctx, _prs_w)   # march17: typed index arrival
             # Convert i64 index to i32 and subtract 1 for 0-based
-            num!(_prsb, Opcode.I32_WRAP_I64)
+            _prs_w === I64 && num!(_prsb, Opcode.I32_WRAP_I64)
             i32_const!(_prsb, 1)
             num!(_prsb, Opcode.I32_SUB)
             # array.get_u on string type (packed i8 array)
@@ -5658,7 +5660,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Get element from externref array
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
-        local _svrb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [svec, i64 idx] on fb
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
         num!(_svrb, Opcode.I32_WRAP_I64)
         i32_const!(_svrb, 1)  # 1
