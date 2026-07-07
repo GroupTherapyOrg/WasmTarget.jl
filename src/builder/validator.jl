@@ -53,10 +53,11 @@ mutable struct WasmStackValidator
     # when unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
     # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
     mod::Any
+    context_hint::String   # march17: the emitting Julia statement (set via set_context!)
 end
 
 WasmStackValidator(; enabled=true, func_name="", mod=nothing) =
-    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true, mod)
+    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true, mod, "")
 
 """
     validate_push!(v, typ)
@@ -86,9 +87,8 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
     if length(v.stack) <= _base(v)
         # march17: name the CURE — a fragment consuming the parent's stack must
         # DECLARE the input via seeding (append_builder! settles the contract).
-        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected). " *
-              "FIX: this fragment consumes the parent's stack; seed the input " *
-              "(push!(b.seeded, $(expected)) at construction) so the merge settles it.")
+        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected) " *
+              "[ctx: $(v.context_hint)]. FIX: seed the fragment's input so the merge settles it.")
         return expected
     end
     actual = pop!(v.stack)
@@ -107,8 +107,8 @@ Returns `nothing` on underflow.
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.enabled || return nothing
     if length(v.stack) <= _base(v)
-        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base). " *
-              "FIX: seed the fragment's input (push!(b.seeded, <type>) at construction).")
+        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base) " *
+              "[ctx: $(v.context_hint)]. FIX: seed the fragment's input.")
         return nothing
     end
     return pop!(v.stack)

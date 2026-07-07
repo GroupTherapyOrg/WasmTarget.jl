@@ -544,6 +544,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/MARCH4_STATEMENT_PLAN.md).
         local _sf = InstrBuilder(; func_name="compile_statement.frag", mod=ctx.mod)
+        set_context!(_sf, first(string(stmt), 80))   # march17: errors name the stmt
+        # march17: statements legitimately consume values earlier statements left on
+        # the wasm stack (the stackified model) — seed the fragment with the parent's
+        # TRACKED stack so pops resolve; append_builder! settles the contract exactly.
+        isempty(b.v.stack) || seed_input!(_sf, copy(b.v.stack))
         _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch

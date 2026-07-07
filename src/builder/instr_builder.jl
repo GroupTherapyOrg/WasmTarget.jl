@@ -118,7 +118,7 @@ opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until
 """
 _wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
-set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
+set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
 
 _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
 
@@ -605,7 +605,8 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
     # march17: fragment violations PROPAGATE — they were silently dropped here,
     # which is why per-emit strict threw while the top-level harvest saw nothing.
     if has_errors(src.v)
-        append!(dst.v.errors, ("[via $(src.func_name)] " * e for e in src.v.errors))
+        local _mctx = isempty(dst.context) ? "" : " ⟨$(first(dst.context, 60))⟩"
+        append!(dst.v.errors, ("[via $(src.func_name)$(_mctx)] " * e for e in src.v.errors))
         empty!(src.v.errors)
     end
     for t in Iterators.reverse(src.seeded)

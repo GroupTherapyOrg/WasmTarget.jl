@@ -1727,6 +1727,7 @@ same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = InstrBuilder(; func_name="compile_call.frag", mod=ctx.mod)
+    set_context!(fb, first(string(expr), 80))   # march17: errors name the call
     _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
@@ -4456,11 +4457,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # Migration helper: emit ONE no-immediate numeric/cmp/conv op into `bytes`
     # via a scratch InstrBuilder (byte-identical to push!(bytes, op)).
-    _op1! = function (op::UInt8)
-        local _ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
-        num!(_ib, op)
-        append_builder!(fb, _ib)
-    end
+    # march17: DIRECT emission — the one-instruction fragment wrapper was a
+    # migration artifact; the fresh builder's empty stack underflowed by design
+    # and the merge papered over it (7k+ harvest errors from this one idiom).
+    _op1! = (op::UInt8) -> num!(fb, op)
 
     # parity(M11.2): THE INTRINSICS TABLE ROUTE (dart intrinsics.dart) — one
     # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
