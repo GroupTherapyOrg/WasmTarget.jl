@@ -6307,7 +6307,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 i64_const!(fb, Int64(n_expr_args))
                 struct_new!(fb, size_tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
             size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
-            let ib = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            let ib = _sub_builder(fb, ctx, "compile_call", 1)   # march17: the size tuple
                 local_set!(ib, size_local)
 
                 # Step 4: Assemble Expr struct
