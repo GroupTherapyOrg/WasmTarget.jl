@@ -145,7 +145,7 @@ end
             msg = join(b.v.errors, "\n  ")
             # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
             if b.trace !== nothing && !isempty(b.trace)
-                msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-5):end], "\n    ")
+                msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
             end
             empty!(b.v.errors)
             throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))

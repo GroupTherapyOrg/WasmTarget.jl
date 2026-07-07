@@ -5340,7 +5340,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                           target_type === Int8 || target_type === UInt8 ||
                           target_type === Bool || target_type === Char
 
-        local _trb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        local _trb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the source
         if source_type === Int128 || source_type === UInt128
             # Truncating from 128-bit - extract lo part
             source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)

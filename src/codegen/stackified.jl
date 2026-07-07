@@ -1143,6 +1143,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
         bb = InstrBuilder(; func_name="generate_stackified_flow.block", mod=ctx.mod)
         _seed_builder_locals!(bb, ctx)
+        # march17: values legitimately flow BETWEEN basic blocks on the wasm stack —
+        # the block fragment declares the incoming stack (the merge settles exactly).
+        isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on
