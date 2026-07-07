@@ -2089,6 +2089,20 @@ end
 Get a concrete Wasm type for a Julia type, using the module and registry.
 This is used before CompilationContext is created.
 """
+
+"""
+    derive_nullability(T) -> Bool
+
+tag-run item 2 (dart translator.dart:517 `type.isPotentiallyNullable`): THE nullability
+derivation — a reference is nullable iff the Julia type admits `nothing`
+(Union{Nothing,…} / Any / unions containing Nothing). The full non-null flip for plain-T
+slots is BLOCKED by struct.new_default (non-defaultable non-null fields) + the type-safe
+ref.null default emitters — recorded as the campaign's floor; this function is the
+single source consumers migrate onto as those rework.
+"""
+derive_nullability(@nospecialize(T))::Bool =
+    T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
+
 function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry)::WasmValType
     # Union{} (bottom type) indicates unreachable code - return void/nothing
     if T === Union{}
@@ -2221,8 +2235,13 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         # Handle Union types - use the inner type for Union{Nothing, T}
         inner_type = get_nullable_inner_type(T)
         if inner_type !== nothing
-            # Union{Nothing, T} -> concrete type of T (nullable reference)
-            return get_concrete_wasm_type(inner_type, mod, registry)
+            # Union{Nothing, T} → T's concrete rep with DERIVED nullability (item 2:
+            # dart's isPotentiallyNullable — true here by construction of the union)
+            local _inner_w = get_concrete_wasm_type(inner_type, mod, registry)
+            if _inner_w isa ConcreteRef
+                return ConcreteRef(_inner_w.type_idx, derive_nullability(T))
+            end
+            return _inner_w
         else
             # Multi-variant union → THE single resolver (dart2wasm translateType parity).
             # Formerly a copy that "MUST agree" with julia_to_wasm_type_concrete's twin; both
