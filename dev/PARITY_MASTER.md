@@ -905,3 +905,15 @@ verified: march-16 end-to-end by the dispatch+residual audits, march-17 by the g
    slot; String offsets) · 5. **boxed-scalar constant dedup** · 6. **closure-rep
    unification** (the dual static rep) · 7. **allocation-gating** (driver) ·
    8. $current_exn death · tuple-per-arity.
+
+## THE FULL-STRICT BUILDER — VALID BY CONSTRUCTION (2026-07-07, Dale's bar MET)
+TOTAL enforcement: every violation throws at the emitting line — underflow, TYPE
+MISMATCH, frame error. ZERO opt-outs (the flow builder's exemption DELETED). The
+machinery: derive-the-truth chokepoints (struct/array/global/call read the MODULE,
+never caller claims) · the live locals provider (+_ctx_builder across 180 creations) ·
+entry-narrowing contracts (_sub_builder) · PRE-DECLARED SIGNATURES (declare-then-define;
+every call validates against truth from the moment indices exist) · the hierarchy arms
+(func-type ConcreteRefs, raw-byte valtypes). The burn: 1267 mismatches → 0. THE L-LOCK:
+default-strict + underflow @test_throws + MISMATCH @test_throws + zero-opt-out count —
+regression cannot land. wasm-tools = the CI disagreement alarm ONLY (builder-pass +
+wasm-tools-fail = P0); the development loop never touches it again.

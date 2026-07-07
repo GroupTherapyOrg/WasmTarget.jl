@@ -57,6 +57,10 @@ mutable struct InstrBuilder
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
+    # fullstrict: LIVE locals provider (a codegen-supplied closure idx→WasmValType) —
+    # the static b.locals snapshot goes stale when locals are allocated AFTER builder
+    # creation (the tracker then guessed AnyRef and every downstream op mismatched).
+    locals_fn::Union{Nothing, Function}
     seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
 end
 
@@ -73,7 +77,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, WasmValType[])
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, nothing, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
@@ -136,12 +140,11 @@ end
 # Throw the collected validator errors (if strict) with rich source context, else collect.
 @inline function _check!(b::InstrBuilder)
     if b.strict && has_errors(b.v)
-        # march17 STAGED ENFORCEMENT: UNDERFLOWS (structural stack integrity) THROW;
-        # type mismatches COLLECT until the typed-value-channel campaign zeroes them
-        # (they're tracked-type disagreements, some tracker-conservative). dart throws
-        # on both; WT gets there in two steps. Harvest stays visible for both.
-        local _uf = any(startswith(e, "UNDERFLOW") for e in b.v.errors)
-        if _uf
+        # fullstrict (Dale's bar, 2026-07-07): TOTAL ENFORCEMENT — every violation
+        # throws at the emitting line. Underflows, type mismatches, frame errors:
+        # nothing squeezes through. Valid by construction; wasm-tools is the CI
+        # disagreement alarm only.
+        if true
             msg = join(b.v.errors, "\n  ")
             # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
             if b.trace !== nothing && !isempty(b.trace)
@@ -225,15 +228,25 @@ drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
 select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
 
 # ── Variable ────────────────────────────────────────────────────────────────────
+# fullstrict: the LIVE type for a local — the provider (fresh truth) outranks the
+# static snapshot; AnyRef only when neither knows.
+@inline _local_type(b::InstrBuilder, idx::Integer)::WasmValType = begin
+    if b.locals_fn !== nothing
+        local t = b.locals_fn(Int(idx))
+        t isa WasmValType && return t
+    end
+    (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
+end
+
 function local_get!(b::InstrBuilder, idx::Integer)
-    validate_push!(b.v, (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef)
+    validate_push!(b.v, _local_type(b, idx))
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
 function local_set!(b::InstrBuilder, idx::Integer)
     # dart parity: local.set validates the value against the LOCAL's type when known
     # (a store is [local.type] → []; pop_any hid ill-typed stores until instantiation).
-    if (idx + 1) <= length(b.locals)
-        validate_pop!(b.v, b.locals[idx + 1])
+    if b.locals_fn !== nothing || (idx + 1) <= length(b.locals)
+        validate_pop!(b.v, _local_type(b, idx))
     else
         validate_pop_any!(b.v)
     end
@@ -241,11 +254,17 @@ function local_set!(b::InstrBuilder, idx::Integer)
 end
 function local_tee!(b::InstrBuilder, idx::Integer)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
-    lt = (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
+    lt = _local_type(b, idx)   # fullstrict: the live provider
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
     _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end
-global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType) = (validate_push!(b.v, typ); _emit!(b, InstrIR.GlobalGet(UInt32(idx))))
+function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)
+    # fullstrict: the module's declared global valtype outranks the caller's claim
+    local m = b.v.mod
+    local t = (m !== nothing && (idx + 1) <= length(m.globals)) ? m.globals[idx + 1].valtype : typ
+    validate_push!(b.v, t isa WasmValType ? t : typ)
+    _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
+end
 global_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.GlobalSet(UInt32(idx))))
 
 # ── Control flow ────────────────────────────────────────────────────────────────
@@ -285,11 +304,27 @@ function br_table!(b::InstrBuilder, targets::Vector{<:Integer}, default::Integer
 end
 return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
-# call: pop params, push results (caller supplies the signature it already knows).
+# fullstrict: the module KNOWS every function's signature — derive it there; the
+# caller's claim is the fallback (imports + not-yet-pushed bodies resolve by index math).
+@inline function _true_call_sig(b::InstrBuilder, func_idx::Integer, params, results)
+    local m = b.v.mod
+    m === nothing && return (params, results)
+    local n_imp = 0
+    for imp in m.imports
+        imp.kind == 0x00 && (n_imp += 1)
+    end
+    local fi = Int(func_idx) - n_imp
+    (fi >= 0 && fi < length(m.functions)) || return (params, results)
+    local ft = m.types[Int(m.functions[fi + 1].type_idx) + 1]
+    ft isa FuncType || return (params, results)
+    return (ft.params, ft.results)
+end
+
 function call!(b::InstrBuilder, func_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
+    local tp, tr = _true_call_sig(b, func_idx, params, results)
     if b.v.reachable
-        for p in reverse(params); validate_pop!(b.v, p); end
-        for r in results; validate_push!(b.v, r); end
+        for p in reverse(tp); validate_pop!(b.v, p); end
+        for r in tr; validate_push!(b.v, r); end
     end
     _emit!(b, InstrIR.Call(UInt32(func_idx)))
 end
@@ -421,17 +456,34 @@ function struct_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
 end
+# fullstrict (valid-by-construction): the MODULE knows every struct's field types —
+# DERIVE the truth there instead of trusting the caller's declaration (dozens of sites
+# declared AnyRef over typed fields, silently poisoning the tracker downstream). The
+# declared param stays as the fallback when the module/type is unavailable.
+@inline function _true_field_type(b::InstrBuilder, type_idx::Integer, field_idx::Integer, declared::WasmValType)::WasmValType
+    m = b.v.mod
+    m === nothing && return declared
+    (type_idx + 1) <= length(m.types) || return declared
+    local ct = m.types[type_idx + 1]
+    ct isa StructType || return declared
+    (field_idx + 1) <= length(ct.fields) || return declared
+    local ft = ct.fields[field_idx + 1].valtype
+    # packed i8/i16 storage reads as i32
+    ft isa UInt8 && ft in (0x78, 0x77) && return I32
+    return ft isa WasmValType ? ft : declared
+end
+
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
-    validate_gc_instruction!(b.v, op, (type_idx, field_type))
+    validate_gc_instruction!(b.v, op, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
 end
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, field_type))
+    validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
 end
 function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayNew(UInt32(type_idx)))
 end
 function array_new_default!(b::InstrBuilder, type_idx::Integer)
@@ -439,7 +491,7 @@ function array_new_default!(b::InstrBuilder, type_idx::Integer)
     _emit!(b, InstrIR.ArrayNewDefault(UInt32(type_idx)))
 end
 function array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, elem_type, n))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, _true_elem_type(b, type_idx, elem_type), n))
     _emit!(b, InstrIR.ArrayNewFixed(UInt32(type_idx), UInt32(n)))
 end
 # array.new_data $type $seg : [offset:i32, length:i32] -> [(ref $type)]
@@ -450,13 +502,25 @@ function array_new_data!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)
     end
     _emit!(b, InstrIR.ArrayNewData(UInt32(type_idx), UInt32(seg_idx)))
 end
+# fullstrict: the module's array elem truth (packed i8/i16 read as i32)
+@inline function _true_elem_type(b::InstrBuilder, type_idx::Integer, declared::WasmValType)::WasmValType
+    m = b.v.mod
+    m === nothing && return declared
+    (type_idx + 1) <= length(m.types) || return declared
+    local ct = m.types[type_idx + 1]
+    ct isa ArrayType || return declared
+    local ft = ct.elem.valtype
+    ft isa UInt8 && ft in (0x78, 0x77) && return I32
+    return ft isa WasmValType ? ft : declared
+end
+
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
-    validate_gc_instruction!(b.v, op, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, op, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))
 end
 function array_set!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArraySet(UInt32(type_idx)))
 end
 array_len!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ARRAY_LEN); _emit!(b, InstrIR.ArrayLen()))

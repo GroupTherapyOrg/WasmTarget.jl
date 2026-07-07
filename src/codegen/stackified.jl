@@ -63,7 +63,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = InstrBuilder(; func_name="emit_numeric_to_externref!", mod=ctx.mod)
+    b = _ctx_builder(ctx, "emit_numeric_to_externref!")
     emit_numeric_to_externref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
     return
@@ -93,7 +93,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = InstrBuilder(; func_name="emit_numeric_to_anyref!", mod=ctx.mod)
+    b = _ctx_builder(ctx, "emit_numeric_to_anyref!")
     emit_numeric_to_anyref!(b, val, val_wasm, ctx)
     append!(target_bytes, builder_code(b))
     return
@@ -361,10 +361,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
-    # march17: the ONE documented opt-out — the whole-body flow's stack effect spans
-    # fragments and control joins the per-builder model can't see (the merge validators
-    # + the emitted module's wasm-tools pass gate it instead). R-strict counts this.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
+    # fullstrict: the opt-out is DEAD — the whole-body flow tracks exactly (the
+    # fragment contracts + the live locals provider + derived-truth chokepoints
+    # made it possible). ZERO opt-outs anywhere.
+    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
 
     # For very complex functions, use a dispatcher-style approach
@@ -603,7 +603,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
         # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
         # strict=false; byte-identical to the prior raw emission.
-        tb = InstrBuilder(; func_name="emit_phi_type_default", mod=ctx.mod)
+        tb = _ctx_builder(ctx, "emit_phi_type_default")
         if wasm_type isa ConcreteRef
             ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
         elseif wasm_type === StructRef
@@ -641,7 +641,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # pushes; the pv_ty===nothing guess that let an invalid module through WT's
         # own validation is structurally impossible now). `temp_map` substitutes
         # circular-phi temp locals at the plain local.get branches (PURE-1001).
-        pvb = InstrBuilder(; func_name="compile_phi_value", mod=ctx.mod)
+        pvb = _ctx_builder(ctx, "compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin
             if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
@@ -673,7 +673,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
                         # converter (source = local.get of the SSA local). The unbox arm is
                         # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
-                        local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                        local _srcb = _ctx_builder(ctx, "phi_edge_src")
                         _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, _srcb)
@@ -699,7 +699,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
                     # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
-                    local _srcb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                    local _srcb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, _srcb)
@@ -722,7 +722,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
-                    local _sb = InstrBuilder(; func_name="phi_edge_src", mod=ctx.mod)
+                    local _sb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_sb, ctx)
                     emit_value!(_sb, val, ctx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
@@ -1144,7 +1144,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # MIGRATED: block_bytes is now a sub-builder `bb`; straight-line emission uses
         # typed methods, recursive sub-results (stmt_bytes/phi_value_bytes) bridge via
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
-        bb = InstrBuilder(; func_name="generate_stackified_flow.block", mod=ctx.mod)
+        bb = _ctx_builder(ctx, "generate_stackified_flow.block")
         _seed_builder_locals!(bb, ctx)
         # march17: values legitimately flow BETWEEN basic blocks on the wasm stack —
         # the block fragment declares the incoming stack (the merge settles exactly).

@@ -543,7 +543,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # march4 Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/MARCH4_STATEMENT_PLAN.md).
-        local _sf = InstrBuilder(; func_name="compile_statement.frag", mod=ctx.mod)
+        local _sf = _ctx_builder(ctx, "compile_statement.frag")
         set_context!(_sf, first(string(stmt), 80))   # march17: errors name the stmt
         # march17: statements legitimately consume values earlier statements left on
         # the wasm stack (the stackified model) — seed the fragment with the parent's
@@ -889,7 +889,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                             # emitted a type-safe NULL default, silently dropping the value
                             # (the box-contents reads of the escaping-closure case).
                             append_builder!(b, _sf)
-                            local _nbx = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                            local _nbx = _ctx_builder(ctx, "compile_statement")
                             seed_input!(_nbx, WasmValType[ssa_wasm_type])
                             convert_type!(_nbx, ssa_wasm_type, local_wasm_type, ctx;
                                           from_julia=(ssa_julia_type isa DataType ? ssa_julia_type : nothing))
@@ -912,7 +912,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                             else
                                 # Insert: any_convert_extern (externref→anyref) + ref.cast null <type>
                                 needs_ref_cast_local = local_wasm_type
-                                local _aceb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                                local _aceb = _ctx_builder(ctx, "compile_statement")
                                 any_convert_extern!(_aceb)
                                 append_builder!(_sf, _aceb); stmt_bytes = builder_code(_sf)
                             end
@@ -1077,7 +1077,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
 
                 # PURE-913: ref → externref conversion (e.g., compilerbarrier returning struct into Any local)
                 if needs_extern_convert_any
-                    local _ecab = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                    local _ecab = _ctx_builder(ctx, "compile_statement")
                     extern_convert_any!(_ecab)
                     append_builder!(_sf, _ecab); stmt_bytes = builder_code(_sf)
                 end
@@ -1146,7 +1146,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                         if local_wasm_type !== nothing
                             # Type-safe default + local.set (typed; byte-identical).
                             _emit_default!(b, local_wasm_type)
-                            local _msb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                            local _msb = _ctx_builder(ctx, "compile_statement")
                             local_set!(_msb, local_idx)
                             append_builder!(b, _msb)
                         end
@@ -1191,7 +1191,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     (ssa_type.name.name === :MemoryRef && length(ssa_type.parameters) >= 1 && ssa_type.parameters[1] === Nothing) ||
                     (ssa_type.name.name === :GenericMemoryRef && length(ssa_type.parameters) >= 2 && ssa_type.parameters[2] === Nothing))
                 if is_nothing_ref
-                    local _drb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                    local _drb = _ctx_builder(ctx, "compile_statement")
                     drop!(_drb)  # drop i32_index
                     drop!(_drb)  # drop array_ref
                     append_builder!(b, _drb)
@@ -1205,7 +1205,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         stmt_type_check = get(ctx.ssa_types, idx, Any)
         if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
            !(!isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.Unreachable)
-            local _urb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+            local _urb = _ctx_builder(ctx, "compile_statement")
             unreachable!(_urb)  # structural trap (dart-legit dead path)
             append_builder!(b, _urb)
         end
@@ -1238,11 +1238,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
                     # PURE-908: externref↔anyref conversion instead of drop+default
                     if value_wasm_type === ExternRef && local_type === AnyRef
-                        local _cvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                        local _cvb = _ctx_builder(ctx, "compile_statement")
                         any_convert_extern!(_cvb)
                         append_builder!(b, _cvb)
                     elseif value_wasm_type === AnyRef && local_type === ExternRef
-                        local _cvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                        local _cvb = _ctx_builder(ctx, "compile_statement")
                         extern_convert_any!(_cvb)
                         append_builder!(b, _cvb)
                     else
@@ -1276,7 +1276,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                                     _cs4_ret = julia_to_wasm_type(_fi.return_type)
                                     # Cross-function return-type fixups, typed; byte-identical
                                     # (0x6B = UInt8(StructRef) → ref.cast null struct).
-                                    local _csb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                                    local _csb = _ctx_builder(ctx, "compile_statement")
                                     if local_type isa ConcreteRef
                                         if _cs4_ret === AnyRef || _cs4_ret === StructRef || _cs4_ret === ArrayRef
                                             ref_cast!(_csb, Int64(local_type.type_idx), true)
@@ -1328,7 +1328,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_statement")
     _seed_builder_locals!(b, ctx)
     compile_statement!(b, stmt, idx, ctx)
     return builder_code(b)
@@ -2110,7 +2110,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_new", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_new")
     _seed_builder_locals!(b, ctx)
     compile_new!(b, expr, idx, ctx)
     return builder_code(b)
@@ -3092,7 +3092,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_foreigncall", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_foreigncall")
     _seed_builder_locals!(b, ctx)
     compile_foreigncall!(b, expr, idx, ctx)
     return builder_code(b)

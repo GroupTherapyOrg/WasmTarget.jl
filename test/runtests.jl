@@ -1506,14 +1506,29 @@ begin
     # ========================================================================
     @pphase "Phase 1: Test Harness Infrastructure" begin
 
-        @testset "L-strict: THE ENFORCING BUILDER is the DEFAULT (march17 lock)" begin
-            # Dale's directive: an ill-typed emit on a DEFAULT-constructed builder must
-            # THROW at the emitting line (dart wasm_builder semantics). This lock makes
-            # the 07-01 regression (the default silently unwired) impossible to repeat.
+        @testset "L-strict: THE FULL-STRICT BUILDER — forever (the lock)" begin
+            # Dale's bar: valid-by-construction in FULL. EVERY violation throws on a
+            # DEFAULT builder: underflow, TYPE MISMATCH, frame error. Zero opt-outs.
+            # This lock makes any regression — the silent unwiring, a staged carve-out,
+            # a new opt-out — impossible to land.
             WT = WasmTarget
             lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
             @test lb.strict   # the default IS strict
-            @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # pops 2 from empty
+            @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # UNDERFLOW throws
+            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2")
+            WT.i64_const!(lb2, 1)
+            @test_throws WT.StackImbalanceError WT.num!(lb2, WT.Opcode.I32_EQZ)  # TYPE MISMATCH throws
+            # ZERO opt-outs in the tree (no netting, no exceptions):
+            cgdir = joinpath(dirname(pathof(WasmTarget)), "..")
+            n_optout = 0
+            for (root, _, files) in walkdir(joinpath(cgdir, "src"))
+                for f in files
+                    endswith(f, ".jl") || continue
+                    n_optout += count(l -> occursin(r"InstrBuilder\([^)]*strict\s*=\s*false", l),
+                                      readlines(joinpath(root, f)))
+                end
+            end
+            @test n_optout == 0
         end
 
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin

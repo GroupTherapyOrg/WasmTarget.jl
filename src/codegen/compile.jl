@@ -1664,6 +1664,41 @@ function compile_module(functions::Vector;
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
+    # fullstrict PRE-DECLARED SIGNATURES: the one derivation both the placeholder
+    # (registration) and the body fill use — the builder's call! deriver then reads
+    # TRUTH for every function from the moment indices exist (the 19 empty-sig call
+    # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
+    _fn_signature = function(arg_types, return_type, global_args)
+        local pts = WasmValType[]
+        for (j, T) in enumerate(arg_types)
+            if !(j in global_args)
+                if T isa Union && needs_anyref_boxing(T)
+                    push!(pts, AnyRef)
+                else
+                    push!(pts, get_concrete_wasm_type(T, mod, type_registry))
+                end
+            end
+        end
+        local rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+                    WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+        return (pts, rts)
+    end
+
+    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
+    # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
+    # collection) register as is_candidate=true → visible to the call-site typeId
+    # switch (by_ref) but invisible to get_function cross-call resolution.
+    _disp_cands = _TRIM_ISOLATED_FUNCS[]
+    for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
+        func_idx = UInt32(n_imports + n_existing + i - 1)
+        register_function!(func_registry, name, f, arg_types, func_idx, return_type;
+                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
+        # fullstrict: the PLACEHOLDER carries the true signature from birth
+        local _pp, _rr = _fn_signature(arg_types, return_type, global_args)
+        local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
+        push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
+    end
+
     # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
@@ -1673,12 +1708,12 @@ function compile_module(functions::Vector;
         f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
     end
     if !isempty(_cvp)
-        local _n_now = length(mod.functions)
-        local _K = length(_cvp)   # trampolines to pre-create (one per closure body)
         for (_slot, (_i, _T)) in enumerate(_cvp)
             local _entry = function_data[_i]
             local _ats, _rt = _entry[2], _entry[5]
-            local _body_idx = UInt32(n_imports + _n_now + _K + _i - 1)
+            # fullstrict reorder: the placeholders occupy the body indices ALREADY —
+            # the standard formula reads them; trampolines append after.
+            local _body_idx = UInt32(n_imports + n_existing + _i - 1)
             local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
             local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
                          WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
@@ -1686,16 +1721,7 @@ function compile_module(functions::Vector;
         end
     end
 
-    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
-    # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
-    # collection) register as is_candidate=true → visible to the call-site typeId
-    # switch (by_ref) but invisible to get_function cross-call resolution.
-    _disp_cands = _TRIM_ISOLATED_FUNCS[]
-    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + n_existing + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type;
-                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
-    end
+
 
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
@@ -1805,22 +1831,12 @@ function compile_module(functions::Vector;
             end
         end
 
-        # Get param/result types (skip WasmGlobal args)
-        param_types = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            if !(j in global_args)
-                # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
-                if T isa Union && needs_anyref_boxing(T)
-                    push!(param_types, AnyRef)
-                else
-                    push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-                end
-            end
-        end
-        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-        # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, locals, body)
+        # fullstrict: FILL the pre-declared placeholder (same signature derivation)
+        param_types, result_types = _fn_signature(arg_types, return_type, global_args)
+        local _slot = Int(func_idx) - n_imports + 1
+        local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
+        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body)
+        actual_idx = func_idx
         _this_isolated && push!(isolated_indices, actual_idx)
 
         # Export the function with a unique name

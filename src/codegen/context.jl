@@ -2228,7 +2228,7 @@ function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
 end
 
 function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
-    b = InstrBuilder(; func_name="emit_ref_cast_if_structref!", mod=ctx.mod)
+    b = _ctx_builder(ctx, "emit_ref_cast_if_structref!")
     seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
     _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
     append!(bytes, builder_code(b))

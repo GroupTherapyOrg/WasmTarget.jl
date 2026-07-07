@@ -187,8 +187,14 @@ function _wt_heap_kind(t, mod)::Symbol
         # `mod === nothing` only happens for the numeric-only builders (int128 etc.) whose
         # validators never see a ConcreteRef — but guard it anyway so a stray concrete ref
         # degrades to the default struct kind instead of crashing on `length(nothing.types)`.
-        if mod !== nothing && idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
-            return :concrete_array
+        if mod !== nothing && idx + 1 >= 1 && idx + 1 <= length(mod.types)
+            local ct = mod.types[idx + 1]
+            ct isa ArrayType && return :concrete_array
+            # fullstrict: a ConcreteRef to a FUNC type lives in the func hierarchy
+            # (the closure vtable's `ref.cast (ref $sig)` on a funcref entry — valid
+            # wasm the validator previously mis-hierarchied).
+            ct isa FuncType && return :func
+            return :concrete_struct
         else
             return :concrete_struct  # default concrete kind (struct; also for out-of-range / no-mod)
         end
@@ -197,6 +203,10 @@ function _wt_heap_kind(t, mod)::Symbol
         return _wt_heap_kind_of_byte(t.heaptype_byte)
     elseif t isa RefType
         return _wt_heap_kind_of_byte(UInt8(t))
+    elseif t isa UInt8
+        # fullstrict: RAW BYTE valtypes (the vtable's funcref fields etc.) resolve
+        # through the same byte table
+        return _wt_heap_kind_of_byte(t)
     else
         return :unknown
     end
@@ -895,6 +905,19 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
 end
 
 """
+    _ctx_builder(ctx, name) -> InstrBuilder
+
+fullstrict: THE codegen builder constructor — mod + seeded params + the LIVE locals
+provider, so the tracker always reads ctx truth (bare builders guessed AnyRef for
+locals allocated after creation — the largest residual mismatch class).
+"""
+function _ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder
+    local b = InstrBuilder(; func_name=name, mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
+    return b
+end
+
+"""
     _seed_builder_locals!(b, ctx)
 
 Teach a fresh value-builder the function's REAL local types (params via the same julia→wasm
@@ -913,6 +936,14 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
     for (k, t) in enumerate(ctx.locals)
         builder_set_local_type!(b, ctx.n_params + k - 1, t)
     end
+    # fullstrict: the LIVE provider — locals allocated AFTER this builder's creation
+    # resolve to their true types (the stale-snapshot AnyRef guesses poisoned the
+    # tracker downstream of every mid-emission allocate_local!).
+    b.locals_fn = function(idx::Int)
+        idx < ctx.n_params && return nothing   # params: the static seed rules
+        local off = idx - ctx.n_params + 1
+        (off >= 1 && off <= length(ctx.locals)) ? ctx.locals[off] : nothing
+    end
     return b
 end
 
@@ -921,7 +952,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
     # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="compile_value", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_value")
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = emit_type_id!(b, ctx.type_registry, T)
