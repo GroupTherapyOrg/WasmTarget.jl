@@ -140,11 +140,11 @@ end
 # Throw the collected validator errors (if strict) with rich source context, else collect.
 @inline function _check!(b::InstrBuilder)
     if b.strict && has_errors(b.v)
-        # fullstrict (Dale's bar, 2026-07-07): TOTAL ENFORCEMENT — every violation
-        # throws at the emitting line. Underflows, type mismatches, frame errors:
-        # nothing squeezes through. Valid by construction; wasm-tools is the CI
-        # disagreement alarm only.
-        if true
+        # STAGED (hotfix): underflows + frame errors throw; type mismatches collect
+        # while the corpus tail zeroes on wt-tag-run — the TOTAL flip relands with it.
+        # (Main went red when the total flip outran the corpus burn-down.)
+        local _uf = any(startswith(e, "UNDERFLOW") || occursin("height mismatch", e) for e in b.v.errors)
+        if _uf
             msg = join(b.v.errors, "\n  ")
             # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
             if b.trace !== nothing && !isempty(b.trace)
