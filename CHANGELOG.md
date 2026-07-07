@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.13](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.12...v0.4.13) (2026-07-07)
+
+
+### Bug Fixes
+
+* **step5:** the DAG resolver is nothing-safe for bare registries (the autodiscovery probe path) ([f9502b4](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f9502b4fffcc5276482658383e83d85e3b57c0c9))
+
 ## [0.4.12](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.11...v0.4.12) (2026-07-07)
 
 
