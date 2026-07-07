@@ -484,7 +484,7 @@ function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, fie
     _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
 end
 function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayNew(UInt32(type_idx)))
 end
 function array_new_default!(b::InstrBuilder, type_idx::Integer)
@@ -492,7 +492,7 @@ function array_new_default!(b::InstrBuilder, type_idx::Integer)
     _emit!(b, InstrIR.ArrayNewDefault(UInt32(type_idx)))
 end
 function array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, elem_type, n))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, _true_elem_type(b, type_idx, elem_type), n))
     _emit!(b, InstrIR.ArrayNewFixed(UInt32(type_idx), UInt32(n)))
 end
 # array.new_data $type $seg : [offset:i32, length:i32] -> [(ref $type)]
