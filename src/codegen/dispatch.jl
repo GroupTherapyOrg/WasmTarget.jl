@@ -77,7 +77,7 @@ get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_
 # ==================== Table Building ====================
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
-                                threshold::Int=9)::DispatchTableRegistry
+                                threshold::Int=2)::DispatchTableRegistry
     # march13b: the 2-8 TABLE MACHINERY is now PROVEN (threshold=2 exercised the
     # wrapper void-drop, the target-signature cast fallback, the class-axis
     # requirement, and tuple dedup — all landed below; M8+two-arg+smoke green at 2).
@@ -89,11 +89,8 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
 
     for (func_ref, infos) in func_registry.by_ref
         length(infos) < threshold && continue
-        # march13b: CLOSURE selectors don't belong in the class-selector table —
-        # dart dispatches function values through the closure VTABLE
-        # (closures.dart:147+), not the classId table. The closures march owns
-        # them; tabling them here at threshold=2 met the un-migrated invoke path
-        # (unbalanced wrapper bodies). Loud + temporary by design.
+        # march16 owns closures: function values dispatch through the closure
+        # VTABLE (call_ref), never the class-selector table — same split as dart.
         any(i -> occursin("#", string(i.name)), infos) && continue
         # march13b: the selector table dispatches on receiver.classId — a group needs
         # at least one CLASS axis (every specialization's type at that slot is a real
@@ -245,7 +242,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
-            b = InstrBuilder(; func_name="emit_dispatch_wrappers!")
+            b = InstrBuilder(; func_name="emit_dispatch_wrappers!", mod=mod)
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
@@ -262,33 +259,25 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
                 if dt.slot_types[j] !== AnyRef
                     # march11 fast lane: the slot arrives UNBOXED — pass through
-                elseif concrete_type !== nothing
-                    arg_wasm_type = julia_to_wasm_type(concrete_type)
-                    if arg_wasm_type in (I32, I64, F32, F64) && haskey(type_registry.numeric_boxes, arg_wasm_type)
+                else
+                    # step3 (dart wrapper rule): the cast target is ALWAYS the TARGET's
+                    # declared param — the tid-resolved struct can differ from what the
+                    # body actually takes (the classed-string vs byte-array split broke
+                    # the search family at threshold=2: cast (ref 7), param (ref null 5)).
+                    local _tsig_ft = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
+                    local _tp = (_tsig_ft isa FuncType && j <= length(_tsig_ft.params)) ? _tsig_ft.params[j] : AnyRef
+                    if _tp in (I32, I64, F32, F64)
                         # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
-                        emit_classid_unbox!(b, mod, type_registry, arg_wasm_type)
-                    elseif haskey(type_registry.structs, concrete_type)
-                        # Cast to concrete struct type
-                        struct_info = type_registry.structs[concrete_type]
-                        ref_cast!(b, Int64(struct_info.wasm_type_idx), false)
-                    else
-                        # march13b (dart wrapper shape: cast to the TARGET's declared
-                        # param, dispatch_table.dart wrapper gen): the tid resolved no
-                        # registered struct (spelling/synthetic ids) — read the target's
-                        # own wasm signature and cast to its declared param when narrower
-                        # than anyref (raw-anyref pass-through failed validation).
-                        local _tsig_ft = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
-                        if _tsig_ft isa FuncType && j <= length(_tsig_ft.params)
-                            local _tp = _tsig_ft.params[j]
-                            if _tp isa ConcreteRef
-                                ref_cast!(b, Int64(_tp.type_idx), false)
-                            elseif _tp === StructRef
-                                ref_cast!(b, StructRef, false)
-                            elseif _tp === ArrayRef
-                                ref_cast!(b, ArrayRef, false)
-                            end
-                        end
-                    end
+                        emit_classid_unbox!(b, mod, type_registry, _tp)
+                    elseif _tp isa ConcreteRef
+                        ref_cast!(b, Int64(_tp.type_idx), _tp.nullable)
+                    elseif _tp === StructRef
+                        ref_cast!(b, StructRef, false)
+                    elseif _tp === ArrayRef
+                        ref_cast!(b, ArrayRef, false)
+                    elseif _tp === ExternRef
+                        extern_convert_any!(b)
+                    end   # anyref/eq: pass through
                 end
             end
 
@@ -321,6 +310,14 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 # return — the 2-entry tables surfaced wrappers left unbalanced
                 # ("values remaining on stack"; Base.get's wrapper, func 9).
                 drop!(b)
+            elseif dt.result_wasm_type in (I32, I64, F32, F64) &&
+                   (entry.return_type === Nothing || entry.return_type === Union{})
+                # step3: the MIRROR hole — a VALUE-typed dispatch signature over a
+                # VOID target must push a default (the Dates fn#35 fallthru-0 stopper:
+                # mixed Nothing/Int32 returns joined to i32).
+                dt.result_wasm_type === I32 ? i32_const!(b, 0) :
+                dt.result_wasm_type === I64 ? i64_const!(b, 0) :
+                dt.result_wasm_type === F32 ? f32_const!(b, 0.0f0) : f64_const!(b, 0.0)
             end
 
             end_block!(b)
