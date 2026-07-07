@@ -4561,7 +4561,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local_a = allocate_local!(ctx, local_type)
             local_b = allocate_local!(ctx, local_type)
             local_result = allocate_local!(ctx, local_type)
-            local _caddb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _caddb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [a, b]
 
             # Save b, save a, compute a+b, save result
             local_set!(_caddb, local_b)
@@ -4622,7 +4622,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local_a = allocate_local!(ctx, local_type)
             local_b = allocate_local!(ctx, local_type)
             local_result = allocate_local!(ctx, local_type)
-            local _csubb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+            local _csubb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [a, b]
 
             # Save b, save a, compute a-b, save result
             local_set!(_csubb, local_b)
