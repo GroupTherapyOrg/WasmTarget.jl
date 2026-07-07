@@ -856,3 +856,8 @@ wrapper builder carries mod (the ENFORCER named it at the emitting line — the 
 instrument catching real bugs on day one). Closures stay out of the class table by
 design (the march-16 vtable owns them — dart's exact split). The multi-axis 2-8
 unreachable hole: CLOSED (tables exist for every polymorphic selector).
+
+## STEP 4 — the wrap tail continued (2026-07-07)
+R17 205→186 (invoke obvious-expected + the index idiom + codepoint sites). The remaining
+186: mega-arm restructures + the memoryref multi-value class (recorded) — resumable
+mechanically; superseded in priority by step 5 (the CLASS-DAG's census value is higher).
