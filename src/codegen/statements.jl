@@ -1066,13 +1066,12 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                                 end
                             end
                         end
-                        # any.convert_extern (optional) + ref.cast null <type_idx>, typed; byte-identical.
-                        local _rcb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                        # march17: DIRECT into _sf (the fresh-builder wrapper underflowed by design)
                         if needs_any_convert_extern
-                            any_convert_extern!(_rcb)
+                            any_convert_extern!(_sf)
                         end
-                        ref_cast!(_rcb, Int64(needs_ref_cast_local.type_idx), true)
-                        append_builder!(_sf, _rcb); stmt_bytes = builder_code(_sf)
+                        ref_cast!(_sf, Int64(needs_ref_cast_local.type_idx), true)
+                        stmt_bytes = builder_code(_sf)
                     end
                 end
 
@@ -1253,9 +1252,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     # (M5 loud-visible; behavior unchanged pending the full audit).
                     record_unsupported!(ctx, :unsupported_type,
                         "SSA-store type mismatch (value dropped, type-safe default emitted)"; idx=idx)
-                    local _dvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-                    drop!(_dvb)
-                    append_builder!(b, _dvb)
+                    drop!(b)   # march17: direct
                     _emit_default!(b, local_type; eqref=false)
                     end  # close else from PURE-908 externref↔anyref check
                 end
