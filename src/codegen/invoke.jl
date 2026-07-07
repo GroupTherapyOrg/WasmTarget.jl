@@ -1447,7 +1447,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 num!(b, Opcode.F64_PROMOTE_F32)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, I32)   # step4
                 call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
             elseif arg_type === Nothing
                 # PURE-9041: println(nothing) → write "nothing"
@@ -1462,7 +1462,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
                 # Compile the vector value onto stack
-                emit_value!(b, arg, ctx)
+                emit_value!(b, arg, ctx, ConcreteRef(UInt32(vec_type_idx), true))   # step4
 
                 # Allocate locals: vec_ref, data_arr, len, i, tmp_str
                 vec_local = UInt32(allocate_local!(ctx, ConcreteRef(vec_type_idx, true)))
@@ -1565,7 +1565,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                     elem_types = arg_type.parameters
 
                     # Compile tuple value and store in local
-                    emit_value!(b, arg, ctx)
+                    emit_value!(b, arg, ctx, ConcreteRef(UInt32(tuple_type_idx), true))   # step4
                     tup_local = UInt32(allocate_local!(ctx, ConcreteRef(tuple_type_idx, true)))
                     str_tmp_local2 = UInt32(allocate_local!(ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)))
                     local_set!(b, tup_local)
@@ -1685,7 +1685,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             global_idx = ctx.signal_ssa_setters[ssa_id]
             bss2 = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)
             # Compile the argument (the new value)
-            emit_value!(bss2, args[1], ctx)
+            emit_value!(bss2, args[1], ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)   # step4
             # Store to global
             global_set!(bss2, global_idx)
 
@@ -2603,7 +2603,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             # First arg is f32, need to insert promotion before second arg
                             # This is tricky with stack order. For now, just promote both
                             bpow = InstrBuilder(; func_name="compile_invoke", mod=ctx.mod)  # Reset
-                            emit_value!(bpow, args[1], ctx)
+                            emit_value!(bpow, args[1], ctx, F32)   # step4: the promote follows
                             num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
                             emit_value!(bpow, args[2], ctx)
                             if arg2_type === Float32
