@@ -361,7 +361,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
     # effect can't be tracked precisely by the fragment model, so we never gate.
     # Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
+    # march17: the ONE documented opt-out — the whole-body flow's stack effect spans
+    # fragments and control joins the per-builder model can't see (the merge validators
+    # + the emitted module's wasm-tools pass gate it instead). R-strict counts this.
+    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
 
     # For very complex functions, use a dispatcher-style approach
@@ -1143,6 +1146,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
         bb = InstrBuilder(; func_name="generate_stackified_flow.block", mod=ctx.mod)
         _seed_builder_locals!(bb, ctx)
+        # march17: values legitimately flow BETWEEN basic blocks on the wasm stack —
+        # the block fragment declares the incoming stack (the merge settles exactly).
+        isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on

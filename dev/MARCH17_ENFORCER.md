@@ -37,3 +37,26 @@ emits, align the tracker ordering); (b) compile_call int128 sext family; (c) a f
 compile_statement.frag tails. THEN: flip the ctor default (strict=_wt_builder_strict()),
 run the FULL ladder, L-strict LOCK test (a default builder THROWS on an ill-typed emit),
 gate, PR with march-16.
+
+## THE LAST 78 (dict_get exemplar, warm-3 diagnosed): num! inside compile_call! on a
+fresh builder holding [I32] popping I64×2 — the seeder copied a SHORT tracked stack:
+fb's own stack under-tracks because the OPERAND emission upstream (the dict-key path)
+flows through un-tracked arms. The 78 = upstream tracked-stack debt, not wrapper debt.
+NEXT: in warm-3, WT_BUILDER_TRACE the dict_get compile; find where fb's tracked height
+diverges from the real emission (the first emit whose tracked h drops below truth);
+fix THAT arm's tracking (likely an emit_raw!/byte-bridge splice that pushes real values
+without validate_push!). Then recount → flip → L-lock → gate.
+
+## THE FINAL KNOT (13 strict-smoke survivors, dict_get exemplar):
+The 0xa7 thrower: a SEEDED _sub_builder (h=1) that OPENS a control frame (if_!/block!)
+then pops the seed INSIDE it → "past block base" (the tracker enforces wasm's
+cross-label rule; the BYTES validate green, so either the real pops happen outside the
+frame and the tracker's frame-entry bookkeeping mis-times, or the emitted block
+carries params the tracker doesn't model). SUSPECTS: _emit_wrap_shift_amount_saturating!
+(seeded n=1 + opens if_!), _zxb/_sxb. Repro: warm-3 + WT_BUILDER_TRACE=1 on
+  f_dg(x)= (d = Dict(1=>10, 2=>20); get(d, x, 0))
+— read the trace tail: WHERE does the label open relative to the pop? Fix = pop BEFORE
+opening the frame (hoist to a local) or model block params in the tracker (dart does
+block-with-params). Also: the anyarray/foldl family throws in generate_stackified_flow
+.block (same cross-label class at the flow level). AFTER ZERO: flip ctor default →
+full ladder → L-strict lock → gate → PR march-17-final.

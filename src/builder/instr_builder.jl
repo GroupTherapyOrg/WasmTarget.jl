@@ -62,7 +62,7 @@ end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", strict::Bool=false, mod=nothing)
+                      func_name::String="", strict::Bool=_wt_builder_strict(), mod=nothing)
     locals = WasmValType[p for p in param_types]
     # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
     # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
@@ -143,6 +143,10 @@ end
         local _uf = any(startswith(e, "UNDERFLOW") for e in b.v.errors)
         if _uf
             msg = join(b.v.errors, "\n  ")
+            # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
+            if b.trace !== nothing && !isempty(b.trace)
+                msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
+            end
             empty!(b.v.errors)
             throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
         end
@@ -251,14 +255,25 @@ nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
 # block/loop/if: blocktype is a void byte 0x40 or a WasmValType (I32, ConcreteRef(...));
 # encode_block_type (in serialize) handles the single-byte vs multi-byte distinction.
 # `results` feeds the validator's end-balance check.
+# march17 THE CHOKEPOINT FIX: a positional VALUE-TYPE blocktype reached the BYTES but
+# never the TRACKER (results came only from the kwarg) — every `if_!(b, I32)` was
+# tracker-void, its value silently discarded at end, and everything downstream
+# under-counted (the .block strict family). Derive the tracked results from the
+# positional blocktype when the kwarg is empty. (An Int blocktype = an s33 type-index
+# multi-value frame — callers pass `results` explicitly there.)
+@inline _blocktype_results(blocktype, results)::Vector{WasmValType} =
+    !isempty(results) ? WasmValType[r for r in results] :
+    (blocktype === 0x40 || blocktype isa Int) ? WasmValType[] :
+    blocktype isa WasmValType ? WasmValType[blocktype] : WasmValType[]
+
 function block!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_block_start!(b.v, :block, WasmValType[r for r in results]); _emit!(b, InstrIR.Block(blocktype))
+    validate_block_start!(b.v, :block, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.Block(blocktype))
 end
 function loop!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_block_start!(b.v, :loop, WasmValType[r for r in results]); _emit!(b, InstrIR.Loop(blocktype))
+    validate_block_start!(b.v, :loop, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.Loop(blocktype))
 end
 function if_!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_if_start!(b.v, WasmValType[r for r in results]); _emit!(b, InstrIR.If(blocktype))
+    validate_if_start!(b.v, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.If(blocktype))
 end
 else_!(b::InstrBuilder) = (validate_else!(b.v); _emit!(b, InstrIR.Else()))
 end_block!(b::InstrBuilder) = (validate_block_end!(b.v); _emit!(b, InstrIR.End()))
