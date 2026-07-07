@@ -21,3 +21,20 @@ extend the L-strict lock → gate.
   _seed_builder_locals! IF the map lives on ctx.
 ## THEN: re-harvest → burn residual classes → flip `_uf = true` in _check! (drop the
 UNDERFLOW-only staging) → L-lock extension (@test_throws on a MISMATCH) → gate → PR.
+
+## THE SHARPENED BAR (Dale, 2026-07-07): VALID-BY-CONSTRUCTION IN FULL
+"NEVER ever need wasm-tools ever again." The full scope — NO rug-sweeping:
+1. NO collect-mode anywhere; NO opt-outs. The flow builder's opt-out DIES: the
+   temp_map threading + exact fragment contracts make whole-body tracking complete.
+2. The tracker models the ENTIRE wasm validation surface:
+   - value stack + types + control frames + br target arities (have)
+   - locals: LIVE provider + POST-REMAP truth (in flight)
+   - globals: const-expr validity at add_global_ref! (init bytes type-checked)
+   - type section: subtype-ordering + field-prefix validity at add_type!
+   - elem/data segments, exports, start-fn signature — at their add_*! chokepoints
+3. Every mismatch = a modeling debt to FIX. The harvest must hit ZERO with everything
+   throwing, no exclusions.
+4. TRANSITION: wasm-tools stays in CI as the DISAGREEMENT ALARM (builder-pass +
+   wasm-tools-fail = P0 builder bug) until proven, then optional. The L-lock family
+   asserts: default strict, throws on mismatch AND underflow AND frame errors,
+   zero opt-out count.
