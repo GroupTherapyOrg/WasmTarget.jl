@@ -38,3 +38,16 @@ UNDERFLOW-only staging) → L-lock extension (@test_throws on a MISMATCH) → ga
    wasm-tools-fail = P0 builder bug) until proven, then optional. The L-lock family
    asserts: default strict, throws on mismatch AND underflow AND frame errors,
    zero opt-out count.
+
+## CONVERGENCE LEDGER (2026-07-07)
+1267 → 689 (struct_get/set derive) → 556 (array/global derive) → 210 (_ctx_builder:
+the universal provider, 180 creations swept) → 26 mismatches + ~48 flow-opt-out
+underflows. THE CURES THAT WORKED: derive-the-truth at builder chokepoints (the module
+outranks callers); the live locals provider; entry-narrowing at _sub_builder (helpers
+declare widths, erased seeds funnel at entry).
+THE LAST FIELD: (a) ~26 mismatches — the getfield-tuple arm's frame-result direction
+(hom tuple: expected AnyRef found …) + I32-vs-CR flow pairs; (b) the FLOW OPT-OUT's
+underflows (~48, all ⟨GotoIfNot cond⟩ — the whole-body tracking completion: the cond
+value crossing label boundaries in the tracker's view; complete the inter-block
+contracts, then strict=false DIES). Then: _uf=true in main, the L-lock extension
+(mismatch @test_throws + opt-out-count=0), ladder, gate, PR.
