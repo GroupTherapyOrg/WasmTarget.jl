@@ -78,14 +78,9 @@ get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
                                 threshold::Int=2)::DispatchTableRegistry
-    # march13b: the 2-8 TABLE MACHINERY is now PROVEN (threshold=2 exercised the
-    # wrapper void-drop, the target-signature cast fallback, the class-axis
-    # requirement, and tuple dedup — all landed below; M8+two-arg+smoke green at 2).
-    # The DEFAULT flip 9→2 (dart: every targetCount>1, dispatch_table.dart:401-403)
-    # is SEQUENCED AFTER the closures march: the remaining holes at 2 live in the
-    # closure/invoke wrapper interplay that march rebuilds (Dates parse internals
-    # unbalanced at fn#35 was the stopper). One-line flip when that lands.
-    dt_registry = DispatchTableRegistry()
+    # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
+    # (dispatch_table.dart:401-403 needsDispatch). The 2-8 machinery was proven at
+    # march13b (void-drop + mirror arm, target-signature casts, class-axis, dedup).
 
     for (func_ref, infos) in func_registry.by_ref
         length(infos) < threshold && continue
