@@ -78,6 +78,13 @@ end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
+    # march17 harvest: surface every collect-mode violation WITHOUT throwing —
+    # the burn-down list generator (strip after the flip).
+    if haskey(ENV, "WT_STRICT_HARVEST") && has_errors(b.v)
+        for e in b.v.errors
+            println(stderr, "HARVEST| ", b.func_name, " | ", first(e, 160))
+        end
+    end
     code = UInt8[]
     for i in eachindex(b.instrs)
         if !isassigned(b.instrs, i)
@@ -594,6 +601,12 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
         end
         error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
               "$(length(src.v.labels)) labels; $_report")
+    end
+    # march17: fragment violations PROPAGATE — they were silently dropped here,
+    # which is why per-emit strict threw while the top-level harvest saw nothing.
+    if has_errors(src.v)
+        append!(dst.v.errors, ("[via $(src.func_name)] " * e for e in src.v.errors))
+        empty!(src.v.errors)
     end
     for t in Iterators.reverse(src.seeded)
         validate_pop!(dst.v, t)

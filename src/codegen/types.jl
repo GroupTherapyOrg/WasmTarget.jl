@@ -1512,13 +1512,19 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = registry.jl_type_idx
     str_arr_idx = get_string_array_type!(mod, registry)
 
-    b = InstrBuilder(; func_name="_populate_jl_hierarchy!")
+    # march17: global_get! declares the global's TRUE valtype (the AnyRef lie made
+    # this the #1 harvest offender — 96k tracked-type mismatches feeding struct_set!).
+    b = InstrBuilder(; func_name="_populate_jl_hierarchy!", mod=mod)
 
     for (type_val, dt_global_idx) in registry.type_constant_globals
         type_val isa DataType || continue
 
         # Field 0: kind = TYPE_DATATYPE (0)
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         i32_const!(b, Int64(JL_TYPE_KIND_DATATYPE))
         struct_set!(b, dt_type_idx, UInt32(0), I32)  # field 0 = kind
 
@@ -1526,8 +1532,16 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         tn = type_val.name
         if haskey(registry.typename_constant_globals, tn)
             tn_global_idx = registry.typename_constant_globals[tn]
-            global_get!(b, dt_global_idx, AnyRef)
-            global_get!(b, tn_global_idx, AnyRef)
+            begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
+            begin
+            local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
+            global_get!(b, tn_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
             struct_set!(b, dt_type_idx, UInt32(1), ConcreteRef(tn_type_idx, true))  # field 1 = name
         end
 
@@ -1536,21 +1550,41 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         if parent !== type_val
             if haskey(registry.type_constant_globals, parent)
                 parent_global_idx = registry.type_constant_globals[parent]
-                global_get!(b, dt_global_idx, AnyRef)
-                global_get!(b, parent_global_idx, AnyRef)
+                begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
+                begin
+            local _gvt = mod.globals[Int(parent_global_idx) + 1].valtype
+            global_get!(b, parent_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
                 struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
             end
         else
             # Any.super === Any (self-referential)
-            global_get!(b, dt_global_idx, AnyRef)
-            global_get!(b, dt_global_idx, AnyRef)
+            begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
+            begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
             struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
         end
 
         # Field 3: parameters → $JlSVec (array of ref null $JlType)
         params = type_val.parameters
         nparams = length(params)
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         if nparams == 0
             i32_const!(b, 0)
             array_new_default!(b, svec_idx)
@@ -1559,7 +1593,11 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                 p = params[i]
                 if p isa DataType && haskey(registry.type_constant_globals, p)
                     p_global_idx = registry.type_constant_globals[p]
-                    global_get!(b, p_global_idx, AnyRef)
+                    begin
+            local _gvt = mod.globals[Int(p_global_idx) + 1].valtype
+            global_get!(b, p_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
                     # $JlDataType is sub $JlType, so ref is already compatible
                 else
                     # Unknown parameter type → null ref
@@ -1571,12 +1609,20 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         struct_set!(b, dt_type_idx, UInt32(3), ConcreteRef(svec_idx, true))  # field 3 = parameters
 
         # Field 4: hash → i32 (use Julia's type hash)
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         i32_const!(b, Int64(Int32(hash(type_val) & 0x7FFFFFFF)))
         struct_set!(b, dt_type_idx, UInt32(4), I32)  # field 4 = hash
 
         # Field 5: abstract → i32 (1 if abstract, 0 if concrete)
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         i32_const!(b, Int64(isabstracttype(type_val) ? 1 : 0))
         struct_set!(b, dt_type_idx, UInt32(5), I32)  # field 5 = abstract
 
@@ -1593,12 +1639,20 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
 
         # Field 6: dfs_low
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         i32_const!(b, Int64(dfs_low))
         struct_set!(b, dt_type_idx, UInt32(6), I32)  # field 6 = dfs_low
 
         # Field 7: dfs_high
-        global_get!(b, dt_global_idx, AnyRef)
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
         i32_const!(b, Int64(dfs_high))
         struct_set!(b, dt_type_idx, UInt32(7), I32)  # field 7 = dfs_high
     end
@@ -1617,8 +1671,16 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         wrapper = tn.wrapper
         if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
             wrapper_global_idx = registry.type_constant_globals[wrapper]
-            global_get!(b, tn_global_idx, AnyRef)
-            global_get!(b, wrapper_global_idx, AnyRef)
+            begin
+            local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
+            global_get!(b, tn_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
+            begin
+            local _gvt = mod.globals[Int(wrapper_global_idx) + 1].valtype
+            global_get!(b, wrapper_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+        end
             struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = wrapper
         end
     end

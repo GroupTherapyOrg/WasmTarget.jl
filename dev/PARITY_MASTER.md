@@ -786,3 +786,28 @@ from its runtime; the SLOT parity (2-arity tag) is what matters and is done.
 (c) SURVEYED → DEFERRED (own campaign): first-class nullability = 63 hard-coded
 nullable=true ConcreteRef sites in types.jl + every consumer assuming nullable; a
 full-fuzz ripple. Not blocking the closures build; schedule after THE TAG measurement.
+
+# ═══════════════════════════════════════════════════════════════════
+# GO-FOR-BROKE (2026-07-06): THE 8 STEPS TO REAL PARITY — full plan
+# ═══════════════════════════════════════════════════════════════════
+1. CLOSE MARCH 16 — the allowlist fix is in (batteries+smoke green); suite conf + gate
+   + PR + merge. Exit: closures on main.
+2. MARCH 17 THE ENFORCER — WT_STRICT_HARVEST drives the burn-down (types.jl
+   _populate_jl_hierarchy! remaining classes; stackified generate_structured;
+   statements compile_statement.frag; closures trampoline×1); then ctor default →
+   _wt_builder_strict(); then L-strict LOCK (a test asserting the default THROWS on an
+   ill-typed emit); wasm-tools → CI-only. Exit: strict default + green gate.
+3. SLICE E — threshold 9→2 + closure-exclusion removal (both staged one-liners).
+   Exit: green gate (the Dates fn#35 unbalance = first triage if red).
+4. WRAP TAIL — R17 205→~40 floor in batches; then boxed-scalar constant dedup
+   (needs expectedType at scalar arms). Exit: R17 ≤ 45, dedup live.
+5. THE CLASS-DAG — per-class wasm struct subtype hierarchy mirroring Julia's type DAG
+   (dart class_info.dart's subtype chains) replacing flat sub-$JlBase; + the
+   identityHash header slot. Unlocks dispatch struct-LUB + typeassert depth. THE BIG ONE.
+6. NULLABILITY — derive ConcreteRef nullability from Union{T,Nothing} (63 sites +
+   consumers; full-fuzz per batch).
+7. UNIFICATION + RESIDUALS — one closure rep everywhere (static path through the
+   object); allocation-gated compilation; $current_exn death; tuple-per-arity.
+8. FINAL RE-CENSUS — the 6-auditor instrument; the honest number.
+EXECUTION: warm worktrees wt-warm-1/2; single-process verify batches; minimized
+oracles; parallel hypotheses; background gates overlap next-step foreground dev.

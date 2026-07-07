@@ -75,7 +75,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             # the vtable trampoline, which needs the body compiled. Specialized with
             # the method's own sig (abstract slots stay erased; the trampoline passes
             # anyref and the body's funnel machinery narrows internally).
-            if !haskey(ENV, "WT_NO_M16_SCAN") && stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
+            if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
                 local _nt = stmt.args[1]
                 local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
                            _nt isa DataType ? _nt : nothing
@@ -87,14 +87,13 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     while parentmodule(_r) !== _r; _r = parentmodule(_r); end
                     _r === Main
                 end
-                if _T isa DataType && is_closure_type(_T) && _T_user &&
-                   !haskey(ENV, "WT_NO_CLOSURE_ENROLL")
+                if _T isa DataType && is_closure_type(_T) && _T_user
                     push!(_fn_closures, _T)   # staged; folds only on co-occurrence
                 end
                 continue
             end
             # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
-            if !haskey(ENV, "WT_NO_M16_SCAN") && stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
+            if stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
                 local _dargs = Any[]
                 local _dok = true
                 for a in stmt.args[2:end]
@@ -202,7 +201,13 @@ end
 # stubs that one function instead of breaking the whole module). 0 = no discovery ran.
 const _TRIM_BASE_PAIRS = Ref{Int}(0)
 
+# march16: the conversion-arm allowlist — closure types whose bodies the candidate
+# fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
+# lifecycle as TRIM_IR_CACHE; reset at each collect).
+const _ENROLLED_CLOSURE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
+
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
+    _ENROLLED_CLOSURE_TYPES[] = Set{DataType}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -236,6 +241,16 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         for _round in 1:8
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
             extra = Any[mi for mi in extra if !(mi in base_mis)]
+            # march16: remember WHICH closure types were enrolled — the conversion
+            # arm converts ONLY these (converting every userland closure pair changed
+            # unrelated compiles: the randsubseq suite regression, bisect-certified).
+            for mi in extra
+                local st = mi.specTypes
+                if st isa DataType && st <: Tuple && length(st.parameters) >= 1
+                    local ft = st.parameters[1]
+                    ft isa DataType && is_closure_type(ft) && push!(_ENROLLED_CLOSURE_TYPES[], ft)
+                end
+            end
             isempty(extra) && break
             # Fresh interpreter (its own cache_owner) — never touches the base partition.
             cand_interp = WasmInterpreter(Base.RefValue(0))
@@ -338,9 +353,7 @@ function trim_compile_plan(entries_named::Vector)
             # its target. USERLAND ONLY: converting Base-internal closure pairs
             # (previously skipped) changed unrelated compiles — randsubseq's
             # internals regressed in the suite context (the march-16 gate catch).
-            local _fr = ftyp.name.module
-            while parentmodule(_fr) !== _fr; _fr = parentmodule(_fr); end
-            _fr === Main && !haskey(ENV, "WT_NO_M16_SCAN") && (f = ftyp)
+            ftyp in _ENROLLED_CLOSURE_TYPES[] && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig
