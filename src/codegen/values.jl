@@ -187,8 +187,14 @@ function _wt_heap_kind(t, mod)::Symbol
         # `mod === nothing` only happens for the numeric-only builders (int128 etc.) whose
         # validators never see a ConcreteRef — but guard it anyway so a stray concrete ref
         # degrades to the default struct kind instead of crashing on `length(nothing.types)`.
-        if mod !== nothing && idx + 1 >= 1 && idx + 1 <= length(mod.types) && mod.types[idx + 1] isa ArrayType
-            return :concrete_array
+        if mod !== nothing && idx + 1 >= 1 && idx + 1 <= length(mod.types)
+            local ct = mod.types[idx + 1]
+            ct isa ArrayType && return :concrete_array
+            # fullstrict: a ConcreteRef to a FUNC type lives in the func hierarchy
+            # (the closure vtable's `ref.cast (ref $sig)` on a funcref entry — valid
+            # wasm the validator previously mis-hierarchied).
+            ct isa FuncType && return :func
+            return :concrete_struct
         else
             return :concrete_struct  # default concrete kind (struct; also for out-of-range / no-mod)
         end
@@ -197,6 +203,10 @@ function _wt_heap_kind(t, mod)::Symbol
         return _wt_heap_kind_of_byte(t.heaptype_byte)
     elseif t isa RefType
         return _wt_heap_kind_of_byte(UInt8(t))
+    elseif t isa UInt8
+        # fullstrict: RAW BYTE valtypes (the vtable's funcref fields etc.) resolve
+        # through the same byte table
+        return _wt_heap_kind_of_byte(t)
     else
         return :unknown
     end

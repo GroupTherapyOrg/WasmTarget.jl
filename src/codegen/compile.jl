@@ -1664,28 +1664,6 @@ function compile_module(functions::Vector;
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
-    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
-    # may add functions during body compilation). Trampolines + vtable globals for
-    # every type-keyed userland closure are created NOW; their bodies' FINAL indices
-    # are computable deterministically (bodies start after the K trampolines).
-    local _cvp = Tuple{Int, DataType}[]   # (function_data position, closure type)
-    for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
-        f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
-    end
-    if !isempty(_cvp)
-        local _n_now = length(mod.functions)
-        local _K = length(_cvp)   # trampolines to pre-create (one per closure body)
-        for (_slot, (_i, _T)) in enumerate(_cvp)
-            local _entry = function_data[_i]
-            local _ats, _rt = _entry[2], _entry[5]
-            local _body_idx = UInt32(n_imports + _n_now + _K + _i - 1)
-            local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
-            local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
-                         WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
-            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs)
-        end
-    end
-
     # fullstrict PRE-DECLARED SIGNATURES: the one derivation both the placeholder
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
@@ -1720,6 +1698,30 @@ function compile_module(functions::Vector;
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
+
+    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
+    # may add functions during body compilation). Trampolines + vtable globals for
+    # every type-keyed userland closure are created NOW; their bodies' FINAL indices
+    # are computable deterministically (bodies start after the K trampolines).
+    local _cvp = Tuple{Int, DataType}[]   # (function_data position, closure type)
+    for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
+        f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
+    end
+    if !isempty(_cvp)
+        for (_slot, (_i, _T)) in enumerate(_cvp)
+            local _entry = function_data[_i]
+            local _ats, _rt = _entry[2], _entry[5]
+            # fullstrict reorder: the placeholders occupy the body indices ALREADY —
+            # the standard formula reads them; trampolines append after.
+            local _body_idx = UInt32(n_imports + n_existing + _i - 1)
+            local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
+            local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
+                         WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
+            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs)
+        end
+    end
+
+
 
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation

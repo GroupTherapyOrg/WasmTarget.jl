@@ -37,7 +37,11 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     # ── the trampoline: the UNIFORM DYNAMIC SIGNATURE (anyref^(1+arity)) → anyref
     # (dart's dynamic-call entries: args arrive boxed/erased; the trampoline
     # unboxes/casts per the body's REAL signature and re-boxes the result).
-    tb = InstrBuilder(; func_name="closure_trampoline", mod=mod)
+    # fullstrict: the trampoline builder declares its params + scratch local so the
+    # tracker reads truth (params anyref^(1+arity) → anyref; scratch = the body width)
+    tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity],
+                      isempty(body_results) ? WasmValType[] : WasmValType[AnyRef];
+                      func_name="closure_trampoline", mod=mod)
     local_get!(tb, UInt32(0))
     ref_cast!(tb, Int64(base_idx), false)
     struct_get!(tb, base_idx, UInt32(1), AnyRef)               # .context
@@ -57,6 +61,7 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
         local rw = body_results[1]
         local box_idx = get_numeric_box_type!(mod, registry, rw)
         local scratch = UInt32(1 + arity)
+        builder_set_local_type!(tb, Int(scratch), rw)   # fullstrict: the scratch's truth
         local_set!(tb, scratch)
         i32_const!(tb, Int64(0))          # width-default classId (un-migrated callers discriminate by width)
         local_get!(tb, scratch)
@@ -128,9 +133,19 @@ function _closure_body_for(ctx, closure_type::Type)
         # PRECISE match only: the type-keyed registration (the arg_types[1]
         # heuristic once matched throw_boundserror taking the closure as arg 1)
         info.func_ref === closure_type || continue
-        # derive the wasm signature from the REGISTRATION (Julia types) — at wrap
-        # time the body may not be pushed into mod.functions yet (indices are
-        # assigned before bodies compile)
+        # fullstrict: the PLACEHOLDER (pre-declared signatures) is THE truth — the
+        # same source the call! deriver enforces; the julia re-derivation could
+        # disagree (the trampoline then mismatched at its own call).
+        local _m = ctx.mod
+        local _ni = count(imp -> imp.kind == 0x00, _m.imports)
+        local _fi = Int(info.wasm_idx) - _ni
+        if _fi >= 0 && _fi < length(_m.functions)
+            local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
+            if _ft isa FuncType
+                return (info.wasm_idx, WasmValType[q for q in _ft.params], WasmValType[r for r in _ft.results])
+            end
+        end
+        # fallback: the julia derivation (bare registries)
         local ps = WasmValType[]
         for T in info.arg_types
             push!(ps, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
