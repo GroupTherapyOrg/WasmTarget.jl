@@ -75,6 +75,33 @@ has_dispatch_table(reg::DispatchTableRegistry, func_ref) = haskey(reg.tables, fu
 get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_ref, nothing)
 
 # ==================== Table Building ====================
+
+# tag-run: the declared supertype of a struct wasm type — read through the abstract
+# synthetics' registry (the DAG's chain lives there + $JlBase terminates).
+function _dispatch_supertype_idx(idx::UInt32, registry)::Union{UInt32, Nothing}
+    d = registry.abstract_struct_idxs
+    # a concrete struct's parent: find T with this idx, return its dag parent chainable
+    for (T, info) in registry.structs
+        if info.wasm_type_idx == idx && T isa DataType
+            local P = supertype(T)
+            (P === Any || !(P isa DataType)) && return registry.base_struct_idx
+            return (d !== nothing && haskey(d, P)) ? d[P] : registry.base_struct_idx
+        end
+    end
+    # an abstract synthetic's parent
+    if d !== nothing
+        for (A, aidx) in d
+            if aidx == idx
+                local PA = supertype(A)
+                (PA === Any || !(PA isa DataType)) && return registry.base_struct_idx
+                return haskey(d, PA) ? d[PA] : registry.base_struct_idx
+            end
+        end
+    end
+    idx == registry.base_struct_idx && return nothing
+    return registry.base_struct_idx
+end
+
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
                                 threshold::Int=2)::DispatchTableRegistry
@@ -161,6 +188,11 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
         # march11: per-slot LUB — dart's unboxed-primitive fast lane
         # (dispatch_table.dart:172-205). A slot stays unboxed iff EVERY
         # specialization declares the SAME primitive Julia type there.
+        # tag-run item 1: dart _upperBound (dispatch_table.dart:172-205) — the
+        # unboxed-primitive fast lane PLUS the struct-LUB via the class-DAG: walk each
+        # concrete struct's declared supertype chain; the join = the deepest common
+        # ancestor (the DAG's synthetics make real join targets; AnyRef only when the
+        # types cross hierarchies).
         slot_types = WasmValType[]
         for j in 1:arity
             _tys = Set{Type}()
@@ -174,6 +206,29 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
                     _t === Float64 ? F64 :
                     _t === Int32 || _t === UInt32 || _t === Bool || _t === Char ? I32 :
                     _t === Float32 ? F32 : AnyRef)
+            elseif all(T -> T isa DataType && isconcretetype(T) && isstructtype(T) &&
+                            haskey(type_registry.structs, T), _tys)
+                # the struct-LUB: intersect the declared chains
+                local _chains = [begin
+                    local idx = type_registry.structs[T].wasm_type_idx
+                    local ch = UInt32[idx]
+                    local cur = idx
+                    for _ in 1:64
+                        local nxt = _dispatch_supertype_idx(cur, type_registry)
+                        nxt === nothing && break
+                        push!(ch, nxt); cur = nxt
+                    end
+                    ch
+                end for T in _tys]
+                local _common = intersect(Set.(_chains)...)
+                if isempty(_common)
+                    push!(slot_types, AnyRef)
+                else
+                    # the deepest common = the one earliest in any chain
+                    local _lub = first(_chains)[findfirst(x -> x in _common, first(_chains))]
+                    push!(slot_types, _lub == type_registry.base_struct_idx ? AnyRef :
+                                      ConcreteRef(UInt32(_lub), true))
+                end
             else
                 push!(slot_types, AnyRef)
             end
@@ -255,7 +310,16 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
                 local_get!(b, UInt32(j - 1))
 
-                if dt.slot_types[j] !== AnyRef
+                if dt.slot_types[j] isa ConcreteRef
+                    # tag-run: a struct-LUB slot arrives as the JOIN ref — downcast to
+                    # the TARGET's declared param (a within-hierarchy refinement)
+                    local _tsig_lub = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
+                    if _tsig_lub isa FuncType && j <= length(_tsig_lub.params)
+                        local _tpl = _tsig_lub.params[j]
+                        _tpl isa ConcreteRef && _tpl.type_idx != dt.slot_types[j].type_idx &&
+                            ref_cast!(b, Int64(_tpl.type_idx), _tpl.nullable)
+                    end
+                elseif dt.slot_types[j] !== AnyRef
                     # march11 fast lane: the slot arrives UNBOXED — pass through
                 else
                     # step3 (dart wrapper rule): the cast target is ALWAYS the TARGET's
