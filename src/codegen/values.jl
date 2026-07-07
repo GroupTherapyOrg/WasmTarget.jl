@@ -895,6 +895,19 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
 end
 
 """
+    _ctx_builder(ctx, name) -> InstrBuilder
+
+fullstrict: THE codegen builder constructor — mod + seeded params + the LIVE locals
+provider, so the tracker always reads ctx truth (bare builders guessed AnyRef for
+locals allocated after creation — the largest residual mismatch class).
+"""
+function _ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder
+    local b = InstrBuilder(; func_name=name, mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)
+    return b
+end
+
+"""
     _seed_builder_locals!(b, ctx)
 
 Teach a fresh value-builder the function's REAL local types (params via the same julia→wasm
@@ -929,7 +942,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
     # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
-    b = InstrBuilder(; func_name="compile_value", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_value")
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = emit_type_id!(b, ctx.type_registry, T)
