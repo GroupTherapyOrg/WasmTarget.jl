@@ -1269,7 +1269,7 @@ function _compile_call_fpext(args, fb::InstrBuilder, ctx::AbstractCompilationCon
         # Stack: [i32 = Float16 bits]
         # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
 
-        bld = _ctx_builder(ctx, "_compile_call_fpext")
+        bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
         # Save the Float16 bits to a temp local
         local_idx = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, I32)
@@ -1341,7 +1341,7 @@ function _compile_call_fpext(args, fb::InstrBuilder, ctx::AbstractCompilationCon
         append_builder!(fb, bld)
     else
         # Float32 → Float64 (standard case)
-        let bld = _ctx_builder(ctx, "_compile_call_fpext")
+        let bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
             num!(bld, 0xBB)  # f64.promote_f32
             append_builder!(fb, bld)
         end
