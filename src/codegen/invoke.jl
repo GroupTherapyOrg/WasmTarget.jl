@@ -3085,6 +3085,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
                     else
                         append_builder!(bas, _as_b)
+                        # march16: a KNOWN closure erasing into a Vector{Any} slot wraps
+                        # into the closure OBJECT first (dart convertType at the seam)
+                        val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
                         # PURE-048: Skip extern_convert_any if value is already externref
                         val_ty === ExternRef || extern_convert_any!(bas)
                     end

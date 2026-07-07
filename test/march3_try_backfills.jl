@@ -126,3 +126,22 @@ _m15_nest(n::Int64)::Int64 = (r = 0; try; try; throw(ErrorException("inner")); c
         @test r.pass
     end
 end
+
+# march16: FIRST-CLASS CLOSURES — the dart layouter end-to-end: construction →
+# the closure OBJECT {classId, context, vtable} at the erasure seam → Vector{Any}
+# → readback → vtable entry[arity] → call_ref → typed-specialized body.
+function _m16_mk(n::Int64)
+    fs = Any[x -> x + n, x -> x * n, x -> x - n]
+    s = 0
+    for f in fs; s += f(10)::Int64; end
+    s
+end
+_m16_one(n::Int64)::Int64 = (fs = Any[x -> x + n]; f = fs[1]; f(10)::Int64)
+@testset "march16: first-class closures (vtable + call_ref)" begin
+    for a in (Int64(5), Int64(0), Int64(-3))
+        r = try compare_julia_wasm(_m16_mk, a) catch; (pass=false,) end
+        @test r.pass
+    end
+    r = try compare_julia_wasm(_m16_one, Int64(7)) catch; (pass=false,) end
+    @test r.pass
+end

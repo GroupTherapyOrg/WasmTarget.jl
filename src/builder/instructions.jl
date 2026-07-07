@@ -363,7 +363,9 @@ struct WasmElemSegment
     table_idx::UInt32        # Which table to initialize
     offset::UInt32           # Offset in table (constant)
     func_indices::Vector{UInt32}  # Function indices to place in table
+    declared::Bool           # march16: flags=3 declarative segment (ref.func in const exprs)
 end
+WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32}) = WasmElemSegment(t, o, f, false)
 
 """
     WasmMemory
@@ -723,6 +725,19 @@ function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer,
     return mod
 end
 
+
+"""
+    declare_funcs!(mod, func_indices)
+
+march16: a DECLARATIVE element segment (flags=3) — makes the functions legal
+`ref.func` targets in constant expressions (the vtable-global initializers).
+"""
+function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})
+    isempty(func_indices) && return
+    push!(mod.elem_segments, WasmElemSegment(UInt32(0), UInt32(0), func_indices, true))
+    return
+end
+
 """
     add_memory!(mod, min, max=nothing) -> memory_idx
 
@@ -994,7 +1009,11 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         write_section!(w, SECTION_ELEMENT) do section
             write_u32!(section, length(mod.elem_segments))
             for elem in mod.elem_segments
-                if elem.table_idx == UInt32(0)
+                if elem.declared
+                    # march16 flags=3: declarative — elemkind + vec(funcidx), no table/offset
+                    write_byte!(section, 0x03)
+                    write_byte!(section, 0x00)  # elemkind: funcref
+                elseif elem.table_idx == UInt32(0)
                     # Element segment kind 0: active, table index 0, funcref
                     # Binary format: flags (0) + offset expr + vec(funcidx)
                     write_byte!(section, 0x00)  # flags: active segment, table 0
@@ -1004,11 +1023,13 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                     write_byte!(section, 0x02)  # flags: active segment, explicit table index
                     write_u32!(section, elem.table_idx)
                 end
-                # Offset expression (i32.const offset)
-                push!(section.buffer, Opcode.I32_CONST)
-                append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
-                push!(section.buffer, Opcode.END)
-                if elem.table_idx != UInt32(0)
+                if !elem.declared
+                    # Offset expression (i32.const offset)
+                    push!(section.buffer, Opcode.I32_CONST)
+                    append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
+                    push!(section.buffer, Opcode.END)
+                end
+                if !elem.declared && elem.table_idx != UInt32(0)
                     # elemkind for flags=2: 0x00 = funcref
                     write_byte!(section, 0x00)
                 end
@@ -1305,16 +1326,21 @@ function to_bytes_no_dict(mod::WasmModule)::Vector{UInt8}
         write_section!(w, SECTION_ELEMENT) do section
             write_u32!(section, length(mod.elem_segments))
             for elem in mod.elem_segments
-                if elem.table_idx == UInt32(0)
+                if elem.declared
+                    write_byte!(section, 0x03)   # march16: declarative
+                    write_byte!(section, 0x00)
+                elseif elem.table_idx == UInt32(0)
                     write_byte!(section, 0x00)
                 else
                     write_byte!(section, 0x02)
                     write_u32!(section, elem.table_idx)
                 end
-                push!(section.buffer, Opcode.I32_CONST)
-                append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
-                push!(section.buffer, Opcode.END)
-                if elem.table_idx != UInt32(0)
+                if !elem.declared
+                    push!(section.buffer, Opcode.I32_CONST)
+                    append!(section.buffer, encode_leb128_signed(Int32(elem.offset)))
+                    push!(section.buffer, Opcode.END)
+                end
+                if !elem.declared && elem.table_idx != UInt32(0)
                     write_byte!(section, 0x00)
                 end
                 write_u32!(section, length(elem.func_indices))

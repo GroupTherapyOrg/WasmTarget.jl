@@ -78,6 +78,13 @@ end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
+    # march17 harvest: surface every collect-mode violation WITHOUT throwing —
+    # the burn-down list generator (strip after the flip).
+    if haskey(ENV, "WT_STRICT_HARVEST") && has_errors(b.v)
+        for e in b.v.errors
+            println(stderr, "HARVEST| ", b.func_name, " | ", first(e, 160))
+        end
+    end
     code = UInt8[]
     for i in eachindex(b.instrs)
         if !isassigned(b.instrs, i)
@@ -111,7 +118,7 @@ opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until
 """
 _wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
-set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b)
+set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
 
 _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
 
@@ -129,9 +136,16 @@ end
 # Throw the collected validator errors (if strict) with rich source context, else collect.
 @inline function _check!(b::InstrBuilder)
     if b.strict && has_errors(b.v)
-        msg = join(b.v.errors, "\n  ")
-        empty!(b.v.errors)
-        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
+        # march17 STAGED ENFORCEMENT: UNDERFLOWS (structural stack integrity) THROW;
+        # type mismatches COLLECT until the typed-value-channel campaign zeroes them
+        # (they're tracked-type disagreements, some tracker-conservative). dart throws
+        # on both; WT gets there in two steps. Harvest stays visible for both.
+        local _uf = any(startswith(e, "UNDERFLOW") for e in b.v.errors)
+        if _uf
+            msg = join(b.v.errors, "\n  ")
+            empty!(b.v.errors)
+            throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
+        end
     end
     return b
 end
@@ -594,6 +608,13 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
         end
         error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
               "$(length(src.v.labels)) labels; $_report")
+    end
+    # march17: fragment violations PROPAGATE — they were silently dropped here,
+    # which is why per-emit strict threw while the top-level harvest saw nothing.
+    if has_errors(src.v)
+        local _mctx = isempty(dst.context) ? "" : " ⟨$(first(dst.context, 60))⟩"
+        append!(dst.v.errors, ("[via $(src.func_name)$(_mctx)] " * e for e in src.v.errors))
+        empty!(src.v.errors)
     end
     for t in Iterators.reverse(src.seeded)
         validate_pop!(dst.v, t)

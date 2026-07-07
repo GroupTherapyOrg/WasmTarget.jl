@@ -45,16 +45,71 @@ const TRIM_ENTRY_NAMES = Ref{Union{Nothing, Set{String}}}(nothing)
 # Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     out = Any[]
+    # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
+    # closure bodies specialize against these (dart's typed vtable entries; Julia's
+    # inference makes the body REAL instead of an any-erased stub).
+    dyn_sigs = Set{Tuple}()
+    closure_types = Set{DataType}()
     i = 1
+    _fn_closures = Set{DataType}()   # per-function staging (folded on co-occurrence)
+    _fn_has_dyn = false
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
+        # march16 co-occurrence fold: a function's constructed closures enroll ONLY
+        # if that function ALSO makes dynamic (SSA-callee) calls — enrolling every
+        # userland closure perturbed modules with purely-static closures (the
+        # randsubseq suite regression).
+        if _fn_has_dyn
+            union!(closure_types, _fn_closures)
+        end
+        empty!(_fn_closures); _fn_has_dyn = false
         host_mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
         ssat = src.ssavaluetypes
         for stmt in src.code
+            # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
+            # closure enrolls its callable body — the erased/dynamic call site rides
+            # the vtable trampoline, which needs the body compiled. Specialized with
+            # the method's own sig (abstract slots stay erased; the trampoline passes
+            # anyref and the body's funnel machinery narrows internally).
+            if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
+                local _nt = stmt.args[1]
+                local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
+                           _nt isa DataType ? _nt : nothing
+                # scope: USERLAND closures only — Base/stdlib-internal closures are
+                # statically called (never through the vtable); enrolling them all
+                # exploded the blast radius (a _growend! trampoline mis-built).
+                local _T_user = _T isa DataType && begin
+                    local _r = _T.name.module
+                    while parentmodule(_r) !== _r; _r = parentmodule(_r); end
+                    _r === Main
+                end
+                if _T isa DataType && is_closure_type(_T) && _T_user
+                    push!(_fn_closures, _T)   # staged; folds only on co-occurrence
+                end
+                continue
+            end
+            # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
+            if stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
+                local _dargs = Any[]
+                local _dok = true
+                for a in stmt.args[2:end]
+                    local t = a isa Core.SSAValue ?
+                                ((ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any) :
+                              a isa Core.Argument ?
+                                ((a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any) :
+                                Core.Typeof(a)
+                    (t isa DataType && isconcretetype(t)) || (_dok = false; break)
+                    push!(_dargs, t)
+                end
+                if _dok && !isempty(_dargs)
+                    push!(dyn_sigs, Tuple(_dargs))
+                    _fn_has_dyn = true
+                end
+            end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
             cref isa GlobalRef || continue
@@ -107,6 +162,35 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             end
         end
     end
+
+    _fn_has_dyn && union!(closure_types, _fn_closures)
+    # cross-product: each userland closure type × each observed dynamic-call
+    # signature of matching arity → a TYPED body specialization (the vtable's
+    # typed entry; inference compiles the body for real)
+    for _T in closure_types
+        local _mms2 = try
+            Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
+        catch; nothing end
+        for mm in (_mms2 === nothing ? () : _mms2)
+            local m = mm.method
+            local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
+            msig isa DataType || continue
+            local mps = collect(msig.parameters)
+            (length(mps) >= 1 && _T <: mps[1]) || continue
+            local marity = length(mps) - 1
+            for ds in dyn_sigs
+                length(ds) == marity || continue
+                local ssig = try Tuple{_T, ds...} catch; continue end
+                # the observed args must be admissible for the method
+                (ssig <: m.sig) || continue
+                local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                cmi === nothing && continue
+                cmi in seen && continue
+                push!(seen, cmi)
+                push!(out, cmi)
+            end
+        end
+    end
     return out
 end
 
@@ -117,7 +201,13 @@ end
 # stubs that one function instead of breaking the whole module). 0 = no discovery ran.
 const _TRIM_BASE_PAIRS = Ref{Int}(0)
 
+# march16: the conversion-arm allowlist — closure types whose bodies the candidate
+# fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
+# lifecycle as TRIM_IR_CACHE; reset at each collect).
+const _ENROLLED_CLOSURE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
+
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
+    _ENROLLED_CLOSURE_TYPES[] = Set{DataType}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -151,6 +241,16 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         for _round in 1:8
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
             extra = Any[mi for mi in extra if !(mi in base_mis)]
+            # march16: remember WHICH closure types were enrolled — the conversion
+            # arm converts ONLY these (converting every userland closure pair changed
+            # unrelated compiles: the randsubseq suite regression, bisect-certified).
+            for mi in extra
+                local st = mi.specTypes
+                if st isa DataType && st <: Tuple && length(st.parameters) >= 1
+                    local ft = st.parameters[1]
+                    ft isa DataType && is_closure_type(ft) && push!(_ENROLLED_CLOSURE_TYPES[], ft)
+                end
+            end
             isempty(extra) && break
             # Fresh interpreter (its own cache_owner) — never touches the base partition.
             cand_interp = WasmInterpreter(Base.RefValue(0))
@@ -246,6 +346,14 @@ function trim_compile_plan(entries_named::Vector)
         elseif ftyp isa DataType && ftyp <: Type && length(ftyp.parameters) >= 1
             f = ftyp.parameters[1]       # constructors: Type{T} → T
             (f isa DataType || f isa UnionAll) || (f = nothing)
+        elseif ftyp isa DataType && is_closure_type(ftyp)
+            # march16: a CAPTURING closure has no instance — key its body by the
+            # closure TYPE (the vtable machinery resolves by type; no static
+            # caller resolves these by value). dart: creating a Lambda compiles
+            # its target. USERLAND ONLY: converting Base-internal closure pairs
+            # (previously skipped) changed unrelated compiles — randsubseq's
+            # internals regressed in the suite context (the march-16 gate catch).
+            ftyp in _ENROLLED_CLOSURE_TYPES[] && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig

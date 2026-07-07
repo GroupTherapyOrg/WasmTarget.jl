@@ -786,3 +786,48 @@ from its runtime; the SLOT parity (2-arity tag) is what matters and is done.
 (c) SURVEYED → DEFERRED (own campaign): first-class nullability = 63 hard-coded
 nullable=true ConcreteRef sites in types.jl + every consumer assuming nullable; a
 full-fuzz ripple. Not blocking the closures build; schedule after THE TAG measurement.
+
+# ═══════════════════════════════════════════════════════════════════
+# GO-FOR-BROKE (2026-07-06): THE 8 STEPS TO REAL PARITY — full plan
+# ═══════════════════════════════════════════════════════════════════
+1. CLOSE MARCH 16 — the allowlist fix is in (batteries+smoke green); suite conf + gate
+   + PR + merge. Exit: closures on main.
+2. MARCH 17 THE ENFORCER — WT_STRICT_HARVEST drives the burn-down (types.jl
+   _populate_jl_hierarchy! remaining classes; stackified generate_structured;
+   statements compile_statement.frag; closures trampoline×1); then ctor default →
+   _wt_builder_strict(); then L-strict LOCK (a test asserting the default THROWS on an
+   ill-typed emit); wasm-tools → CI-only. Exit: strict default + green gate.
+3. SLICE E — threshold 9→2 + closure-exclusion removal (both staged one-liners).
+   Exit: green gate (the Dates fn#35 unbalance = first triage if red).
+4. WRAP TAIL — R17 205→~40 floor in batches; then boxed-scalar constant dedup
+   (needs expectedType at scalar arms). Exit: R17 ≤ 45, dedup live.
+5. THE CLASS-DAG — per-class wasm struct subtype hierarchy mirroring Julia's type DAG
+   (dart class_info.dart's subtype chains) replacing flat sub-$JlBase; + the
+   identityHash header slot. Unlocks dispatch struct-LUB + typeassert depth. THE BIG ONE.
+6. NULLABILITY — derive ConcreteRef nullability from Union{T,Nothing} (63 sites +
+   consumers; full-fuzz per batch).
+7. UNIFICATION + RESIDUALS — one closure rep everywhere (static path through the
+   object); allocation-gated compilation; $current_exn death; tuple-per-arity.
+8. FINAL RE-CENSUS — the 6-auditor instrument; the honest number.
+EXECUTION: warm worktrees wt-warm-1/2; single-process verify batches; minimized
+oracles; parallel hypotheses; background gates overlap next-step foreground dev.
+
+## MARCH 16 — FIRST-CLASS CLOSURES (2026-07-06)
+The dart layouter END-TO-END: the closure OBJECT {classId, context, vtable} (sub $JlBase)
+· per-arity vtable structs · one immutable vtable global per body (declarative elem
+segments for ref.func const-exprs; the index-freeze pre-pass) · trampolines with the
+UNIFORM dynamic signature · the erasure-seam wrap/unwrap in the funnel · call_ref through
+entry[arity] · TYPED vtable entries from OBSERVED call signatures (Julia's inference
+makes bodies real — dart's typed entries). The suite regression (randsubseq) was the
+conversion arm converting EVERY userland closure pair — fixed with the enrolled-types
+allowlist (bisect-certified). Battery: vec-of-closures ×3 args + single-element.
+
+## MARCH 17a — THE ENFORCING BUILDER (2026-07-06, Dale's directive)
+THE DISCOVERY: the enforcement layer existed but the ctor default was never wired (only
+int128.jl; the 07-01 "certification" tested nothing). THE BURN-DOWN: harvest
+instrumentation (error propagation at merges + context threading) → 14307 findings → 78
+underflows: _populate 96k→0 (declared truth + consumer narrows) · direct emission for
+the pointless-fragment idiom (_op1!, stores, drops, 16 let-ib wrappers) · the
+_sub_builder seeder for parent-consuming helpers · STAGED enforcement (underflows THROW
+under strict; type mismatches collect until the typed-channel campaign). Remaining: the
+flow-family underflows (~61) → the ctor-default flip → the L-strict lock.

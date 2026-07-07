@@ -544,6 +544,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/MARCH4_STATEMENT_PLAN.md).
         local _sf = InstrBuilder(; func_name="compile_statement.frag", mod=ctx.mod)
+        set_context!(_sf, first(string(stmt), 80))   # march17: errors name the stmt
+        # march17: statements legitimately consume values earlier statements left on
+        # the wasm stack (the stackified model) — seed the fragment with the parent's
+        # TRACKED stack so pops resolve; append_builder! settles the contract exactly.
+        isempty(b.v.stack) || seed_input!(_sf, copy(b.v.stack))
         _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
@@ -1061,13 +1066,12 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                                 end
                             end
                         end
-                        # any.convert_extern (optional) + ref.cast null <type_idx>, typed; byte-identical.
-                        local _rcb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                        # march17: DIRECT into _sf (the fresh-builder wrapper underflowed by design)
                         if needs_any_convert_extern
-                            any_convert_extern!(_rcb)
+                            any_convert_extern!(_sf)
                         end
-                        ref_cast!(_rcb, Int64(needs_ref_cast_local.type_idx), true)
-                        append_builder!(_sf, _rcb); stmt_bytes = builder_code(_sf)
+                        ref_cast!(_sf, Int64(needs_ref_cast_local.type_idx), true)
+                        stmt_bytes = builder_code(_sf)
                     end
                 end
 
@@ -1248,9 +1252,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     # (M5 loud-visible; behavior unchanged pending the full audit).
                     record_unsupported!(ctx, :unsupported_type,
                         "SSA-store type mismatch (value dropped, type-safe default emitted)"; idx=idx)
-                    local _dvb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-                    drop!(_dvb)
-                    append_builder!(b, _dvb)
+                    drop!(b)   # march17: direct
                     _emit_default!(b, local_type; eqref=false)
                     end  # close else from PURE-908 externref↔anyref check
                 end
@@ -1297,13 +1299,13 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 end
 
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
-                # (leaves value on stack for the SSA local.set below). Typed; byte-identical.
-                local _slb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                # (leaves value on stack for the SSA local.set below).
+                # march17: DIRECT — the fresh store wrapper pop_any'd an empty stack
+                # on EVERY SSA store (the single largest harvest class).
                 if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)
-                    local_tee!(_slb, ctx.slot_locals[_slot_assign_id])
+                    local_tee!(b, ctx.slot_locals[_slot_assign_id])
                 end
-                local_set!(_slb, local_idx)
-                append_builder!(b, _slb)
+                local_set!(b, local_idx)
             end
         end
     end
@@ -1311,9 +1313,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
     # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
-        local _slb2 = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-        local_set!(_slb2, ctx.slot_locals[_slot_assign_id])
-        append_builder!(b, _slb2)
+        local_set!(b, ctx.slot_locals[_slot_assign_id])   # march17: direct
     end
 
     # TRACE: Find double-DROP in compiled output for func 8 (node count — no byte scan)
