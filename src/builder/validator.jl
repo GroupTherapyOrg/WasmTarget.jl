@@ -337,6 +337,16 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode == Opcode.F64_CONVERT_I64_S || opcode == Opcode.F64_CONVERT_I64_U
         validate_pop!(v, I64); validate_push!(v, F64)
 
+    # --- Sign-extension (i32; the i64 family was already tracked) ---
+    elseif opcode == Opcode.I32_EXTEND8_S || opcode == Opcode.I32_EXTEND16_S
+        validate_pop!(v, I32); validate_push!(v, I32)
+
+    # --- Float precision conversion (were UNTRACKED — the fma32 class) ---
+    elseif opcode == Opcode.F64_PROMOTE_F32
+        validate_pop!(v, F32); validate_push!(v, F64)
+    elseif opcode == Opcode.F32_DEMOTE_F64
+        validate_pop!(v, F64); validate_push!(v, F32)
+
     # --- Reinterpret (same-size bitcast) ---
     elseif opcode == Opcode.I32_REINTERPRET_F32
         validate_pop!(v, F32); validate_push!(v, I32)
