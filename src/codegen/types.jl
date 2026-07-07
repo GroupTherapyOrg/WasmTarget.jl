@@ -1672,15 +1672,15 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
             wrapper_global_idx = registry.type_constant_globals[wrapper]
             begin
-            local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
-            global_get!(b, tn_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
-        end
+                local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
+                global_get!(b, tn_global_idx, _gvt)
+                _gvt === AnyRef && ref_cast!(b, Int64(tn_type_idx), true)   # march17: the RECEIVER is a TypeName
+            end
             begin
-            local _gvt = mod.globals[Int(wrapper_global_idx) + 1].valtype
-            global_get!(b, wrapper_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
-        end
+                local _gvt = mod.globals[Int(wrapper_global_idx) + 1].valtype
+                global_get!(b, wrapper_global_idx, _gvt)
+                _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)
+            end
             struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = wrapper
         end
     end
@@ -1706,7 +1706,9 @@ function _emit_typename_string_field!(b::InstrBuilder, tn_global_idx::UInt32,
     utf8 = Vector{UInt8}(str)
     n = length(utf8)
 
+    # march17: declare truth + narrow to the TypeName receiver
     global_get!(b, tn_global_idx, AnyRef)
+    ref_cast!(b, Int64(tn_type_idx), true)
 
     if n == 0
         i32_const!(b, 0)
@@ -1917,13 +1919,11 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
         type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds
         dt_global_idx = registry.type_constant_globals[T]
 
-        # global.get $type_table
+        # march17: the table's declared type + narrow to the array receiver
         global_get!(b, table_global, AnyRef)
-        # i32.const <typeId>
+        ref_cast!(b, Int64(arr_type_idx), true)
         i32_const!(b, Int64(type_id))
-        # global.get $dt_global
-        global_get!(b, dt_global_idx, AnyRef)
-        # array.set $arr_type
+        global_get!(b, dt_global_idx, AnyRef)   # element slot IS anyref
         array_set!(b, arr_type_idx, AnyRef)
     end
     return b
