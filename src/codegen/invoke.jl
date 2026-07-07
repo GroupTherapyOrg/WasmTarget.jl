@@ -2427,7 +2427,22 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         end
 
                         # Cross-function call - emit call instruction with target index
-                        bcc = _ctx_builder(ctx, "compile_invoke")
+                        # fullstrict: the args sit on the PARENT builder — seed the real
+                        # param count (readable from the pre-declared placeholder).
+                        local _cc_params = begin
+                            local _m = ctx.mod
+                            local _ni = count(imp -> imp.kind == 0x00, _m.imports)
+                            local _fi = Int(target_info.wasm_idx) - _ni
+                            local _ps = WasmValType[]
+                            if _fi >= 0 && _fi < length(_m.functions)
+                                local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
+                                _ft isa FuncType && (_ps = WasmValType[q for q in _ft.params])
+                            end
+                            _ps
+                        end
+                        haskey(ENV, "WT_DBG_CC") && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
+                        bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
+                                           seed_types=_cc_params)   # the placeholder truth IS the contract
                         call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
                         cross_call_handled = true
                         # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
@@ -2498,7 +2513,19 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             end
             if is_self_call
                 # Self-recursive call - emit call instruction
-                bsc2 = _ctx_builder(ctx, "compile_invoke")
+                # fullstrict: the args live on fb; the OWN placeholder sig is the contract
+                local _sc_params = begin
+                    local _m = ctx.mod
+                    local _ni = count(imp -> imp.kind == 0x00, _m.imports)
+                    local _fi = Int(ctx.func_idx) - _ni
+                    local _ps = WasmValType[]
+                    if _fi >= 0 && _fi < length(_m.functions)
+                        local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
+                        _ft isa FuncType && (_ps = WasmValType[q for q in _ft.params])
+                    end
+                    _ps
+                end
+                bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
                 call!(bsc2, ctx.func_idx, WasmValType[], WasmValType[])
                 # PURE-908: Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)

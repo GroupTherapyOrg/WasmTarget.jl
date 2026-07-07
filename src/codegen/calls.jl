@@ -110,10 +110,17 @@ march17: a fragment that consumes the parent's top `n` stack values DECLARES the
 (seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
 """
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
-                      narrow_to::Union{Nothing, WasmValType}=nothing)
+                      narrow_to::Union{Nothing, WasmValType}=nothing,
+                      seed_types::Union{Nothing, Vector{WasmValType}}=nothing)
     local b = InstrBuilder(; func_name=name, mod=ctx.mod)
     _seed_builder_locals!(b, ctx)   # fullstrict: the live provider everywhere
     local h = length(fb.v.stack)
+    # fullstrict: when the parent's tracking is short, the caller's DECLARED types
+    # are the contract (the parent's shortfall surfaces at ITS merge, attributed there)
+    if n > 0 && h < n && seed_types !== nothing && length(seed_types) == n
+        seed_input!(b, copy(seed_types))
+        return b
+    end
     if n > 0 && h >= n
         local seeds = WasmValType[fb.v.stack[h - n + i] for i in 1:n]
         seed_input!(b, seeds)
