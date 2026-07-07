@@ -846,3 +846,13 @@ asserted in runtests; the silent-unwiring cannot repeat; L6 re-pointed to freeze
 opt-out set at the ONE documented flow builder). Underflows THROW at the emitting line
 with the statement + stack snapshot; type mismatches collect until the typed-channel
 campaign zeroes them. wasm-tools = the independent CI oracle only.
+
+## STEP 3 — THE THRESHOLD FLIP 9→2 (2026-07-07, gate-certified 10+9)
+dart tables EVERY targetCount>1 selector (dispatch_table.dart:401-403). Three holes
+closed en route: the void-target mirror arm (a value-typed dispatch sig over a void
+target pushes the default — the Dates fn#35 stopper) · the wrapper's arg casts ALWAYS
+follow the TARGET's declared signature (the tid-resolved struct can differ) · the
+wrapper builder carries mod (the ENFORCER named it at the emitting line — the march-17
+instrument catching real bugs on day one). Closures stay out of the class table by
+design (the march-16 vtable owns them — dart's exact split). The multi-axis 2-8
+unreachable hole: CLOSED (tables exist for every polymorphic selector).
