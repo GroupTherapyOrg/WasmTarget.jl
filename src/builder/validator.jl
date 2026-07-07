@@ -84,6 +84,10 @@ Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
 
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType
     v.enabled || return expected
+    # wasm spec: post-unreachable code validates POLYMORPHICALLY — pops succeed
+    # against the bottom type (the tag-run corpus tail's root: dead-path phi
+    # stores popped an empty tracked stack that the spec says is bottomless).
+    v.reachable || return expected
     if length(v.stack) <= _base(v)
         # march17: name the CURE — a fragment consuming the parent's stack must
         # DECLARE the input via seeding (append_builder! settles the contract).
@@ -106,6 +110,7 @@ Returns `nothing` on underflow.
 """
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.enabled || return nothing
+    v.reachable || return nothing   # spec: polymorphic post-unreachable
     if length(v.stack) <= _base(v)
         push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow on pop_any (past block base) " *
               "[ctx: $(v.context_hint)]. FIX: seed the fragment's input.")

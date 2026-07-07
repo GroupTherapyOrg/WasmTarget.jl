@@ -1515,7 +1515,9 @@ begin
             lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
             @test lb.strict   # the default IS strict
             @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # UNDERFLOW throws
-            # (STAGED hotfix: the mismatch @test_throws relands with the total flip)
+            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2")
+            WT.i64_const!(lb2, 1)
+            @test_throws WT.StackImbalanceError WT.num!(lb2, WT.Opcode.I32_EQZ)  # TYPE MISMATCH throws
             # ZERO opt-outs in the tree (no netting, no exceptions):
             cgdir = joinpath(dirname(pathof(WasmTarget)), "..")
             n_optout = 0
@@ -1526,7 +1528,7 @@ begin
                                       readlines(joinpath(root, f)))
                 end
             end
-            @test n_optout <= 1   # STAGED hotfix: the flow's temporary re-opt-out
+            @test n_optout == 0   # ZERO opt-outs, forever
         end
 
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin

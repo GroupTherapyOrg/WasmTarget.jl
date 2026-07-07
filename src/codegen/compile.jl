@@ -101,7 +101,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
     expected_func_idx = UInt32(0)
 
     # Check if this is an intrinsic function that needs special code generation
-    intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
+    intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type) : nothing
 
     local body::Vector{UInt8}
     local locals::Vector{WasmValType}
@@ -837,13 +837,19 @@ Generate intrinsic function body for WasmTarget runtime functions.
 These functions have special WASM implementations that differ from their Julia fallbacks.
 Returns the function body bytes, or nothing if not an intrinsic.
 """
-function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
+function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                 return_type::Union{Type, Nothing}=nothing)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
     # Only functions can have intrinsic bodies
     if !(f isa Function)
         return nothing
     end
     fname = nameof(f)
-    b = InstrBuilder(; func_name="generate_intrinsic_body", mod=mod)
+    # tag-run: the builder declares its params (the same julia→wasm mapping the
+    # emitted function will carry) so the tracker reads truth for every local.get
+    local _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+    local _ib_results = (return_type === nothing || return_type === Nothing || return_type === Union{}) ?
+                        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+    b = InstrBuilder(_ib_params, _ib_results; func_name="generate_intrinsic_body", mod=mod)
     extra_locals = WasmValType[]
 
     # Get string array type for string operations
@@ -1755,7 +1761,7 @@ function compile_module(functions::Vector;
         func_idx = UInt32(n_imports + n_existing + i - 1)
         _this_isolated = !isempty(_isolated_set) && (f, arg_types) in _isolated_set
         # Check if this is an intrinsic function that needs special code generation
-        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
+        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type) : nothing
 
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}

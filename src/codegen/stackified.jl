@@ -363,7 +363,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Byte-identical to the prior raw emission.
     # STAGED (hotfix): the flow re-opts-out while the corpus tail zeroes on
     # wt-tag-run (its underflow class was the red); dies again with the total flip.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
+    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
 
     # For very complex functions, use a dispatcher-style approach

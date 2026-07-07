@@ -143,8 +143,7 @@ end
         # STAGED (hotfix): underflows + frame errors throw; type mismatches collect
         # while the corpus tail zeroes on wt-tag-run — the TOTAL flip relands with it.
         # (Main went red when the total flip outran the corpus burn-down.)
-        local _uf = any(startswith(e, "UNDERFLOW") || occursin("height mismatch", e) for e in b.v.errors)
-        if _uf
+        if true   # tag-run: TOTAL on the branch (the corpus tail zeroes here, then main)
             msg = join(b.v.errors, "\n  ")
             # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
             if b.trace !== nothing && !isempty(b.trace)

@@ -347,7 +347,13 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             call!(b, entry.target_idx, WasmValType[], WasmValType[])
 
             # PURE-9061: Box numeric results when dispatch table uses anyref return
-            if is_anyref_return
+            # tag-run: key on the TRACKED actual — the call's derived (placeholder)
+            # result is the truth; a target already returning a ref needs NO box
+            # (the julia-derived width lied for Any-erased returns).
+            local _wr_actual = isempty(b.v.stack) ? nothing : b.v.stack[end]
+            if is_anyref_return && _wr_actual !== nothing && _wt_is_ref(_wr_actual)
+                # already a ref — anyref-compatible, pass through
+            elseif is_anyref_return
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
                 if entry.return_type === Nothing || entry.return_type === Union{}
                     # WBUILD-4000: Target function returns void (Nothing/Union{}).
@@ -360,6 +366,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # hardcoded 0 = non-discriminable — an isa/typeof on this result would wrongly fail),
                     # reload, struct.new {classId, value}. (dispatch carries mod+registry, not ctx, so it
                     # cannot share emit_classid_box!'s ctx-allocated scratch local — same shape inline.)
+                    builder_set_local_type!(b, Int(dt.arity), entry_wasm_type)  # the scratch's truth
                     local_set!(b, UInt32(Int(dt.arity)))  # first extra local
                     i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                     local_get!(b, UInt32(Int(dt.arity)))
