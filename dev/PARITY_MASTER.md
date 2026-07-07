@@ -831,3 +831,18 @@ the pointless-fragment idiom (_op1!, stores, drops, 16 let-ib wrappers) · the
 _sub_builder seeder for parent-consuming helpers · STAGED enforcement (underflows THROW
 under strict; type mismatches collect until the typed-channel campaign). Remaining: the
 flow-family underflows (~61) → the ctor-default flip → the L-strict lock.
+
+## MARCH 17 FINAL — THE ENFORCING BUILDER: STRICT BY DEFAULT (2026-07-07, Dale's directive)
+GATE-CERTIFIED (10 shards + 9 fuzz, strict default). The arc: the discovery (the ctor
+default was never wired; the 07-01 certification tested nothing) → the harvest
+instrument (error propagation at merges + context threading + line-tagging) → the
+burn-down 14307→0 underflows (declared-truth global_gets ×15+, direct emission for the
+pointless-fragment idiom ×60+, the _sub_builder seeder for parent-consuming helpers,
+the corpus tail one site per gate round) → THE BLOCKTYPE CHOKEPOINT ROOT-FIX
+(if_!/block!/loop! sent value-typed blocktypes to the bytes but never the tracker —
+every if_!(b, I32) was tracker-void; ONE fix cleared the final family) → THE FLIP
+(default = _wt_builder_strict()) → THE L-STRICT LOCK (default-strict + @test_throws
+asserted in runtests; the silent-unwiring cannot repeat; L6 re-pointed to freeze the
+opt-out set at the ONE documented flow builder). Underflows THROW at the emitting line
+with the statement + stack snapshot; type mismatches collect until the typed-channel
+campaign zeroes them. wasm-tools = the independent CI oracle only.
