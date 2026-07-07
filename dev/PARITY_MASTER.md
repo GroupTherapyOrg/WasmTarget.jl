@@ -811,3 +811,23 @@ full-fuzz ripple. Not blocking the closures build; schedule after THE TAG measur
 8. FINAL RE-CENSUS — the 6-auditor instrument; the honest number.
 EXECUTION: warm worktrees wt-warm-1/2; single-process verify batches; minimized
 oracles; parallel hypotheses; background gates overlap next-step foreground dev.
+
+## MARCH 16 — FIRST-CLASS CLOSURES (2026-07-06)
+The dart layouter END-TO-END: the closure OBJECT {classId, context, vtable} (sub $JlBase)
+· per-arity vtable structs · one immutable vtable global per body (declarative elem
+segments for ref.func const-exprs; the index-freeze pre-pass) · trampolines with the
+UNIFORM dynamic signature · the erasure-seam wrap/unwrap in the funnel · call_ref through
+entry[arity] · TYPED vtable entries from OBSERVED call signatures (Julia's inference
+makes bodies real — dart's typed entries). The suite regression (randsubseq) was the
+conversion arm converting EVERY userland closure pair — fixed with the enrolled-types
+allowlist (bisect-certified). Battery: vec-of-closures ×3 args + single-element.
+
+## MARCH 17a — THE ENFORCING BUILDER (2026-07-06, Dale's directive)
+THE DISCOVERY: the enforcement layer existed but the ctor default was never wired (only
+int128.jl; the 07-01 "certification" tested nothing). THE BURN-DOWN: harvest
+instrumentation (error propagation at merges + context threading) → 14307 findings → 78
+underflows: _populate 96k→0 (declared truth + consumer narrows) · direct emission for
+the pointless-fragment idiom (_op1!, stores, drops, 16 let-ib wrappers) · the
+_sub_builder seeder for parent-consuming helpers · STAGED enforcement (underflows THROW
+under strict; type mismatches collect until the typed-channel campaign). Remaining: the
+flow-family underflows (~61) → the ctor-default flip → the L-strict lock.
