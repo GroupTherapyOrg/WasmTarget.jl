@@ -124,7 +124,9 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     end
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping (field_offset=1 for typeId prefix)
     info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
@@ -553,7 +555,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     end
 
     # Update the placeholder struct with the correct fields
-    mod.types[reserved_idx + 1] = StructType(wasm_fields)
+    mod.types[reserved_idx + 1] = StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))   # step5
 
     # Record mapping (rec groups already set up by register_struct_type!)
     # PURE-9024: field_offset=1 for typeId prefix
@@ -752,7 +754,9 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     end
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
     info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
@@ -879,7 +883,9 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     end
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
     info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
@@ -931,7 +937,9 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     ]
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:ref, :size]  # Julia field names
@@ -987,7 +995,9 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     ]
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:ref, :size]  # Julia field names
@@ -1021,7 +1031,9 @@ function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     ]
 
     # Add struct type to module
-    type_idx = add_struct_type!(mod, wasm_fields)
+    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
+    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    type_idx = UInt32(add_type!(mod, StructType(wasm_fields, dag_supertype_idx!(mod, registry, T))))
 
     # Record mapping with field info (PURE-9024: field_offset=1)
     field_names = [:lo, :hi]

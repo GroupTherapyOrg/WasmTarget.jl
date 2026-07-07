@@ -455,6 +455,11 @@ function types_equal(a::FuncType, b::FuncType)
 end
 
 function types_equal(a::StructType, b::StructType)
+    # step5: the SUPERTYPE is part of a struct type's identity — the class-DAG's
+    # synthetic {classId} structs differ ONLY by their parent (dedup collapsed the
+    # whole hierarchy into $JlBase otherwise). Matches wasm's nominal-ish subtyping:
+    # (sub A (struct i32)) and (sub B (struct i32)) are distinct types.
+    a.supertype_idx == b.supertype_idx &&
     length(a.fields) == length(b.fields) &&
     all(fields_equal(af, bf) for (af, bf) in zip(a.fields, b.fields))
 end
