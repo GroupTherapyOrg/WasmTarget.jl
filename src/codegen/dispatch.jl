@@ -81,6 +81,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
     # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
     # (dispatch_table.dart:401-403 needsDispatch). The 2-8 machinery was proven at
     # march13b (void-drop + mirror arm, target-signature casts, class-axis, dedup).
+    dt_registry = DispatchTableRegistry()
 
     for (func_ref, infos) in func_registry.by_ref
         length(infos) < threshold && continue
