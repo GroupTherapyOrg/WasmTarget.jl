@@ -1107,9 +1107,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     # Emit type-safe default instead of the incompatible value (typed via
                     # _append_default!; byte-identical), then local.set via a temp builder.
                     _emit_default!(b, local_wasm_type)
-                    local _tsb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-                    local_set!(_tsb, local_idx)
-                    append_builder!(b, _tsb)
+                    local_set!(b, local_idx)   # march17: direct
                 end
             end
         end

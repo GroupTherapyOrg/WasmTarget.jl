@@ -12,7 +12,7 @@ L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 L4_no_postemit_reguess = 0
 L5_no_tagged_union = 0
-L6_all_builders_strict = 0
+L6_all_builders_strict = 0   # 0 = no opt-outs beyond THE ONE documented flow builder (netted in the counter)
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0

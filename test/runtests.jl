@@ -1506,6 +1506,16 @@ begin
     # ========================================================================
     @pphase "Phase 1: Test Harness Infrastructure" begin
 
+        @testset "L-strict: THE ENFORCING BUILDER is the DEFAULT (march17 lock)" begin
+            # Dale's directive: an ill-typed emit on a DEFAULT-constructed builder must
+            # THROW at the emitting line (dart wasm_builder semantics). This lock makes
+            # the 07-01 regression (the default silently unwired) impossible to repeat.
+            WT = WasmTarget
+            lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
+            @test lb.strict   # the default IS strict
+            @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # pops 2 from empty
+        end
+
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
             WT = WasmTarget
             # function-end balance: x*x+1 leaves exactly the one f64 result

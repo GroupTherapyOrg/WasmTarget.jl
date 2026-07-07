@@ -590,7 +590,7 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
         local_result = allocate_local!(ctx, local_type)
-        bld = InstrBuilder(; func_name="_compile_call_checked_mul", mod=ctx.mod)
+        bld = _sub_builder(fb, ctx, "_compile_call_checked_mul", 2)   # march17: the operands
 
         # Save b, save a, compute a*b, save result
         local_set!(bld, local_b)
@@ -5061,7 +5061,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Allocate a scratch local to hold the input value (need it 4 times)
         scratch_local = length(ctx.locals) + ctx.n_params
         push!(ctx.locals, is_32bit ? I32 : I64)
-        local _bswb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the input
         # Store input value
         local_set!(_bswb, scratch_local)
         if is_32bit
