@@ -259,7 +259,13 @@ function local_tee!(b::InstrBuilder, idx::Integer)
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
     _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end
-global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType) = (validate_push!(b.v, typ); _emit!(b, InstrIR.GlobalGet(UInt32(idx))))
+function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)
+    # fullstrict: the module's declared global valtype outranks the caller's claim
+    local m = b.v.mod
+    local t = (m !== nothing && (idx + 1) <= length(m.globals)) ? m.globals[idx + 1].valtype : typ
+    validate_push!(b.v, t isa WasmValType ? t : typ)
+    _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
+end
 global_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.GlobalSet(UInt32(idx))))
 
 # ── Control flow ────────────────────────────────────────────────────────────────
@@ -481,13 +487,25 @@ function array_new_data!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)
     end
     _emit!(b, InstrIR.ArrayNewData(UInt32(type_idx), UInt32(seg_idx)))
 end
+# fullstrict: the module's array elem truth (packed i8/i16 read as i32)
+@inline function _true_elem_type(b::InstrBuilder, type_idx::Integer, declared::WasmValType)::WasmValType
+    m = b.v.mod
+    m === nothing && return declared
+    (type_idx + 1) <= length(m.types) || return declared
+    local ct = m.types[type_idx + 1]
+    ct isa ArrayType || return declared
+    local ft = ct.elem.valtype
+    ft isa UInt8 && ft in (0x78, 0x77) && return I32
+    return ft isa WasmValType ? ft : declared
+end
+
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
-    validate_gc_instruction!(b.v, op, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, op, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))
 end
 function array_set!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
-    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArraySet(UInt32(type_idx)))
 end
 array_len!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ARRAY_LEN); _emit!(b, InstrIR.ArrayLen()))
