@@ -37,3 +37,12 @@ emits, align the tracker ordering); (b) compile_call int128 sext family; (c) a f
 compile_statement.frag tails. THEN: flip the ctor default (strict=_wt_builder_strict()),
 run the FULL ladder, L-strict LOCK test (a default builder THROWS on an ill-typed emit),
 gate, PR with march-16.
+
+## THE LAST 78 (dict_get exemplar, warm-3 diagnosed): num! inside compile_call! on a
+fresh builder holding [I32] popping I64×2 — the seeder copied a SHORT tracked stack:
+fb's own stack under-tracks because the OPERAND emission upstream (the dict-key path)
+flows through un-tracked arms. The 78 = upstream tracked-stack debt, not wrapper debt.
+NEXT: in warm-3, WT_BUILDER_TRACE the dict_get compile; find where fb's tracked height
+diverges from the real emission (the first emit whose tracked h drops below truth);
+fix THAT arm's tracking (likely an emit_raw!/byte-bridge splice that pushes real values
+without validate_push!). Then recount → flip → L-lock → gate.
