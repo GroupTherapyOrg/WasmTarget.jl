@@ -811,6 +811,13 @@ Modifies `bytes` in-place.
 """
 function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     bld = InstrBuilder(; func_name="_compile_call_egaleq", mod=ctx.mod)
+    # march17: the two operands are already on fb — declare them (the width by arm)
+    if !is_128bit
+        local _sw = arg_type === Float64 ? F64 : arg_type === Float32 ? F32 :
+                    isempty(fb.v.stack) ? AnyRef : fb.v.stack[end]
+        local _sw2 = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : _sw
+        seed_input!(bld, WasmValType[_sw2, _sw])
+    end
     if is_128bit
         local _i128sr = _int128_structref(ctx, arg_type)
         seed_input!(bld, WasmValType[_i128sr, _i128sr])
