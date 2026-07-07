@@ -238,7 +238,9 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
         wrapper_indices = UInt32[]
         for (entry_i, entry) in enumerate(dt.entries)
-            b = InstrBuilder(; func_name="emit_dispatch_wrappers!", mod=mod)
+            local _wr_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+                            WasmValType[dt.result_wasm_type] : WasmValType[]
+            b = InstrBuilder(copy(dt.slot_types), _wr_res; func_name="emit_dispatch_wrappers!", mod=mod)
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)

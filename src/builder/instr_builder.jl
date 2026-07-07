@@ -140,12 +140,11 @@ end
 # Throw the collected validator errors (if strict) with rich source context, else collect.
 @inline function _check!(b::InstrBuilder)
     if b.strict && has_errors(b.v)
-        # march17 STAGED ENFORCEMENT: UNDERFLOWS (structural stack integrity) THROW;
-        # type mismatches COLLECT until the typed-value-channel campaign zeroes them
-        # (they're tracked-type disagreements, some tracker-conservative). dart throws
-        # on both; WT gets there in two steps. Harvest stays visible for both.
-        local _uf = any(startswith(e, "UNDERFLOW") for e in b.v.errors)
-        if _uf
+        # fullstrict (Dale's bar, 2026-07-07): TOTAL ENFORCEMENT — every violation
+        # throws at the emitting line. Underflows, type mismatches, frame errors:
+        # nothing squeezes through. Valid by construction; wasm-tools is the CI
+        # disagreement alarm only.
+        if true
             msg = join(b.v.errors, "\n  ")
             # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
             if b.trace !== nothing && !isempty(b.trace)

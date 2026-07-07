@@ -170,7 +170,9 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
         # axis2, emitted as tiny uniform-sig functions living in the SAME table.
         for c in get(dt_registry.selector_cascades, func_ref, [])
             arity = Int(dt.arity)
-            tb = InstrBuilder(; func_name="selector_trampoline", mod=mod)
+            local _tr_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+                            WasmValType[dt.result_wasm_type] : WasmValType[]
+            tb = InstrBuilder(copy(dt.slot_types), _tr_res; func_name="selector_trampoline", mod=mod)
             for j in 1:arity
                 local_get!(tb, UInt32(j - 1))
             end
@@ -222,8 +224,13 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
                                        caller_return_type::Type=Any, mod=nothing, type_registry=nothing)
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
-    b = InstrBuilder(; func_name="selector_caller")
     arity = Int(dt.arity)
+    # fullstrict: the builder carries its TRUE signature (params + the dispatch result)
+    # so the function frame's end validates against the real contract, and mod for
+    # the derived-truth chokepoints.
+    local _sc_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
+                    WasmValType[dt.result_wasm_type] : WasmValType[]
+    b = InstrBuilder(copy(dt.slot_types), _sc_res; func_name="selector_caller", mod=mod)
     # dispatch signature params are AnyRef: push params in order
     for j in 1:arity
         local_get!(b, UInt32(j - 1))
