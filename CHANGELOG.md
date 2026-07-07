@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.12](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.11...v0.4.12) (2026-07-07)
+
+
+### Bug Fixes
+
+* **march16:** the vestigial discovery-conversion edits reverted (trimcollect owns type-keying); the unwrap arm gated on ACTUAL wrapping (vtable globals present) ([6e7fdd6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/6e7fdd6bf713cf1215ee172d2bd0d6e121a5178e))
+
 ## [0.4.11](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.10...v0.4.11) (2026-07-06)
 
 
