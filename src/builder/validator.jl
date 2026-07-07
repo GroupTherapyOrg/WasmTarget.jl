@@ -84,7 +84,11 @@ Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType
     v.enabled || return expected
     if length(v.stack) <= _base(v)
-        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected)")
+        # march17: name the CURE — a fragment consuming the parent's stack must
+        # DECLARE the input via seeding (append_builder! settles the contract).
+        push!(v.errors, "$(v.func_name): stack underflow (past block base) — expected $(expected). " *
+              "FIX: this fragment consumes the parent's stack; seed the input " *
+              "(push!(b.seeded, $(expected)) at construction) so the merge settles it.")
         return expected
     end
     actual = pop!(v.stack)
@@ -103,7 +107,8 @@ Returns `nothing` on underflow.
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.enabled || return nothing
     if length(v.stack) <= _base(v)
-        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base)")
+        push!(v.errors, "$(v.func_name): stack underflow on pop_any (past block base). " *
+              "FIX: seed the fragment's input (push!(b.seeded, <type>) at construction).")
         return nothing
     end
     return pop!(v.stack)
