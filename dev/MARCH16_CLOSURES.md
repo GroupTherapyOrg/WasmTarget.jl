@@ -52,3 +52,13 @@ typechecks at EMISSION (ill-typed emit = crash at the line); WT's InstrBuilder t
 (v.stack) but records instead of enforcing → post-hoc wasm-tools loops. Flip the
 tracker to THROW on operand mismatch + frame accounting at end_block!. wasm-tools
 retreats to the independent CI oracle. (The missing half of the migration.)
+
+## THE RANDSUBSEQ BISECT LEDGER (suite-context diff failure, random_diff.jl:119):
+- main suite: PASS · branch: FAIL → march-16 owns it.
+- bisect A (branch + main's WHOLE trimcollect): PASS → trimcollect owns it.
+- enrollment kill-switch alone: FAIL · co-occurrence tightening: FAIL ·
+  scan kill-switch: FAIL → the CONVERSION arm (userland closure pairs newly
+  converted into compile entries) = the last candidate; full-neutralization run
+  (all three arms env-gated) in flight — if THAT passes, the fix = the conversion
+  arm must apply ONLY to type-keyed closures the PRE-PASS will consume (thread the
+  enrolled-MI set through instead of converting every userland closure pair).

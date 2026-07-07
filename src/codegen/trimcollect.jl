@@ -51,10 +51,20 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     dyn_sigs = Set{Tuple}()
     closure_types = Set{DataType}()
     i = 1
+    _fn_closures = Set{DataType}()   # per-function staging (folded on co-occurrence)
+    _fn_has_dyn = false
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
+        # march16 co-occurrence fold: a function's constructed closures enroll ONLY
+        # if that function ALSO makes dynamic (SSA-callee) calls — enrolling every
+        # userland closure perturbed modules with purely-static closures (the
+        # randsubseq suite regression).
+        if _fn_has_dyn
+            union!(closure_types, _fn_closures)
+        end
+        empty!(_fn_closures); _fn_has_dyn = false
         host_mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
@@ -65,7 +75,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             # the vtable trampoline, which needs the body compiled. Specialized with
             # the method's own sig (abstract slots stay erased; the trampoline passes
             # anyref and the body's funnel machinery narrows internally).
-            if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
+            if !haskey(ENV, "WT_NO_M16_SCAN") && stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
                 local _nt = stmt.args[1]
                 local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
                            _nt isa DataType ? _nt : nothing
@@ -79,12 +89,12 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 end
                 if _T isa DataType && is_closure_type(_T) && _T_user &&
                    !haskey(ENV, "WT_NO_CLOSURE_ENROLL")
-                    push!(closure_types, _T)
+                    push!(_fn_closures, _T)   # staged; folds only on co-occurrence
                 end
                 continue
             end
             # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
-            if stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
+            if !haskey(ENV, "WT_NO_M16_SCAN") && stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
                 local _dargs = Any[]
                 local _dok = true
                 for a in stmt.args[2:end]
@@ -96,7 +106,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     (t isa DataType && isconcretetype(t)) || (_dok = false; break)
                     push!(_dargs, t)
                 end
-                _dok && !isempty(_dargs) && push!(dyn_sigs, Tuple(_dargs))
+                if _dok && !isempty(_dargs)
+                    push!(dyn_sigs, Tuple(_dargs))
+                    _fn_has_dyn = true
+                end
             end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
@@ -151,6 +164,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         end
     end
 
+    _fn_has_dyn && union!(closure_types, _fn_closures)
     # cross-product: each userland closure type × each observed dynamic-call
     # signature of matching arity → a TYPED body specialization (the vtable's
     # typed entry; inference compiles the body for real)
@@ -321,8 +335,12 @@ function trim_compile_plan(entries_named::Vector)
             # march16: a CAPTURING closure has no instance — key its body by the
             # closure TYPE (the vtable machinery resolves by type; no static
             # caller resolves these by value). dart: creating a Lambda compiles
-            # its target.
-            f = ftyp
+            # its target. USERLAND ONLY: converting Base-internal closure pairs
+            # (previously skipped) changed unrelated compiles — randsubseq's
+            # internals regressed in the suite context (the march-16 gate catch).
+            local _fr = ftyp.name.module
+            while parentmodule(_fr) !== _fr; _fr = parentmodule(_fr); end
+            _fr === Main && !haskey(ENV, "WT_NO_M16_SCAN") && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig
