@@ -1299,13 +1299,13 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 end
 
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
-                # (leaves value on stack for the SSA local.set below). Typed; byte-identical.
-                local _slb = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
+                # (leaves value on stack for the SSA local.set below).
+                # march17: DIRECT — the fresh store wrapper pop_any'd an empty stack
+                # on EVERY SSA store (the single largest harvest class).
                 if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)
-                    local_tee!(_slb, ctx.slot_locals[_slot_assign_id])
+                    local_tee!(b, ctx.slot_locals[_slot_assign_id])
                 end
-                local_set!(_slb, local_idx)
-                append_builder!(b, _slb)
+                local_set!(b, local_idx)
             end
         end
     end
@@ -1313,9 +1313,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
     # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
-        local _slb2 = InstrBuilder(; func_name="compile_statement", mod=ctx.mod)
-        local_set!(_slb2, ctx.slot_locals[_slot_assign_id])
-        append_builder!(b, _slb2)
+        local_set!(b, ctx.slot_locals[_slot_assign_id])   # march17: direct
     end
 
     # TRACE: Find double-DROP in compiled output for func 8 (node count — no byte scan)
