@@ -861,3 +861,47 @@ unreachable hole: CLOSED (tables exist for every polymorphic selector).
 R17 205→186 (invoke obvious-expected + the index idiom + codepoint sites). The remaining
 186: mega-arm restructures + the memoryref multi-value class (recorded) — resumable
 mechanically; superseded in priority by step 5 (the CLASS-DAG's census value is higher).
+
+## STEP 5 — THE CLASS-DAG: gate-certified (2026-07-07, 10 shards + 9 fuzz under the strict builder)
+Per-class wasm subtype hierarchy (dart class_info.dart:278-330): abstract synthetics
+{classId:i32} sub their parent's synthetic; concretes sub their nearest abstract parent
+at creation (7 sites) + the lookup-only retrofit; supertype joined struct identity
+(types_equal). Emitted proof: sub-chains 6→5→0, wasm-tools valid.
+
+# ═══════════════════════════════════════════════════════════════════
+# CENSUS-3 — THE GO-FOR-BROKE CLOSE (2026-07-07)
+# ═══════════════════════════════════════════════════════════════════
+Same instrument (parallel auditors, verify-in-code strict bar, dart oracle cross-checks,
+empirical probes). Dims 7/14 ESTIMATED from three other auditors' verified citations
+(the closures auditor's summary did not deliver; its subject matter was independently
+verified: march-16 end-to-end by the dispatch+residual audits, march-17 by the gate).
+
+## THE NUMBER: raw-15 55.6 → 66.0 → **70.2** · actionable-13 72.8 → **77.7**
+
+| # | dim | c2 | NOW | movement |
+|---|-----|----|-----|----------|
+| 1 | visitors | 82 | **84** | PiNode collapse (exactly 11 arms→1 wrap, verified); 61 fragment-ctors deleted; the wrap = dart's wrap→ONE convertType where wired (34% coverage, ~86% achievable) |
+| 2 | translator | 81 | **85** | THE CLASS-DAG verified end-to-end incl. emitted wasm; nullability = exactly-63 sites, zero derived (the residual) |
+| 3 | class metadata | 68 | **74** | the per-class chain EMITTED+VALID; sibling-abstract collapse = wasm-inherent (isa correctly stays classId-ranged); identityHash absent; the LUB unlock latent |
+| 4 | runtime types | 65 | **65** | holds — isa/typeassert correctly classId-ranged (per the collapse finding) |
+| 5 | dispatch | 63 | **76** | threshold=2 LIVE (needsDispatch-equivalent) + the two-arg six-link fix + all machinery + the LUB fast lane; REFUTED: struct-LUB via the DAG (dart's _upperBound climb absent — THE unlocked follow-up) |
+| 6 | dynamic calls | 78 | **78** | the call_ref path real but DIM-7-attributed (no double count) |
+| 7 | closures | 35 | **68 (EST)** | march-16 end-to-end: the object/vtable/trampolines/call_ref/typed entries — verified via citations; dual static rep + identityHash/runtimeType slots remain |
+| 8 | constants | 78 | **78** | holds; boxed-scalar dedup definitively absent; 5-registry federation + threshold-64 nuances |
+| 9 | exceptions | 82 | **82** | march-15 verified live; $current_exn legacy copy per plan |
+| 10 | async | 5 | **5** | permanent (ratified) |
+| 11 | records | 75 | **75** | the DAG tuple-neutral (verified) |
+| 12 | boxes/strings | 82 | **82** | box sub-base at creation ✓ oracle-corroborated (dart puts bool/num under Top); width-default classId = precision caveat |
+| 13 | interop | 38 | **38** | permanent-ish |
+| 14 | builder | 88 | **93 (EST)** | THE ENFORCING BUILDER strict-by-default, gate-certified; the L-strict lock; underflows throw at the emit site |
+| 15 | driver | 70 | **70** | trimcollect = worklist seeding, NOT allocation-gating (the opposite axis; verified) |
+
+## THE RANKED REMAINDER (to ~85 actionable)
+1. **struct-LUB in dispatch** — dart's _upperBound superType! climb; the DAG's join
+   targets exist NOW (latent) — a contained follow-up in dispatch.jl's slot loop.
+2. **The typed-channel campaign** — zero the collected type-mismatches → full-strict
+   (the enforcer's stage 2); subsumes the wrap tail's ~150 semi-convertible sites.
+3. **Nullability** (exactly 63 + consumers) · 4. **identityHash campaign** (the header
+   slot; String offsets) · 5. **boxed-scalar constant dedup** · 6. **closure-rep
+   unification** (the dual static rep) · 7. **allocation-gating** (driver) ·
+   8. $current_exn death · tuple-per-arity.

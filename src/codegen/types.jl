@@ -105,6 +105,10 @@ mutable struct TypeRegistry
     closure_base_idx::Union{Nothing, UInt32}
     closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct
     closure_vtable_globals::Union{Nothing, Dict{Any, UInt32}}          # closure body key -> global
+    # step5 THE CLASS-DAG (dart class_info.dart:278-330): synthetic {classId:i32}
+    # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
+    # structs subtype their nearest abstract parent instead of flat $JlBase.
+    abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
 end
 
 TypeRegistry() = TypeRegistry(
@@ -121,7 +125,8 @@ TypeRegistry() = TypeRegistry(
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
     Dict{Type, Vector{Int32}}(),            # type_extra_ids (march9)
-    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}()   # march16 closure layouter
+    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # march16 closure layouter
+    Dict{Type, UInt32}()                                # step5 class-DAG synthetics
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -141,7 +146,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # string_constant_globals (census F3)
     nothing,  # lazy_string_globals (march7)
     nothing,  # type_extra_ids (march9)
-    nothing, nothing, nothing   # march16 closure layouter
+    nothing, nothing, nothing,  # march16 closure layouter
+    nothing                     # step5 class-DAG synthetics
 )
 
 """
@@ -796,8 +802,22 @@ function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32; registry::Uni
     for (i, ct) in enumerate(mod.types)
         ti = UInt32(i - 1)
         if ct isa StructType && ti != base_idx && ct.supertype_idx === nothing && !(ti in jl_exclude)
-            # Replace with version that declares base as supertype
-            mod.types[i] = StructType(ct.fields, base_idx)
+            # step5: per-class re-parenting where a synthetic ALREADY exists (post-body
+            # creation would forward-reference — lookup only); else the flat base.
+            local _dag_parent = base_idx
+            if registry !== nothing && registry.abstract_struct_idxs !== nothing && registry.structs !== nothing
+                for (T2, info2) in registry.structs
+                    if info2.wasm_type_idx == ti && T2 isa DataType
+                        local P2 = supertype(T2)
+                        if P2 isa DataType && P2 !== Any && haskey(registry.abstract_struct_idxs, P2) &&
+                           registry.abstract_struct_idxs[P2] < ti
+                            _dag_parent = registry.abstract_struct_idxs[P2]
+                        end
+                        break
+                    end
+                end
+            end
+            mod.types[i] = StructType(ct.fields, _dag_parent)
         end
     end
 end
@@ -2270,4 +2290,39 @@ function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max
     idx = UInt32(add_type!(mod, StructType(fields)))
     d[max_arity] = idx
     return idx
+end
+
+
+# ═══ step5: THE CLASS-DAG (dart class_info.dart:278-330) ═══
+
+"""
+    ensure_abstract_struct!(mod, registry, A) -> UInt32
+
+The synthetic {classId:i32} struct for an ABSTRACT Julia type, `sub` its parent's
+synthetic (recursion roots at \$JlBase = Any). Parents recurse FIRST → their indices
+precede the child's (the wasm ordering rule).
+"""
+function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)
+    (A === Any || !(A isa DataType)) && return registry.base_struct_idx
+    d = registry.abstract_struct_idxs
+    d === nothing && return registry.base_struct_idx
+    haskey(d, A) && return d[A]
+    parent_idx = ensure_abstract_struct!(mod, registry, supertype(A))
+    idx = UInt32(add_type!(mod, StructType([FieldType(I32, false)], parent_idx)))
+    d[A] = idx
+    return idx
+end
+
+"""
+    dag_supertype_idx!(mod, registry, T) -> UInt32
+
+The wasm supertype for a CONCRETE type's struct: its nearest abstract parent's
+synthetic (the class-DAG), falling back to \$JlBase.
+"""
+function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::Union{UInt32, Nothing}
+    registry.base_struct_idx === nothing && return nothing   # bare registries (probes)
+    (T isa DataType && registry.abstract_struct_idxs !== nothing) || return registry.base_struct_idx
+    local P = supertype(T)
+    (P === Any || !(P isa DataType)) && return registry.base_struct_idx
+    return ensure_abstract_struct!(mod, registry, P)
 end

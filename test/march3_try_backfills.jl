@@ -145,3 +145,16 @@ _m16_one(n::Int64)::Int64 = (fs = Any[x -> x + n]; f = fs[1]; f(10)::Int64)
     r = try compare_julia_wasm(_m16_one, Int64(7)) catch; (pass=false,) end
     @test r.pass
 end
+
+# step5 THE CLASS-DAG: concrete structs subtype their abstract parent's SYNTHETIC
+# (dart class_info.dart:288) — the per-class wasm hierarchy replaces flat sub-$JlBase.
+abstract type _S5Shape end
+struct _S5C <: _S5Shape; r::Float64; end
+struct _S5Q <: _S5Shape; s::Float64; end
+_s5_area(q::Bool)::Float64 = (s = q ? _S5C(2.0) : _S5Q(3.0); s isa _S5C ? 3.14 * s.r : (s::_S5Q).s^2)
+@testset "step5: the class-DAG (per-class wasm subtyping)" begin
+    for a in (true, false)
+        r = try compare_julia_wasm(_s5_area, a) catch; (pass=false,) end
+        @test r.pass
+    end
+end
