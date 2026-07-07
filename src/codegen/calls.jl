@@ -109,10 +109,40 @@ end
 march17: a fragment that consumes the parent's top `n` stack values DECLARES them
 (seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
 """
-function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int)
+function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
+                      narrow_to::Union{Nothing, WasmValType}=nothing)
     local b = InstrBuilder(; func_name=name, mod=ctx.mod)
+    _seed_builder_locals!(b, ctx)   # fullstrict: the live provider everywhere
     local h = length(fb.v.stack)
-    n > 0 && h >= n && seed_input!(b, WasmValType[fb.v.stack[h - n + i] for i in 1:n])
+    if n > 0 && h >= n
+        local seeds = WasmValType[fb.v.stack[h - n + i] for i in 1:n]
+        seed_input!(b, seeds)
+        # fullstrict: a helper that declares its operand WIDTH narrows erased seeds
+        # AT ENTRY through the funnel (the erased-operand mismatches in the div/shift/
+        # flipsign guards). Deeper-than-top seeds shuffle through a scratch.
+        if narrow_to !== nothing
+            for k in n:-1:1
+                local st = seeds[k]
+                if _wt_is_ref(st)
+                    if k == n
+                        convert_type!(b, st, narrow_to, ctx)
+                    else
+                        # rotate: store the above values, convert, restore
+                        local _tmp = UInt32[]
+                        for _ in (k+1):n
+                            local t2 = UInt32(allocate_local!(ctx, narrow_to))
+                            local_set!(b, t2); pushfirst!(_tmp, t2)
+                        end
+                        convert_type!(b, st, narrow_to, ctx)
+                        for t2 in _tmp
+                            local_get!(b, t2)
+                        end
+                    end
+                    seeds[k] = narrow_to
+                end
+            end
+        end
+    end
     return b
 end
 
@@ -182,7 +212,7 @@ function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is3
     weq    = is32 ? Opcode.I32_EQ : Opcode.I64_EQ
     la = UInt32(allocate_local!(ctx, lt))
     lb = UInt32(allocate_local!(ctx, lt))
-    bld = _sub_builder(fb, ctx, "_emit_div_guard!", 2)
+    bld = _sub_builder(fb, ctx, "_emit_div_guard!", 2; narrow_to=(is32 ? I32 : I64))
     local_set!(bld, lb)  # [a]
     local_set!(bld, la)  # []
     # b == 0 → throw DivideError
@@ -252,7 +282,7 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
     shop   = kind === :shl  ? (is32 ? Opcode.I32_SHL : Opcode.I64_SHL) :
              kind === :lshr ? (is32 ? Opcode.I32_SHR_U : Opcode.I64_SHR_U) :
                               (is32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
-    bld = _sub_builder(fb, ctx, "_emit_shift_guarded!", 2)
+    bld = _sub_builder(fb, ctx, "_emit_shift_guarded!", 2; narrow_to=(is32 ? I32 : I64))
     _lset(op, i) = op === Opcode.LOCAL_SET ? local_set!(bld, i) :
                    op === Opcode.LOCAL_TEE ? local_tee!(bld, i) : local_get!(bld, i)
     _wc(v) = is32 ? i32_const!(bld, Int64(v)) : i64_const!(bld, Int64(v))
@@ -679,7 +709,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
 
-    bld = _sub_builder(fb, ctx, "_compile_call_flipsign", 2)
+    bld = _sub_builder(fb, ctx, "_compile_call_flipsign", 2; narrow_to=(is_32bit ? I32 : I64))
     if is_128bit
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
