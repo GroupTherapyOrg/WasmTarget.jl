@@ -305,11 +305,27 @@ function br_table!(b::InstrBuilder, targets::Vector{<:Integer}, default::Integer
 end
 return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
-# call: pop params, push results (caller supplies the signature it already knows).
+# fullstrict: the module KNOWS every function's signature — derive it there; the
+# caller's claim is the fallback (imports + not-yet-pushed bodies resolve by index math).
+@inline function _true_call_sig(b::InstrBuilder, func_idx::Integer, params, results)
+    local m = b.v.mod
+    m === nothing && return (params, results)
+    local n_imp = 0
+    for imp in m.imports
+        imp.kind == 0x00 && (n_imp += 1)
+    end
+    local fi = Int(func_idx) - n_imp
+    (fi >= 0 && fi < length(m.functions)) || return (params, results)
+    local ft = m.types[Int(m.functions[fi + 1].type_idx) + 1]
+    ft isa FuncType || return (params, results)
+    return (ft.params, ft.results)
+end
+
 function call!(b::InstrBuilder, func_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
+    local tp, tr = _true_call_sig(b, func_idx, params, results)
     if b.v.reachable
-        for p in reverse(params); validate_pop!(b.v, p); end
-        for r in results; validate_push!(b.v, r); end
+        for p in reverse(tp); validate_pop!(b.v, p); end
+        for r in tr; validate_push!(b.v, r); end
     end
     _emit!(b, InstrIR.Call(UInt32(func_idx)))
 end
