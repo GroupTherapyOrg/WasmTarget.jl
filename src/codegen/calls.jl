@@ -312,7 +312,7 @@ end
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
 function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)
     amt = UInt32(allocate_local!(ctx, I64))
-    bld = InstrBuilder(; func_name="_emit_wrap_shift_amount_saturating!", mod=ctx.mod)
+    bld = _sub_builder(fb, ctx, "_emit_wrap_shift_amount_saturating!", 1)
     local_tee!(bld, amt)                         # [amount]
     i64_const!(bld, Int64(julia_width))          # [amount, jw]
     local_get!(bld, amt)                         # [amount, jw, amount]
@@ -5233,7 +5233,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         else
             target_type_ref
         end
-        local _sxb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        local _sxb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the operand
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
@@ -5317,7 +5317,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
         _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
                    (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
-        local _zxb = InstrBuilder(; func_name="compile_call", mod=ctx.mod)
+        local _zxb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the operand
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
             # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
