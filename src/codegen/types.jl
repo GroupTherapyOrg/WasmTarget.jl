@@ -54,8 +54,12 @@ mutable struct TypeRegistry
     # PURE-9025: DFS type ID assignment for runtime dispatch
     type_ids::Union{Nothing, Dict{Type, Int32}}  # Concrete type -> unique DFS integer ID
     type_ranges::Union{Nothing, Dict{Type, Tuple{Int32, Int32}}}  # Abstract/concrete type -> [low, high] DFS range
-    # PURE-9026: Base struct type index for typeof(x) extraction
-    base_struct_idx::Union{Nothing, UInt32}  # Index of $JlBase = (struct (field i32))
+    # dart class_info.dart: Top carries classId; Object extends it with the
+    # lazily-assigned mutable identity-hash slot. Primitive value boxes remain
+    # direct Top descendants and therefore do not carry identity state.
+    base_struct_idx::Union{Nothing, UInt32}    # $JlTop = {classId:i32}
+    object_struct_idx::Union{Nothing, UInt32}  # $JlObject <: Top = {classId, identityHash}
+    identity_counter_global::Union{Nothing, UInt32}
     # PURE-9028: BoxedNothing struct type and singleton global
     nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
     nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
@@ -116,7 +120,7 @@ TypeRegistry() = TypeRegistry(
     Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
-    nothing, nothing, nothing, nothing, nothing, Int32(0),
+    nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
@@ -597,9 +601,9 @@ end
 """
     get_base_struct_type!(mod::WasmModule, registry::TypeRegistry) -> UInt32
 
-Get or create the base struct type \$JlBase = (struct (field i32)).
-All other struct types should be subtypes of this, enabling typeof(x) via
-struct.get \$JlBase 0 on any struct reference.
+Get or create the Top struct type `(struct (field classId i32))`.
+Every class representation is a subtype of Top, enabling class-id extraction
+through field 0. Object descendants additionally subtype `get_object_struct_type!`.
 """
 function get_base_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.base_struct_idx !== nothing
@@ -609,6 +613,31 @@ function get_base_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     base_type = StructType([FieldType(I32, false)], nothing)
     idx = add_type!(mod, base_type)
     registry.base_struct_idx = idx
+    return idx
+end
+
+"""
+    get_object_struct_type!(mod, registry) -> UInt32
+
+Create dart2wasm's Object layout: immutable classId followed by a mutable i32
+identity-hash slot. Ordinary heap objects subtype this struct; primitive value
+boxes subtype Top directly and use their field 1 for the boxed payload.
+"""
+function get_object_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.object_struct_idx !== nothing && return registry.object_struct_idx
+    top = get_base_struct_type!(mod, registry)
+    fields = FieldType[FieldType(I32, false), FieldType(I32, true)]
+    idx = UInt32(add_type!(mod, StructType(fields, top)))
+    registry.object_struct_idx = idx
+    return idx
+end
+
+"""Return the module-local monotonic source for newly assigned object identities."""
+function get_identity_counter_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.identity_counter_global !== nothing && return registry.identity_counter_global
+    # Zero means "unassigned" in every object slot; assigned identities begin at 1.
+    idx = add_global!(mod, I32, true, Int32(0))
+    registry.identity_counter_global = idx
     return idx
 end
 
