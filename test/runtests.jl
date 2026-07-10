@@ -2361,10 +2361,22 @@ begin
             return a * b
         end
 
+        @noinline function str_identity_contract()::Int32
+            a = "identity-a"
+            b = "identity-b"
+            return objectid(a) == objectid(a) && objectid(a) != objectid(b) ? Int32(1) : Int32(0)
+        end
+
         @testset "String concatenation" begin
             wasm_bytes = WasmTarget.compile(str_concat, (String, String))
             @test length(wasm_bytes) > 0
             @test validate_wasm(wasm_bytes)
+        end
+
+        @testset "String object identity" begin
+            result = compare_julia_wasm(str_identity_contract)
+            @test result.pass
+            @test result.actual == 1
         end
 
         # Regression: a string literal's array.new_data LENGTH operand is an

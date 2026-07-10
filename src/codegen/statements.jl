@@ -1163,12 +1163,42 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             end
             # Non-literal args: fall through to the unknown-foreigncall stub below
         elseif name === :jl_object_id
-            # jl_object_id(x) → UInt64: identity hash. There is no correct WasmGC
-            # implementation yet (no stable per-object identity). The previous stub
-            # returned array.len for strings and a constant 42 otherwise — both silently
-            # wrong (constant 42 collides every object to one hash bucket). Refuse instead.
-            # Dict/Set hashing does NOT route through here (it uses Base.hash, pure Julia),
-            # so this should be unreachable in practice; if it fires, it's a real gap.
+            # dart2wasm Object identity: read the mutable identityHash slot and lazily
+            # assign a non-zero module-local identity on first observation. String is
+            # the first migrated Object descendant; other layouts remain loud until
+            # they acquire the same Object prefix (never fabricate an identity).
+            local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
+            local object_type = object_arg === nothing ? nothing : infer_value_type(object_arg, ctx)
+            if object_type === String
+                local string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                local string_ref = ConcreteRef(string_idx, false)
+                local object_local = allocate_local!(ctx, string_ref)
+                local hash_local = allocate_local!(ctx, I32)
+                local counter = get_identity_counter_global!(ctx.mod, ctx.type_registry)
+
+                emit_value!(b, object_arg, ctx, string_ref)
+                local_set!(b, object_local)
+                local_get!(b, object_local)
+                struct_get!(b, string_idx, UInt32(1), I32)
+                local_tee!(b, hash_local)
+                num!(b, Opcode.I32_EQZ)
+                if_!(b, I32)
+                    # next = counter + 1; persist it globally and on the object.
+                    global_get!(b, counter, I32)
+                    i32_const!(b, 1)
+                    num!(b, Opcode.I32_ADD)
+                    local_tee!(b, hash_local)
+                    global_set!(b, counter)
+                    local_get!(b, object_local)
+                    local_get!(b, hash_local)
+                    struct_set!(b, string_idx, UInt32(1), I32)
+                    local_get!(b, hash_local)
+                else_!(b)
+                    local_get!(b, hash_local)
+                end_block!(b)
+                num!(b, Opcode.I64_EXTEND_I32_U)
+                return b
+            end
             record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
             unreachable!(b)  # non-strict path: trap rather than return a fake hash
             ctx.last_stmt_was_stub = true
