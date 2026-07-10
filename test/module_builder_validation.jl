@@ -17,11 +17,14 @@ const MBV = WasmTarget
         m = MBV.WasmModule()
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "missing", 0, 0)
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "bad-kind", 4, 0)
+        f = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        MBV.add_export!(m, "f", 0, f)
+        @test_throws MBV.ModuleValidationError MBV.add_export!(m, "f", 0, f)
         @test_throws MBV.ModuleValidationError MBV.add_table!(m, MBV.FuncRef, 2, 1)
         @test_throws MBV.ModuleValidationError MBV.add_memory!(m, 2, 1)
         @test_throws MBV.ModuleValidationError MBV.add_elem_segment!(m, 0, 0, Int[])
         @test_throws MBV.ModuleValidationError MBV.add_data_segment!(m, 0, 0, UInt8[])
-        @test_throws MBV.ModuleValidationError MBV.declare_funcs!(m, UInt32[0])
+        @test_throws MBV.ModuleValidationError MBV.declare_funcs!(m, UInt32[1])
     end
 
     @testset "tags and recursive groups" begin

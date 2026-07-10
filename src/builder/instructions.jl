@@ -667,18 +667,9 @@ function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
             kind == 1 ? length(mod.tables) :
             kind == 2 ? length(mod.memories) : length(mod.globals)
     0 <= idx < limit || _module_invalid(:add_export, "index $idx is out of bounds for kind $kind")
-    # march13: export-name dedup at THE one chokepoint — wasm requires unique export
-    # names, and two independent minting paths (megamorphic wrappers + discovery
-    # candidates) collided. Suffix _dN until unique.
-    final = name
-    if any(e -> e.name == final, mod.exports)
-        local k = 2
-        while any(e -> e.name == string(name, "_d", k), mod.exports)
-            k += 1
-        end
-        final = string(name, "_d", k)
-    end
-    push!(mod.exports, WasmExport(final, UInt8(kind), UInt32(idx)))
+    any(e -> e.name == name, mod.exports) &&
+        _module_invalid(:add_export, "duplicate export name $(repr(name))")
+    push!(mod.exports, WasmExport(name, UInt8(kind), UInt32(idx)))
     return mod
 end
 

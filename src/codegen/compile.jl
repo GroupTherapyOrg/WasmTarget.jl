@@ -122,7 +122,7 @@ function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmM
     func_idx = add_function!(mod, param_types, result_types, locals, body)
 
     # Export the function
-    add_export!(mod, func_name, 0, func_idx)
+    add_codegen_export!(mod, func_name, 0, func_idx)
 
     # PURE-4149: Populate DataType/TypeName fields for type constant globals
     populate_type_constant_globals!(mod, type_registry)
@@ -1852,7 +1852,7 @@ function compile_module(functions::Vector;
             export_name = "$(name)_$(count)"
         end
         export_name_counts[name] = count + 1
-        add_export!(mod, export_name, 0, actual_idx)
+        add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
     # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
@@ -2097,7 +2097,7 @@ function compile_module_from_ir(ir_entries::Vector)::WasmModule
             export_name = "$(name)_$(count)"
         end
         export_name_counts[name] = count + 1
-        add_export!(mod, export_name, 0, actual_idx)
+        add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
     populate_type_constant_globals!(mod, type_registry)
@@ -2244,7 +2244,7 @@ function compile_handler(
     func_idx = add_function!(mod, param_types, result_types, ctx.locals, body)
 
     # Export the function
-    add_export!(mod, export_name, 0, func_idx)
+    add_codegen_export!(mod, export_name, 0, func_idx)
 
     return mod
 end
@@ -2405,7 +2405,7 @@ function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
 
     idx = add_function!(mod, param_types, result_types, locals, body)
     if export_name !== nothing
-        add_export!(mod, export_name, 0, idx)
+        add_codegen_export!(mod, export_name, 0, idx)
     end
     return idx
 end
@@ -2976,7 +2976,7 @@ function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompila
         if !found
             push!(export_name_counts, (name::String, 1))
         end
-        add_export!(mod, export_name, 0, actual_idx)
+        add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
     populate_type_constant_globals!(mod, type_registry)
@@ -3090,7 +3090,7 @@ function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_regi
         if !found
             push!(export_name_counts, (name::String, 1))
         end
-        add_export!(mod, export_name, 0, actual_idx)
+        add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
     populate_type_constant_globals!(mod, type_registry)
@@ -4441,4 +4441,18 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         end
     end
     return out
+end
+# Julia may discover several specialized functions with the same source-level name.
+# Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
+# ExportsBuilder, rejects duplicate names instead of silently repairing the request.
+function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+    final = name
+    if any(e -> e.name == final, mod.exports)
+        local k = 2
+        while any(e -> e.name == string(name, "_d", k), mod.exports)
+            k += 1
+        end
+        final = string(name, "_d", k)
+    end
+    return add_export!(mod, final, kind, idx)
 end
