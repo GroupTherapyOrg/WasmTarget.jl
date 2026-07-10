@@ -433,12 +433,59 @@ new_wasm_module() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], 
 # Module Building API
 # ============================================================================
 
+"Raised at a module-builder chokepoint when an addition would make the module invalid."
+struct ModuleValidationError <: Exception
+    operation::Symbol
+    detail::String
+end
+Base.showerror(io::IO, e::ModuleValidationError) =
+    print(io, "invalid WebAssembly module at ", e.operation, ": ", e.detail)
+
+@noinline _module_invalid(op::Symbol, detail::AbstractString) =
+    throw(ModuleValidationError(op, String(detail)))
+
+@inline _function_count(mod::WasmModule) = num_imported_funcs(mod) + length(mod.functions)
+
+function _function_type(mod::WasmModule, idx::Integer)::FuncType
+    0 <= idx < _function_count(mod) ||
+        _module_invalid(:function_index, "function index $idx is out of bounds")
+    if idx < num_imported_funcs(mod)
+        imp = filter(x -> x.kind == 0x00, mod.imports)[idx + 1]
+        ft = mod.types[Int(imp.type_idx) + 1]
+    else
+        fn = mod.functions[idx - num_imported_funcs(mod) + 1]
+        ft = mod.types[Int(fn.type_idx) + 1]
+    end
+    ft isa FuncType || _module_invalid(:function_index, "function $idx has a non-function type")
+    return ft
+end
+
+function _validate_struct_subtype!(mod::WasmModule, st::StructType)
+    st.supertype_idx === nothing && return
+    si = Int(st.supertype_idx)
+    0 <= si < length(mod.types) ||
+        _module_invalid(:add_type, "struct supertype $si must be declared earlier")
+    super = mod.types[si + 1]
+    super isa StructType || _module_invalid(:add_type, "struct supertype $si is not a struct")
+    length(st.fields) >= length(super.fields) ||
+        _module_invalid(:add_type, "struct subtype has fewer fields than supertype $si")
+    for (i, sf) in enumerate(super.fields)
+        cf = st.fields[i]
+        cf.mutable_ == sf.mutable_ ||
+            _module_invalid(:add_type, "field $i changes mutability from supertype $si")
+        # Mutable fields are invariant. Immutable fields are covariant.
+        ok = sf.mutable_ ? cf.valtype == sf.valtype : wasm_subtype(cf.valtype, sf.valtype, mod)
+        ok || _module_invalid(:add_type, "field $i is not a valid subtype of supertype $si")
+    end
+end
+
 """
     add_type!(mod, composite_type) -> type_idx
 
 Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index.
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
+    ct isa StructType && _validate_struct_subtype!(mod, ct)
     # Check if type already exists (structural deduplication)
     for (i, existing) in enumerate(mod.types)
         if types_equal(existing, ct)
@@ -501,6 +548,13 @@ Types in a rec group can reference each other (forward references allowed).
 function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})
     # Only add if not empty and not already a rec group
     if !isempty(type_indices)
+        length(unique(type_indices)) == length(type_indices) ||
+            _module_invalid(:add_rec_group, "a type may occur only once in a recursive group")
+        all(i -> Int(i) < length(mod.types), type_indices) ||
+            _module_invalid(:add_rec_group, "recursive group contains an unknown type index")
+        existing = Set(Iterators.flatten(mod.rec_groups))
+        any(i -> i in existing, type_indices) &&
+            _module_invalid(:add_rec_group, "a type may belong to only one recursive group")
         push!(mod.rec_groups, type_indices)
     end
 end
@@ -608,6 +662,11 @@ Add an export entry to the module.
 - kind: 0=func, 1=table, 2=memory, 3=global
 """
 function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+    0 <= kind <= 3 || _module_invalid(:add_export, "unknown export kind $kind")
+    limit = kind == 0 ? _function_count(mod) :
+            kind == 1 ? length(mod.tables) :
+            kind == 2 ? length(mod.memories) : length(mod.globals)
+    0 <= idx < limit || _module_invalid(:add_export, "index $idx is out of bounds for kind $kind")
     # march13: export-name dedup at THE one chokepoint — wasm requires unique export
     # names, and two independent minting paths (megamorphic wrappers + discovery
     # candidates) collided. Suffix _dN until unique.
@@ -706,6 +765,8 @@ end
 Add a table to the module. Tables hold references (funcref or externref).
 """
 function add_table!(mod::WasmModule, reftype::RefType, min::Integer, max::Union{Integer, Nothing}=nothing)::UInt32
+    min >= 0 || _module_invalid(:add_table, "minimum must be nonnegative")
+    max !== nothing && max < min && _module_invalid(:add_table, "maximum $max is below minimum $min")
     max_val = max === nothing ? nothing : UInt32(max)
     push!(mod.tables, WasmTable(reftype, UInt32(min), max_val))
     return UInt32(length(mod.tables) - 1)
@@ -726,6 +787,10 @@ end
 Add an element segment to initialize a table with function references.
 """
 function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer, func_indices::Vector{<:Integer})
+    0 <= table_idx < length(mod.tables) || _module_invalid(:add_elem_segment, "unknown table $table_idx")
+    offset >= 0 || _module_invalid(:add_elem_segment, "offset must be nonnegative")
+    all(i -> 0 <= i < _function_count(mod), func_indices) ||
+        _module_invalid(:add_elem_segment, "segment contains an unknown function")
     push!(mod.elem_segments, WasmElemSegment(UInt32(table_idx), UInt32(offset), UInt32[f for f in func_indices]))
     return mod
 end
@@ -739,6 +804,8 @@ march16: a DECLARATIVE element segment (flags=3) — makes the functions legal
 """
 function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})
     isempty(func_indices) && return
+    all(i -> Int(i) < _function_count(mod), func_indices) ||
+        _module_invalid(:declare_funcs, "declaration contains an unknown function")
     push!(mod.elem_segments, WasmElemSegment(UInt32(0), UInt32(0), func_indices, true))
     return
 end
@@ -749,6 +816,8 @@ end
 Add a linear memory to the module. Size is in pages (64KB each).
 """
 function add_memory!(mod::WasmModule, min::Integer, max::Union{Integer, Nothing}=nothing)::UInt32
+    min >= 0 || _module_invalid(:add_memory, "minimum must be nonnegative")
+    max !== nothing && max < min && _module_invalid(:add_memory, "maximum $max is below minimum $min")
     max_val = max === nothing ? nothing : UInt32(max)
     push!(mod.memories, WasmMemory(UInt32(min), max_val))
     return UInt32(length(mod.memories) - 1)
@@ -770,6 +839,8 @@ Add a data segment to initialize linear memory with constant data.
 Data can be a Vector{UInt8} or a String.
 """
 function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::Vector{UInt8})
+    0 <= memory_idx < length(mod.memories) || _module_invalid(:add_data_segment, "unknown memory $memory_idx")
+    offset >= 0 || _module_invalid(:add_data_segment, "offset must be nonnegative")
     push!(mod.data_segments, WasmDataSegment(UInt32(memory_idx), UInt32(offset), data))
     return mod
 end
@@ -806,6 +877,10 @@ Add an exception tag to the module and return its index.
 The type_idx refers to a FuncType whose params define the exception payload.
 """
 function add_tag!(mod::WasmModule, type_idx::Integer)::UInt32
+    0 <= type_idx < length(mod.types) || _module_invalid(:add_tag, "unknown type $type_idx")
+    ft = mod.types[type_idx + 1]
+    ft isa FuncType || _module_invalid(:add_tag, "tag type $type_idx is not a function type")
+    isempty(ft.results) || _module_invalid(:add_tag, "tag type must have no results")
     push!(mod.tags, WasmTag(UInt32(type_idx)))
     return UInt32(length(mod.tags) - 1)
 end
@@ -817,6 +892,9 @@ Set the start function for the module. This function is called automatically
 on module instantiation. The function must take no parameters and return nothing.
 """
 function add_start_function!(mod::WasmModule, func_idx::Integer)
+    ft = _function_type(mod, func_idx)
+    (isempty(ft.params) && isempty(ft.results)) ||
+        _module_invalid(:add_start_function, "start function must have type [] -> []")
     mod.start_function = UInt32(func_idx)
     return mod
 end
