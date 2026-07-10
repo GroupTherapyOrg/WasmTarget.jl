@@ -14,7 +14,7 @@
 # interpreter, so @overlay methods replace their natives during inference
 # (verified: the sinh overlay inlines and only its `exp` callee is
 # collected). This is the intended replacement for the homegrown
-# discover_dependencies walk + AUTODISCOVER whitelist, and the integration
+# retired curated dependency walk, and the integration
 # point for a future juliac `--compiler=WasmTarget` plugin interface.
 #
 # Availability: the three-arg Compiler API exists on 1.12 and 1.13. The
