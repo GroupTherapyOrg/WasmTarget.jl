@@ -5764,11 +5764,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 "_apply_iterate over multiple containers or a non-Vector iterable"; idx=idx)
         end
 
-    # Core.svec — genuinely unsupported. Loud reject (returns a SimpleVector natively).
+    # Core.svec — materialize the real $JlSVec array.
     elseif func isa GlobalRef && func.name === :svec && func.mod === Core
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
-        emit_unsupported_stub!(ctx, fb, :unsupported_method,
-            "Core.svec (SimpleVector construction)"; idx=idx)
+        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        _emit_svec_values!(fb, args, ctx)
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
@@ -5792,16 +5791,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        # P4-stdlib: constant-receiver getfield yielding a SimpleVector
-        # (typename(T).names) — emit a benign null placeholder (a stub
-        # dead-codes the rest of the block); consumers fold against the
-        # host value via _try_host_svec.
+        # Constant-receiver getfield yielding a SimpleVector
+        # (typename(T).names) — materialize the real $JlSVec array.
         if !_gfc_done && func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
             local _gfc_fld2 = args[2] isa QuoteNode ? args[2].value : args[2]
             if _gfc_fld2 isa Symbol
                 local _gfc_v2 = try getfield(args[1].value, _gfc_fld2) catch; nothing end
                 if _gfc_v2 isa Core.SimpleVector
-                        ref_null!(fb, ArrayRef)
+                    _emit_svec_values!(fb, collect(_gfc_v2), ctx)
                     _gfc_done = true
                 end
             end
@@ -6645,11 +6642,22 @@ known at compile time. Returns the host-loaded DataTypeLayout for literal
 materialization, or nothing if the chain doesn't match.
 """
 
-# P4-stdlib (Random hash_seed): resolve an IR value to a HOST SimpleVector
-# constant when its definition is compile-time evaluable — `padding(T, n)`
-# with literal args, or `getfield(typename(T), :names)`. The defs emit benign
-# null placeholders (no svec constant emission exists); consumers like
-# _svec_len/_svec_ref fold against the host value instead of reading it.
+# Emit a SimpleVector as its actual WasmGC array representation.
+function _emit_svec_values!(b::InstrBuilder, values, ctx::AbstractCompilationContext)
+    info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
+    arr_idx = info.wasm_type_idx
+    arr_def = ctx.mod.types[arr_idx + 1]
+    arr_def isa ArrayType || error("SimpleVector did not register as a Wasm array")
+    elem_type = arr_def.elem.valtype
+    for value in values
+        emit_value!(b, value, ctx, elem_type; from_julia=typeof(value))
+    end
+    array_new_fixed!(b, arr_idx, length(values), elem_type)
+    return b
+end
+
+# Resolve an IR value to a HOST SimpleVector constant when its definition is
+# compile-time evaluable. Consumers may fold length/index operations directly.
 function _try_host_svec(arg, ctx::AbstractCompilationContext)
     arg isa Core.SSAValue || return nothing
     (arg.id < 1 || arg.id > length(ctx.code_info.code)) && return nothing

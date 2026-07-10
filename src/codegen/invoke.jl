@@ -4128,14 +4128,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 return append_builder!(b, bi32)
             elseif name === :padding && length(args) == 2 &&
                    args[1] isa Type && args[2] isa Integer
-                # P4-stdlib (Random hash_seed): padding(T, n) of literal args is
-                # a compile-time constant SimpleVector. No svec constant
-                # emission exists — emit a benign null placeholder (NOT a stub:
-                # a stub dead-codes the rest of the block) and let consumers
-                # (_svec_len etc.) fold against the host value via
-                # _try_host_svec.
+                # `padding(T,n)` is a compile-time SimpleVector constant.
                 bpad = _ctx_builder(ctx, "compile_invoke")
-                ref_null!(bpad, ArrayRef)
+                local _padding = Base.padding(args[1], Int(args[2]))
+                _emit_svec_values!(bpad, collect(_padding), ctx)
                 return append_builder!(b, bpad)
 
             elseif name === :array_subpadding && length(args) == 2 &&

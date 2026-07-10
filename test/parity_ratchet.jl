@@ -135,6 +135,8 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L19_no_fabricated_invoke_results" => ("invoke/call lowering may not substitute dummy exceptions, empty strings, constant hashes, or null SimpleVectors",
+        () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|Core\.svec \(SimpleVector construction\)")),
     "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, SSA-store, and struct-field lowering preserve and coerce the emitted value; no zero/null repair helper may return",
         () -> count_sites(r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch")),
     "L17_one_compilation_path" => ("public compilation always enters the closed-world planner; legacy discovery, recursive mode switching, byte shells, and legacy body compilers are extinct",
