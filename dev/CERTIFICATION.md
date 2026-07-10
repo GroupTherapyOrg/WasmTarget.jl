@@ -1,62 +1,75 @@
-# dart2wasm Structural-Parity Certification — WasmTarget.jl
-**Branch `wt-dart2wasm-parity` · certified 2026-07-02 · the M7 closing document of
-`dev/PARITY_MASTER.md`. Every claim below carries file:line on BOTH sides; every "LOCKED"
-row is machine-enforced by `test/parity_ratchet.jl` + `dev/parity_baseline.toml` at every
-commit and inside `Pkg.test` shard 0.**
+# WasmTarget.jl ↔ dart2wasm structural certification
 
-## The five load-bearing invariants
+Status: **ACTIVE AUDIT — not yet a final parity certificate**
 
-| Invariant | dart2wasm evidence | WasmTarget evidence | Status |
-|---|---|---|---|
-| **I1 — Validating builder**: the instruction builder is a type-checking abstract interpreter; every emit subtype-checks its stack effect and throws at the emit site | `wasm_builder/src/builder/instructions.dart:98-294` (`_checkStackTypes` :252, 233 assert-gated verify sites) | `src/builder/validator.jl` (735L live model) + `instr_builder.jl`: **strict is the DEFAULT** (`_wt_builder_strict`), zero per-builder opt-outs (**LOCK L6**), `mod` threaded into ~330 builders so the FULL `wasm_subtype` lattice gates every push/pop; `local_set!` validates against the local's type. **Beyond dart: always-on (dart's checks vanish in release builds)** | ✅ **DELIVERED + LOCKED** |
-| **I2 — Typed expression channel**: a value's type is a byproduct of emission through ONE `wrap(node, expected)` chokepoint; never re-derived | `code_generator.dart:39` (`ExpressionVisitor1<w.ValueType,w.ValueType>`), `:879-888` (`wrap`) | `emit_value!(b, val, ctx, expected)` (values.jl) = emit → actual type off the validator stack (`compile_value_typed`) → `convert_type!` → expected; `_seed_builder_locals!` makes `local.get` types truthful; **`infer_value_wasm_type` DELETED** — the ~10 legit pre-emit deciders renamed `static_wasm_type` under a pre-emit-ONLY contract (**LOCK L4**); every remaining untyped splice carries the god-fn-seam annotation (**LOCK L9**) | ✅ **DELIVERED + LOCKED** (seam-typing rides the god-fn decomposition, ratchet R2) |
-| **I3 — One coercion funnel**: ALL boundary adjustment through one `convertType`; boxing exists only there | `translator.dart:828-875` (identity/drop/non-null/cast/box/unbox arms + loud throw) | `convert_type!` (values.jl:383+) with the same arms incl. numeric widening; ONE box producer `emit_classid_box!` / ONE unbox consumer `emit_classid_unbox!` / ONE numeric discriminator `emit_isa_classid!` (**LOCK L1**); returns (`emit_return_coerced!`), phi stores (`emit_phi_local_set!` 366→36, both stackified clusters), field/arg stores all wrap through it; **no i31 anywhere** (**LOCK L2**) | ✅ **DELIVERED + LOCKED** (remaining raw coercion ops = intrinsic implementations, ratchet R7 → the dart-style intrinsics table) |
-| **I4 — One type translator + DFS classIds**: single type map; DFS pre-order ids; field 0 = classId; is-tests = dense-range check | `translator.dart:493/516/614`, `class_info.dart:27/369/642-686`, `dynamic_forwarders.dart:250-259` | ONE resolver (`_resolve_multivariant_union` + `get_concrete_wasm_type`); DFS `ensure_type_id!` + `$JlBase` classId@0; **zero placeholder (typeId=0) headers** — boxes, dispatch results, Int128/UInt128, size tuples, Vector/NamedTuple/Expr headers all carry real ids; abstract isa = `emit_classid_range_check!` (the exact 3-instruction `i32.sub; i32.le_u` unsigned window); **the tagged-union wrapper family is DELETED** (**LOCK L5**) — a Union value is JUST an AnyRef discriminated by classId | ✅ **DELIVERED + LOCKED** (strings classId = certified gap, below) |
-| **I5 — Loud failure posture**: unmodeled input throws; no guess-and-continue; dummies only in provably-dead positions | `translator.dart:614/502/872`, `code_generator.dart:145-153` (`unimplemented` = diagnostic + validating trap), `globals.dart:99` | `record_unsupported!` router (entry-strict policy); **every `unreachable!` is diagnostic-routed or an annotated structural trap — zero silent stubs** (**LOCK L8**); the 2 surviving type-safe defaults are diagnosed; **the #1 silent miscompile (`sum(x for x in xs if c)` → 0) is FIXED and locked into smoke** (3 variants) | ✅ **DELIVERED + LOCKED** |
+Audit date: 2026-07-10
 
-## Supporting dimensions
+WasmTarget commit audited: `8d3550d`
+Dart architectural oracle: dart-lang/sdk `upstream/main` at
+`6f00c0695c7c2cdddf16776b9a1c272bba70045a`
 
-| Dimension | dart | WT | Status |
-|---|---|---|---|
-| One dynamic-value box `{classId@0, value@1}` | `translator.dart:202/855-870`, `class_info.dart:27-28/84-86` | `emit_classid_box!`/`emit_classid_unbox!` — real classIds, `emit_box_type_id!` demoted to internal fallback (0 external callers, L1) | ✅ |
-| One control-flow lowering | one `CodeGenerator`, no strategy choice | `generate_structured` = try/catch \| single-block \| **the stackifier**; ALL 8 legacy strategies deleted (−4,850 lines; a documented multivar-phi miscompiler among them) (**LOCK L3**) | ✅ |
-| External validator | dart ships none — the builder is the gate | `wasm-tools` demoted to opt-in (`validate=true` / `WT_VALIDATE=1`, CI cross-check) (**LOCK L7**); certified by a full corpus run with validation OFF | ✅ |
-| Typed captures (`Capture.type`) | `closures.dart:1030/1112-1118`, `translateTypeOfLocalVariable` | `f3_self_box_joins` (closure-local optimistic-verify contents solver) + the numeric-join local typing: the mutable-capture closure body compiles **valid** wasm | 🟡 partial (see gaps) |
+This document was rebuilt from the current sources. It deliberately does not inherit
+green claims from the previous certification. A row is green only when current source,
+a machine lock, and current execution evidence all support it.
 
-## Certified remaining gaps (the post-PR completion campaign — tracked, never hidden)
+## Scope
 
-1. **Shared-Context semantics (M6)**: the parent scalar-replaces an ESCAPING `Core.Box` while
-   the closure mutates the real one — two copies. Fix = dart `Context` structs
-   (`closures.dart:970-1013`): ONE materialized cell, no scalar replacement across an escaping
-   closure. Documented xfails: `F3_mutable_capture/{mutate_capture, mutate_capture_typed}`.
-2. **Dispatch table (M6)**: dart's ONE flat funcref table `table[classId + selector.offset]`
-   with offset packing + monomorphic direct-call (`dispatch_table.dart:391-444`,
-   `code_generator.dart:2072-2125`) vs WT's FNV-hash tier-2 scheme. Design fully mapped.
-3. **Strings classId (M6)**: strings are bare `array<i32>` refs without the `$JlBase` header,
-   so classed checks can't see them (`isa AbstractString` over `Any[]` — documented xfail
-   `strings_lack_classid`). Fix = class the string rep (dart: String is a class).
-4. **God-fn decomposition (M4 tail)**: `compile_call`/`compile_invoke`/`compile_new` are
-   bytes-returning; their internal splices are the annotated seams (L9) and the `emit_raw!`
-   ratchet R2 (~244); the dart-style typed intrinsics table (`intrinsics.dart:28-71`) lands
-   with it, locking R7.
-5. **`infer_value_type` consolidation**: reclassified as dart's `node.getStaticType` analog
-   (a static JULIA-type query); consolidate + contract-document with the M4 tail.
+Builder and code-generation structure are in scope. Async, FFI, threads, deferred/JS
+glue, and host integration remain explicitly excluded. Exclusion does not permit a fake
+value: unsupported reachable constructs must reject, and sound dead branches may emit a
+diagnosed validating trap.
 
-## The enforcement (what makes this durable)
+## Current source-to-source audit
 
-**NINE LOCKS** (exact-match, every commit + CI): L1 one-box-producer · L2 no-i31 ·
-L3 one-lowering · L4 no-post-emit-re-guess · L5 no-tagged-union · L6 all-builders-strict ·
-L7 wasm-tools-demoted · L8 no-silent-traps · L9 no-unjustified-untyped-emission.
-**RATCHETS** (may only decrease): R2 emit_raw seams · R3 static-type-query callers ·
-R5 pre-emit julia-type queries · R7 raw coercion ops · R11 patch-tag sediment.
+| Invariant | Current dart2wasm oracle | Current WasmTarget implementation | Evidence | Result |
+|---|---|---|---|---|
+| Typed validating instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart:172,474-554`; `_verifyTypes` is called by instruction methods | `src/builder/instr_builder.jl:51,117`; every emission updates and checks the abstract operand stack | Locks L6, L13; clean `Pkg.test()` | ✅ |
+| Typed expression channel | `pkg/dart2wasm/lib/code_generator.dart:28,60,677`; `CodeGenerator`/`AstCodeGenerator` carry expected and produced value types | `src/codegen/values.jl:857-905`; `emit_value!` derives the actual type from emission and owns expected-type wrapping | Locks L4, L9; R17 ratchet | ✅, remaining unwrapped call sites ratcheted |
+| One conversion funnel | `pkg/dart2wasm/lib/translator.dart:1597-1655`; `convertType` owns drop, unreachable, null-check, cast, box, and unbox | `src/codegen/values.jl:400+`; `convert_type!` is the coercion funnel and the expected-value wrapper owns static source typing | Locks L1, L2, L5; R7/R16 ratchets | ✅, intrinsic-local numeric ops remain tracked debt |
+| One production compilation route | dart compilation constructs one translator/module strategy and all bodies use the `CodeGenerator` interface | `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → exactly one production `generate_body(ctx)` call | Lock L17; legacy/self-host/byte-shell compilers deleted | ✅ |
+| One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
+| Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
+| Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | `types.jl:610-645`; separate Top/Object types and monotonic identity source. String/Symbol and Core.TypeName are Object descendants; `jl_object_id` reads/writes field 1 | Lock L20; explicit identity differential; padding/Statistics suites | 🟡 partial: remaining ordinary heap structs still need Object-prefix migration |
+| Dynamic dispatch table | `dynamic_dispatch_table.dart:25+`; classId/selector-based table construction | one selector table, classId + offset + indirect call; FNV dispatch deleted | Lock L10; dispatch suites | ✅ for current supported call surface |
+| Module strategy | `modules.dart:182,219`; default and deferred strategies are explicit | one monolithic closed-world Wasm module | Deferred loading is excluded | ✅ within declared monolithic scope |
+| Loud unsupported behavior | dart `unimplemented` paths diagnose and trap; `convertType` has no guess-and-continue arm | `record_unsupported!`/`emit_unsupported_stub!` distinguish fatal wrong-value replacements from diagnosed traps | Locks L8, L14-L19; soundness tests | ✅ |
+| No validator-as-repair loop | dart relies on its builder; external validation is not a repair phase | builder validity is unconditional; `wasm-tools` is an independent opt-in cross-check and never rewrites bodies | Locks L6/L7/L14 | ✅ |
 
-## Soundness certification
+## Current execution evidence
 
-Every phase closed with its own full capped gate (`WT_TEST_CONCURRENCY=2 Pkg.test`): 10
-process shards (~2,690 tests incl. Aqua + all regression backfills + the Snapshot-islands
-integration) + 9 differential fuzz suites (293 property tests over LinearAlgebra/Dates/
-Random/Statistics/SparseArrays/ForwardDiff/StaticArrays/SimpleDiffEq). The M7 closing matrix
-ran the full corpus twice: once with external validation OFF (the builder is the gate) and
-once with `WT_VALIDATE=1` (wasm-tools independently re-verifying every module). En route the
-campaign found and fixed **seven real silent-wrong bugs** the old structure was hiding, the
-flagship being the filtered-generator fold returning 0.
+Clean worktree command:
+
+```sh
+WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+Result on 2026-07-10:
+
+- all ten shards green: 347 + 169 + 199 + 257 + 179 + 153 + 306 + 495 + 198 + 261;
+- bounded differential fuzz: 3/3;
+- LinearAlgebra 81/81, Dates 59/59, Random 19/19, Statistics 5/5;
+- SparseArrays 39/39, ForwardDiff 27/27, StaticArrays 20/20,
+  SimpleDiffEq 40/40;
+- package result: `WasmTarget tests passed`.
+
+This proves the tested executable surface. It does not by itself prove structural parity;
+the source rows and locks above are independently required.
+
+## Remaining blockers to a final green certificate
+
+1. Migrate every ordinary heap struct from the Top-only prefix to the Object prefix;
+   retain Top-only layouts for primitive value boxes. Extend `jl_object_id` to the entire
+   Object subtree and add distinguishability/identity tests across mutable objects.
+2. Close current builder/codegen gaps that are not excluded, including mixed-container
+   `_apply_iterate`, runtime composition, packed i8/i16 arrays, and principled recursive
+   type groups. A diagnosed failure is sound but is not feature parity.
+3. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
+   architectural floors, with every remaining site classified against current dart.
+4. Re-audit dynamic/static dispatch and constant construction against current files
+   (`dynamic_dispatch_table.dart`, `static_dispatch_table.dart`, `constants.dart`) after
+   the Object migration, then add exact locks for the final invariants.
+5. Run the clean full suite, differential matrix, external validators, and this audit
+   again at the final candidate commit.
+
+Until all five blockers are closed, this file is an evidence-backed progress audit—not a
+claim of strict 1:1 parity.
