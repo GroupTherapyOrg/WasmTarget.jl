@@ -395,6 +395,8 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
         _a_data = 2 + length(extra_locals) - 2
         _b_data = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, _a_data, extra_locals[end - 1])
+        builder_set_local_type!(b, _b_data, extra_locals[end])
         _str0!(b); local_set!(b, _a_data)
         local_get!(b, 1)
         struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
@@ -403,6 +405,8 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, I32)  # len_a
         str_ref_type = ConcreteRef(str_type_idx, true)
         push!(extra_locals, str_ref_type)  # local 3: result array ref
+        builder_set_local_type!(b, 4, I32)
+        builder_set_local_type!(b, 5, str_ref_type)
 
         # len_a = array.len(a)
         local_get!(b, _a_data)  # a data
