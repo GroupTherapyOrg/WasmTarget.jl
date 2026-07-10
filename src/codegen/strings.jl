@@ -95,7 +95,7 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     # i16 char array → fromCharCodeArray. Byte-identical to the raw emission below.
     char_arr_ref = ConcreteRef(char_arr_type_idx, true)
     b = InstrBuilder(WasmValType[i8arr_ref], WasmValType[NonNullExternRef];
-                     func_name="create_utf8_to_js_helper", strict=_wt_builder_strict())
+                     func_name="create_utf8_to_js_helper")
     builder_set_local_type!(b, local_len, I32)
     builder_set_local_type!(b, local_i16arr, char_arr_ref)
     builder_set_local_type!(b, local_i, I32)
@@ -202,7 +202,7 @@ function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
     # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
     # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
     # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
-    # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
+    # Typed helper builder with the declared [externref] → [str_arr] effect.
     ib = InstrBuilder(; func_name="emit_js_to_jl_string")
     call!(ib, encode_func_idx, WasmValType[], WasmValType[])
     append!(bytes, builder_code(ib))
@@ -449,7 +449,7 @@ function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::I
     end
     result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_concat", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="compile_string_concat")
     set_context!(b, "string concat")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, result_local, strref)
@@ -507,7 +507,7 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     end
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_equal", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="compile_string_equal")
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, str1_local, strref)
@@ -557,4 +557,3 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
 
     return b
 end
-

@@ -1,8 +1,8 @@
 # Stack Validator — catches type mismatches during codegen (like dart2wasm's InstructionsBuilder)
 #
 # dart2wasm tracks _stackTypes (List<ValueType>) and validates push/pop during
-# bytecode emission. We mirror that approach: collect errors instead of throwing,
-# so one validation run catches multiple issues.
+# bytecode emission. Individual stack-effect checks append precise diagnostics; the
+# instruction builder throws them at that same emit before another instruction can run.
 
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, reset_validator!, validate_instruction!,
@@ -41,7 +41,7 @@ Modeled on dart2wasm's InstructionsBuilder._stackTypes / _checkStackTypes patter
 """
 mutable struct WasmStackValidator
     stack::Vector{WasmValType}          # Current value stack (types)
-    errors::Vector{String}              # Collected errors (don't throw, collect)
+    errors::Vector{String}              # Pending diagnostics thrown by InstrBuilder._check!
     enabled::Bool                       # Can disable for debugging
     func_name::String                   # For error messages
     labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)

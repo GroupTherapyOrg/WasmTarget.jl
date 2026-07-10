@@ -7,19 +7,18 @@
 #     InstrIR.WasmInstr into `b.instrs` (the ir/ layer);
 #   - `builder_code` serializes `b.instrs` to bytes (the serialize/ layer) via the
 #     per-class `encode!` methods in instr_ir.jl.
-# One representation, no parallel byte path. When `strict`, a stack imbalance THROWS at
-# the emit site with Julia source context; during migration it collects so
-# partially-migrated functions still build, with the model staying live.
+# One representation, no parallel byte path. Every imbalance THROWS at the emit site
+# with Julia source context; validation is an invariant, not a mode.
 #
 # See dev/WASM_BUILDER_MIGRATION.md.
 
-export InstrBuilder, builder_code, builder_disasm, set_strict!, StackImbalanceError,
+export InstrBuilder, builder_code, builder_disasm, StackImbalanceError,
        set_context!, builder_diagnose, append_builder!
 
 """
     StackImbalanceError
 
-Thrown by an `InstrBuilder` in strict mode when an emit would unbalance/mistype the
+Thrown by an `InstrBuilder` when an emit would unbalance/mistype the
 operand stack — the build-time, source-located equivalent of `wasm-tools`'
 "values remaining on stack", but caught AT THE EMIT SITE with the offending Julia
 statement, the live operand-stack snapshot, and the byte offset. This is the
@@ -53,7 +52,6 @@ mutable struct InstrBuilder
     instrs::Vector{InstrIR.WasmInstr}   # the ir/ layer — serialized on demand
     v::WasmStackValidator
     locals::Vector{WasmValType}         # param + local types, indexed by local index
-    strict::Bool                        # throw on stack imbalance (migrated funcs) vs collect
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
@@ -66,7 +64,7 @@ end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", strict::Bool=_wt_builder_strict(), mod=nothing)
+                      func_name::String="", mod=nothing)
     locals = WasmValType[p for p in param_types]
     # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
     # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
@@ -77,18 +75,11 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, nothing, WasmValType[])
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
-    # march17 harvest: surface every collect-mode violation WITHOUT throwing —
-    # the burn-down list generator (strip after the flip).
-    if haskey(ENV, "WT_STRICT_HARVEST") && has_errors(b.v)
-        for e in b.v.errors
-            println(stderr, "HARVEST| ", b.func_name, " | ", first(e, 160))
-        end
-    end
     code = UInt8[]
     for i in eachindex(b.instrs)
         if !isassigned(b.instrs, i)
@@ -106,21 +97,6 @@ end
 builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
 _byte_len(b::InstrBuilder)::Int = length(builder_code(b))
 
-set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
-
-"""
-    _wt_builder_strict() -> Bool
-
-Default strict-mode for emitters (parity M4 — dart wasm_builder instructions.dart:98:
-the builder is a type-checking abstract interpreter that THROWS on an ill-typed emit).
-**ON by default since 2026-07-01**, certified by a full capped `Pkg.test` + fuzz run under
-`WT_BUILDER_STRICT=1` (10 shards 2,681 + fuzz 293, zero failures). An ill-typed emission
-now fails AT THE EMIT SITE with the offending Julia statement + stack snapshot — valid by
-construction, beyond dart (whose checks are assert-gated). Escape hatch for debugging only:
-`WT_BUILDER_STRICT=0`. Builders constructed with an explicit per-builder
-opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until converted.
-"""
-_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
 set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
 
@@ -137,21 +113,15 @@ _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
     return _check!(b)
 end
 
-# Throw the collected validator errors (if strict) with rich source context, else collect.
+# Throw validator errors immediately with rich source context.
 @inline function _check!(b::InstrBuilder)
-    if b.strict && has_errors(b.v)
-        # STAGED (hotfix): underflows + frame errors throw; type mismatches collect
-        # while the corpus tail zeroes on wt-tag-run — the TOTAL flip relands with it.
-        # (Main went red when the total flip outran the corpus burn-down.)
-        if true   # tag-run: TOTAL on the branch (the corpus tail zeroes here, then main)
-            msg = join(b.v.errors, "\n  ")
-            # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
-            if b.trace !== nothing && !isempty(b.trace)
-                msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
-            end
-            empty!(b.v.errors)
-            throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
+    if has_errors(b.v)
+        msg = join(b.v.errors, "\n  ")
+        if b.trace !== nothing && !isempty(b.trace)
+            msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
         end
+        empty!(b.v.errors)
+        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
     end
     return b
 end
@@ -161,7 +131,7 @@ end
 
 Full human-readable post-mortem of a builder's state — the symbolic instruction tail,
 the operand-stack snapshot, the open control-flow labels (with their base heights/result
-types), reachability, the byte length, and any collected (non-strict) errors. Pins a
+types), reachability, the byte length, and any pending validator errors. Pins a
 codegen bug to an exact statement + stack shape with no wasm-tools round-trip.
 """
 function builder_diagnose(b::InstrBuilder)::String

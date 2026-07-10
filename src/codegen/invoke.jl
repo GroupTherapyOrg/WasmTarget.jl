@@ -16,7 +16,7 @@ _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
 function _compile_invoke_str_hash_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
-    b = InstrBuilder(; func_name="_compile_invoke_str_hash", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_hash")
 
     # Allocate locals for this operation
     str_local = ctx.n_params + length(ctx.locals)
@@ -107,7 +107,7 @@ _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
 """builder-returning core (march3): callers merge via append_builder!."""
 function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_find", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_find")
 
     # Allocate locals
     haystack_local = ctx.n_params + length(ctx.locals)
@@ -283,7 +283,7 @@ _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Vector{UInt
 """builder-returning core (march4)."""
 function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_contains", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_contains")
 
     # Reuse str_find implementation by comparing result > 0
     # Allocate locals
@@ -452,7 +452,7 @@ _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::Vector{UI
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_startswith", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_startswith")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -558,7 +558,7 @@ _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Vector{UInt
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_endswith", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_endswith")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -676,7 +676,7 @@ _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vector{UInt8}
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_repeat", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_repeat")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -773,7 +773,7 @@ _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_lpad", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_lpad")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -887,7 +887,7 @@ _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_rpad", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_rpad")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -984,7 +984,7 @@ _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UIn
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_uppercase", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_uppercase")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1088,7 +1088,7 @@ _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::Vector{UIn
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_lowercase", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_lowercase")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)
@@ -1192,7 +1192,7 @@ _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
 """builder-returning core (march4): callers merge via append_builder!."""
 function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_trim", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="_compile_invoke_str_trim")
 
     # Allocate locals
     s_local = ctx.n_params + length(ctx.locals)

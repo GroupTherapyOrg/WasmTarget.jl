@@ -136,7 +136,7 @@ end
 
 # ── Loop A (FINISH) GATE: the LIVE operand-stack validator now uses `wasm_subtype`
 #    (not the deleted permissive `wasm_types_assignable`) with the threaded `mod`.
-#    Byte-identity can't catch this — the validator records errors silently in non-strict
+#    Byte-identity can't catch this — the validator must reject it at emission
 #    mode — so this test asserts the relation actually fires at a `validate_pop!`, AND
 #    proves WHY `mod` must be threaded (the `mod===nothing` path FALSE-REJECTS valid
 #    concrete upcasts, which is the silent degradation the reorientation critique flagged).

@@ -372,7 +372,7 @@ Assumes codepoint i32 is on top of the stack. Leaves raw bits i32 on stack.
 """
 function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [codepoint:i32] from the stack, pushes [rawbits:i32].
-    b = InstrBuilder(; func_name="emit_char_codepoint_to_rawbits", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_char_codepoint_to_rawbits")
     seed_input!(b, WasmValType[I32])
     cp_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -501,7 +501,7 @@ Reverse of emit_char_codepoint_to_rawbits.
 """
 function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [rawbits:i32] from the stack, pushes [codepoint:i32].
-    b = InstrBuilder(; func_name="emit_char_rawbits_to_codepoint", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_char_rawbits_to_codepoint")
     seed_input!(b, WasmValType[I32])
     raw_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))

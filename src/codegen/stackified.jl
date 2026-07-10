@@ -354,15 +354,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # - We use nested if/else for these patterns
     # - For more complex patterns, we use labeled blocks
 
-    # MIGRATED to InstrBuilder: the main accumulator is the typed builder `b`. The
-    # byte-INSPECTING helper closures (set_phi_locals_for_edge!, compile_phi_value,
-    # emit_phi_type_default) keep building their own local
-    # UInt8[] buffers — they LEB-decode + scan recursive results — and splice them into
-    # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
-    # effect can't be tracked precisely by the fragment model, so we never gate.
-    # Byte-identical to the prior raw emission.
-    # STAGED (hotfix): the flow re-opts-out while the corpus tail zeroes on
-    # wt-tag-run (its underflow class was the red); dies again with the total flip.
+    # The main accumulator and every helper fragment are typed builders. Fragment
+    # composition preserves tracked stack contracts; no byte splice or validation
+    # exception exists in the flow path.
     b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
 
@@ -600,8 +594,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
-        # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
-        # strict=false; byte-identical to the prior raw emission.
+        # Pure straight-line typed value emission.
         tb = _ctx_builder(ctx, "emit_phi_type_default")
         if wasm_type isa ConcreteRef
             ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
@@ -1581,4 +1574,3 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     return b
 end
-

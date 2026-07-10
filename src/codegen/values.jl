@@ -818,7 +818,7 @@ end
 
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_condition_to_i32", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="compile_condition_to_i32")
     compile_condition_to_i32!(b, cond, ctx)
     return builder_code(b)
 end
@@ -1851,4 +1851,3 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
     return b
 end
-

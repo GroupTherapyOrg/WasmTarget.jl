@@ -64,7 +64,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_add(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_add", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_add")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_add!(b, ctx, result_type)
     return builder_code(b)
@@ -124,7 +124,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_sub(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_sub", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_sub")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_sub!(b, ctx, result_type)
     return builder_code(b)
@@ -213,7 +213,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_mul(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_mul", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_mul")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_mul!(b, ctx, result_type)
     return builder_code(b)
@@ -259,7 +259,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_neg(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_neg", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_neg")
     seed_input!(b, WasmValType[structref])
     emit_int128_neg!(b, ctx, result_type)
     return builder_code(b)
@@ -314,7 +314,7 @@ end
 # bytes shell for the remaining byte-region callers (dies with them)
 function emit_int128_slt(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_slt", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_slt")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_slt!(b, ctx, arg_type)
     return builder_code(b)
@@ -338,7 +338,7 @@ end
 # bytes shell for the remaining byte-region callers (dies with them)
 function emit_int128_ult(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ult", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ult")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_ult!(b, ctx, arg_type)
     return builder_code(b)
@@ -374,7 +374,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_sle(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_sle", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_sle")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_sle!(b, ctx, arg_type)
     return builder_code(b)
@@ -410,7 +410,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_ule(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ule", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ule")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_ule!(b, ctx, arg_type)
     return builder_code(b)
@@ -482,7 +482,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_shl(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_shl", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_shl")
     seed_input!(b, WasmValType[structref, I64])
     emit_int128_shl!(b, ctx, result_type)
     return builder_code(b)
@@ -550,7 +550,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_lshr(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_lshr", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_lshr")
     seed_input!(b, WasmValType[structref, I64])
     emit_int128_lshr!(b, ctx, result_type)
     return builder_code(b)
@@ -626,7 +626,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_ashr(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_ashr", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ashr")
     seed_input!(b, WasmValType[structref, I64])
     emit_int128_ashr!(b, ctx, result_type)
     return builder_code(b)
@@ -678,7 +678,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_ctlz(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ctlz", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ctlz")
     seed_input!(b, WasmValType[structref])
     emit_int128_ctlz!(b, ctx, arg_type)
     return builder_code(b)
@@ -727,7 +727,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_cttz(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_cttz", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_cttz")
     seed_input!(b, WasmValType[structref])
     emit_int128_cttz!(b, ctx, arg_type)
     return builder_code(b)
@@ -765,7 +765,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_ctpop(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ctpop", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ctpop")
     seed_input!(b, WasmValType[structref])
     emit_int128_ctpop!(b, ctx, arg_type)
     return builder_code(b)
@@ -796,7 +796,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_not(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_not", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_not")
     seed_input!(b, WasmValType[structref])
     emit_int128_not!(b, ctx, arg_type)
     return builder_code(b)
@@ -845,7 +845,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_and(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_and", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_and")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_and!(b, ctx, result_type)
     return builder_code(b)
@@ -894,7 +894,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_or(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_or", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_or")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_or!(b, ctx, result_type)
     return builder_code(b)
@@ -943,7 +943,7 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_xor(ctx, result_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, result_type)
-    b = InstrBuilder(; func_name="emit_int128_xor", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_xor")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_xor!(b, ctx, result_type)
     return builder_code(b)
@@ -965,7 +965,7 @@ end
 # bytes shell for the remaining byte-region callers (dies with them)
 function emit_int128_eq(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_eq", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_eq")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_eq!(b, ctx, arg_type)
     return builder_code(b)
@@ -1013,9 +1013,8 @@ end
 """bytes shell for the remaining byte-region callers (dies with them)."""
 function emit_int128_ne(ctx, arg_type::Type)::Vector{UInt8}
     structref = _int128_structref(ctx, arg_type)
-    b = InstrBuilder(; func_name="emit_int128_ne", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="emit_int128_ne")
     seed_input!(b, WasmValType[structref, structref])
     emit_int128_ne!(b, ctx, arg_type)
     return builder_code(b)
 end
-

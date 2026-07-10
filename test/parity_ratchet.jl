@@ -163,8 +163,10 @@ const LOCKS = [
         end),
     "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
         () -> count_sites(r"validate::Bool\s*=\s*true")),
-    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs; full-strict requires ZERO exceptions, and the runtests lock asserts default underflow/type-mismatch throws plus a zero opt-out census.",
-        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
+    "L6_all_builders_strict" => ("instruction validation is unconditional: no strict field, environment switch, setter, constructor keyword, or production opt-out may exist.",
+        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=" ) +
+              count_sites(r"_wt_builder_strict|set_strict!|strict::Bool";
+                          roots=[joinpath(SRC, "builder")])),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
