@@ -40,7 +40,9 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
         if (m = match(r"^\[(\w+)\]$", s)) !== nothing
             section = m.captures[1]
             out[section] = get(out, section, Dict{String,Int}())
-        elseif (m = match(r"^(\w+)\s*=\s*(\d+)$", s)) !== nothing && !isempty(section)
+        # Accept TOML inline comments.  Without this, an annotated baseline entry is
+        # silently omitted and reported as NEW(baseline), which disables its ratchet.
+        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing && !isempty(section)
             out[section][m.captures[1]] = parse(Int, m.captures[2])
         end
     end
@@ -161,7 +163,7 @@ const LOCKS = [
         end),
     "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
         () -> count_sites(r"validate::Bool\s*=\s*true")),
-    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs beyond THE ONE documented (the whole-body flow builder, whose cross-fragment stack the per-builder model cannot see — merge validators + wasm-tools gate it). march17: the DEFAULT is now genuinely strict (the runtests L-strict lock asserts it + @test_throws); this lock keeps the opt-out set frozen at that single site.",
+    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs; full-strict requires ZERO exceptions, and the runtests lock asserts default underflow/type-mismatch throws plus a zero opt-out census.",
         () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false")),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
