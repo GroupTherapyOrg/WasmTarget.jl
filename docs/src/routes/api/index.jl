@@ -134,11 +134,6 @@
             "Serialize a manually-built `WasmModule` to WASM binary."
         ),
         api_entry(
-            "build_frozen_state(...) / FrozenCompilationState",
-            "Snapshot of the compilation context (registered types, function table, overlay tables) suitable for reuse \
-             across many calls. Therapy.jl uses this between hot-reload iterations."
-        ),
-        api_entry(
             "TypeRegistry / FunctionRegistry",
             "Mutable registries the compiler walks while lowering IR — types it has seen, functions it has emitted. \
              Exposed for advanced consumers that need to inspect or pre-seed compilation state."

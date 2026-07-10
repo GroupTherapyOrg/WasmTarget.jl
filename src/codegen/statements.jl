@@ -1849,7 +1849,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             # TRUE-INT-002: Handle `nothing` literal for ref-typed struct fields.
             # compile_value(nothing) always emits i32_const 0, but ref-typed fields
             # (AnyRef, EqRef, StructRef, etc.) need ref.null instead.
-            # This occurs for Nothing-typed fields (e.g., InplaceCompilationContext.signal_ssa_getters::Nothing)
+            # This occurs for Nothing-typed fields.
             # when register_struct_type! maps Nothing to AnyRef/EqRef.
             # The `nothing` can appear as: literal, GlobalRef(:nothing), or SSAValue with Nothing type
             # (from inlined kwarg constructor defaults).

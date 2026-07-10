@@ -4,8 +4,7 @@
 
 """
 Abstract supertype for compilation contexts.
-CompilationContext (Dict-based) for normal compilation.
-InplaceCompilationContext (Dict-free) for WASM self-hosting.
+CompilationContext is the sole function-compilation context.
 """
 abstract type AbstractCompilationContext end
 
@@ -2590,76 +2589,3 @@ struct SimpleCodeInfo
 end
 
 # ============================================================================
-# InplaceCompilationContext — Dict-free context for WASM self-hosting
-# ============================================================================
-
-"""
-Dict-free compilation context for WASM self-hosting.
-Same field names as CompilationContext but Dict fields replaced with Nothing.
-Julia specializes codegen functions for this type, producing Dict-free IR.
-For MVP (Int64 arithmetic): Dict fields are never accessed, so Nothing is safe.
-code_info is Any to support both Core.CodeInfo and SimpleCodeInfo.
-"""
-mutable struct InplaceCompilationContext <: AbstractCompilationContext
-    code_info::SimpleIR  # Wraps code + ssavaluetypes for concrete field access
-    arg_types::Tuple
-    return_type::Type
-    n_params::Int
-    locals::Vector{WasmValType}
-    ssa_types::IntKeyMap{Type}
-    ssa_locals::IntKeyMap{Int}
-    phi_locals::IntKeyMap{Int}
-    loop_headers::Vector{Bool}
-    mod::WasmModule
-    type_registry::TypeRegistry  # Normal TypeRegistry with empty Dicts (never accessed for MVP)
-    func_registry::Union{FunctionRegistry, Nothing}
-    func_idx::UInt32
-    func_ref::Any
-    global_args::Vector{Int}     # WasmGlobal param indices (Vector for WASM constructability — no Dict)
-    is_compiled_closure::Bool
-    # Dict fields replaced with Nothing for WASM constructability
-    signal_ssa_getters::Nothing
-    signal_ssa_setters::Nothing
-    captured_signal_fields::Nothing
-    dom_bindings::Nothing
-    module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
-    scratch_locals::Nothing
-    memoryref_offsets::Nothing
-    last_stmt_was_stub::Bool
-    slot_locals::Nothing
-    dispatch_registry::Nothing
-    typeof_scratch_local::Nothing
-    diagnostics::Vector{WasmDiagnostic}
-    # march15: per-try-region exception payload locals (dart binds each catch's
-    # exception to its OWN local; keyed by the region's enter_idx). :the_exception
-    # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
-    exn_region_locals::Dict{Int, Int}
-end
-
-function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
-                                  func_registry::Union{FunctionRegistry, Nothing}=nothing,
-                                  func_idx::UInt32=UInt32(0), func_ref=nothing)
-    # Wrap code_info in SimpleIR if needed (Core.CodeInfo → SimpleIR for concrete field access)
-    ci = code_info isa SimpleIR ? code_info : SimpleIR(code_info.code, code_info.ssavaluetypes)
-    n_real_params = length(arg_types)
-    ctx = InplaceCompilationContext(
-        ci, arg_types, return_type, n_real_params,
-        WasmValType[],
-        IntKeyMap{Type}(length(ci.code)),
-        IntKeyMap{Int}(length(ci.code)),
-        IntKeyMap{Int}(length(ci.code)),
-        fill(false, length(ci.code)),
-        mod, type_registry, func_registry, func_idx, func_ref,
-        Int[], false,              # global_args (Vector{Int} — no Dict), is_compiled_closure
-        nothing, nothing, nothing, nothing,  # signal_ssa_getters/setters, captured_signal_fields, dom_bindings
-        Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
-        nothing, nothing,          # scratch_locals, memoryref_offsets
-        false, nothing, nothing, nothing,  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
-        WasmDiagnostic[],                    # diagnostics
-        Dict{Int, Int}()                     # march15: exn_region_locals
-    )
-    analyze_ssa_types!(ctx)
-    analyze_control_flow!(ctx)
-    allocate_ssa_locals!(ctx)
-    return ctx
-end
