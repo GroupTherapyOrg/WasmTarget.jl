@@ -31,7 +31,7 @@
             "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, validate=false) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
-             `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen). \
+             `optimize=true` runs the Binaryen_jll-provided `wasm-opt` for an ~80–90% size reduction; no system Binaryen installation is required. \
              Codegen correctness is unconditional: there is no permissive or validator-opt-out builder mode. \
              `validate=true` additionally runs `wasm-tools validate` as an independent cross-check; the typed builder \
              remains responsible for validity by construction."

@@ -23,8 +23,6 @@ Pkg.add("WasmTarget")  # registered in the General registry""")),
             ),
             P(:class => "text-sm font-semibold text-warm-800 dark:text-warm-200 pt-2", "Optional"),
             Ul(:class => "list-disc ml-5 space-y-1 text-sm text-warm-600 dark:text-warm-400",
-                Li(A(:href => "https://github.com/WebAssembly/binaryen", :target => "_blank", :class => "text-accent-500 underline", "Binaryen"),
-                   " (", Code(:class => "text-accent-500 font-mono text-xs", "wasm-opt"), ") for optimization"),
                 Li(A(:href => "https://github.com/bytecodealliance/wasm-tools", :target => "_blank", :class => "text-accent-500 underline", "wasm-tools"),
                    " for validation")
             )
@@ -62,7 +60,6 @@ bytes = compile_multi([
         H2(:id => "optimization", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Optimization"),
         Pre(:class => code_block, Code(:class => "language-julia", """bytes = compile(sin, (Float64,); optimize=true)""")),
         P(:class => "text-warm-600 dark:text-warm-400",
-            "Requires ", Code(:class => "text-accent-500 font-mono", "wasm-opt"),
-            " installed. Typical size reduction is 80–90%.")
+            "Uses the Binaryen executable bundled through Binaryen_jll. No system installation is required; typical size reduction is 80–90%.")
     ))
 end

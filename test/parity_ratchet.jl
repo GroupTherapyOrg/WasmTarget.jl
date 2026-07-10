@@ -135,6 +135,17 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L22_artifact_binaryen" => ("optimization uses Binaryen_jll's artifact executable and cannot silently depend on or skip for a system wasm-opt",
+        () -> begin
+            api_src = read(joinpath(SRC, "WasmTarget.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            project_src = read(joinpath(ROOT, "Project.toml"), String)
+            missing = count(p -> !occursin(p, api_src * project_src),
+                            ["using Binaryen_jll: wasmopt", "Binaryen_jll =", "\$(wasmopt())"])
+            forbidden = count(p -> occursin(p, api_src * tests_src),
+                              ["Sys.which(\"wasm-opt\")", "wasm-opt not found", "skipping optimization tests"])
+            missing + forbidden
+        end),
     "L21_packed_integer_arrays" => ("Int8/UInt8 and Int16/UInt16 arrays use packed Wasm GC storage and generic loads derive signedness from the Julia element type",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

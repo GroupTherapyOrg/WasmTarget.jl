@@ -1,5 +1,6 @@
 module WasmTarget
 
+using Binaryen_jll: wasmopt
 using PrecompileTools: @setup_workload, @compile_workload
 
 # Builder - Low-level Wasm binary emitter
@@ -298,16 +299,9 @@ Uses dart2wasm's production WasmGC flags by default.
 Optimized `Vector{UInt8}`.
 
 # Throws
-- Error if `wasm-opt` is not found (with install instructions)
 - Error if optimization or validation fails
 """
 function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
-    # Check wasm-opt availability
-    wasm_opt = Sys.which("wasm-opt")
-    if wasm_opt === nothing
-        error("wasm-opt not found. Install Binaryen: brew install binaryen (macOS) or apt install binaryen (Linux)")
-    end
-
     # Build flags based on level
     flags = copy(WASM_OPT_GC_FLAGS)
     if level === :size
@@ -330,7 +324,10 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         output_path = joinpath(dir, "output.wasm")
         write(input_path, bytes)
 
-        cmd = `$(wasm_opt) $(flags) $(input_path) -o $(output_path)`
+        # Binaryen_jll supplies a platform-correct executable plus its required
+        # library environment. Optimization therefore has no ambient PATH or
+        # system-package dependency.
+        cmd = `$(wasmopt()) $(flags) $(input_path) -o $(output_path)`
         try
             Base.run(cmd)
         catch e

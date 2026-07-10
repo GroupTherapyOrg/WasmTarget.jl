@@ -4023,7 +4023,6 @@ begin
     # Phase 28: Binaryen Optimization
     # ========================================================================
     @pphase "Phase 28: Binaryen Optimization" begin
-        if Sys.which("wasm-opt") !== nothing
             @testset "optimize() reduces size" begin
                 test_add(a::Int32, b::Int32)::Int32 = a + b
                 bytes = compile(test_add, (Int32, Int32))
@@ -4074,10 +4073,6 @@ begin
                 @test run_wasm(opt_bytes, "multi_a", Int32(4)) == 5
                 @test run_wasm(opt_bytes, "multi_b", Int32(4)) == 8
             end
-        else
-            @warn "wasm-opt not found — skipping optimization tests"
-            @test true  # placeholder so testset isn't empty
-        end
     end
 
     # ========================================================================

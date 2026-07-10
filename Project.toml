@@ -4,6 +4,7 @@ version = "0.4.12"
 authors = ["Dale Black"]
 
 [deps]
+Binaryen_jll = "a54ac8ab-712d-5a0e-8e11-9296c0d3c20e"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
@@ -34,6 +35,7 @@ WasmTargetStatisticsExt = "Statistics"
 # Tilde specifiers pin to supported minor lines only: the typed-IR format the
 # compiler consumes is version-specific, so each minor needs explicit support.
 Aqua = "0.8"
+Binaryen_jll = "0.130.0"
 Dates = "1"
 # The SimpleDiffEq ext constructs SciMLBase's ODEFunction/ODEProblem CONCRETELY
 # (explicit field layout) — version-sensitive. Pinned to the verified majors;
