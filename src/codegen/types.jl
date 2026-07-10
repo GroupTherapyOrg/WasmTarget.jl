@@ -2321,20 +2321,21 @@ end
 """
     get_closure_base_struct!(mod, registry) -> UInt32
 
-The closure-base struct: {classId:i32, context:anyref, vtable:(ref null struct)}.
-dart: class_info.dart FieldIndex closureContext=2/closureVtable=3 (WT drops the
-identityHash + runtimeType slots — deferred with the hash-slot and RTI campaigns).
-`sub \$JlBase` so closures live in the classId world (typeof/isa discriminate).
+The closure-base Object prefix and callable payload:
+`{classId:i32, identityHash:(mut i32), context:anyref, vtable:structref}`.
+This copies current dart ClosureLayouter's Object fields and context/vtable order
+(the separate runtime function-type field remains part of the RTI campaign).
 """
 function get_closure_base_struct!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.closure_base_idx !== nothing && return registry.closure_base_idx
     fields = FieldType[
         FieldType(I32, false),       # classId
+        FieldType(I32, true),        # identityHash
         FieldType(AnyRef, false),    # context (the captured-fields struct)
         FieldType(StructRef, false), # vtable (covariant per-arity structs; cast at use)
     ]
-    base = registry.base_struct_idx
-    idx = UInt32(add_type!(mod, base === nothing ? StructType(fields) : StructType(fields, base)))
+    object = get_object_struct_type!(mod, registry)
+    idx = UInt32(add_type!(mod, StructType(fields, object)))
     registry.closure_base_idx = idx
     return idx
 end

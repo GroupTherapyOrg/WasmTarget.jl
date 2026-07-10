@@ -1,11 +1,12 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # march16: FIRST-CLASS CLOSURES — trampolines + vtable globals
 # (dart ClosureLayouter/ClosureRepresentation, closures.dart:41-118;
-#  the closure object = {classId, context, vtable}, class_info.dart FieldIndex)
+#  the closure object = {classId, identityHash, context, vtable})
 # ═══════════════════════════════════════════════════════════════════════════
 
 """
-    ensure_closure_vtable!(mod, registry, closure_type, body_idx, body_params, body_results)
+    ensure_closure_vtable!(mod, registry, closure_type, body_idx, body_params, body_results;
+                           body_return_type=nothing)
         -> (vtable_global_idx, vtable_struct_idx)
 
 One immutable vtable GLOBAL per closure body. Its single populated entry (the
@@ -19,7 +20,8 @@ at vtableBaseIndex + posArgCount (closures.dart:105-118).
 function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                 closure_type::Type, body_idx::UInt32,
                                 body_params::Vector{WasmValType},
-                                body_results::Vector{WasmValType})::Tuple{UInt32, UInt32}
+                                body_results::Vector{WasmValType};
+                                body_return_type=nothing)::Tuple{UInt32, UInt32}
     cache = registry.closure_vtable_globals
     cache === nothing && error("closure layouter unavailable on a minimal registry")
     key = closure_type   # T-keyed: the wrap looks up by type alone
@@ -44,7 +46,7 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                       func_name="closure_trampoline", mod=mod)
     local_get!(tb, UInt32(0))
     ref_cast!(tb, Int64(base_idx), false)
-    struct_get!(tb, base_idx, UInt32(1), AnyRef)               # .context
+    struct_get!(tb, base_idx, UInt32(2), AnyRef)               # .context
     ref_cast!(tb, Int64(captured_info.wasm_type_idx), false)   # the captured struct
     for j in 1:arity
         local_get!(tb, UInt32(j))
@@ -57,13 +59,18 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     end
     call!(tb, body_idx, WasmValType[], body_results)
     if !isempty(body_results) && body_results[1] in (I32, I64, F32, F64)
-        # re-box the numeric result (inline shape — no ctx here; scratch local 1+arity)
+        # Re-box with the body's REAL Julia classId. The compile pre-pass owns this
+        # vtable creation and therefore owns the authoritative inferred return type;
+        # a Wasm width alone cannot distinguish Bool/Int32 or the other same-width
+        # Julia types.
+        body_return_type isa Type ||
+            error("numeric closure trampoline requires its inferred Julia return type")
         local rw = body_results[1]
         local box_idx = get_numeric_box_type!(mod, registry, rw)
         local scratch = UInt32(1 + arity)
         builder_set_local_type!(tb, Int(scratch), rw)   # fullstrict: the scratch's truth
         local_set!(tb, scratch)
-        i32_const!(tb, Int64(0))          # width-default classId (un-migrated callers discriminate by width)
+        i32_const!(tb, Int64(ensure_type_id!(registry, body_return_type)))
         local_get!(tb, scratch)
         struct_new!(tb, box_idx)
         tramp_locals = WasmValType[rw]
@@ -95,7 +102,7 @@ end
     emit_closure_wrap!(b, ctx, closure_type, body_idx, body_params, body_results)
 
 The captured struct is ON THE STACK; wraps it into the closure OBJECT
-{classId, context, vtable} (dart's implicit function-value creation at the
+{classId, identityHash, context, vtable} (dart's implicit function-value creation at the
 erasure seam — convertType when a closure meets a top type).
 """
 function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
@@ -107,10 +114,11 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
     (cache !== nothing && haskey(cache, closure_type)) || return nothing
     g, _ = ensure_closure_vtable!(ctx.mod, ctx.type_registry, closure_type, body_idx,
                                   body_params, body_results)
-    # stack: [captured] → {classId, captured-as-context, vtable}
+    # stack: [captured] → {classId, identityHash=0, context, vtable}
     local ctx_scratch = allocate_local!(ctx, AnyRef)
     local_set!(b, UInt32(ctx_scratch))
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, closure_type)))
+    i32_const!(b, 0)
     local_get!(b, UInt32(ctx_scratch))
     global_get!(b, g, ConcreteRef(get_closure_vtable_struct!(ctx.mod, ctx.type_registry, length(body_params) - 1), false))
     struct_new!(b, base_idx)
@@ -202,7 +210,7 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     end
     local_get!(b, UInt32(scratch))
     ref_cast!(b, Int64(base_idx), false)
-    struct_get!(b, base_idx, UInt32(2), StructRef)          # .vtable
+    struct_get!(b, base_idx, UInt32(3), StructRef)          # .vtable
     ref_cast!(b, Int64(vt_struct), false)
     struct_get!(b, vt_struct, UInt32(arity), UInt8(FuncRef)) # entry[arity]
     ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)

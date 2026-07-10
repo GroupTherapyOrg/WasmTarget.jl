@@ -499,7 +499,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                     if_!(b, to)
                     local_get!(b, UInt32(_uw))
                     ref_cast!(b, Int64(_cbase), false)
-                    struct_get!(b, _cbase, UInt32(1), AnyRef)   # .context
+                    struct_get!(b, _cbase, UInt32(2), AnyRef)   # .context
                     ref_cast!(b, Int64(to.type_idx), to.nullable)
                     else_!(b)
                     local_get!(b, UInt32(_uw))

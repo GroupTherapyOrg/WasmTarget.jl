@@ -139,6 +139,7 @@ const LOCKS = [
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
             required = [
                 "object_struct_idx::Union{Nothing, UInt32}",
                 "StructType(fields, top)",
@@ -146,9 +147,14 @@ const LOCKS = [
                 "get_identity_counter_global!",
                 "struct_get!(b, object_idx, UInt32(1), I32)",
                 "struct_set!(b, object_idx, UInt32(1), I32)",
+                "StructType(fields, object)",
+                "struct_get!(tb, base_idx, UInt32(2), AnyRef)",
+                "struct_get!(b, base_idx, UInt32(3), StructRef)",
+                "ensure_type_id!(registry, body_return_type)",
             ]
-            missing = count(p -> !occursin(p, types_src * stmt_src), required)
-            forbidden = count(p -> occursin(p, stmt_src),
+            all_src = types_src * stmt_src * closure_src
+            missing = count(p -> !occursin(p, all_src), required)
+            forbidden = count(p -> occursin(p, all_src),
                               ["constant 42", "array.len for strings", "fake identity", "fabricated identity"])
             missing + forbidden
         end),

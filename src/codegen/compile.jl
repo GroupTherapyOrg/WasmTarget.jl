@@ -907,7 +907,8 @@ function _compile_closed_world_plan(functions::Vector;
             local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
             local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
                          WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
-            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs)
+            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs;
+                                   body_return_type=_rt)
         end
     end
 
