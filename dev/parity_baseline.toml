@@ -3,13 +3,14 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
-L16_no_codegen_lax_mode = 0
-L14_no_posthoc_module_repair = 0
-L15_no_fabricated_ssa_store = 0
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
 L13_no_byte_bridges = 0
+L14_no_posthoc_module_repair = 0
+L15_no_fabricated_ssa_store = 0
+L16_no_codegen_lax_mode = 0
+L17_one_compilation_path = 0
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
@@ -21,15 +22,15 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 645
+R11_patch_markers = 641
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
-R16_external_convert_ladders = 13   # +2 fullstrict contract sites (entry-narrowing + the dyn-call result seam) — structural
+R16_external_convert_ladders = 13
 R17_unwrapped_value_emissions = 186
 R18_anyref_dispatch_sigs = 2
 R2_emit_raw_bridges = 0
 R3_infer_value_type = 139
-R5_julia_type_reguess = 108
+R5_julia_type_reguess = 106
 R7_raw_coercion_ops = 122

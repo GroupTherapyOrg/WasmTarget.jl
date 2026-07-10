@@ -1162,32 +1162,19 @@ mod = compile_module([
 
 Functions can call each other within the module.
 """
-function compile_module(functions::Vector;
+function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         return_registries::Bool=false,
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false,
-                        discovery::Symbol=:trim
+                        register_ir_types::Bool=false
                         )
-    # P5-trim: discovery=:trim replaces the homegrown dependency walk +
-    # AUTODISCOVER whitelist with the upstream closed-world collection
-    # (collect_closed_world). The whole pipeline then compiles from the
-    # collection's paired CodeInfos via the TRIM_IR_CACHE served inside
-    # get_typed_ir. Cache cleanup is in the wrapper below.
-    discovery === :trim && return _compile_module_trim(functions;
-        existing_module, import_stubs, return_registries,
-        overlay_entries, optimize_ir, register_ir_types)
+    # This private entry receives only a complete plan produced by
+    # `trim_compile_plan`. It never discovers or silently adds functions.
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
-
-    # WASM-057: Auto-discover function dependencies
-    # P5-trim: skipped when the trim plan already expanded the closed world
-    if !_TRIM_ACTIVE[]
-        functions = discover_dependencies(functions; interp=interp)
-    end
 
     # Filter out any discovered functions that are import stubs
     # (import stubs are registered in func_registry at their import indices, not compiled)
@@ -4177,11 +4164,9 @@ end
 
 
 
-# P5-trim: trim-discovery wrapper — build the plan, activate the IR cache,
-# and run the standard pipeline with discovery handled (the legacy
-# discover_dependencies call inside is skipped via the pre-expanded list +
-# _TRIM_ACTIVE flag).
-const _TRIM_ACTIVE = Ref(false)
+# The sole module pipeline: collect one closed world, install its paired typed-IR
+# cache for the duration of codegen, then compile that immutable plan. Public
+# entry points may normalize inputs, but none may bypass this collector.
 function _compile_module_trim(functions::Vector; kwargs...)
     normalized = Any[]
     for entry in functions
@@ -4194,13 +4179,26 @@ function _compile_module_trim(functions::Vector; kwargs...)
     end
     plan, ir_cache = trim_compile_plan(normalized)
     TRIM_IR_CACHE[] = ir_cache
-    _TRIM_ACTIVE[] = true
     try
-        return compile_module(plan; discovery=:legacy, kwargs...)
+        return _compile_closed_world_plan(plan; kwargs...)
     finally
         TRIM_IR_CACHE[] = nothing
-        _TRIM_ACTIVE[] = false
     end
+end
+
+function compile_module(functions::Vector;
+                        existing_module::Union{WasmModule, Nothing}=nothing,
+                        import_stubs::Vector=[],
+                        return_registries::Bool=false,
+                        overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
+                        optimize_ir::Bool=true,
+                        register_ir_types::Bool=false,
+                        discovery::Symbol=:trim)
+    discovery === :trim || throw(ArgumentError(
+        "only the closed-world compilation path is supported (discovery=:trim)"))
+    return _compile_module_trim(functions;
+        existing_module, import_stubs, return_registries, overlay_entries,
+        optimize_ir, register_ir_types)
 end
 
 """

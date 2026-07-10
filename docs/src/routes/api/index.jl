@@ -28,14 +28,13 @@
         # ── Core Compilation ──
         H2(:id => "compile", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Core Compilation"),
         api_entry(
-            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, strict=true, validate=true) -> Vector{UInt8}",
+            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, validate=false) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
              `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen). \
-             Soundness defaults: `strict=true` raises a `WasmCompileError` (naming the construct + source location) rather \
-             than emit a wrong value for an unsupported construct — pass `strict=false` for permissive stub-and-trap; \
-             `validate=true` runs `wasm-tools validate` on the output and raises `WasmValidationError` instead of returning \
-             malformed bytes."
+             Codegen correctness is unconditional: there is no permissive or validator-opt-out builder mode. \
+             `validate=true` additionally runs `wasm-tools validate` as an independent cross-check; the typed builder \
+             remains responsible for validity by construction."
         ),
         api_entry(
             "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",
@@ -43,7 +42,7 @@
              type space and can call each other directly — this is the entry point for vector-bridge patterns and any \
              multi-function island. Callee discovery defaults to `:trim` — the upstream closed-world collection \
              (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`) walks every reachable invoke in \
-             one consistent inference world. Pass `discovery=:legacy` for the previous curated-whitelist walker."
+             one consistent inference world. This is the only supported discovery and module-codegen path."
         ),
         api_entry(
             "compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type, ...)",
