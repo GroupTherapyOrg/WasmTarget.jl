@@ -266,6 +266,13 @@ _wt_packed_i8()::Int8 = Int8[-128, -1, 127][2]
 _wt_packed_u8()::UInt8 = UInt8[0, 255, 128][2]
 _wt_packed_i16()::Int16 = Int16[-32768, -1, 32767][2]
 _wt_packed_u16()::UInt16 = UInt16[0, 65535, 32768][2]
+
+_wt_tearoff_add(x::Int64)::Int64 = x + Int64(3)
+_wt_tearoff_mul(x::Int64)::Int64 = x * Int64(4)
+function _wt_dynamic_tearoff(x::Int64, i::Int64)::Int64
+    fs = Any[_wt_tearoff_add, _wt_tearoff_mul]
+    return (fs[i](x))::Int64
+end
 # WASMTARGET-FUZZ (Loop B/B4c): Char is i32-rep but NOT <:Number, so it was excluded from
 # both the boxing decision (needs_anyref_boxing required all(<:Number)) and the isa
 # discriminator (gated on check_type<:Number) → Union{Char,Int32} collapsed + isa Char
@@ -9428,6 +9435,8 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm_vec(_s2004_cap_chain, Int64[1,3,5,7,9]; optimize=opt).pass
                 @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(1); optimize=opt).pass
                 @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(2); optimize=opt).pass
+                @test compare_julia_wasm(_wt_dynamic_tearoff, Int64(9), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_wt_dynamic_tearoff, Int64(9), Int64(2); optimize=opt).pass
             end
         end
     end

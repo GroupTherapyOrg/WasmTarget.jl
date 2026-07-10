@@ -135,6 +135,19 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L24_unified_static_tearoffs" => ("named-function tear-offs enroll in the closed world and use the same closure Object/context/vtable/RTI representation as capturing closures",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
+            required = ["_ENROLLED_CALLABLE_TYPES", "isdefined(T, :instance)",
+                        "typeof(f) in _ENROLLED_CALLABLE_TYPES[]", "takes_context ? 1 : 0",
+                        "get_nothing_global!(ctx.mod, ctx.type_registry)"]
+            forbidden = ["static_tearoff_struct", "tearoff_base_idx", "tearoff_callsite"]
+            all_src = trim_src * compile_src * closure_src
+            count(p -> !occursin(p, all_src), required) +
+            count(p -> occursin(p, all_src), forbidden)
+        end),
     "L23_closure_rti" => ("closure objects copy Dart's Object/context/vtable/functionType layout and use a real closed-world Julia type object",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
@@ -143,7 +156,7 @@ const LOCKS = [
             required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
                         "haskey(type_globals, closure_type)",
                         "global_get!(b, type_global",
-                        "observe_user_closure!(CC.widenconst(t))"]
+                        "observe_callable!(CC.widenconst(t))"]
             forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
             count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
             count(p -> occursin(p, types_src * closure_src), forbidden)

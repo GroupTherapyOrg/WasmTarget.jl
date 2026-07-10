@@ -893,12 +893,16 @@ function _compile_closed_world_plan(functions::Vector;
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).
-    local _cvp = Tuple{Int, DataType}[]   # (function_data position, closure type)
+    local _cvp = Tuple{Int, DataType, Bool}[] # (function_data position, callable type, takes context)
     for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
-        f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
+        if f isa DataType && is_closure_type(f)
+            push!(_cvp, (i, f, true))
+        elseif f isa Function && typeof(f) in _ENROLLED_CALLABLE_TYPES[]
+            push!(_cvp, (i, typeof(f), false))
+        end
     end
     if !isempty(_cvp)
-        for (_slot, (_i, _T)) in enumerate(_cvp)
+        for (_slot, (_i, _T, _takes_context)) in enumerate(_cvp)
             local _entry = function_data[_i]
             local _ats, _rt = _entry[2], _entry[5]
             # fullstrict reorder: the placeholders occupy the body indices ALREADY —
@@ -908,7 +912,7 @@ function _compile_closed_world_plan(functions::Vector;
             local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
                          WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
             ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs;
-                                   body_return_type=_rt)
+                                   body_return_type=_rt, takes_context=_takes_context)
         end
     end
 
@@ -1688,7 +1692,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
         # wasm arrays (an id here admits them as dispatch candidates whose
         # wrappers then have no struct to cast to — the _la_sub regression)
-        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box &&
+        if isconcretetype(T) && isstructtype(T) &&
+           (!(T <: Function) || T in _ENROLLED_CALLABLE_TYPES[]) && T !== Core.Box &&
            !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
             push!(out, T)
         end

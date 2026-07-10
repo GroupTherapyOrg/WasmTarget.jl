@@ -77,19 +77,25 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
     # inference makes the body REAL instead of an any-erased stub).
     dyn_sigs = Set{Tuple}()
-    closure_types = Set{DataType}()
+    callable_types = Set{DataType}()
     i = 1
-    _fn_closures = Set{DataType}()   # per-function staging (folded on co-occurrence)
+    _fn_callables = Set{DataType}()   # per-function staging (folded on co-occurrence)
     _fn_has_dyn = false
-    function observe_user_closure!(@nospecialize(T))
+    function observe_callable!(@nospecialize(T))
         if T isa Union
-            foreach(observe_user_closure!, Base.uniontypes(T))
-        elseif T isa DataType && is_closure_type(T)
-            local root = T.name.module
-            while parentmodule(root) !== root
-                root = parentmodule(root)
+            foreach(observe_callable!, Base.uniontypes(T))
+        elseif T isa DataType && T <: Function
+            if is_closure_type(T)
+                local root = T.name.module
+                while parentmodule(root) !== root
+                    root = parentmodule(root)
+                end
+                root === Main && push!(_fn_callables, T)
+            elseif isdefined(T, :instance)
+                # A named/generic function singleton is Dart's static tear-off
+                # counterpart. Enrollment remains co-occurrence-gated below.
+                push!(_fn_callables, T)
             end
-            root === Main && push!(_fn_closures, T)
         end
         return
     end
@@ -102,9 +108,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         # userland closure perturbed modules with purely-static closures (the
         # randsubseq suite regression).
         if _fn_has_dyn
-            union!(closure_types, _fn_closures)
+            union!(callable_types, _fn_callables)
         end
-        empty!(_fn_closures); _fn_has_dyn = false
+        empty!(_fn_callables); _fn_has_dyn = false
         host_mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
@@ -112,7 +118,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         # Optimized IR often folds `%new(closure, captures...)` into a constant
         # tuple followed by getfield. The concrete closure types still inhabit SSA
         # types, so collect from that semantic source as well as explicit :new.
-        ssat isa Vector && foreach(t -> observe_user_closure!(CC.widenconst(t)), ssat)
+        ssat isa Vector && foreach(t -> observe_callable!(CC.widenconst(t)), ssat)
         for stmt in src.code
             # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
@@ -126,7 +132,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 # scope: USERLAND closures only — Base/stdlib-internal closures are
                 # statically called (never through the vtable); enrolling them all
                 # exploded the blast radius (a _growend! trampoline mis-built).
-                observe_user_closure!(_T)   # staged; folds only on co-occurrence
+                observe_callable!(_T)   # staged; folds only on co-occurrence
                 continue
             end
             # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
@@ -200,11 +206,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         end
     end
 
-    _fn_has_dyn && union!(closure_types, _fn_closures)
-    # cross-product: each userland closure type × each observed dynamic-call
+    _fn_has_dyn && union!(callable_types, _fn_callables)
+    # cross-product: each runtime callable type × each observed dynamic-call
     # signature of matching arity → a TYPED body specialization (the vtable's
     # typed entry; inference compiles the body for real)
-    for _T in closure_types
+    for _T in callable_types
         local _mms2 = try
             Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
         catch; nothing end
@@ -237,13 +243,13 @@ end
 # selector candidates rather than ordinary direct-call targets. 0 = no discovery ran.
 const _TRIM_BASE_PAIRS = Ref{Int}(0)
 
-# march16: the conversion-arm allowlist — closure types whose bodies the candidate
+# march16: the conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
-const _ENROLLED_CLOSURE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
+const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
-    _ENROLLED_CLOSURE_TYPES[] = Set{DataType}()
+    _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -277,14 +283,14 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         for _round in 1:8
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
             extra = Any[mi for mi in extra if !(mi in base_mis)]
-            # march16: remember WHICH closure types were enrolled — the conversion
+            # march16: remember WHICH callable types were enrolled — the conversion
             # arm converts ONLY these (converting every userland closure pair changed
             # unrelated compiles: the randsubseq suite regression, bisect-certified).
             for mi in extra
                 local st = mi.specTypes
                 if st isa DataType && st <: Tuple && length(st.parameters) >= 1
                     local ft = st.parameters[1]
-                    ft isa DataType && is_closure_type(ft) && push!(_ENROLLED_CLOSURE_TYPES[], ft)
+                    ft isa DataType && ft <: Function && push!(_ENROLLED_CALLABLE_TYPES[], ft)
                 end
             end
             isempty(extra) && break
@@ -387,7 +393,7 @@ function trim_compile_plan(entries_named::Vector)
             # its target. USERLAND ONLY: converting Base-internal closure pairs
             # (previously skipped) changed unrelated compiles — randsubseq's
             # internals regressed in the suite context (the march-16 gate catch).
-            ftyp in _ENROLLED_CLOSURE_TYPES[] && (f = ftyp)
+            ftyp in _ENROLLED_CALLABLE_TYPES[] && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig
