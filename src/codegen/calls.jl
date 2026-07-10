@@ -2593,8 +2593,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
 
             if field_sym === :mem
-                # :mem returns the underlying Memory - in WasmGC this is the array itself
-                emit_value!(fb, obj_arg, ctx)
+                # A virtual MemoryRef may emit `(memory, offset)`; getfield(:mem)
+                # projects the memory operand and discards only the offset.
+                local _mrb = _compile_value_b(obj_arg, ctx)
+                append_builder!(fb, _mrb)
+                length(_mrb.v.stack) == 2 && drop!(fb)
                 return append_builder!(b, fb)
             elseif field_sym === :ptr_or_offset
                 # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
