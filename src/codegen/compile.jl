@@ -1740,176 +1740,31 @@ Optionally a 5th element func_ref can be provided for cross-function call resolu
 This is the entry point for the eval_julia pipeline where type inference has already been run.
 Unlike compile_module, this does NOT call get_typed_ir() or discover_dependencies().
 """
+struct _PrecomputedIRKey
+    id::Int
+end
+
 function compile_module_from_ir(ir_entries::Vector)::WasmModule
-    mod = WasmModule()
-    type_registry = TypeRegistry()
-    func_registry = FunctionRegistry()
-
-    # Add Math.pow import (same as compile_module)
-    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
-
-    # PURE-9026: Create base struct type FIRST
-    get_base_struct_type!(mod, type_registry)
-
-    # Pre-register numeric box types (same as compile_module)
-    for nt in (I32, I64, F32, F64)
-        get_numeric_box_type!(mod, type_registry, nt)
-    end
-    # PURE-9028: Pre-register BoxedNothing type
-    get_nothing_box_type!(mod, type_registry)
-
-    # Build function_data from pre-computed IR (no get_typed_ir call)
-    function_data = []
-    for entry in ir_entries
+    functions = Any[]
+    cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
+    for (i, entry) in enumerate(ir_entries)
+        length(entry) >= 4 || throw(ArgumentError(
+            "IR entry $i must be (CodeInfo, return_type, arg_types, name[, func_ref])"))
         code_info, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
-        # Optional 5th element: func_ref for cross-function call resolution
-        func_ref = length(entry) >= 5 ? entry[5] : nothing
-        global_args = Set{Int}()
-
-        # Register types used in parameters
-        for (i, T) in enumerate(arg_types)
-            if T === Symbol
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: Array && T isa DataType
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
-        end
-
-        # Register return type
-        if is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
-
-        push!(function_data, (func_ref, arg_types, name, code_info, return_type, global_args, false))
+        code_info isa Core.CodeInfo || throw(ArgumentError("IR entry $i does not contain Core.CodeInfo"))
+        arg_types isa Tuple || throw(ArgumentError("IR entry $i arg_types must be a Tuple"))
+        key = length(entry) >= 5 && entry[5] !== nothing ? entry[5] : _PrecomputedIRKey(i)
+        push!(functions, (key, arg_types, String(name)))
+        cache[(key, arg_types)] = (code_info, return_type)
     end
 
-    # Scan for GlobalRef to mutable structs (same as compile_module)
-    # TRUE-INT-002-impl2: Also scan Expr args for nested GlobalRef
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
-    function _scan_globalref!(val, module_globals, mod, type_registry)
-        if val isa GlobalRef
-            try
-                actual_val = getfield(val.mod, val.name)
-                T = typeof(actual_val)
-                if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                    key = (val.mod, val.name)
-                    if _lookup_module_global(module_globals, key) === nothing
-                        info = register_struct_type!(mod, type_registry, T)
-                        type_idx = info.wasm_type_idx
-                        _init_b = InstrBuilder(; func_name="module_global_init")
-                        struct_new_default!(_init_b, type_idx)
-                        init_bytes = builder_code(_init_b)
-                        global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                        push!(module_globals, (key, global_idx))
-                    end
-                end
-            catch
-            end
-        elseif val isa Expr
-            for arg in val.args
-                _scan_globalref!(arg, module_globals, mod, type_registry)
-            end
-        end
+    previous = TRIM_IR_CACHE[]
+    TRIM_IR_CACHE[] = cache
+    try
+        return _compile_closed_world_plan(functions)
+    finally
+        TRIM_IR_CACHE[] = previous
     end
-    for (_, _, _, code_info, _, _, _) in function_data
-        for stmt in code_info.code
-            _scan_globalref!(stmt, module_globals, mod, type_registry)
-        end
-    end
-
-    # PURE-9035: Pre-register all core exception types for DFS typeIds
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError)
-        register_struct_type!(mod, type_registry, _exn_T)
-    end
-
-    # PURE-9025: Assign DFS type IDs after all types are registered
-    assign_type_ids!(type_registry)
-
-    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
-    get_nothing_global!(mod, type_registry)
-
-    # PURE-9063: Create $JlType hierarchy types (before type globals use them)
-    create_jl_type_hierarchy!(mod, type_registry)
-
-    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
-    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
-
-    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
-    ensure_all_type_globals!(mod, type_registry)
-    create_type_lookup_table!(mod, type_registry)
-
-    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    # Calculate function indices
-    n_imports = length(mod.imports)
-    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
-    end
-
-    # Compile function bodies
-    export_name_counts = Dict{String, Int}()
-    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-
-        # Generate function body from Julia IR (no intrinsic check — pre-computed IR is always normal code)
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                global_args=global_args, is_compiled_closure=false,
-                                module_globals=module_globals)
-        body = generate_body(ctx)
-        locals = ctx.locals
-
-        # Get param/result types
-        param_types = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
-            if T isa Union && needs_anyref_boxing(T)
-                push!(param_types, AnyRef)
-            else
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-            end
-        end
-        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-        # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, locals, body)
-
-        # Export
-        export_name = name
-        count = get(export_name_counts, name, 0)
-        if count > 0
-            export_name = "$(name)_$(count)"
-        end
-        export_name_counts[name] = count + 1
-        add_codegen_export!(mod, export_name, 0, actual_idx)
-    end
-
-    populate_type_constant_globals!(mod, type_registry)
-    # census F2 (march5): the post-body supertype retrofit — lazily-registered
-    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
-    # the main pipeline's note).
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    return mod
 end
 
 """
