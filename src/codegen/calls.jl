@@ -3550,8 +3550,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         _sf_ct.fields[_sf_wasm_fi + 1].valtype : nothing
                     _sf_expected === nothing && error("setfield! target has no physical Wasm field type")
                     if field_type === Any
-                        emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                    from_julia=infer_value_type(value_arg, ctx))
+                        emit_value!(_sfsb, value_arg, ctx, _sf_expected)
                     else
                         # PURE-6024: When value is nothing and field is ref-typed,
                         # compile_value(nothing) emits i32_const 0 which fails
@@ -6232,8 +6231,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             else
                 # Push each arg, then array_new_fixed
                 for ea in expr_args
-                    emit_value!(fb, ea, ctx, wasm_elem_type;
-                                from_julia=infer_value_type(ea, ctx))
+                    emit_value!(fb, ea, ctx, wasm_elem_type)
                 end
                     array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
             end

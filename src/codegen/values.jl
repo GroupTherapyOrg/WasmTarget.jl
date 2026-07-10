@@ -886,7 +886,13 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     # keyed on ctx.ssa_types (the typed slot), not statement sniffing.
     ty = emit_value!(b, val, ctx)
     ty === nothing && return expected
-    ty === expected || convert_type!(b, ty, expected, ctx; from_julia=from_julia)
+    if ty !== expected
+        # Like dart's wrap(node, expectedType), the single wrap funnel owns both
+        # the emitted Wasm type and the node's static source type. Callers must
+        # not independently rediscover source types just to request a coercion.
+        from_julia === nothing && (from_julia = infer_value_type(val, ctx))
+        convert_type!(b, ty, expected, ctx; from_julia=from_julia)
+    end
     return expected
 end
 
