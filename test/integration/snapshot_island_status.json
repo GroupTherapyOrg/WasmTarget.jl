@@ -101,7 +101,7 @@
   },
   "Interactivity with HTML.jl#1#ede8009e-7f15-11ea-192a-a5c6135a9dcf": {
     "notebook": "Interactivity with HTML.jl",
-    "status": "golden_drift"
+    "status": "green"
   },
   "Interactivity with HTML.jl#2#5bd8b261-a89d-46a3-bb59-c95a1801c881": {
     "notebook": "Interactivity with HTML.jl",
@@ -365,7 +365,7 @@
   },
   "fractals.jl#3#ee4df211-020e-43d4-a41d-513fbd6f31b7": {
     "notebook": "fractals.jl",
-    "status": "compile_fail"
+    "status": "golden_drift"
   },
   "fractals.jl#4#8899561d-42e7-4397-a649-8800461c6649": {
     "notebook": "fractals.jl",
