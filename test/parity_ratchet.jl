@@ -135,6 +135,23 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L20_object_identity_layout" => ("Top owns classId; Object adds mutable identityHash; objectid reads/writes that slot and never fabricates a constant/content hash",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = [
+                "object_struct_idx::Union{Nothing, UInt32}",
+                "StructType(fields, top)",
+                "FieldType(I32, true)",
+                "get_identity_counter_global!",
+                "struct_get!(b, object_idx, UInt32(1), I32)",
+                "struct_set!(b, object_idx, UInt32(1), I32)",
+            ]
+            missing = count(p -> !occursin(p, types_src * stmt_src), required)
+            forbidden = count(p -> occursin(p, stmt_src),
+                              ["constant 42", "array.len for strings", "fake identity", "fabricated identity"])
+            missing + forbidden
+        end),
     "L19_no_fabricated_invoke_results" => ("invoke/call lowering may not substitute dummy exceptions, empty strings, constant hashes, or null SimpleVectors",
         () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|Core\.svec \(SimpleVector construction\)")),
     "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, SSA-store, and struct-field lowering preserve and coerce the emitted value; no zero/null repair helper may return",

@@ -13,6 +13,7 @@ L16_no_codegen_lax_mode = 0
 L17_one_compilation_path = 0
 L18_no_value_repair_defaults = 0
 L19_no_fabricated_invoke_results = 0
+L20_object_identity_layout = 0
 L1_box_typeid_external = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
