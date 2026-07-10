@@ -436,7 +436,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 # (march12: an externref source crosses the boundary first)
                 from === ExternRef && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
-                struct_get!(b, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(_sai), true))
+                struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
                 return b
             elseif _from_is_sarr && !_to_is_sarr
                 # a bare data array flowing to a value position: WRAP (the one producer),
@@ -632,7 +632,7 @@ end
     emit_string_wrap!(b, mod, registry)
 
 parity(M9) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
-byte array on the stack, wrap it as `\$JlString{classId(String), data}`. The ONE
+byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The ONE
 place a string value is born; every string producer routes here.
 """
 function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
@@ -642,8 +642,9 @@ function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
     local_set!(b, scratch)
     i32_const!(b, Int64(ensure_type_id!(registry, String)))
+    i32_const!(b, 0) # identityHash: lazily assigned by objectid
     local_get!(b, scratch)
-    struct_new!(b, struct_idx, WasmValType[I32, ConcreteRef(arr_idx, true)])
+    struct_new!(b, struct_idx, WasmValType[I32, I32, ConcreteRef(arr_idx, true)])
     return b
 end
 
@@ -667,7 +668,7 @@ function emit_string_data!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     from_anyref && ref_cast!(b, Int64(struct_idx), false)
-    struct_get!(b, UInt32(struct_idx), UInt32(1), ConcreteRef(arr_idx, true))
+    struct_get!(b, UInt32(struct_idx), UInt32(2), ConcreteRef(arr_idx, true))
     return b
 end
 

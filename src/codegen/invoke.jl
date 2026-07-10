@@ -2801,7 +2801,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local_set!(bchr, _sc_idx)
                 _ssi = get_string_struct_type!(ctx.mod, ctx.type_registry)
                 ref_cast!(bchr, Int64(_ssi), false)
-                struct_get!(bchr, UInt32(_ssi), UInt32(1), ConcreteRef(UInt32(str_type_idx), true))
+                struct_get!(bchr, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(str_type_idx), true))
                 local_get!(bchr, _sc_idx)
                 if idx_type === Int64 || idx_type === Int
                     # Convert Int64 to Int32 and subtract 1

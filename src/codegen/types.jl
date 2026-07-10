@@ -296,10 +296,12 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
-    # constant initializer: i32.const classId; per-byte i32.const; array.new_fixed; struct.new
+    # constant initializer: classId; unassigned identityHash; byte array; struct.new
     init = UInt8[]
     push!(init, Opcode.I32_CONST)
     append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, String))))
+    push!(init, Opcode.I32_CONST)
+    append!(init, encode_leb128_signed(Int64(0)))
     bytes = codeunits(s)
     for b in bytes
         push!(init, Opcode.I32_CONST)
@@ -1220,8 +1222,9 @@ end
 """
     get_string_struct_type!(mod, registry) -> UInt32
 
-parity(M9): the CLASSED string — dart: String IS a class. A Julia String value is
-`(struct (field i32 classId) (field (ref null \$strbytes) data))`, SUBTYPE of \$JlBase,
+parity(M9): the CLASSED string — dart: String IS an Object class. A Julia String value is
+`(struct (field i32 classId) (field (mut i32) identityHash)
+         (field (ref null \$strbytes) data))`, SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
 table like every other value. String OPS unwrap `.data` once at entry and work on the
 byte array (dart's methods read the class's array field the same way).
@@ -1229,10 +1232,11 @@ byte array (dart's methods read the class's array field the same way).
 function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.string_struct_idx === nothing
         arr_idx = get_string_array_type!(mod, registry)
-        base_idx = registry.base_struct_idx
+        object_idx = get_object_struct_type!(mod, registry)
         st = StructType(FieldType[FieldType(I32, false),
+                                  FieldType(I32, true),
                                   FieldType(ConcreteRef(arr_idx, true), true)],
-                        base_idx === nothing ? nothing : UInt32(base_idx))
+                        object_idx)
         registry.string_struct_idx = add_type!(mod, st)
     end
     return registry.string_struct_idx

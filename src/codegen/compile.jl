@@ -56,12 +56,13 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
         local_set!(bb, scratch_idx)
         i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
+        i32_const!(bb, 0)
         local_get!(bb, scratch_idx)
         struct_new!(bb, get_string_struct_type!(mod, type_registry),
-                    WasmValType[I32, ConcreteRef(UInt32(str_type_idx), true)])
+                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true)])
     end
     _str0!(bb) = (local_get!(bb, 0);
-                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                               ConcreteRef(UInt32(str_type_idx), true)))
 
     if fname === :str_char
@@ -399,7 +400,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         builder_set_local_type!(b, _b_data, extra_locals[end])
         _str0!(b); local_set!(b, _a_data)
         local_get!(b, 1)
-        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                     ConcreteRef(UInt32(str_type_idx), true))
         local_set!(b, _b_data)
         push!(extra_locals, I32)  # len_a
