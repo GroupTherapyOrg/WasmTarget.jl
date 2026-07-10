@@ -5645,10 +5645,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         num!(_svrb, Opcode.I32_WRAP_I64)
         i32_const!(_svrb, 1)  # 1
         num!(_svrb, Opcode.I32_SUB)
-        array_get!(_svrb, svec_arr_idx, ExternRef)
-        # array.get returns externref but downstream ref.cast expects anyref
-        # PURE-9064: Skip conversion when array elements are already anyref (JlType hierarchy)
-        if ctx.type_registry.jl_type_idx === nothing
+        local _svelem = ctx.mod.types[svec_arr_idx + 1].elem.valtype
+        array_get!(_svrb, svec_arr_idx, _svelem)
+        # Legacy headerless registries used externref; the canonical hierarchy
+        # uses AnyRef directly.
+        if _svelem === ExternRef
             any_convert_extern!(_svrb)
         end
         append_builder!(fb, _svrb)
@@ -5675,6 +5676,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # comparison (shared wasm type at base struct index), so the typeId must
         # match Tuple{}'s assigned ID for the check to pass correctly.
         target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
+        target_is_vect = (target_func isa GlobalRef && target_func.name === :vect && target_func.mod === Base)
+        target_is_typed_vect = (target_func isa GlobalRef && target_func.name === :getindex && target_func.mod === Base)
+        prefix_values = length(args) == 4 ? _apply_iterate_svec_values(args[3], ctx) : nothing
+        tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
 
         if target_is_tuple
             # Kwarg dispatch pattern: _apply_iterate(iterate, Core.tuple, unknown_kwargs_vec)
@@ -5688,6 +5693,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 struct_new!(fb, info.wasm_type_idx)   # mod-resolved fields (march3)
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
         # or a known binary-reduce intrinsic.
+        elseif (target_is_vect || target_is_typed_vect) && prefix_values !== nothing &&
+               tail_type isa DataType && tail_type <: Vector
+            # `[prefix..., vector...]`: Base.vect receives scalar prefix operands and
+            # one runtime-length Vector tail. `T[prefix..., vector...]` lowers via
+            # Base.getindex with T as the first svec item; it is a type marker,
+            # not a result element.
+            local actual_prefix = target_is_typed_vect ? prefix_values[2:end] : prefix_values
+            _emit_apply_iterate_vect_prefix!(fb, actual_prefix, args[4],
+                                              tail_type, ctx)
         elseif length(args) == 3 && container_type <: Vector && container_type isa DataType
             elem_type = eltype(container_type)
             target_name = target_func isa GlobalRef ? target_func.name : nothing
@@ -6299,6 +6313,92 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     return append_builder!(b, fb)
+end
+
+"""Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""
+function _apply_iterate_svec_values(arg, ctx)
+    arg isa Core.SSAValue || return nothing
+    1 <= arg.id <= length(ctx.code_info.code) || return nothing
+    stmt = ctx.code_info.code[arg.id]
+    stmt isa Expr && stmt.head === :call || return nothing
+    f = stmt.args[1]
+    ((f isa GlobalRef && f.mod === Core && f.name === :svec) ||
+     (isdefined(Core, :svec) && f === Core.svec)) || return nothing
+    return Any[stmt.args[2:end]...]
+end
+
+"""Lower `Base.vect(prefix..., tail...)` where `tail` is one `Vector{T}`."""
+function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
+                                           container_arg, container_type::DataType, ctx)
+    vec_info = get(ctx.type_registry.structs, container_type, nothing)
+    elem_type = eltype(container_type)
+    arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
+    size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
+    bld = _ctx_builder(ctx, "_emit_apply_iterate_vect_prefix!")
+    if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
+        emit_unsupported_stub!(ctx, bld, :unsupported_method,
+                               "apply-iterate vect: vector layout unavailable";
+                               soundness_fatal=false)
+        append_builder!(fb, bld)
+        return
+    end
+
+    vec_idx = vec_info.wasm_type_idx
+    arr_ref = ConcreteRef(arr_type_idx, true)
+    size_idx = size_info.wasm_type_idx
+    size_ref = ConcreteRef(size_idx, true)
+    off = vec_info.field_offset
+    n_prefix = length(prefix_args)
+
+    vec_local = allocate_local!(ctx, ConcreteRef(vec_idx, true))
+    src_local = allocate_local!(ctx, arr_ref)
+    tail_len = allocate_local!(ctx, I32)
+    total_len = allocate_local!(ctx, I32)
+    dst_local = allocate_local!(ctx, arr_ref)
+
+    # The SSA producer already carries the canonical registered Vector ref. Do
+    # not introduce a downcast here: the local declaration validates the exact
+    # producer type and catches any registry disagreement at build time.
+    emit_value!(bld, container_arg, ctx, ConcreteRef(vec_idx, true))
+    local_set!(bld, vec_local)
+    local_get!(bld, vec_local)
+    struct_get!(bld, vec_idx, off, arr_ref)
+    local_set!(bld, src_local)
+    local_get!(bld, vec_local)
+    struct_get!(bld, vec_idx, off + 1, size_ref)
+    struct_get!(bld, size_idx, size_info.field_offset, I64)
+    narrow_length_to_i32!(bld)
+    local_tee!(bld, tail_len)
+    i32_const!(bld, n_prefix)
+    num!(bld, Opcode.I32_ADD)
+    local_tee!(bld, total_len)
+    array_new_default!(bld, arr_type_idx)
+    local_set!(bld, dst_local)
+
+    elem_wasm = ctx.mod.types[arr_type_idx + 1].elem.valtype
+    for (i, arg) in enumerate(prefix_args)
+        local_get!(bld, dst_local)
+        i32_const!(bld, i - 1)
+        emit_value!(bld, arg, ctx, elem_wasm)
+        array_set!(bld, arr_type_idx, elem_wasm)
+    end
+
+    local_get!(bld, dst_local)
+    i32_const!(bld, n_prefix)
+    local_get!(bld, src_local)
+    i32_const!(bld, 0)
+    local_get!(bld, tail_len)
+    array_copy!(bld, arr_type_idx, arr_type_idx)
+
+    # Vector{T} = {classId, data, size}; size is the immutable Tuple{Int64}.
+    i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, container_type)))
+    local_get!(bld, dst_local)
+    i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))
+    local_get!(bld, total_len)
+    widen_length_to_i64!(bld)
+    struct_new!(bld, size_idx)
+    struct_new!(bld, vec_idx)
+    append_builder!(fb, bld)
 end
 
 # ============================================================================

@@ -1068,6 +1068,9 @@ end
 function _p65_splat_prod_f64(v::Vector{Float64})::Float64
     return *(v...)
 end
+function _p65_prefix_splat_sum(v::Vector{Int64})::Int64
+    return sum(Int64[7, v...])
+end
 
 # Each `@pphase` below defines + registers a top-level phase function (lazy compile).
 # They run inside the `@testset "WasmTarget.jl"` block at the end of the file via
@@ -7278,6 +7281,11 @@ console.log(JSON.stringify({
         @testset "*(vec...) Float64 — reduce via _apply_iterate" begin
             @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[2.0, 3.0, 4.0]).pass
             @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[0.5, 0.5, 0.5]).pass  # 0.125
+        end
+
+        @testset "Base.vect(prefix, vec...) — heterogeneous SimpleVector prefix" begin
+            @test compare_julia_wasm_vec(_p65_prefix_splat_sum, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p65_prefix_splat_sum, Int64[]).pass
         end
     end
 

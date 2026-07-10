@@ -900,6 +900,12 @@ end
 """Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result."""
 extend_identity_hash_to_u64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
 
+# Physical collection lengths are i32 in WasmGC and Int64 in Julia. Keep these
+# representation conversions beside the central value/conversion machinery so
+# collection lowerers do not grow independent coercion ladders.
+narrow_length_to_i32!(b::InstrBuilder) = num!(b, Opcode.I32_WRAP_I64)
+widen_length_to_i64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
+
 """
     _ctx_builder(ctx, name) -> InstrBuilder
 

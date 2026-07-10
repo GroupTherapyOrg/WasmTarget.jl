@@ -13,8 +13,8 @@ L16_no_codegen_lax_mode = 0
 L17_one_compilation_path = 0
 L18_no_value_repair_defaults = 0
 L19_no_fabricated_invoke_results = 0
-L20_object_identity_layout = 0
 L1_box_typeid_external = 0
+L20_object_identity_layout = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 L4_no_postemit_reguess = 0
@@ -25,7 +25,7 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 533
+R11_patch_markers = 532
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12

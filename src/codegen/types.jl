@@ -74,7 +74,7 @@ mutable struct TypeRegistry
     jl_unionall_idx::Union{Nothing, UInt32}   # $JlUnionAll (sub $JlType) — type constructor
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
-    jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = (array (mut (ref null $JlType)))
+    jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
     # PURE-9065: String hash helper function index for Dict{String,...} support
     string_hash_func_idx::Union{Nothing, UInt32}
     # F3 (dev/F3_LOOP.md): specialized Core.Box struct types, keyed by contents WASM type.
@@ -686,7 +686,7 @@ Hierarchy (from §3.2.5):
   \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
   \$JlTypeName     = (sub \$JlObject (struct \$classId, \$identityHash,
                                       \$name_str, \$module_name_str, \$wrapper))
-  \$JlSVec         = (array (mut (ref null \$JlType)))
+  \$JlSVec         = (array (mut anyref))
 
 Must be called early, before type constant globals are created.
 """
@@ -714,8 +714,10 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_typename_idx = add_type!(mod, jl_typename)
     registry.jl_typename_idx = jl_typename_idx
 
-    # 3. $JlSVec: (array (mut (ref null $JlType)))
-    jl_svec = ArrayType(FieldType(ConcreteRef(jl_type_idx, true), true))
+    # 3. Core.SimpleVector is heterogeneous in Julia. Type parameter lists are
+    # one use, not its representation contract; numeric and other boxed values
+    # must coexist with $JlType references without a downcast.
+    jl_svec = ArrayType(FieldType(AnyRef, true))
     jl_svec_idx = add_type!(mod, jl_svec)
     registry.jl_svec_idx = jl_svec_idx
 
@@ -1670,7 +1672,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                     ref_null!(b, Int64(jl_type_idx), ConcreteRef(UInt32(jl_type_idx), true))
                 end
             end
-            array_new_fixed!(b, svec_idx, UInt32(nparams), ConcreteRef(jl_type_idx, true))
+            array_new_fixed!(b, svec_idx, UInt32(nparams), AnyRef)
         end
         struct_set!(b, dt_type_idx, UInt32(3), ConcreteRef(svec_idx, true))  # field 3 = parameters
 

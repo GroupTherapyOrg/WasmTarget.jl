@@ -230,8 +230,8 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
     # Register it as an externref array type so _svec_len and _svec_ref work.
     # SimpleVector elements are Any-typed, mapping to externref in WasmGC.
     if T === Core.SimpleVector
-        # PURE-9064: When JlType hierarchy is active, reuse the $JlSVec array type
-        # (array (mut (ref null $JlType))). Previously this created a separate
+        # PURE-9064: When JlType hierarchy is active, reuse the heterogeneous
+        # $JlSVec array type. Previously this created a separate
         # (array (mut anyref)) which caused type mismatch: struct.get on $JlDataType.parameters
         # returns (ref null $JlSVec) but the local was typed with a different array type index.
         if registry.jl_svec_idx !== nothing
@@ -1085,8 +1085,8 @@ function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeR
     registry.jl_type_idx === nothing && return
 
     # PURE-9064: Patch SimpleVector StructInfo to use $JlSVec array type from hierarchy.
-    # SimpleVector may have been registered before the hierarchy existed, creating a
-    # duplicate (array (mut anyref)) type instead of reusing (array (mut (ref null $JlType))).
+    # SimpleVector may have been registered before the hierarchy existed; converge
+    # every consumer on the one heterogeneous $JlSVec type.
     if registry.jl_svec_idx !== nothing && haskey(registry.structs, Core.SimpleVector)
         old_info = registry.structs[Core.SimpleVector]
         if old_info.wasm_type_idx != registry.jl_svec_idx
@@ -1186,4 +1186,3 @@ function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)
         register_struct_type!(mod, registry, T)
     end
 end
-
