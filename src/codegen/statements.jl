@@ -1169,17 +1169,19 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # they acquire the same Object prefix (never fabricate an identity).
             local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
             local object_type = object_arg === nothing ? nothing : infer_value_type(object_arg, ctx)
-            if object_type === String
-                local string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                local string_ref = ConcreteRef(string_idx, false)
-                local object_local = allocate_local!(ctx, string_ref)
+            local object_idx = (object_type === String || object_type === Symbol) ?
+                               get_string_struct_type!(ctx.mod, ctx.type_registry) :
+                               object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx : nothing
+            if object_idx !== nothing
+                local object_ref = ConcreteRef(object_idx, false)
+                local object_local = allocate_local!(ctx, object_ref)
                 local hash_local = allocate_local!(ctx, I32)
                 local counter = get_identity_counter_global!(ctx.mod, ctx.type_registry)
 
-                emit_value!(b, object_arg, ctx, string_ref)
+                emit_value!(b, object_arg, ctx, object_ref)
                 local_set!(b, object_local)
                 local_get!(b, object_local)
-                struct_get!(b, string_idx, UInt32(1), I32)
+                struct_get!(b, object_idx, UInt32(1), I32)
                 local_tee!(b, hash_local)
                 num!(b, Opcode.I32_EQZ)
                 if_!(b, I32)
@@ -1191,7 +1193,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                     global_set!(b, counter)
                     local_get!(b, object_local)
                     local_get!(b, hash_local)
-                    struct_set!(b, string_idx, UInt32(1), I32)
+                    struct_set!(b, object_idx, UInt32(1), I32)
                     local_get!(b, hash_local)
                 else_!(b)
                     local_get!(b, hash_local)

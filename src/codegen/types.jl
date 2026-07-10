@@ -684,7 +684,8 @@ Hierarchy (from §3.2.5):
   \$JlUnion        = (sub \$JlType (struct \$kind, \$a, \$b))
   \$JlUnionAll     = (sub \$JlType (struct \$kind, \$body, \$var))
   \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
-  \$JlTypeName     = (struct \$name_str, \$module_name_str, \$wrapper)
+  \$JlTypeName     = (sub \$JlObject (struct \$classId, \$identityHash,
+                                      \$name_str, \$module_name_str, \$wrapper))
   \$JlSVec         = (array (mut (ref null \$JlType)))
 
 Must be called early, before type constant globals are created.
@@ -698,14 +699,18 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = add_type!(mod, jl_type)
     registry.jl_type_idx = jl_type_idx
 
-    # 2. $JlTypeName: (struct (field $name (ref null str), $module_name (ref null str), $wrapper (ref null $JlType)))
+    # 2. $JlTypeName is an ordinary identity-bearing Object. Its Julia-visible
+    # fields follow the inherited classId/identityHash prefix.
     # All fields mutable — populated by start function after struct.new_default
     str_arr_idx = get_string_array_type!(mod, registry)
+    object_idx = get_object_struct_type!(mod, registry)
     jl_typename = StructType([
+        FieldType(I32, false),                                  # classId
+        FieldType(I32, true),                                   # identityHash
         FieldType(ConcreteRef(str_arr_idx, true), true),       # name (mut string ref)
         FieldType(ConcreteRef(str_arr_idx, true), true),       # module_name (mut string ref)
         FieldType(ConcreteRef(jl_type_idx, true), true),       # wrapper (mut ref null $JlType)
-    ], nothing)
+    ], object_idx)
     jl_typename_idx = add_type!(mod, jl_typename)
     registry.jl_typename_idx = jl_typename_idx
 
@@ -794,12 +799,12 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         UInt32(1)  # skip kind field
     )
 
-    # Core.TypeName: fields name, module_name, wrapper (NO kind prefix)
+    # Core.TypeName: Object prefix followed by name, module_name, wrapper.
     registry.structs[Core.TypeName] = StructInfo(
         Core.TypeName, jl_typename_idx,
         [:name, :module, :wrapper],
         Type[String, String, Any],
-        UInt32(0)  # no kind/typeId prefix
+        UInt32(2)
     )
 end
 
@@ -1514,9 +1519,19 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
         tn_type_idx = tn_info.wasm_type_idx
     end
 
-    # Create with struct.new_default — fields populated later
+    # Immutable classId must be established at allocation; mutable payload fields
+    # begin null and are populated by the start function.
     b = InstrBuilder(; func_name="get_typename_constant_global!")
-    struct_new_default!(b, tn_type_idx)
+    str_arr_idx = get_string_array_type!(mod, registry)
+    jl_type_idx = registry.jl_type_idx
+    i32_const!(b, Int64(ensure_type_id!(registry, Core.TypeName)))
+    i32_const!(b, 0)
+    ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
+    ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
+    ref_null!(b, Int64(jl_type_idx), ConcreteRef(jl_type_idx, true))
+    struct_new!(b, tn_type_idx,
+                WasmValType[I32, I32, ConcreteRef(str_arr_idx, true),
+                            ConcreteRef(str_arr_idx, true), ConcreteRef(jl_type_idx, true)])
     init_bytes = builder_code(b)
 
     # Mutable global — needs patching by init function
@@ -1712,11 +1727,11 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     for (tn, tn_global_idx) in registry.typename_constant_globals
         # Field 0: name → string (i8 array)
         name_str = string(tn.name)
-        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(0), name_str)
+        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(2), name_str)
 
         # Field 1: module_name → string (i8 array)
         mod_name = tn.module !== nothing ? string(nameof(tn.module)) : ""
-        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(1), mod_name)
+        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(3), mod_name)
 
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper
@@ -1732,7 +1747,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                 global_get!(b, wrapper_global_idx, _gvt)
                 _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)
             end
-            struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = wrapper
+            struct_set!(b, tn_type_idx, UInt32(4), ConcreteRef(jl_type_idx, true))
         end
     end
 
