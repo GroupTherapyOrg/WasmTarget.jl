@@ -162,10 +162,8 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
-    g = add_global_ref!(mod, struct_idx, true, UInt8[Opcode.REF_NULL, 0x40 + 0x23 - 0x23])  # placeholder; fixed below
-    # init: ref.null $struct — build the real init expr
-    mod.globals[end] = WasmGlobalDef(ConcreteRef(struct_idx, true), true,
-        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)), UInt8[Opcode.END]))
+    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)), UInt8[Opcode.END])
+    g = add_global_ref!(mod, struct_idx, true, init)
     bytes = codeunits(s)
     seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
     results = WasmValType[ConcreteRef(struct_idx, true)]
@@ -2106,9 +2104,7 @@ derive_nullability(@nospecialize(T))::Bool =
 function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry)::WasmValType
     # Union{} (bottom type) indicates unreachable code - return void/nothing
     if T === Union{}
-        # Return a sentinel value that will cause UNREACHABLE to be emitted
-        # For now, use i64 as a placeholder (this type won't actually be used)
-        return I64
+        throw(ArgumentError("Union{} has no runtime Wasm value type"))
     end
     # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).

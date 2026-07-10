@@ -1633,8 +1633,8 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 _mmv_emit_off(src_ptr_arg)
                 _mmv_emit_off(nbytes_arg)
                 array_copy!(b, _mmv_arr, _mmv_arr)
-                # memmove returns dest ptr — fake i64 0
-                i64_const!(b, 0)
+                # C memmove returns its destination pointer.
+                emit_value!(b, dest_ptr_arg, ctx, I64)
                 return b
             end
         end
@@ -1827,8 +1827,8 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             (_mm_nt === UInt64 || _mm_nt === Int64 || _mm_nt === Int) &&
                 num!(b, Opcode.I32_WRAP_I64)
             array_copy!(b, _arr_t, _arr_t)
-            # memmove returns the dest pointer — fake i64 0 (consumers ignore it)
-            i64_const!(b, 0)
+            # C memmove returns its destination pointer.
+            emit_value!(b, expr.args[6], ctx, I64)
             return b
         end
     end

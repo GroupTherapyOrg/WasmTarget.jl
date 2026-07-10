@@ -1552,10 +1552,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         _emit_tid!(T)
 
         # Field 1: data array — emit array.new_fixed with actual element values
-        # Check if the array element type is externref — if so, each element needs
-        # extern_convert_any because compile_value produces concrete refs for structs/strings
         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-        needs_extern_convert = (wasm_elem_type === ExternRef)
         for i in 1:length(val)
             # PURE-6022: Stop emitting array elements after unreachable (stub).
             # Dead code after unreachable contains raw data bytes that decode as
@@ -1563,32 +1560,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             if ctx.last_stmt_was_stub
                 break
             end
-            if needs_extern_convert
-                elem_val = val[i]
-                # typed channel: the emission's own type replaces the GC_PREFIX/const-first-byte scans.
-                local _el_b = _compile_value_b(elem_val, ctx)
-                local _el_ty = isempty(_el_b.v.stack) ? nothing : _el_b.v.stack[end]
-                is_numeric_elem = _el_ty === I32 || _el_ty === I64 || _el_ty === F32 || _el_ty === F64
-                if is_numeric_elem
-                    # Box numeric value into a struct then convert to externref
-                    emit_numeric_to_externref!(b, elem_val, _el_ty, ctx)
-                elseif _el_ty === ExternRef
-                    # Already externref — no conversion needed (was a REF_NULL byte sniff)
-                    append_builder!(b, _el_b)
-                else
-                    append_builder!(b, _el_b)
-                    extern_convert_any!(b)
-                end
-            else
-                local _elp_b = _compile_value_b(val[i], ctx)
-                if isempty(_elp_b.instrs)
-                    # TRUE-INT-002-impl2-impl: compile_value returned empty.
-                    # Push ref.null as placeholder to maintain array_new_fixed stack balance.
-                    ref_null!(b, AnyRef)  # 0x6E any heap type
-                else
-                    append_builder!(b, _elp_b)
-                end
-            end
+            emit_value!(b, val[i], ctx, wasm_elem_type; from_julia=typeof(val[i]))
             # PURE-6022: Check after each element in case compile_value hit a stub
             if ctx.last_stmt_was_stub
                 break
@@ -1596,7 +1568,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
         # PURE-6022: Skip array_new_fixed if we're in dead code (stub was hit)
         if !ctx.last_stmt_was_stub
-            array_new_fixed!(b, array_type_idx, length(val), AnyRef)
+            array_new_fixed!(b, array_type_idx, length(val), wasm_elem_type)
         end
 
         # Field 2: size tuple — Tuple{Int64} with the length

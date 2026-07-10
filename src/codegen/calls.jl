@@ -1835,18 +1835,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
-    # pointer is compile-time host metadata; its only consumers are the
-    # pointerref loads folded in _try_fold_layout_pointerref. Emit a benign
-    # fake pointer instead of an unreachable stub (which killed the rest of
-    # the block as dead code).
+    # pointer is compile-time host metadata; its loads are folded in
+    # _try_fold_layout_pointerref. Represent the opaque, non-null layout handle
+    # by the registered type id + 1 (zero remains C_NULL), never by a fabricated
+    # universal pointer value.
     if (is_func(func, :getfield) || is_func(func, :getproperty)) && length(args) >= 2
         local _gf_dt = args[1] isa QuoteNode ? args[1].value : args[1]
         local _gf_fld = args[2] isa QuoteNode ? args[2].value : args[2]
         if _gf_dt isa DataType && _gf_fld === :layout
-            # non-null fake: the inlined `dt.layout == C_NULL && throw(...)`
-            # guard must not fire; the pointer is never dereferenced (loads
-            # are folded).
-            i64_const!(fb, 1)
+            i64_const!(fb, Int64(ensure_type_id!(ctx.type_registry, _gf_dt)) + 1)
             return append_builder!(b, fb)
         end
     end
@@ -3540,67 +3537,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_sfsb, obj_arg, info.wasm_type_idx, ctx)
 
-                    # PURE-4150: Track if value is a Type reference (used for both struct_set and return value)
-                    is_type_value = false
-
-                    # PURE-045: If field type is Any, convert value to match field's WasmGC type.
-                    # PURE-9064: The actual Wasm field type may be AnyRef (when JlType hierarchy
-                    # is active) or ExternRef (legacy). Look it up from the module type definition.
+                    # Use the registered physical field type as the sole sink
+                    # contract. Type objects are real interned DataType globals;
+                    # they are never replaced by null.
+                    local _sf_wasm_fi = wasm_field_idx(info, field_idx)
+                    local _sf_ct = ctx.mod.types[info.wasm_type_idx + 1]
+                    local _sf_expected = (_sf_ct isa StructType &&
+                        _sf_wasm_fi + 1 <= length(_sf_ct.fields)) ?
+                        _sf_ct.fields[_sf_wasm_fi + 1].valtype : nothing
+                    _sf_expected === nothing && error("setfield! target has no physical Wasm field type")
                     if field_type === Any
-                        # Determine the actual Wasm field type from the module
-                        local _sf_wasm_fi = wasm_field_idx(info, field_idx)
-                        local _sf_ct = ctx.mod.types[info.wasm_type_idx + 1]
-                        local _sf_field_is_anyref = _sf_ct isa StructType &&
-                            _sf_wasm_fi + 1 <= length(_sf_ct.fields) &&
-                            _sf_ct.fields[_sf_wasm_fi + 1].valtype === AnyRef
-
-                        # PURE-4150: Check if value is a Type reference (GlobalRef → Type value)
-                        # compile_value(Type) emits i32.const 0, but field expects ref.
-                        # Emit ref.null as placeholder (type objects can't be constructed in WasmGC).
-                        if value_arg isa GlobalRef
-                            try
-                                actual_sf_val = getfield(value_arg.mod, value_arg.name)
-                                is_type_value = actual_sf_val isa Type
-                            catch; end
-                        elseif value_arg isa Type
-                            is_type_value = true
-                        end
-
-                        if is_type_value
-                            if _sf_field_is_anyref
-                                ref_null!(_sfsb, AnyRef)  # any heap type
-                            else
-                                ref_null!(_sfsb, ExternRef)
-                            end
-                        else
-                            val_julia_type = infer_value_type(value_arg, ctx)
-                            val_wasm_type = julia_to_wasm_type(val_julia_type)
-                            if _sf_field_is_anyref
-                                # Field is anyref — concrete/struct refs are already subtypes of anyref.
-                                # Numerics need boxing. No extern_convert_any needed.
-                                if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                                    emit_numeric_to_anyref!(_sfsb, value_arg, val_wasm_type, ctx)
-                                else
-                                    # anyref, externref→any.convert_extern, or concrete ref (subtype of anyref)
-                                    emit_value!(_sfsb, value_arg, ctx)
-                                    if val_wasm_type === ExternRef
-                                        any_convert_extern!(_sfsb)
-                                    end
-                                end
-                            else
-                                if val_julia_type === Any || val_wasm_type === ExternRef
-                                    # PURE-3112/PURE-4150: Already externref — no conversion needed
-                                    emit_value!(_sfsb, value_arg, ctx)
-                                elseif val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                                    # PURE-4150: Numeric type → box then convert
-                                    emit_numeric_to_externref!(_sfsb, value_arg, val_wasm_type, ctx)
-                                else
-                                    # Concrete/abstract ref → extern_convert_any
-                                    emit_value!(_sfsb, value_arg, ctx)
-                                    extern_convert_any!(_sfsb)
-                                end
-                            end
-                        end
+                        emit_value!(_sfsb, value_arg, ctx, _sf_expected;
+                                    from_julia=infer_value_type(value_arg, ctx))
                     else
                         # PURE-6024: When value is nothing and field is ref-typed,
                         # compile_value(nothing) emits i32_const 0 which fails
@@ -3618,7 +3566,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         end
                     end
 
-                    struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                    struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
                     # setfield! returns the value — use compile_value to match SSA return type
                     emit_value!(_sfsb, value_arg, ctx)
                     append_builder!(fb, _sfsb)
@@ -4147,7 +4095,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     elseif func isa GlobalRef && func.name === :pointerset
         # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
         # pointers (Ryu digit emission). pointerset(ptr, value, i, align)
-        # returns the pointer; consumers ignore it (fake i64 0).
+        # returns the original pointer.
         local _ps_ptr = length(args) >= 1 ? args[1] : nothing
         local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx) : nothing
         local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
@@ -4159,7 +4107,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             num!(_psb, Opcode.I32_WRAP_I64)
             emit_value!(_psb, args[2], ctx)
             array_set!(_psb, _ps_arr_t, I32)
-            i64_const!(_psb, 0)
+            emit_value!(_psb, _ps_ptr, ctx, I64)
             append_builder!(fb, _psb)
             return append_builder!(b, fb)
         end
@@ -4200,7 +4148,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     num!(_psrb, Opcode.I32_REINTERPRET_F32)
                 end
                 struct_set!(_psrb, _psr_info.wasm_type_idx, UInt32(1), julia_to_wasm_type(_psr_te))
-                i64_const!(_psrb, 0)
+                emit_value!(_psrb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psrb)
                 return append_builder!(b, fb)
             end
@@ -4250,7 +4198,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     num!(_psgb, Opcode.I32_REINTERPRET_F32)
                 end
                 array_set!(_psgb, _psg_arr, julia_to_wasm_type(_psg_te))
-                i64_const!(_psgb, 0)
+                emit_value!(_psgb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psgb)
                 return append_builder!(b, fb)
             end
@@ -4310,7 +4258,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     num!(_pswb, Opcode.I32_WRAP_I64)
                     array_set!(_pswb, _psw_arr, I32)
                 end
-                i64_const!(_pswb, 0)   # fake ptr return
+                emit_value!(_pswb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _pswb)
                 return append_builder!(b, fb)
             end
@@ -6272,59 +6220,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local_set!(fb, head_local)
 
             # Step 2: Create data array (array<anyref>) → local
-            # Any maps to AnyRef — GC refs are subtypes of anyref (no conversion needed).
-            # ExternRef values need any_convert_extern. Numeric values need ref.null any placeholder.
+            # Any maps to the registered array element type. Every element flows
+            # through the typed boxing/conversion chokepoint.
             wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
-            is_anyref_array = (wasm_elem_type === AnyRef)
             if n_expr_args == 0
                     i32_const!(fb, 0)
                     array_new_default!(fb, any_array_type_idx)
             else
                 # Push each arg, then array_new_fixed
                 for ea in expr_args
-                    local _eab = _compile_value_b(ea, ctx)
-                    local _ea_ty = isempty(_eab.v.stack) ? nothing : _eab.v.stack[end]
-                    # march3/4 (typed): the GC_PREFIX scan + const/local first-byte gates
-                    # ARE the tracked type — numeric iff the emission's type is numeric.
-                    is_numeric = _ea_ty === I32 || _ea_ty === I64 || _ea_ty === F32 || _ea_ty === F64
-                    if isempty(_eab.instrs)
-                        # TRUE-INT-002-impl2-impl: compile_value returned empty bytes
-                        # (e.g., QuoteNode wrapping an unserializable Core type).
-                        # Push ref.null as placeholder to maintain array_new_fixed stack balance.
-                        local _pnb = _ctx_builder(ctx, "compile_call")
-                        if is_anyref_array
-                            ref_null!(_pnb, AnyRef)  # any heap type
-                        else
-                            ref_null!(_pnb, ExternRef)
-                        end
-                        append_builder!(fb, _pnb)
-                    elseif is_numeric
-                        local _pnb = _ctx_builder(ctx, "compile_call")
-                        if is_anyref_array
-                            ref_null!(_pnb, AnyRef)  # any heap type
-                        else
-                            ref_null!(_pnb, ExternRef)
-                        end
-                        append_builder!(fb, _pnb)
-                    else
-                        append_builder!(fb, _eab)   # typed merge
-                        if is_anyref_array
-                            # For anyref arrays: GC refs are already subtypes of anyref.
-                            # Only externref values need conversion (any_convert_extern).
-                            is_extern = (_ea_ty === ExternRef)
-                            if is_extern
-                                any_convert_extern!(fb)
-                            end
-                        else
-                            # For externref arrays: GC refs need extern_convert_any.
-                            is_extern = (_ea_ty === ExternRef)
-                            if !is_extern
-                                extern_convert_any!(fb)
-                            end
-                        end
-                    end
+                    emit_value!(fb, ea, ctx, wasm_elem_type;
+                                from_julia=infer_value_type(ea, ctx))
                 end
-                    array_new_fixed!(fb, any_array_type_idx, n_expr_args, AnyRef)
+                    array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
             end
             data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
                 local_set!(fb, data_arr_local)
