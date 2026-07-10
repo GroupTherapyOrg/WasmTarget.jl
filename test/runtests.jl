@@ -2364,7 +2364,10 @@ begin
         @noinline function str_identity_contract()::Int32
             a = "identity-a"
             b = "identity-b"
-            return objectid(a) == objectid(a) && objectid(a) != objectid(b) ? Int32(1) : Int32(0)
+            sa = :identity_a
+            sb = :identity_b
+            return objectid(a) == objectid(a) && objectid(a) != objectid(b) &&
+                   objectid(sa) == objectid(sa) && objectid(sa) != objectid(sb) ? Int32(1) : Int32(0)
         end
 
         @testset "String concatenation" begin

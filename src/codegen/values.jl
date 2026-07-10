@@ -897,6 +897,9 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     return expected
 end
 
+"""Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result."""
+extend_identity_hash_to_u64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
+
 """
     _ctx_builder(ctx, name) -> InstrBuilder
 

@@ -1168,7 +1168,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # the first migrated Object descendant; other layouts remain loud until
             # they acquire the same Object prefix (never fabricate an identity).
             local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
-            local object_type = object_arg === nothing ? nothing : infer_value_type(object_arg, ctx)
+            local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
             local object_idx = (object_type === String || object_type === Symbol) ?
                                get_string_struct_type!(ctx.mod, ctx.type_registry) :
                                object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx : nothing
@@ -1198,7 +1198,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 else_!(b)
                     local_get!(b, hash_local)
                 end_block!(b)
-                num!(b, Opcode.I64_EXTEND_I32_U)
+                extend_identity_hash_to_u64!(b)
                 return b
             end
             record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)

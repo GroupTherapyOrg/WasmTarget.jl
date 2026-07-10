@@ -1907,6 +1907,10 @@ function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
         return Any
     elseif val isa Type
         return Type{val}  # It's a type constant
+    elseif val isa QuoteNode
+        # Literal Symbols and other quoted constants carry the type of their
+        # payload, not the compiler wrapper node itself.
+        return typeof(val.value)
     else
         return typeof(val)
     end
