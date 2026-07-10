@@ -1,7 +1,7 @@
 # Code Generation - Julia IR to Wasm instructions
 # Maps Julia SSA statements to WebAssembly bytecode
 
-export compile_function, compile_module, compile_handler, FunctionRegistry
+export compile_function, compile_module, FunctionRegistry
 
 # ============================================================================
 # Struct Type Registry

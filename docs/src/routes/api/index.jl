@@ -138,11 +138,6 @@
             "Mutable registries the compiler walks while lowering IR — types it has seen, functions it has emitted. \
              Exposed for advanced consumers that need to inspect or pre-seed compilation state."
         ),
-        api_entry(
-            "compile_handler(...) / DOMBindingSpec",
-            "Internal hook used by Therapy.jl's `@island` compiler to lower event-handler closures with DOM-binding \
-             metadata. Not intended for direct use."
-        ),
         P(:class => "text-sm text-warm-500 dark:text-warm-400 pt-4",
             "For codegen primitives (",
             Code(:class => code_inline, "wasm_create_*"), ", ", Code(:class => code_inline, "wasm_set_*"),
