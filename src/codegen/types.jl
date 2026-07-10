@@ -162,7 +162,7 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
-    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)), UInt8[Opcode.END])
+    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)))
     g = add_global_ref!(mod, struct_idx, true, init)
     bytes = codeunits(s)
     seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
