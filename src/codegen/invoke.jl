@@ -3296,8 +3296,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     end
                     struct_new!(bec, _ctor_info.wasm_type_idx)   # mod-resolved fields (march3)
                 else
-                    # Fallback: can't register type, create a dummy anyref (ref.null any)
-                    ref_null!(bec, AnyRef)
+                    record_unsupported!(ctx, :unsupported_type,
+                        "exception constructor type registration failed"; idx=idx, detail=expr)
+                    unreachable!(bec)  # structural trap after recorded unsupported
+                    ctx.last_stmt_was_stub = true
                 end
                 fb = bec   # discard-and-replace (march4)
                 # NOTE: Do NOT throw here and do NOT set last_stmt_was_stub.
@@ -3521,9 +3523,15 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # already in $current_exn from the original throw.
                     global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 else
-                    # PURE-9032: Stash ref.null any as exception placeholder
                     exn_global = ensure_exception_global!(ctx.mod)
-                    ref_null!(bthr2, AnyRef)  # ref.null any (0xD0 0x6E)
+                    if isempty(args)
+                        record_unsupported!(ctx, :unsupported_method,
+                            "throw helper has no exception payload"; idx=idx, detail=expr)
+                        unreachable!(bthr2)  # structural trap after recorded unsupported
+                        ctx.last_stmt_was_stub = true
+                        return append_builder!(b, bthr2)
+                    end
+                    emit_value!(bthr2, args[1], ctx, AnyRef)
                     global_set!(bthr2, exn_global)
                     global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 end
@@ -3669,12 +3677,19 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 end
                                 call!(bpts, int_to_string_info_pt.wasm_idx, WasmValType[], WasmValType[])
                             else
-                                # No int_to_string available — emit empty string
-                                array_new_fixed!(bpts, str_type_idx_pt, 0, I32)
+                                record_unsupported!(ctx, :unsupported_method,
+                                    "string interpolation requires int_to_string"; idx=idx, detail=expr)
+                                unreachable!(bpts)  # structural trap after recorded unsupported
+                                ctx.last_stmt_was_stub = true
+                                return append_builder!(b, bpts)
                             end
                         else
-                            # Unsupported type — emit empty string placeholder
-                            array_new_fixed!(bpts, str_type_idx_pt, 0, I32)
+                            record_unsupported!(ctx, :unsupported_type,
+                                "unsupported string interpolation argument `$arg_type`";
+                                idx=idx, detail=expr)
+                            unreachable!(bpts)  # structural trap after recorded unsupported
+                            ctx.last_stmt_was_stub = true
+                            return append_builder!(b, bpts)
                         end
 
                         local_set!(bpts, local_idx)
@@ -4023,8 +4038,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     end
                     call!(bhb, hash_func_idx, WasmValType[], WasmValType[])
                 else
-                    # Can't trace string — fallback to constant hash
-                    i64_const!(bhb, 0)
+                    record_unsupported!(ctx, :unsupported_method,
+                        "hash_bytes source is not traceable to a Wasm string"; idx=idx, detail=expr)
+                    unreachable!(bhb)  # structural trap after recorded unsupported
+                    ctx.last_stmt_was_stub = true
                 end
                 return append_builder!(b, bhb)
 
