@@ -135,6 +135,17 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L21_packed_integer_arrays" => ("Int8/UInt8 and Int16/UInt16 arrays use packed Wasm GC storage and generic loads derive signedness from the Julia element type",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            load_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                       read(joinpath(CODEGEN, "invoke.jl"), String)
+            required = ["T === Int8 || T === UInt8 ? UInt8(0x78)",
+                        "T === Int16 || T === UInt16 ? UInt8(0x77)",
+                        "packed_array_signedness(elem_type)"]
+            count(p -> !occursin(p, types_src * load_src), required) +
+            count(_ -> true, eachmatch(r"signed=\(elem_type === UInt8", load_src))
+        end),
     "L20_object_identity_layout" => ("Top owns classId; Object adds mutable identityHash; objectid reads/writes that slot and never fabricates a constant/content hash",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

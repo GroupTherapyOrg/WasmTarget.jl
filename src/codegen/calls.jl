@@ -2375,7 +2375,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             num!(_popb, Opcode.I32_WRAP_I64)
 
             # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
-            array_get!(_popb, arr_type_idx, AnyRef; signed=(elem_type === UInt8 ? false : nothing))
+            array_get!(_popb, arr_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
             # Store element in local
             local_set!(_popb, elem_local)
@@ -2817,7 +2817,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         # Access array: array.get (use ARRAY_GET_U for packed i8 arrays)
                         local_get!(_htb, array_local)
                         local_get!(_htb, idx_local)
-                        array_get!(_htb, array_type_idx, AnyRef; signed=(elem_type === UInt8 ? false : nothing))
+                        array_get!(_htb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
                         # PURE-036bc: If array element type is ExternRef (e.g., elem_type=Any),
                         # array_get returns externref. Downstream code may ref_cast to a struct
@@ -2999,7 +2999,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _mrgb = _ctx_builder(ctx, "compile_call")
         emit_value!(_mrgb, ref_arg, ctx)
 
-        array_get!(_mrgb, array_type_idx, AnyRef; signed=(elem_type === UInt8 ? false : nothing))
+        array_get!(_mrgb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
         # Note: if elem_type is Any, array.get returns externref and the SSA local
         # is also typed as externref (fixed in analyze_ssa_types!). No cast needed here.
@@ -4075,7 +4075,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 num!(_prgb, Opcode.I32_WRAP_I64)
                 i32_const!(_prgb, Int64(trailing_zeros(sizeof(_prg_te))))
                 num!(_prgb, Opcode.I32_SHR_U)
-                array_get!(_prgb, _prg_arr, julia_to_wasm_type(_prg_te))
+                array_get!(_prgb, _prg_arr, julia_to_wasm_type(_prg_te);
+                           signed=packed_array_signedness(_prg_te))
                 if _prg_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
                     num!(_prgb, Opcode.I64_REINTERPRET_F64)
                 elseif (_prg_te === UInt64 || _prg_te === Int64) && _prg_tp === Float64
@@ -6524,7 +6525,8 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_arg, container_
     # Step 4: Initialize accumulator = arr[0] (first element)
     local_get!(bld, arr_ref_local)
     i32_const!(bld, 0)
-    array_get!(bld, arr_type_idx, elem_wasm_type)
+    array_get!(bld, arr_type_idx, elem_wasm_type;
+               signed=packed_array_signedness(elem_type))
     local_set!(bld, acc_local)
 
     # Step 5: Initialize loop counter i = 1
@@ -6545,7 +6547,8 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_arg, container_
     local_get!(bld, acc_local)
     local_get!(bld, arr_ref_local)
     local_get!(bld, loop_i_local)
-    array_get!(bld, arr_type_idx, elem_wasm_type)
+    array_get!(bld, arr_type_idx, elem_wasm_type;
+               signed=packed_array_signedness(elem_type))
     num!(bld, reduce_op)
     local_set!(bld, acc_local)
 

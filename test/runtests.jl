@@ -261,6 +261,11 @@ _wt_vany_disc(i::Int64)::Int64 = begin
     v = a[i]
     v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
 end
+# Packed Wasm GC array loads must preserve Julia signedness at both widths.
+_wt_packed_i8()::Int8 = Int8[-128, -1, 127][2]
+_wt_packed_u8()::UInt8 = UInt8[0, 255, 128][2]
+_wt_packed_i16()::Int16 = Int16[-32768, -1, 32767][2]
+_wt_packed_u16()::UInt16 = UInt16[0, 65535, 32768][2]
 # WASMTARGET-FUZZ (Loop B/B4c): Char is i32-rep but NOT <:Number, so it was excluded from
 # both the boxing decision (needs_anyref_boxing required all(<:Number)) and the isa
 # discriminator (gated on check_type<:Number) → Union{Char,Int32} collapsed + isa Char
@@ -6922,6 +6927,13 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_egal_boxed, Int64(5)).pass      # a[1]=true === true → 1
             @test compare_julia_wasm(_wt_egal_boxed, Int64(-5)).pass     # a[1]=false === false → 2
             @test compare_julia_wasm(_wt_egal_difftype, Int64(5)).pass   # boxed Bool === Int32 → 0
+        end
+
+        @testset "packed i8/i16 array representation" begin
+            @test compare_julia_wasm(_wt_packed_i8).pass
+            @test compare_julia_wasm(_wt_packed_u8).pass
+            @test compare_julia_wasm(_wt_packed_i16).pass
+            @test compare_julia_wasm(_wt_packed_u16).pass
         end
 
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin

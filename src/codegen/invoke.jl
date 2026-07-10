@@ -1517,7 +1517,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 local_get!(b, i_local)
                 _elem_wt = (elem_type === Float64) ? F64 : (elem_type === Float32) ? F32 :
                            (elem_type === Int64 || elem_type === Int || elem_type === UInt64) ? I64 : I32
-                array_get!(b, data_array_idx, _elem_wt; signed=(elem_type === UInt8 ? false : nothing))
+                array_get!(b, data_array_idx, _elem_wt; signed=packed_array_signedness(elem_type))
 
                 # Display element based on element type
                 if elem_type === Int32
@@ -3073,7 +3073,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 num!(bget, Opcode.I32_SUB)  # index - 1
 
                 # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
-                array_get!(bget, arr_type_idx, I32; signed=(elem_type === UInt8 ? false : nothing))
+                array_get!(bget, arr_type_idx, I32; signed=packed_array_signedness(elem_type))
                 append_builder!(fb, bget)
 
             # arr_set!(arr, i, val) -> Nothing

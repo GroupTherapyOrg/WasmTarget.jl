@@ -1169,6 +1169,14 @@ end
 """
 Get or create an array type for a given element type.
 """
+@inline packed_array_storage(@nospecialize(T)) =
+    T === Int8 || T === UInt8 ? UInt8(0x78) :
+    T === Int16 || T === UInt16 ? UInt8(0x77) : nothing
+
+@inline packed_array_signedness(@nospecialize(T)) =
+    T === Int8 || T === Int16 ? true :
+    T === UInt8 || T === UInt16 ? false : nothing
+
 function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Type)::UInt32
     if haskey(registry.arrays, elem_type)
         return registry.arrays[elem_type]
@@ -1185,11 +1193,16 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return type_idx
     end
 
-    # UInt8 arrays share the packed i8 type with String — this ensures array.copy
-    # between Vector{UInt8}/Memory{UInt8} and String works (same WasmGC element type).
-    # Reading from packed i8 arrays requires ARRAY_GET_U instead of ARRAY_GET.
+    # Wasm GC's packed storage is the canonical representation for Julia's 8- and
+    # 16-bit integer arrays. UInt8 shares the exact i8 array type with String so
+    # array.copy remains type-correct. Loads select get_s/get_u from Julia signedness.
+    local packed = packed_array_storage(elem_type)
     if elem_type === UInt8
         type_idx = get_string_array_type!(mod, registry)
+        registry.arrays[elem_type] = type_idx
+        return type_idx
+    elseif packed !== nothing
+        type_idx = add_array_type!(mod, packed, true)
         registry.arrays[elem_type] = type_idx
         return type_idx
     end
