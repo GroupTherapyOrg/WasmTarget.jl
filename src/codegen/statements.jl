@@ -1229,71 +1229,12 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
 
 
-                # PURE-036bg: Check if value type matches local type
-                # When multiple SSAs share a local but have incompatible types (e.g., in dead code),
-                # DROP the value and emit a type-safe default instead of causing validation error.
-                # PURE-4151: If extern_convert_any was already appended above (line ~15272),
-                # the stack type is now ExternRef regardless of the original value_wasm_type.
-                value_wasm_type = needs_extern_convert_any ? ExternRef : get_concrete_wasm_type(stmt_type, ctx.mod, ctx.type_registry)
-                if local_type !== nothing && !wasm_types_compatible(local_type, value_wasm_type)
-                    # PURE-908: externref↔anyref conversion instead of drop+default
-                    if value_wasm_type === ExternRef && local_type === AnyRef
-                        local _cvb = _ctx_builder(ctx, "compile_statement")
-                        any_convert_extern!(_cvb)
-                        append_builder!(b, _cvb)
-                    elseif value_wasm_type === AnyRef && local_type === ExternRef
-                        local _cvb = _ctx_builder(ctx, "compile_statement")
-                        extern_convert_any!(_cvb)
-                        append_builder!(b, _cvb)
-                    else
-                    # Type mismatch: drop the value and emit type-safe default — DIAGNOSED
-                    # (M5 loud-visible; behavior unchanged pending the full audit).
-                    record_unsupported!(ctx, :unsupported_type,
-                        "SSA-store type mismatch (value dropped, type-safe default emitted)"; idx=idx)
-                    drop!(b)   # march17: direct
-                    _emit_default!(b, local_type; eqref=false)
-                    end  # close else from PURE-908 externref↔anyref check
-                end
-                # CS-004: Cross-function calls may return anyref/structref even when
-                # Julia's SSA type says ConcreteRef. Resolve the function reference
-                # (which may be an SSAValue pointing to a GlobalRef) and check
-                # the callee's wasm return type in the func_registry.
-                if (local_type isa ConcreteRef || local_type === StructRef) && ctx.func_registry !== nothing &&
-                   stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                    _cs4_func_ref = stmt.head === :invoke ? (length(stmt.args) >= 2 ? stmt.args[2] : nothing) : (length(stmt.args) >= 1 ? stmt.args[1] : nothing)
-                    # Dereference SSAValue to find the underlying GlobalRef
-                    if _cs4_func_ref isa Core.SSAValue
-                        _cs4_src = ctx.code_info.code[_cs4_func_ref.id]
-                        if _cs4_src isa GlobalRef
-                            _cs4_func_ref = _cs4_src
-                        end
-                    end
-                    if _cs4_func_ref isa GlobalRef
-                        try
-                            _cs4_func_val = getfield(_cs4_func_ref.mod, _cs4_func_ref.name)
-                            if haskey(ctx.func_registry.by_ref, _cs4_func_val)
-                                for _fi in ctx.func_registry.by_ref[_cs4_func_val]
-                                    _cs4_ret = julia_to_wasm_type(_fi.return_type)
-                                    # Cross-function return-type fixups, typed; byte-identical
-                                    # (0x6B = UInt8(StructRef) → ref.cast null struct).
-                                    local _csb = _ctx_builder(ctx, "compile_statement")
-                                    if local_type isa ConcreteRef
-                                        if _cs4_ret === AnyRef || _cs4_ret === StructRef || _cs4_ret === ArrayRef
-                                            ref_cast!(_csb, Int64(local_type.type_idx), true)
-                                        elseif _cs4_ret === ExternRef
-                                            any_convert_extern!(_csb)
-                                            ref_cast!(_csb, Int64(local_type.type_idx), true)
-                                        end
-                                    elseif local_type === StructRef && _cs4_ret === AnyRef
-                                        ref_cast!(_csb, StructRef, true)  # structref heap type
-                                    end
-                                    append_builder!(b, _csb)
-                                    break  # Use first matching overload
-                                end
-                            end
-                        catch
-                        end
-                    end
+                # The emitted type is authoritative. Dynamic calls deliberately use
+                # erased signatures, so Julia's static SSA type can differ from the
+                # physical value on the wasm stack. Route every store adjustment through
+                # the single coercion funnel; never drop and fabricate a default.
+                if local_type !== nothing && !isempty(b.v.stack)
+                    coerce_stack_top!(b, local_type, ctx; from_julia=stmt_type)
                 end
 
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
@@ -3406,4 +3347,3 @@ function _trace_ptr_to_memory_array(ptr_ssa, code)
     end
     return nothing
 end
-

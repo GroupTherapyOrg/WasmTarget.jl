@@ -538,6 +538,23 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
     return b
 end
 
+"""
+    coerce_stack_top!(b, expected, ctx; from_julia=nothing)
+
+Adjust the value most recently emitted into `b` to a storage/call boundary type. The
+builder's tracked stack is the sole source of the actual type; callers never re-derive it
+from Julia IR. This is the post-emission half of dart's `wrap` chokepoint for producers
+whose emission and sink are structurally separated.
+"""
+function coerce_stack_top!(b::InstrBuilder, expected::WasmValType,
+                           ctx::AbstractCompilationContext;
+                           from_julia::Union{Type,Nothing}=nothing)::WasmValType
+    isempty(b.v.stack) && throw(ArgumentError("cannot coerce an empty emitted-value stack"))
+    actual = b.v.stack[end]
+    actual === expected || convert_type!(b, actual, expected, ctx; from_julia=from_julia)
+    return expected
+end
+
 # Unknown source/target type (e.g. get_phi_edge_wasm_type returned `nothing`): the
 # inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
 # branch matches), so a no-op preserves byte-identity.

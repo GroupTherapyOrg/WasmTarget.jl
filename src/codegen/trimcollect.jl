@@ -318,11 +318,9 @@ function trim_compile_plan(entries_named::Vector)
 
     functions = Any[]
     ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
-    # WASMTARGET dynamic dispatch: (f, arg_types) of functions pulled in ONLY by the
-    # dispatch-candidate discovery (pairs beyond the base collection). compile_module
-    # isolates their codegen so a latent-bug crash stubs that one function instead of
-    # breaking the whole module (entries + their normal deps stay strict).
-    isolated_funcs = Set{Any}()
+    # Functions pulled in only by dispatch-candidate discovery are registered as
+    # candidates rather than ordinary direct-call targets.
+    dispatch_candidates = Set{Any}()
     base_pairs = _TRIM_BASE_PAIRS[]
     # Pre-seed with entry names: a discovered function processed before its
     # same-named entry must not claim the entry's export name (duplicate-export
@@ -380,16 +378,14 @@ function trim_compile_plan(entries_named::Vector)
         push!(used_names, name)
         push!(functions, (f, arg_types, name))
         ir_cache[(f, arg_types)] = (src, ci.rettype)
-        # Discovery-added (beyond the base collection) AND not also an entry → isolate.
+        # Discovery-added (beyond the base collection) and not also an entry.
         if base_pairs > 0 && pair_no > base_pairs && !haskey(entry_keys, mi)
-            push!(isolated_funcs, (f, arg_types))
+            push!(dispatch_candidates, (f, arg_types))
         end
     end
-    _TRIM_ISOLATED_FUNCS[] = isolated_funcs
+    _TRIM_DISPATCH_CANDIDATES[] = dispatch_candidates
     return functions, ir_cache
 end
 
-# WASMTARGET dynamic dispatch: (f, arg_types) keys whose codegen compile_module should
-# ISOLATE (try/catch → unreachable stub on failure) — the discovery-added functions.
-# Set by trim_compile_plan; read+cleared by compile_module.
-const _TRIM_ISOLATED_FUNCS = Ref{Set{Any}}(Set{Any}())
+# (f, arg_types) keys discovered solely as dynamic-dispatch candidates.
+const _TRIM_DISPATCH_CANDIDATES = Ref{Set{Any}}(Set{Any}())

@@ -3,6 +3,8 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
+L14_no_posthoc_module_repair = 0
+L15_no_fabricated_ssa_store = 0
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
@@ -18,7 +20,7 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 650
+R11_patch_markers = 645
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12
@@ -28,5 +30,5 @@ R17_unwrapped_value_emissions = 186
 R18_anyref_dispatch_sigs = 2
 R2_emit_raw_bridges = 0
 R3_infer_value_type = 139
-R5_julia_type_reguess = 109   # +2 tag-run: the intrinsic builder's declared params/results (pre-emit truth, not re-guessing)
+R5_julia_type_reguess = 108
 R7_raw_coercion_ops = 122

@@ -154,7 +154,7 @@ wasm_bytes = compile_multi([
 
 Functions can call each other within the module.
 """
-function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
+function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, strict::Bool=true, validate::Bool=_wt_default_validate(),
                        discovery::Symbol=:trim,
@@ -162,7 +162,7 @@ function compile_multi(functions::Vector; optimize=false, stub_names::Set{String
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
-        compile_module(functions; stub_names=stub_names, return_registries=return_registries,
+        compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
                        discovery=discovery)
     finally
