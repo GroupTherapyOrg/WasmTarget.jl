@@ -9,7 +9,7 @@ THE single PRE-EMISSION static-type query (dart2wasm's `translateType(node.getSt
 intrinsics.dart:333): what wasm type WOULD `val` push, derived from locals/ssa_types/literals.
 CONTRACT: use ONLY to make decisions BEFORE emitting (opcode/width selection, path choice) —
 NEVER to describe a value that has already been emitted; the emission's own returned type
-(`compile_value_typed`/`emit_value!`) is the truth there. The old name `infer_value_wasm_type`
+(`_compile_value_b`/`emit_value!`) is the truth there. The old name `infer_value_wasm_type`
 (the post-emission re-guess anti-pattern, once ~265 callers) is retired and LOCKED at zero by
 test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
 """
@@ -833,13 +833,6 @@ function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilati
     return b
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_condition_to_i32(cond, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = InstrBuilder(; func_name="compile_condition_to_i32")
-    compile_condition_to_i32!(b, cond, ctx)
-    return builder_code(b)
-end
-
 """
 Compile a value reference (SSA, Argument, or Literal).
 """
@@ -849,37 +842,13 @@ const _VALUE_COMPILE_STACK = Vector{Any}()
 # B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
 # code_generator.dart:879): the body builds into the typed InstrBuilder `b`, so the type it
 # pushes IS a byproduct of emission = `b.v.stack[end]`. `_compile_value_b` returns that
-# builder; `compile_value` is the byte-only wrapper (back-compat for the 410 raw callers);
-# `compile_value_typed` returns (bytes, pushed-type) so callers stop RE-GUESSING via
-# infer_value_wasm_type (265 sites — the north-star deletion).
-function compile_value(val, ctx::AbstractCompilationContext)::Vector{UInt8}
-    return builder_code(_compile_value_b(val, ctx))
-end
-
-"""
-    compile_value_typed(val, ctx) -> (bytes::Vector{UInt8}, pushed_type::Union{WasmValType,Nothing})
-
-dart2wasm-faithful: compile `val` and RETURN the wasm type it left on the stack (the
-emission byproduct), not a re-guess. `pushed_type` is `b.v.stack[end]` (or `nothing` when
-the emit produced no single result — e.g. an unreachable/dead path). Callers coerce via
-`convert_type!` (dart `wrap`), deleting their `infer_value_wasm_type` call.
-"""
-function compile_value_typed(val, ctx::AbstractCompilationContext)::Tuple{Vector{UInt8}, Union{WasmValType,Nothing}}
-    b = _compile_value_b(val, ctx)
-    # march3 audit: a value emission must track exactly ONE pushed value (or zero
-    # for dead paths). More means an interior splice lied to the model — the
-    # blocker list for the channel inversion. Enumerate, don't guess.
-    if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(b.v.stack) > 1
-        println(stderr, "VALUE-STACK-LIAR n=$(length(b.v.stack)) stack=$(b.v.stack) val=$(first(repr(val), 80))")
-    end
-    return (builder_code(b), isempty(b.v.stack) ? nothing : b.v.stack[end])
-end
+# builder, and `emit_value!` is the sole merge/coercion channel.
 
 """
     emit_value!(b, val, ctx) -> Union{WasmValType,Nothing}
 
 Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
-emission ACTUALLY pushed (`compile_value_typed`'s byproduct) — NOT a re-guess via
+emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-guess via
 `infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value;
 pushes=WasmValType[static_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the

@@ -424,21 +424,8 @@ Compile string concatenation (str1 * str2).
 Creates a new string array with combined contents.
 Uses locals for intermediate values.
 """
-# Thin delegator. The explicit-locals implementation below is the real one; the old
-# inline body here built a `bytes` vector then discarded it (dead bloat) — removed.
-function compile_string_concat(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
-    return compile_string_concat_with_locals(str1, str2, ctx)
-end
-
-"""
-String concatenation implementation using explicit locals.
-Uses scratch locals allocated by allocate_scratch_locals!.
-"""
 # MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
 # array.copy. Byte-identical to before.
-compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(compile_string_concat_b(str1, str2, ctx))
-
 """builder-returning core (march3): callers merge via append_builder!."""
 function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
@@ -494,9 +481,6 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
 # control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(compile_string_equal_b(str1, str2, ctx))
-
 """builder-returning core (march3): callers merge via append_builder!."""
 function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx

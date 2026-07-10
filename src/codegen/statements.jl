@@ -437,7 +437,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     # (can't determine source type) but the PiNode's target local is ref-typed.
                     elseif pi_local_type !== nothing && (pi_local_type isa ConcreteRef || pi_local_type === StructRef || pi_local_type === ArrayRef || pi_local_type === ExternRef || pi_local_type === AnyRef || pi_local_type === EqRef)
                         # dart2wasm carries the type with the value: the source is numeric
-                        # iff the EMISSION's own type (val_ty, from compile_value_typed above)
+                        # iff the EMISSION's own tracked type (`val_ty` above)
                         # is not a ref — no re-guess needed.
                         is_numeric_val = !isempty(_pi_b.instrs) && val_ty !== nothing && !_wt_is_ref(val_ty)
                         if is_numeric_val
@@ -1267,14 +1267,6 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     return b
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_statement(stmt, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = _ctx_builder(ctx, "compile_statement")
-    _seed_builder_locals!(b, ctx)
-    compile_statement!(b, stmt, idx, ctx)
-    return builder_code(b)
-end
-
 """
 Compile a struct construction expression (%new).
 """
@@ -2047,14 +2039,6 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     struct_new!(b, info.wasm_type_idx)   # mod-resolved fields (march3)
 
     return b
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_new(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = _ctx_builder(ctx, "compile_new")
-    _seed_builder_locals!(b, ctx)
-    compile_new!(b, expr, idx, ctx)
-    return builder_code(b)
 end
 
 """
@@ -2981,14 +2965,6 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
     unreachable!(b)  # loud unsupported trap
     ctx.last_stmt_was_stub = true
     return b
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_foreigncall(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = _ctx_builder(ctx, "compile_foreigncall")
-    _seed_builder_locals!(b, ctx)
-    compile_foreigncall!(b, expr, idx, ctx)
-    return builder_code(b)
 end
 
 """

@@ -5,7 +5,6 @@ function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, s
     emit_value!(b, arg, ctx, ConcreteRef(UInt32(str_type_idx), true))
     return b
 end
-
 """
 Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h + char[i].
 """
@@ -3269,27 +3268,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     end
                     for fi in 1:nfields
                         if fi <= length(args)
-                            local _ft_ctor = fieldtype(_ctor_type, fi)
-                            local _val_wasm = compile_value_typed(args[fi], ctx)[2]
-                            local _is_numeric_val = _val_wasm === I32 || _val_wasm === I64 || _val_wasm === F32 || _val_wasm === F64
-                            # WBUILD-1011: Box numeric values for Any/abstract-typed struct fields
-                            if _is_numeric_val && (_ft_ctor === Any || isabstracttype(_ft_ctor))
-                                emit_numeric_to_anyref!(bec, args[fi], _val_wasm, ctx)
-                                if _ctor_field_wasm(fi) === ExternRef
-                                    extern_convert_any!(bec)
-                                end
-                            else
-                                emit_value!(bec, args[fi], ctx)
-                                # WASMMAKIE E-003: Any fields map to EXTERNREF — a
-                                # concrete ref (e.g. BoundsError(LinearIndices(...), i)
-                                # in wilkinson's range indexing) fails struct.new
-                                # validation without extern.convert_any
-                                if _ctor_field_wasm(fi) === ExternRef &&
-                                   (_val_wasm isa ConcreteRef || _val_wasm === StructRef ||
-                                    _val_wasm === ArrayRef || _val_wasm === AnyRef || _val_wasm === EqRef)
-                                    extern_convert_any!(bec)
-                                end
-                            end
+                            local _expected = _ctor_field_wasm(fi)
+                            _expected === nothing ? emit_value!(bec, args[fi], ctx) :
+                                emit_value!(bec, args[fi], ctx, _expected;
+                                            from_julia=fieldtype(_ctor_type, fi))
                         else
                             # Default: push null ref for ref fields, 0 for i32/i64 —
                             # the NULL HEAP TYPE must match the wasm field type
@@ -4091,13 +4073,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # Compile each constructor argument as a struct field value
                     for _fi in 1:length(args)
                         local _ftype = _fi <= length(_ctor_sinfo.field_types) ? _ctor_sinfo.field_types[_fi] : Any
-                        local _fval_wasm = compile_value_typed(args[_fi], ctx)[2]
-                        local _fval_numeric = _fval_wasm === I32 || _fval_wasm === I64 || _fval_wasm === F32 || _fval_wasm === F64
-                        if _fval_numeric && (_ftype === Any || isabstracttype(_ftype))
-                            emit_numeric_to_anyref!(fb, args[_fi], _fval_wasm, ctx)
-                        else
-                            emit_value!(fb, args[_fi], ctx)   # THE typed value channel
-                        end
+                        local _ctor_def = ctx.mod.types[_ctor_sinfo.wasm_type_idx + 1]
+                        local _field_idx = _fi + Int(_ctor_sinfo.field_offset)
+                        local _expected = (_ctor_def isa StructType && _field_idx <= length(_ctor_def.fields)) ?
+                            _ctor_def.fields[_field_idx].valtype : nothing
+                        _expected === nothing ? emit_value!(fb, args[_fi], ctx) :
+                            emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
                     end
                     # struct.new
                     bscn = _ctx_builder(ctx, "compile_invoke")
@@ -4170,13 +4151,4 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     end
 
     return append_builder!(b, fb)
-end
-
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_invoke(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = _ctx_builder(ctx, "compile_invoke")
-    _seed_builder_locals!(b, ctx)
-    compile_invoke!(b, expr, idx, ctx)
-    return builder_code(b)
 end

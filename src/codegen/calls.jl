@@ -898,8 +898,8 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
         if arg_type === Nothing && arg2_type === Nothing
             # typed channel: the emissions' own types replace the REF_NULL/LOCAL_GET
             # first-byte checks + double LEB decode of local indices.
-            local arg1_bytes_chk, _a1_ty = compile_value_typed(args[1], ctx)
-            local arg2_bytes_chk, _a2_ty = compile_value_typed(args[2], ctx)
+            local _a1_ty = length(bld.seeded) >= 2 ? bld.seeded[end - 1] : nothing
+            local _a2_ty = isempty(bld.seeded) ? nothing : bld.seeded[end]
             local a1_is_ref = _a1_ty !== nothing && _wt_is_ref(_a1_ty)
             local a2_is_ref = _a2_ty !== nothing && _wt_is_ref(_a2_ty)
             local a1_is_anyref_fp = (_a1_ty === AnyRef)
@@ -1632,7 +1632,7 @@ Modifies `bytes` in-place.
 """
 function _compile_call_symbol(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
     # Compile the argument — it's already a string array in WasmGC
-    append!(bytes, compile_value(args[1], ctx))  # god-fn seam: typed when the caller goes builder-native (M4 tail)
+    append_builder!(fb, _compile_value_b(args[1], ctx))
     return nothing
 end
 
@@ -4451,7 +4451,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     if is_numeric_intrinsic && length(args) > 0
         # typed channel: a ref-typed emission feeding a numeric intrinsic = boxed/Any operand
         # (was a GC_PREFIX+STRUCT_GET byte probe + LEB decode + SSA-type re-check).
-        local arg1_bytes, _p1_ty = compile_value_typed(args[1], ctx)
+        local _p1_pos = length(fb.v.stack) - length(args) + 1
+        local _p1_ty = _p1_pos >= 1 ? fb.v.stack[_p1_pos] : nothing
         if _p1_ty !== nothing && (_p1_ty === ExternRef || _p1_ty === AnyRef)
             local arg1_ssa = args[1]
             if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
@@ -4461,16 +4462,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                 return append_builder!(b, fb)
             end
-        end
-        # Also check for local_get of externref-typed local.
-        # dart2wasm carries the type with the value rather than scanning bytes.
-        if length(arg1_bytes) >= 2 && arg1_bytes[1] == Opcode.LOCAL_GET &&
-           static_wasm_type(args[1], ctx) === ExternRef
-            # externref-typed local fed to a numeric intrinsic — boxing. Loud reject.
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "numeric intrinsic on an externref (boxed) local — type instability"; idx=idx)
-            return append_builder!(b, fb)
         end
     end
 
@@ -4873,8 +4864,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
             if arg_type === Nothing && arg2_type_ne === Nothing
                 # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
-                local arg1_bytes_ne_chk, _a1ne_ty = compile_value_typed(args[1], ctx)
-                local arg2_bytes_ne_chk, _a2ne_ty = compile_value_typed(args[2], ctx)
+                local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
+                local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
                 local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
                 local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
                 # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
@@ -6407,14 +6398,6 @@ end
 # ============================================================================
 # _apply_iterate helpers (vector splatting)
 # ============================================================================
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function compile_call(expr::Expr, idx::Int, ctx::AbstractCompilationContext)::Vector{UInt8}
-    b = _ctx_builder(ctx, "compile_call")
-    _seed_builder_locals!(b, ctx)
-    compile_call!(b, expr, idx, ctx)
-    return builder_code(b)
-end
 
 """
 Map a known binary function name to its WASM reduce opcode for the given element type.
