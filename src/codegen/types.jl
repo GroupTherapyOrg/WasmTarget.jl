@@ -104,7 +104,7 @@ mutable struct TypeRegistry
     # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
     type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
     # march16 (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
-    # {classId, identityHash, context anyref, vtable}, per-max-arity vtable struct
+    # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
     closure_base_idx::Union{Nothing, UInt32}
@@ -2336,9 +2336,10 @@ end
     get_closure_base_struct!(mod, registry) -> UInt32
 
 The closure-base Object prefix and callable payload:
-`{classId:i32, identityHash:(mut i32), context:anyref, vtable:structref}`.
+`{classId:i32, identityHash:(mut i32), context:anyref, vtable:structref,
+  functionType:(ref JlDataType)}`.
 This copies current dart ClosureLayouter's Object fields and context/vtable order
-(the separate runtime function-type field remains part of the RTI campaign).
+including its final runtime function-type field.
 """
 function get_closure_base_struct!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.closure_base_idx !== nothing && return registry.closure_base_idx
@@ -2347,6 +2348,7 @@ function get_closure_base_struct!(mod::WasmModule, registry::TypeRegistry)::UInt
         FieldType(I32, true),        # identityHash
         FieldType(AnyRef, false),    # context (the captured-fields struct)
         FieldType(StructRef, false), # vtable (covariant per-arity structs; cast at use)
+        FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false), # callable RTI
     ]
     object = get_object_struct_type!(mod, registry)
     idx = UInt32(add_type!(mod, StructType(fields, object)))

@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # march16: FIRST-CLASS CLOSURES — trampolines + vtable globals
 # (dart ClosureLayouter/ClosureRepresentation, closures.dart:41-118;
-#  the closure object = {classId, identityHash, context, vtable})
+#  the closure object = {classId, identityHash, context, vtable, functionType})
 # ═══════════════════════════════════════════════════════════════════════════
 
 """True when an erased value or every runtime inhabitant of `T` is callable."""
@@ -112,7 +112,7 @@ end
     emit_closure_wrap!(b, ctx, closure_type, body_idx, body_params, body_results)
 
 The captured struct is ON THE STACK; wraps it into the closure OBJECT
-{classId, identityHash, context, vtable} (dart's implicit function-value creation at the
+{classId, identityHash, context, vtable, functionType} (dart's implicit function-value creation at the
 erasure seam — convertType when a closure meets a top type).
 """
 function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
@@ -124,13 +124,18 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
     (cache !== nothing && haskey(cache, closure_type)) || return nothing
     g, _ = ensure_closure_vtable!(ctx.mod, ctx.type_registry, closure_type, body_idx,
                                   body_params, body_results)
-    # stack: [captured] → {classId, identityHash=0, context, vtable}
+    # stack: [captured] → {classId, identityHash=0, context, vtable, functionType}
     local ctx_scratch = allocate_local!(ctx, AnyRef)
     local_set!(b, UInt32(ctx_scratch))
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, closure_type)))
     i32_const!(b, 0)
     local_get!(b, UInt32(ctx_scratch))
     global_get!(b, g, ConcreteRef(get_closure_vtable_struct!(ctx.mod, ctx.type_registry, length(body_params) - 1), false))
+    local type_globals = ctx.type_registry.type_constant_globals
+    (type_globals !== nothing && haskey(type_globals, closure_type)) ||
+        error("closed-world type object missing for closure $closure_type")
+    local type_global = type_globals[closure_type]
+    global_get!(b, type_global, ctx.mod.globals[Int(type_global) + 1].valtype)
     struct_new!(b, base_idx)
     return ConcreteRef(base_idx, false)
 end

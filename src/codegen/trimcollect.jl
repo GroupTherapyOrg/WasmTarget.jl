@@ -81,6 +81,18 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     i = 1
     _fn_closures = Set{DataType}()   # per-function staging (folded on co-occurrence)
     _fn_has_dyn = false
+    function observe_user_closure!(@nospecialize(T))
+        if T isa Union
+            foreach(observe_user_closure!, Base.uniontypes(T))
+        elseif T isa DataType && is_closure_type(T)
+            local root = T.name.module
+            while parentmodule(root) !== root
+                root = parentmodule(root)
+            end
+            root === Main && push!(_fn_closures, T)
+        end
+        return
+    end
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
@@ -97,6 +109,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
         ssat = src.ssavaluetypes
+        # Optimized IR often folds `%new(closure, captures...)` into a constant
+        # tuple followed by getfield. The concrete closure types still inhabit SSA
+        # types, so collect from that semantic source as well as explicit :new.
+        ssat isa Vector && foreach(t -> observe_user_closure!(CC.widenconst(t)), ssat)
         for stmt in src.code
             # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
@@ -110,14 +126,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 # scope: USERLAND closures only — Base/stdlib-internal closures are
                 # statically called (never through the vtable); enrolling them all
                 # exploded the blast radius (a _growend! trampoline mis-built).
-                local _T_user = _T isa DataType && begin
-                    local _r = _T.name.module
-                    while parentmodule(_r) !== _r; _r = parentmodule(_r); end
-                    _r === Main
-                end
-                if _T isa DataType && is_closure_type(_T) && _T_user
-                    push!(_fn_closures, _T)   # staged; folds only on co-occurrence
-                end
+                observe_user_closure!(_T)   # staged; folds only on co-occurrence
                 continue
             end
             # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args

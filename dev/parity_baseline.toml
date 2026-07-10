@@ -17,6 +17,7 @@ L1_box_typeid_external = 0
 L20_object_identity_layout = 0
 L21_packed_integer_arrays = 0
 L22_artifact_binaryen = 0
+L23_closure_rti = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 L4_no_postemit_reguess = 0

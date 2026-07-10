@@ -135,6 +135,19 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L23_closure_rti" => ("closure objects copy Dart's Object/context/vtable/functionType layout and use a real closed-world Julia type object",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
+                        "haskey(type_globals, closure_type)",
+                        "global_get!(b, type_global",
+                        "observe_user_closure!(CC.widenconst(t))"]
+            forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
+            count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
+            count(p -> occursin(p, types_src * closure_src), forbidden)
+        end),
     "L22_artifact_binaryen" => ("optimization uses Binaryen_jll's artifact executable and cannot silently depend on or skip for a system wasm-opt",
         () -> begin
             api_src = read(joinpath(SRC, "WasmTarget.jl"), String)

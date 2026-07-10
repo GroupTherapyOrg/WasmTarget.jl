@@ -9399,14 +9399,16 @@ console.log(JSON.stringify({
             Int64(length(filter(x -> x > threshold, v)))
         end
 
-        # Force a capturing closure through the erased Function representation.
-        # This exercises the Object-prefix context/vtable fields and call_ref
-        # trampoline, rather than a statically devirtualized closure call.
-        @noinline _s2004_apply_erased(f::Function, x::Int64)::Int64 = f(x)
-        _s2004_dynamic(x::Int64)::Int64 = begin
+        # A runtime index into Vector{Any} prevents inference from devirtualizing
+        # either capturing closure. This exercises allocation of the shared closure
+        # Object, its real RTI field, vtable selection, call_ref, and result unboxing.
+        _s2004_dynamic(x::Int64, i::Int64)::Int64 = begin
             offset = Int64(3)
-            f = (y::Int64) -> y + offset
-            _s2004_apply_erased(f, x)
+            factor = Int64(4)
+            add = (y::Int64) -> y + offset
+            mul = (y::Int64) -> y * factor
+            fs = Any[add, mul]
+            (fs[i](x))::Int64
         end
 
         @testset "basic closure passing" begin
@@ -9424,7 +9426,8 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm_vec(_s2004_reduce, Int64[1,2,3,4,5]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s2004_multi_cap, Int64[1,3,5,7,9]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s2004_cap_chain, Int64[1,3,5,7,9]; optimize=opt).pass
-                @test compare_julia_wasm(_s2004_dynamic, Int64(9); optimize=opt).pass
+                @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(2); optimize=opt).pass
             end
         end
     end
