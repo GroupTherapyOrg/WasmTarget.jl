@@ -22,6 +22,21 @@ using Base.Experimental: @overlay
 
 Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
 
+"""Flat source-level type for runtime-length function composition."""
+struct _RuntimeComposition{V<:AbstractVector} <: Function
+    fs::V
+end
+
+@noinline function _runtime_composition_apply(fs::AbstractVector, i::Int, x)
+    i == 0 && return x
+    return _runtime_composition_apply(fs, i - 1, fs[i](x))
+end
+
+@noinline function (c::_RuntimeComposition)(x)
+    isempty(c.fs) && throw(MethodError(∘, ()))
+    return _runtime_composition_apply(c.fs, length(c.fs), x)
+end
+
 # ─── Dict literal-constructor Overlay ───────────────────────────────────────
 # Why: Dict{K,V}(::Tuple{Pair...}) (the `Dict(k=>v, …)` literal) is mis-compiled as
 #      a fieldwise struct.new from the tuple argument (Dict is a hash table, not a
@@ -2299,6 +2314,33 @@ CC.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 CC.cache_owner(interp::WasmInterpreter) = interp.cache_token
 CC.method_table(interp::WasmInterpreter) = interp.method_table
 CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
+
+# Julia's native inference models `(∘)(runtime_vector...)` as an unbounded
+# recursive union of nested ComposedFunction types, then specializes downstream
+# IR into representation-specific getfield branches. WT uses one flat callable
+# context, analogous to dart2wasm's closure context + vtable. Teach inference the
+# target representation before optimization so downstream IR is generated from
+# that truth; all unrelated builtins delegate unchanged to Julia's implementation.
+function CC.abstract_apply(interp::WasmInterpreter, argtypes::Vector{Any},
+                           si::CC.StmtInfo,
+                           sv::Union{CC.IRInterpretationState,CC.InferenceState},
+                           max_methods::Int)
+    if length(argtypes) == 4
+        local target = argtypes[3]
+        local container = CC.widenconst(argtypes[4])
+        if target isa CC.Const && target.val === (∘) &&
+           container isa DataType && container <: AbstractVector
+            # Conservative effects/exceptions are intentional: the source-level
+            # callable may invoke arbitrary functions and rejects an empty list.
+            return CC.Future(CC.CallMeta(_RuntimeComposition{container}, Any,
+                                         CC.Effects(), CC.NoCallInfo()))
+        end
+    end
+    return invoke(CC.abstract_apply,
+                  Tuple{CC.AbstractInterpreter,Vector{Any},CC.StmtInfo,
+                        Union{CC.IRInterpretationState,CC.InferenceState},Int},
+                  interp, argtypes, si, sv, max_methods)
+end
 
 # Disable concrete eval (GPUCompiler pattern).
 # Without this, the compiler constant-folds calls using Base implementation,

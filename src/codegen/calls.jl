@@ -5680,6 +5680,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
         target_is_vect = (target_func isa GlobalRef && target_func.name === :vect && target_func.mod === Base)
         target_is_typed_vect = (target_func isa GlobalRef && target_func.name === :getindex && target_func.mod === Base)
+        target_value = target_func isa GlobalRef ?
+            (try getfield(target_func.mod, target_func.name) catch; nothing end) : target_func
+        target_is_compose = target_value === (∘)
         prefix_values = length(args) == 4 ? _apply_iterate_svec_values(args[3], ctx) : nothing
         tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
 
@@ -5695,6 +5698,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 struct_new!(fb, info.wasm_type_idx)   # mod-resolved fields (march3)
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
         # or a known binary-reduce intrinsic.
+        elseif target_is_compose && length(args) == 3 &&
+               container_type isa DataType && container_type <: AbstractVector
+            _emit_runtime_composition_context!(fb, container_arg, container_type, ctx)
         elseif (target_is_vect || target_is_typed_vect) && prefix_values !== nothing &&
                tail_type isa DataType && tail_type <: Vector
             # `[prefix..., vector...]`: Base.vect receives scalar prefix operands and
@@ -6315,6 +6321,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     return append_builder!(b, fb)
+end
+
+"""Allocate the valid-Julia `_RuntimeComposition{V}` captured context."""
+function _emit_runtime_composition_context!(fb::InstrBuilder, container_arg,
+                                            container_type::DataType, ctx)
+    local CT = _RuntimeComposition{container_type}
+    local info = get(ctx.type_registry.structs, CT, nothing)
+    info === nothing && error("runtime composition type was not registered: $CT")
+    local bld = _ctx_builder(ctx, "_emit_runtime_composition_context!")
+    i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, CT)))
+    local field_wasm = ctx.mod.types[Int(info.wasm_type_idx) + 1].fields[Int(info.field_offset) + 1].valtype
+    emit_value!(bld, container_arg, ctx, field_wasm)
+    struct_new!(bld, info.wasm_type_idx)
+    append_builder!(fb, bld)
+    return fb
 end
 
 """Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""

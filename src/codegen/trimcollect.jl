@@ -393,7 +393,7 @@ function trim_compile_plan(entries_named::Vector)
             # its target. USERLAND ONLY: converting Base-internal closure pairs
             # (previously skipped) changed unrelated compiles — randsubseq's
             # internals regressed in the suite context (the march-16 gate catch).
-            ftyp in _ENROLLED_CALLABLE_TYPES[] && (f = ftyp)
+            (ftyp in _ENROLLED_CALLABLE_TYPES[] || ftyp <: _RuntimeComposition) && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig

@@ -135,6 +135,18 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L25_flat_runtime_composition" => ("runtime-length composition is typed before optimization as a valid-Julia flat callable and allocated through normal struct codegen",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            call_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            required = ["struct _RuntimeComposition", "function CC.abstract_apply(interp::WasmInterpreter",
+                        "_RuntimeComposition{container}", "_runtime_composition_apply",
+                        "_emit_runtime_composition_context!", "register_closure_type!"]
+            forbidden = ["compose_and_call", "composition_callsite", "fake_composition"]
+            all_src = interp_src * call_src * compile_src
+            count(p -> !occursin(p, all_src), required) + count(p -> occursin(p, all_src), forbidden)
+        end),
     "L24_unified_static_tearoffs" => ("named-function tear-offs enroll in the closed world and use the same closure Object/context/vtable/RTI representation as capturing closures",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)

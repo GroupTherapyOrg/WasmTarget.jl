@@ -210,6 +210,15 @@ stack; when its body was enrolled in the closed world, wrap it. Returns whether
 it wrapped.
 """
 function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
+    # The Julia static type can remain the captured callable after an earlier
+    # heterogeneous/erasure seam has already produced the closure Object. The
+    # strict builder stack is the representation truth; never wrap that Object
+    # again as if it were a context struct.
+    local base_idx = ctx.type_registry.closure_base_idx
+    if base_idx !== nothing && !isempty(b.v.stack)
+        local actual = b.v.stack[end]
+        actual isa ConcreteRef && actual.type_idx == base_idx && return true
+    end
     from_julia isa DataType || return false
     from_julia <: Function || return false
     haskey(ctx.type_registry.structs, from_julia) || return false
