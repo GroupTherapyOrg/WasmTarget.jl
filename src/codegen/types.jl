@@ -104,7 +104,8 @@ mutable struct TypeRegistry
     # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
     type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
     # march16 (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
-    # {classId, context anyref, vtable}, per-max-arity vtable struct idxs, and per-
+    # {classId, identityHash, context anyref, vtable}, per-max-arity vtable struct
+    # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
     closure_base_idx::Union{Nothing, UInt32}
     closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct

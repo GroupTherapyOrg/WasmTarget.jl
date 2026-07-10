@@ -4,6 +4,16 @@
 #  the closure object = {classId, identityHash, context, vtable})
 # ═══════════════════════════════════════════════════════════════════════════
 
+"""True when an erased value or every runtime inhabitant of `T` is callable."""
+function is_callable_julia_type(@nospecialize(T))::Bool
+    T === Any && return true
+    T isa Type || return false
+    T <: Function && return true
+    T isa Union || return false
+    local members = Base.uniontypes(T)
+    return !isempty(members) && all(U -> U isa Type && U <: Function, members)
+end
+
 """
     ensure_closure_vtable!(mod, registry, closure_type, body_idx, body_params, body_results;
                            body_return_type=nothing)

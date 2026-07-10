@@ -1949,13 +1949,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     # march16 slice D: a DYNAMIC function-value call — the callee is a runtime value
-    # whose static type is erased (Any/Function). Ride the closure vtable: the OBJECT
+    # whose static type is erased or a union containing only Function subtypes. Ride
+    # the closure vtable: the OBJECT
     # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
     # Signature + call_ref). Devirtualizable callees (concrete/small-union types)
     # never reach here — the existing paths outrank.
     if func isa Core.SSAValue
         local _dfc_t = infer_value_type(func, ctx)
-        if (_dfc_t === Any || _dfc_t === Function) &&
+        if is_callable_julia_type(_dfc_t) &&
            emit_dynamic_closure_call!(fb, ctx, func, args, idx) === true
             return append_builder!(b, fb)
         end
