@@ -11,7 +11,7 @@ include("builder/instr_ir.jl")
 include("builder/instr_builder.jl")
 
 # Codegen - Julia IR to Wasm bytecode
-include("codegen/diagnostics.jl")  # strict-mode diagnostics; must precede context.jl (struct field)
+include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic field)
 include("codegen/interpreter.jl")
 include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
@@ -76,7 +76,7 @@ export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, Func
 export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
-# Soundness: strict-mode diagnostics + validation gate
+# Soundness diagnostics + independent validation cross-check
 export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
 
 """
@@ -101,7 +101,7 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
-                 strict::Bool=true, validate::Bool=_wt_default_validate(),
+                 validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
@@ -112,8 +112,7 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     mod = try
-        # Compile to WasmModule (strict=true raises WasmCompileError on unsupported constructs)
-        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir, strict=strict)
+        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end
@@ -130,8 +129,8 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
 end
 
 # Convenience method for single argument type
-compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, strict::Bool=true, validate::Bool=_wt_default_validate()) =
-    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, strict=strict, validate=validate)
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate()) =
+    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, validate=validate)
 
 """
     compile_multi(functions; optimize=false) -> Vector{UInt8}
@@ -156,14 +155,14 @@ Functions can call each other within the module.
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
-                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=_wt_default_validate(),
+                       register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
                        discovery::Symbol=:trim,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
         compile_module(functions; return_registries=return_registries,
-                       optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
+                       optimize_ir=optimize_ir, register_ir_types=register_ir_types,
                        discovery=discovery)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink

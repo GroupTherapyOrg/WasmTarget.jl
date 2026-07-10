@@ -2974,60 +2974,12 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
 
-    # Unknown foreigncall — emit a default return value instead of unreachable.
-    # These stubs are dead code at runtime (WasmTarget handles them via intrinsics
-    # at a higher level), but emitting unreachable causes wasm-opt's
-    # --traps-never-happen to eliminate surrounding live code.
-    # Returning a type-appropriate default keeps the optimizer safe.
-    fc_return_type = length(expr.args) >= 2 ? expr.args[2] : Nothing
-    # P5-trim: emit the default in the width of the ACTUAL SSA LOCAL when one
-    # exists — the declared foreigncall return type can disagree with the
-    # local the pipeline allocated (i64 default into an i32 local failed
-    # validation in freshly-collected show machinery).
-    local _fcd_lt = nothing
-    local _fcd_li = get(ctx.ssa_locals, idx, nothing)
-    if _fcd_li !== nothing
-        local _fcd_off = _fcd_li - ctx.n_params
-        if _fcd_off >= 0 && _fcd_off < length(ctx.locals)
-            _fcd_lt = ctx.locals[_fcd_off + 1]
-        end
-    end
-    if _fcd_lt === I32
-        i32_const!(b, 0)
-    elseif _fcd_lt === I64
-        i64_const!(b, 0)
-    elseif _fcd_lt === F64
-        f64_const!(b, 0.0)
-    elseif _fcd_lt === F32
-        f32_const!(b, 0.0f0)
-    elseif _fcd_lt isa ConcreteRef
-        ref_null!(b, Int64(_fcd_lt.type_idx), ConcreteRef(UInt32(_fcd_lt.type_idx), true))
-    elseif _fcd_lt === AnyRef || _fcd_lt === ExternRef || _fcd_lt === StructRef || _fcd_lt === ArrayRef || _fcd_lt === EqRef
-        ref_null!(b, _fcd_lt)
-    elseif fc_return_type === Int32 || fc_return_type === UInt32
-        i32_const!(b, 0)
-    elseif fc_return_type === Int64 || fc_return_type === UInt64 || fc_return_type === Int
-        i64_const!(b, 0)
-    elseif fc_return_type === Float64
-        f64_const!(b, 0.0)
-    elseif fc_return_type === Float32
-        f32_const!(b, 0.0f0)
-    elseif fc_return_type === Nothing || fc_return_type === Cvoid
-        # void return — no value needed
-    else
-        # For pointer types (Ptr{...}) and other unknowns, use i64 as a safe default
-        i64_const!(b, 0)
-    end
-    # P4-stdlib (Random digest!, the CONDSTUB class root): this path EMITS A
-    # VALUE — execution continues past it — so it must NOT set
-    # last_stmt_was_stub: the flag dead-codes the rest of the block,
-    # poisoning live conditions into `unreachable` (the value-vs-dead
-    # contradiction behind the FINDINGS P4 family). It must still be LOUD:
-    # record the unsupported foreigncall so strict mode surfaces it instead
-    # of silently no-opping effectful calls (a missed memmove made SHA
-    # digest its own zeros — input-independent output).
-    record_unsupported!(ctx, :unsupported_method,
-        "foreigncall `$(name)` (no handler; emitted type-default value)"; idx=idx, detail=expr)
+    # Unknown foreigncall: dart-style loud unsupported path. It is never valid to
+    # synthesize a type-default and continue; that silently turns effectful calls
+    # (memmove was the historical example) into wrong computations.
+    record_unsupported!(ctx, :unsupported_method, "foreigncall `$(name)` (no lowering)"; idx=idx, detail=expr)
+    unreachable!(b)  # loud unsupported trap
+    ctx.last_stmt_was_stub = true
     return b
 end
 

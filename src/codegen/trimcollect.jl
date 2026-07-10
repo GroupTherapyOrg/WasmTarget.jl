@@ -30,12 +30,9 @@ Collect the closed transitive callgraph for the given entry
 `MethodInstance`s under the WASM overlay interpreter. With `verify=true`,
 run the upstream trim verifier (throws `Core.TrimFailure` with
 source-located diagnostics when dynamic dispatch remains — the same
-"abstract inference unsupported" boundary WasmTarget's strict mode guards,
+"abstract inference unsupported" boundary WasmTarget's diagnostics guard,
 but reported far better).
 """
-# P5-trim: entry names for strict-mode scoping (see record_unsupported!).
-const TRIM_ENTRY_NAMES = Ref{Union{Nothing, Set{String}}}(nothing)
-
 # WASMTARGET dynamic dispatch: trim/inference drops `dynamic` calls (open-world) —
 # the applicable method specializations are never collected, so func_registry has
 # nothing for the call site to dispatch over. Scan the collected IR for dynamic
@@ -45,6 +42,37 @@ const TRIM_ENTRY_NAMES = Ref{Union{Nothing, Set{String}}}(nothing)
 # Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     out = Any[]
+    # dart builds dispatch rows only for classes in the closed component. Mirror that
+    # boundary: a Julia method's concrete dispatch type must occur in the collected
+    # program's signatures/SSA types/allocations. Enumerating every method below an
+    # abstract slot pulled unrelated BigFloat/MPFR code into integer-only modules and
+    # forced the now-deleted trap-repair policy.
+    runtime_types = Set{DataType}()
+    function observe_type!(@nospecialize(T))
+        if T isa Union
+            foreach(observe_type!, Base.uniontypes(T))
+        elseif T isa DataType
+            isconcretetype(T) && push!(runtime_types, T)
+        end
+        return
+    end
+    for j in 1:2:length(codeinfos)
+        (j + 1 <= length(codeinfos) && codeinfos[j] isa Core.CodeInstance &&
+         codeinfos[j + 1] isa Core.CodeInfo) || continue
+        local mi = codeinfos[j].def isa Core.MethodInstance ? codeinfos[j].def : codeinfos[j].def.def
+        local sig = mi.specTypes
+        sig isa DataType && foreach(observe_type!, sig.parameters)
+        local src0 = codeinfos[j + 1]
+        local ss0 = src0.ssavaluetypes
+        ss0 isa Vector && foreach(t -> observe_type!(CC.widenconst(t)), ss0)
+        for stmt0 in src0.code
+            if stmt0 isa Expr && stmt0.head === :new && !isempty(stmt0.args)
+                local nt = stmt0.args[1]
+                local T = nt isa GlobalRef ? (try getfield(nt.mod, nt.name) catch; nothing end) : nt
+                observe_type!(T)
+            end
+        end
+    end
     # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
     # inference makes the body REAL instead of an any-erased stub).
@@ -152,7 +180,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 length(msig) == length(atypes) + 1 || continue
                 Tp = msig[p + 1]
                 (Tp isa DataType && isconcretetype(Tp) && isstructtype(Tp) &&
-                 !(Tp <: Tuple) && Tp !== String && Tp !== Symbol) || continue
+                 Tp in runtime_types && !(Tp <: Tuple) && Tp !== String && Tp !== Symbol) || continue
                 spec = ntuple(j -> j == p ? Tp : atypes[j], length(atypes))
                 ssig = try Tuple{Core.Typeof(g), spec...} catch; continue end
                 cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
@@ -196,9 +224,8 @@ end
 
 # WASMTARGET dynamic dispatch: number of (CodeInstance, CodeInfo) PAIRS collected by
 # the BASE (pre-dynamic-dispatch) closed-world pass. Pairs beyond this are pulled in
-# ONLY by the dispatch-candidate discovery below; trim_compile_plan marks them so
-# compile_module can ISOLATE their codegen (a latent-bug crash in discovery-added code
-# stubs that one function instead of breaking the whole module). 0 = no discovery ran.
+# ONLY by the dispatch-candidate discovery below; trim_compile_plan marks them as
+# selector candidates rather than ordinary direct-call targets. 0 = no discovery ran.
 const _TRIM_BASE_PAIRS = Ref{Int}(0)
 
 # march16: the conversion-arm allowlist — closure types whose bodies the candidate

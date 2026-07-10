@@ -135,6 +135,9 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L16_no_codegen_lax_mode" => ("codegen correctness is unconditional: no strict keyword/field, paranoid environment toggle, or entry-vs-dependency downgrade state",
+        () -> count_sites(r"strict::Bool|ctx\.strict|WT_PARANOID_STUBS|TRIM_ENTRY_NAMES";
+                          exclude_files=["codegen/interpreter.jl"])),
     "L15_no_fabricated_ssa_store" => ("an emitted SSA value is coerced from its builder-tracked actual type; the drop-and-default store repair path is extinct",
         () -> count_sites(r"SSA-store type mismatch|value dropped, type-safe default|_cs4_func_ref")),
     "L14_no_posthoc_module_repair" => ("no codegen-crash or external-validator failure may be converted into an unreachable function body after the fact",

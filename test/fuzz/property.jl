@@ -88,7 +88,7 @@ const OPT_LEVELS = (:size, :speed)   # -Os, -O3
 # wasm payload for DIAGNOSTICS (the bridge returns descriptor trees, not values).
 function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt;
                       cmp = vals_match, dec = identity)
-    wres = runner(fn, argtypes, samples; strict = true, opt = opt)
+    wres = runner(fn, argtypes, samples; opt = opt)
     if wres === :no_node || wres === :unsupported
         return Outcome(:skip, src, nothing, nothing, nothing, nothing)
     elseif wres isa Pair && wres.first === :compile_error
@@ -157,8 +157,8 @@ function differential(body, ::Type{T0}; check_opt::Bool = false) where {T0}
     end
     if rt isa Type && isconcretetype(rt) && bridge_supported(rt)
         desc = descriptor(rt)[1]
-        runner = (f, at, s; strict = true, opt = false) ->
-            bridge_run(f, at, s; rettype = rt, strict = strict, opt = opt)
+        runner = (f, at, s; opt = false) ->
+            bridge_run(f, at, s; rettype = rt, opt = opt)
         cmp = (n, t) -> tree_matches(desc, n, t)
         dec = t -> tree_decode(desc, t)
     else

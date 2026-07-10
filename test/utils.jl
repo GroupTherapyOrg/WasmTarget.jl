@@ -959,7 +959,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     fname = name === nothing ? string(nameof(f)) : name
     func_list = Any[(f, Tuple(arg_types), fname)]
     append!(func_list, accs)
-    bytes = WasmTarget.compile_multi(func_list; strict=true, validate=true, optimize=optimize)
+    bytes = WasmTarget.compile_multi(func_list; validate=true, optimize=optimize)
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
@@ -1033,7 +1033,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     fname = name === nothing ? string(nameof(f)) : name
     funcs = Any[(f, Tuple(arg_types), fname)]
     append!(funcs, accs)
-    bytes = WasmTarget.compile_multi(funcs; strict=true, validate=true, optimize=optimize)
+    bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
     const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };

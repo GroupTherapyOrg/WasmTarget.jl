@@ -24,7 +24,7 @@ const _WALK_JS = WALK_JS
 
 # ── Execution: compile target + accessor closure, run, return walked trees ───
 """
-    bridge_run(fn, argtypes, inputs; rettype, strict=true, timeout, opt=false)
+    bridge_run(fn, argtypes, inputs; rettype, timeout, opt=false)
 
 Compile `fn` together with the accessor closure for `rettype` and evaluate it
 over every arg-tuple in `inputs` (scalar args) in one Node round-trip.
@@ -33,7 +33,7 @@ if `rettype` is outside the bridge universe, or `(:compile_error => e)` /
 `:no_node` for whole-batch failures.
 """
 function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                    strict::Bool = true, timeout::Real = DEFAULT_TIMEOUT, opt = false,
+                    timeout::Real = DEFAULT_TIMEOUT, opt = false,
                     discovery::Symbol = :trim)
     NODE_OK || return :no_node
     dp = descriptor(rettype)
@@ -43,7 +43,7 @@ function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; strict = strict, validate = true, optimize = opt,
+        WasmTarget.compile_multi(funcs; validate = true, optimize = opt,
                                  discovery = discovery)
     catch e
         return (:compile_error => e)

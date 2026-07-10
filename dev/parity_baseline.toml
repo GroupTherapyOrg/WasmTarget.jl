@@ -3,6 +3,7 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
+L16_no_codegen_lax_mode = 0
 L14_no_posthoc_module_repair = 0
 L15_no_fabricated_ssa_store = 0
 L10_no_fnv_dispatch = 0

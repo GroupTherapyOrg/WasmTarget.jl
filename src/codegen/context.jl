@@ -63,10 +63,6 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # instead of normal compilation. Maps SSA index -> WASM import function index.
     # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
     invoke_imports::Dict{Int, UInt32}
-    # Soundness: when true (default), codegen raises WasmCompileError instead of
-    # silently emitting an `unreachable`/value stub for unsupported constructs.
-    # strict=false restores the historical permissive stub-and-trap behavior.
-    strict::Bool
     # Diagnostics accumulated during compilation (see diagnostics.jl).
     diagnostics::Vector{WasmDiagnostic}
     # march15: per-try-region exception payload locals (dart binds each catch's
@@ -85,8 +81,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
-                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}(),
-                           strict::Bool=true)
+                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     ctx = CompilationContext(
@@ -119,7 +114,6 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         nothing,                # PURE-9063: typeof scratch local (allocated on demand)
         skip_stmts,             # Skip statements (Therapy.jl js() interop)
         invoke_imports,         # Invoke imports (Therapy.jl js() as WASM imports)
-        strict,                 # Soundness: raise on unsupported constructs (default true)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}()        # march15: exn_region_locals
     )
@@ -2635,7 +2629,6 @@ mutable struct InplaceCompilationContext <: AbstractCompilationContext
     slot_locals::Nothing
     dispatch_registry::Nothing
     typeof_scratch_local::Nothing
-    strict::Bool
     diagnostics::Vector{WasmDiagnostic}
     # march15: per-try-region exception payload locals (dart binds each catch's
     # exception to its OWN local; keyed by the region's enter_idx). :the_exception
@@ -2645,7 +2638,7 @@ end
 
 function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                                   func_registry::Union{FunctionRegistry, Nothing}=nothing,
-                                  func_idx::UInt32=UInt32(0), func_ref=nothing, strict::Bool=true)
+                                  func_idx::UInt32=UInt32(0), func_ref=nothing)
     # Wrap code_info in SimpleIR if needed (Core.CodeInfo → SimpleIR for concrete field access)
     ci = code_info isa SimpleIR ? code_info : SimpleIR(code_info.code, code_info.ssavaluetypes)
     n_real_params = length(arg_types)
@@ -2662,7 +2655,7 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
         Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
         nothing, nothing,          # scratch_locals, memoryref_offsets
         false, nothing, nothing, nothing,  # last_stmt_was_stub, slot_locals, dispatch_registry, typeof_scratch_local
-        strict, WasmDiagnostic[],            # strict mode + diagnostics
+        WasmDiagnostic[],                    # diagnostics
         Dict{Int, Int}()                     # march15: exn_region_locals
     )
     analyze_ssa_types!(ctx)
@@ -2670,4 +2663,3 @@ function InplaceCompilationContext(code_info, arg_types::Tuple, return_type, mod
     allocate_ssa_locals!(ctx)
     return ctx
 end
-

@@ -4153,8 +4153,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             else
                 # Unknown method — codegen has no translation for this invoke target.
-                # Under strict=true this raises WasmCompileError naming the method + source
-                # location; under strict=false it emits unreachable (traps at runtime),
+                # This records a source-attributed diagnostic and emits dart's validating
+                # unsupported-path trap; no permissive mode exists.
                 # which lets compilation succeed for paths that never reach this method.
                 haskey(ENV, "WT_TRACE_STUBARGS") && println(stderr, "STUBARGS ", name, " args=", repr(args))
                 record_unsupported!(ctx, :unsupported_method,

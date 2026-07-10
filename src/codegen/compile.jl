@@ -7,10 +7,10 @@
 
 Compile a Julia function to a WebAssembly module.
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true, strict::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir, strict=strict)
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
 end
 
 # Legacy implementation kept for reference - now unused
@@ -1286,7 +1286,6 @@ function compile_module(functions::Vector;
                         overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        strict::Bool=true,
                         discovery::Symbol=:trim
                         )
     # P5-trim: discovery=:trim replaces the homegrown dependency walk +
@@ -1296,7 +1295,7 @@ function compile_module(functions::Vector;
     # get_typed_ir. Cache cleanup is in the wrapper below.
     discovery === :trim && return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        overlay_entries, optimize_ir, register_ir_types, strict)
+        overlay_entries, optimize_ir, register_ir_types)
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
@@ -1803,7 +1802,7 @@ function compile_module(functions::Vector;
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals, strict=strict)
+                                    module_globals=module_globals)
             body = generate_body(ctx)
             locals = ctx.locals
         end
@@ -4312,13 +4311,11 @@ function _compile_module_trim(functions::Vector; kwargs...)
     end
     plan, ir_cache = trim_compile_plan(normalized)
     TRIM_IR_CACHE[] = ir_cache
-    TRIM_ENTRY_NAMES[] = Set{String}(String(e[3]) for e in normalized)
     _TRIM_ACTIVE[] = true
     try
         return compile_module(plan; discovery=:legacy, kwargs...)
     finally
         TRIM_IR_CACHE[] = nothing
-        TRIM_ENTRY_NAMES[] = nothing
         _TRIM_ACTIVE[] = false
     end
 end

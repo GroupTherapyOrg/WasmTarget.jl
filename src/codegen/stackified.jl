@@ -566,60 +566,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         return false
     end
 
-    # Helper: emit a type-safe default value for a given WasmValType
-    # builder-native variant: emit the default directly into the target builder
-    function emit_phi_type_default!(tb::InstrBuilder, wasm_type::WasmValType)
-        if wasm_type isa ConcreteRef
-            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
-        elseif wasm_type === StructRef
-            ref_null!(tb, StructRef)
-        elseif wasm_type === ArrayRef
-            ref_null!(tb, ArrayRef)
-        elseif wasm_type === ExternRef
-            ref_null!(tb, ExternRef)
-        elseif wasm_type === AnyRef
-            ref_null!(tb, AnyRef)
-        elseif wasm_type === EqRef
-            ref_null!(tb, EqRef)
-        elseif wasm_type === I64
-            i64_const!(tb, 0)
-        elseif wasm_type === F32
-            f32_const!(tb, 0.0f0)
-        elseif wasm_type === F64
-            f64_const!(tb, 0.0)
-        else
-            i32_const!(tb, 0)
-        end
+    # A phi lowering failure may never be repaired with a fabricated zero/null.
+    # Match dart's unimplemented shape: diagnostic plus a validating polymorphic trap.
+    function emit_phi_failure!(tb::InstrBuilder, message::AbstractString; idx::Int=0)
+        record_unsupported!(ctx, :unsupported_type, message; idx=idx)
+        unreachable!(tb)  # loud unsupported trap
+        ctx.last_stmt_was_stub = true
         return tb
-    end
-
-    function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
-        # Pure straight-line typed value emission.
-        tb = _ctx_builder(ctx, "emit_phi_type_default")
-        if wasm_type isa ConcreteRef
-            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
-        elseif wasm_type === StructRef
-            ref_null!(tb, StructRef)
-        elseif wasm_type === ArrayRef
-            ref_null!(tb, ArrayRef)
-        elseif wasm_type === ExternRef
-            ref_null!(tb, ExternRef)
-        elseif wasm_type === AnyRef
-            ref_null!(tb, AnyRef)
-        elseif wasm_type === EqRef
-            ref_null!(tb, EqRef)
-        elseif wasm_type === I64
-            i64_const!(tb, 0)
-        elseif wasm_type === I32
-            i32_const!(tb, 0)
-        elseif wasm_type === F64
-            f64_const!(tb, 0.0)
-        elseif wasm_type === F32
-            f32_const!(tb, 0.0f0)
-        else
-            i32_const!(tb, 0)
-        end
-        return builder_code(tb)
     end
 
     # Helper to compile a value, ensuring it actually produces bytes
@@ -669,7 +622,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, _srcb)
-                            emit_phi_type_default!(pvb, phi_local_wasm_type)
+                            emit_phi_failure!(pvb, "phi edge has no valid coercion"; idx=phi_idx)
                         end
                     end
                 else
@@ -695,7 +648,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, _srcb)
-                        emit_phi_type_default!(pvb, phi_local_wasm_type)
+                        emit_phi_failure!(pvb, "phi-to-phi edge has no valid coercion"; idx=phi_idx)
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
@@ -705,7 +658,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    emit_phi_type_default!(pvb, phi_local_wasm_type)
+                    emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
@@ -718,7 +671,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     _seed_builder_locals!(_sb, ctx)
                     emit_value!(_sb, val, ctx)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
-                        emit_phi_type_default!(pvb, phi_local_wasm_type)
+                        emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
@@ -760,8 +713,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     i32_const!(pvb, 0)
                 end
             else
-                # No phi local found — emit i32(0) as placeholder
-                i32_const!(pvb, 0)
+                emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
             end
         else
             # Not an SSA and not nothing - just compile directly
@@ -776,11 +728,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
                                                 (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b)
-                        # Type mismatch with no conversion arm: emit a type-safe default —
-                        # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
-                        record_unsupported!(ctx, :unsupported_type,
-                            "phi-edge type mismatch with no conversion arm (type-safe default emitted)")
-                        emit_phi_type_default!(pvb, phi_local_type)
+                        emit_phi_failure!(pvb, "literal phi edge has no valid coercion"; idx=phi_idx)
                     end
                     return _cpv_ret()
                 end
@@ -998,9 +946,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # march3: typed merge — the audit proved the channel honest
                                 # (pv_n is now trustworthy; the phantom declared-push is gone).
                                 if pv_n >= 2
-                                    # multi-value emission can't feed one local.set — type-safe default
-                                    emit_phi_type_default!(b, phi_local_type)
-                                    local_set!(b, local_idx)
+                                    emit_phi_failure!(b, "multi-value phi edge cannot feed one local"; idx=i)
                                     phi_count += 1
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
@@ -1202,8 +1148,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
-                                    emit_phi_type_default!(bb, phi_local_type)
-                                    local_set!(bb, local_idx)
+                                    emit_phi_failure!(bb, "multi-value fallthrough phi cannot feed one local"; idx=i)
                                 elseif !isempty(pv_b2.instrs)
                                     append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type

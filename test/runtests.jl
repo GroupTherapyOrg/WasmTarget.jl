@@ -197,9 +197,8 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 struct _WTI128Box; x::Int128; n::Int64; end
 struct _WTU128Box; x::UInt128; n::Int64; end
 
-# Phase 77 (G1 soundness): a value-stub (`objectid`/jl_object_id) in a DISCOVERED
-# (non-entry) callee. Compiles by default (the downgrade), but must stay FATAL
-# under WT_PARANOID_STUBS=1. Top-level so trim sees _g1_objid as a non-entry MI.
+# Phase 77: a value-stub (`objectid`/jl_object_id) in a discovered callee is
+# unconditionally fatal. Top-level so trim sees _g1_objid as a non-entry MI.
 @noinline _g1_objid(c::TestCounter)::UInt64 = objectid(c)
 _g1_entry(n::Int64)::UInt64 = _g1_objid(TestCounter(n))
 # WASMTARGET-FUZZ: tagged-union FLOAT members round-trip (wrap boxes the float into
@@ -7713,11 +7712,11 @@ console.log(JSON.stringify({
             _mk_crat(re::Rational{Int64}, im::Rational{Int64}) = Complex{Rational{Int64}}(re, im)
             @test (WasmTarget.compile_multi(
                 Any[(_mk_crat, (Rational{Int64}, Rational{Int64}), "_mk_crat")];
-                strict=true, validate=true, optimize=false); true)            # struct.new field cast
+                validate=true, optimize=false); true)            # struct.new field cast
             _re_num(z::Complex{Rational{Int64}})::Int64 = numerator(real(z))
             @test (WasmTarget.compile_multi(
                 Any[(_re_num, (Complex{Rational{Int64}},), "_re_num")];
-                strict=true, validate=true, optimize=false); true)            # struct.get on structref param
+                validate=true, optimize=false); true)            # struct.get on structref param
         end
 
         @testset "Int128/UInt128 struct field registration (WASMTARGET-FUZZ)" begin
@@ -7730,10 +7729,10 @@ console.log(JSON.stringify({
             # sibling; Int128 *arithmetic* on the field is a separate op gap.
             _mk_i128(a::Int64)::Int64 = _WTI128Box(Int128(a), a).n
             @test (WasmTarget.compile_multi(Any[(_mk_i128, (Int64,), "_mk_i128")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
             _mk_u128(a::Int64)::Int64 = _WTU128Box(UInt128(a), a).n
             @test (WasmTarget.compile_multi(Any[(_mk_u128, (Int64,), "_mk_u128")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
         end
 
         @testset "Tagged-union Float member round-trip (WASMTARGET-FUZZ)" begin
@@ -7764,7 +7763,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_scplx_cu,  Int64(4)).pass   # byte 5 = '+'
             @test compare_julia_wasm(_wt_scplx_cu,  Int64(9)).pass   # byte 10 = 'i'
             @test (WasmTarget.compile_multi(Any[(_wt_scplx_len, (Int64,), "_wt_scplx_len")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
         end
 
         @testset "Snapshot.jl fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
@@ -8664,7 +8663,7 @@ console.log(JSON.stringify({
 
             tc_strict()::Int64 = Int64(str_char(titlecase("hELLO"), Int32(2)))
             r = compare_julia_wasm(tc_strict)
-            @test r.pass  # strict=true by default → 'e' = 101
+            @test r.pass
 
             tc_empty()::Int64 = length(titlecase(""))
             r = compare_julia_wasm(tc_empty)
@@ -11037,28 +11036,16 @@ console.log(JSON.stringify({
     # select_t/if ref operand. The downstream-regression INTENT is preserved end-to-end by
     # the Loop-1 backfills, e.g. _no_wrap_after_i32_op in test/cleanup_loop1_backfills.jl.)
 
-    # Soundness guard (G1): a wrong-value stub buried in a DISCOVERED (non-entry)
-    # function used to compile "clean" via the downgrade in diagnostics.jl, only
-    # trapping off-sample. WT_PARANOID_STUBS=1 must keep EVERY value-stub fatal so
-    # the autonomous /loop + CI can't be reward-hacked into masking. See
-    # test/fuzz/LOOP.md §7. (objectid on a discovered TestCounter is the value-stub.)
-    @pphase "Phase 77: G1 paranoid value-stub fatality (soundness)" begin
-        @testset "Phase 77: paranoid mode makes discovered value-stubs fatal" begin
+    # Soundness guard: wrong-value stubs are fatal in every function, including
+    # discovered dependencies. There is no mode or environment escape hatch.
+    @pphase "Phase 77: unconditional value-stub fatality" begin
+        @testset "Phase 77: discovered value-stubs are fatal" begin
             _g1_try() = try
-                WasmTarget.compile(_g1_entry, (Int64,); strict=true); :ok
+                WasmTarget.compile(_g1_entry, (Int64,)); :ok
             catch e
                 e isa WasmTarget.WasmCompileError ? :rejected : rethrow()
             end
-            _save = get(ENV, "WT_PARANOID_STUBS", nothing)
-            try
-                delete!(ENV, "WT_PARANOID_STUBS")
-                @test _g1_try() === :ok           # default: downgraded → compiles
-                ENV["WT_PARANOID_STUBS"] = "1"
-                @test _g1_try() === :rejected     # paranoid: value-stub stays fatal
-            finally
-                _save === nothing ? delete!(ENV, "WT_PARANOID_STUBS") :
-                                    (ENV["WT_PARANOID_STUBS"] = _save)
-            end
+            @test _g1_try() === :rejected
         end
     end
 
