@@ -45,6 +45,7 @@ L46_symbol_syntax_value_metadata = 0
 L47_single_memmove_lowering = 0
 L48_exact_mutable_global_initialization = 0
 L49_monomorphic_invokes_and_typed_args = 0
+L50_closed_world_result_lub_and_reinterpret_bits = 0
 L4_no_postemit_reguess = 0
 L5_no_tagged_union = 0
 L6_all_builders_strict = 0

@@ -751,20 +751,14 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
-    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
-    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
-    # stay local-typing hints only (they poisoned print_to_string's string-carrying
-    # accumulator when made visible).
+    # ONLY the CONSERVATIVE joins (the fixed-point pass verifies every phi operand
+    # numeric) become globally visible. This includes the phi itself: consumers such
+    # as convert(T, phi) must see the proven type, not an erased Any while the local
+    # silently uses a different representation. Optimistic box-solver joins remain
+    # local-only hints.
     for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
         local _orig = get(ctx.ssa_types, _jk, Any)
-        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
-        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
-        # type — their truth lives in the join-typed LOCAL, and rewriting them
-        # desynced String-carrying phis in print_to_string (a String local receiving
-        # a join-typed i32 edge).
-        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
-        if (_orig === Any || _orig isa Union) &&
-           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
+        if _orig === Any || _orig isa Union
             ctx.ssa_types[_jk] = _jv
         end
     end
@@ -2056,6 +2050,36 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
     # Comparison operations return Bool
     if is_comparison(func)
         return Bool
+    end
+
+    # Dart selector signatures carry the LUB of every matching target result.
+    # Julia inference may erase a dynamic call to Any/abstract; recover the same
+    # closed-world fact from the already-complete function registry.
+    if ctx.func_registry !== nothing
+        called = if func isa GlobalRef && isdefined(func.mod, func.name)
+            getfield(func.mod, func.name)
+        elseif func isa Function
+            func
+        else
+            nothing
+        end
+        if called !== nothing && has_func_ref(ctx.func_registry, called)
+            call_types = Any[get_ssa_type(ctx, arg) for arg in args]
+            returns = Type[]
+            for info in get_func_ref_infos(ctx.func_registry, called)
+                length(info.arg_types) == length(call_types) || continue
+                compatible = all(eachindex(call_types)) do j
+                    actual, candidate = call_types[j], info.arg_types[j]
+                    actual isa Type && candidate isa Type &&
+                        (isconcretetype(actual) ? actual == candidate : candidate <: actual)
+                end
+                compatible || continue
+                info.return_type isa Type && push!(returns, info.return_type)
+            end
+            if !isempty(returns)
+                return foldl(typejoin, returns)
+            end
+        end
     end
 
     # PURE-325: getfield returns the field type, not the object type

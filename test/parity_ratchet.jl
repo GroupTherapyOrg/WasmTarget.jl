@@ -135,6 +135,25 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L50_closed_world_result_lub_and_reinterpret_bits" => ("dynamic selector results use the closed-world target LUB, proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["foldl(typejoin, returns)",
+                        "ctx.ssa_types[_jk] = _jv",
+                        "foreach(observe_type!, T.parameters)",
+                        "last_param isa Core.TypeofVararg",
+                        "runtime_type <: atypes[p]",
+                        "Base.array_subpadding",
+                        "Core.bitcast(T, bits)",
+                        "% TargetBits",
+                        "% SourceBits"]
+            forbidden = ["getfield(a, :parent)"]
+            all_src = context_src * interp_src * trim_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)

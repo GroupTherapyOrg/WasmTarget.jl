@@ -133,11 +133,21 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     # abstract slot pulled unrelated BigFloat/MPFR code into integer-only modules and
     # forced the now-deleted trap-repair policy.
     runtime_types = Set{DataType}()
+    observed_type_nodes = Set{Any}()
     function observe_type!(@nospecialize(T))
+        T in observed_type_nodes && return
+        push!(observed_type_nodes, T)
         if T isa Union
             foreach(observe_type!, Base.uniontypes(T))
         elseif T isa DataType
             isconcretetype(T) && push!(runtime_types, T)
+            # Instantiated generic fields encode runtime classes in their type
+            # arguments (for example DateFormat's Tuple of DatePart{'y'}/Delim
+            # nodes). They are part of the closed component even when inference
+            # never exposes each nested class as a standalone SSA type.
+            foreach(observe_type!, T.parameters)
+        elseif T isa UnionAll
+            observe_type!(Base.unwrap_unionall(T))
         end
         return
     end
@@ -277,16 +287,44 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             (0 < length(ms) <= 64) || continue
             for m in ms
                 msig = try collect(Base.unwrap_unionall(m.sig).parameters) catch; continue end
-                length(msig) == length(atypes) + 1 || continue
-                Tp = msig[p + 1]
-                (Tp isa DataType && isconcretetype(Tp) && isstructtype(Tp) &&
-                 Tp in runtime_types && !(Tp <: Tuple) && Tp !== String && Tp !== Symbol) || continue
-                spec = ntuple(j -> j == p ? Tp : atypes[j], length(atypes))
-                ssig = try Tuple{Core.Typeof(g), spec...} catch; continue end
-                cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
-                cmi in seen && continue
-                push!(seen, cmi)
-                push!(out, cmi)
+                isempty(msig) && continue
+                last_param = msig[end]
+                is_vararg = last_param isa Core.TypeofVararg
+                fixed_args = length(msig) - 1 - (is_vararg ? 1 : 0)
+                (!is_vararg && length(msig) != length(atypes) + 1) && continue
+                (is_vararg && length(atypes) < fixed_args) && continue
+                declared = if p <= fixed_args
+                    msig[p + 1]
+                elseif is_vararg
+                    last_param.T
+                else
+                    continue
+                end
+                declared_bound = declared isa TypeVar ? declared.ub : declared
+                declared_bound isa Type || continue
+
+                # A generic method (`Any`, abstract, or TypeVar parameter) is still a
+                # selector target for every observed closed-world class admitted by
+                # both the call-site type and the method bound. Dart constructs the
+                # same target set from instantiated classes, not merely from concrete
+                # parameter annotations on source methods.
+                candidates = DataType[]
+                for runtime_type in runtime_types
+                    (runtime_type isa DataType && isconcretetype(runtime_type) &&
+                     isstructtype(runtime_type) && !(runtime_type <: Tuple) &&
+                     runtime_type !== String && runtime_type !== Symbol) || continue
+                    (runtime_type <: atypes[p] && runtime_type <: declared_bound) || continue
+                    push!(candidates, runtime_type)
+                end
+                for target_type in candidates
+                    spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
+                    ssig = try Tuple{Core.Typeof(g), spec...} catch; continue end
+                    ssig <: m.sig || continue
+                    cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                    cmi in seen && continue
+                    push!(seen, cmi)
+                    push!(out, cmi)
+                end
             end
         end
     end

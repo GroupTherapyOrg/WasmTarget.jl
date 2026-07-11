@@ -765,6 +765,7 @@ const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
 const _WT_BITS64 = Union{Int64, UInt64, Float64}
 const _WT_BITS16 = Union{Int16, UInt16}
 const _WT_BITS8  = Union{Int8, UInt8, Bool}
+const _WT_PRIMITIVE_BITS = Union{_WT_BITS8, _WT_BITS16, _WT_BITS32, _WT_BITS64}
 @overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS32) where {Out<:_WT_BITS32}
     Core.bitcast(Out, x)
 end
@@ -778,22 +779,95 @@ end
     Core.bitcast(Out, x)
 end
 
-# Same-size, padding-free ReinterpretArray elements are the parent's bits with a
-# primitive reinterpret. Julia's generic implementation probes GC object headers
-# through pointer_from_objref; WasmGC has no such header ABI, while this valid-Julia
-# definition states the representation-independent semantics directly.
+# Padding-free ReinterpretArray elements are assembled from the parent's value bits.
+# Julia's native implementation probes GC object headers through pointer_from_objref;
+# WasmGC has no such header ABI. State the complete little-endian value semantics in
+# valid Julia instead: equal-width elements bitcast directly, wider destinations pack
+# consecutive parent elements, and narrower destinations select their byte lane.
+_wt_uint_type(::Val{1}) = UInt8
+_wt_uint_type(::Val{2}) = UInt16
+_wt_uint_type(::Val{4}) = UInt32
+_wt_uint_type(::Val{8}) = UInt64
+
+# Primitive numeric elements have no padding. Folding this target-independent
+# layout fact keeps ReinterpretArray construction out of Julia's host pointer/
+# datatype-layout machinery while preserving Base.array_subpadding semantics.
+@overlay WASM_METHOD_TABLE Base.array_subpadding(
+    ::Type{S}, ::Type{T}) where {S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = false
+
 @overlay WASM_METHOD_TABLE function Base.getindex(
-        a::Base.ReinterpretArray{T,N,S,A,false}, i::Int) where {T,N,S,A}
-    return reinterpret(T, getindex(parent(a), i))
+        a::Base.ReinterpretArray{T,N,S,A,false}, i::Int
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
+    parent_array = getfield(a, 1)
+    target_bytes = sizeof(T)
+    source_bytes = sizeof(S)
+    TargetBits = _wt_uint_type(Val(target_bytes))
+    SourceBits = _wt_uint_type(Val(source_bytes))
+    if target_bytes == source_bytes
+        return Core.bitcast(T, getindex(parent_array, i))
+    elseif target_bytes > source_bytes
+        ratio = target_bytes ÷ source_bytes
+        first_parent = (i - 1) * ratio + 1
+        bits = zero(TargetBits)
+        for lane in 0:(ratio - 1)
+            source = Core.bitcast(SourceBits, getindex(parent_array, first_parent + lane))
+            bits |= convert(TargetBits, source) << (8 * source_bytes * lane)
+        end
+        return Core.bitcast(T, bits)
+    else
+        ratio = source_bytes ÷ target_bytes
+        parent_index = (i - 1) ÷ ratio + 1
+        lane = (i - 1) % ratio
+        source = Core.bitcast(SourceBits, getindex(parent_array, parent_index))
+        bits = (source >> (8 * target_bytes * lane)) % TargetBits
+        return Core.bitcast(T, bits)
+    end
 end
 @overlay WASM_METHOD_TABLE function Base.setindex!(
-        a::Base.ReinterpretArray{T,N,S,A,false}, value, i::Int) where {T,N,S,A}
+        a::Base.ReinterpretArray{T,N,S,A,false}, value, i::Int
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
     converted = convert(T, value)
-    setindex!(parent(a), reinterpret(S, converted), i)
+    parent_array = getfield(a, 1)
+    target_bytes = sizeof(T)
+    source_bytes = sizeof(S)
+    TargetBits = _wt_uint_type(Val(target_bytes))
+    SourceBits = _wt_uint_type(Val(source_bytes))
+    target = Core.bitcast(TargetBits, converted)
+    if target_bytes == source_bytes
+        setindex!(parent_array, Core.bitcast(S, target), i)
+    elseif target_bytes > source_bytes
+        ratio = target_bytes ÷ source_bytes
+        first_parent = (i - 1) * ratio + 1
+        for lane in 0:(ratio - 1)
+            bits = (target >> (8 * source_bytes * lane)) % SourceBits
+            setindex!(parent_array, Core.bitcast(S, bits), first_parent + lane)
+        end
+    else
+        ratio = source_bytes ÷ target_bytes
+        parent_index = (i - 1) ÷ ratio + 1
+        lane = (i - 1) % ratio
+        shift = 8 * target_bytes * lane
+        old = Core.bitcast(SourceBits, getindex(parent_array, parent_index))
+        lane_mask = convert(SourceBits, typemax(TargetBits)) << shift
+        merged = (old & ~lane_mask) | (convert(SourceBits, target) << shift)
+        setindex!(parent_array, Core.bitcast(S, merged), parent_index)
+    end
     return value
 end
 
 # ─── show typeinfo overlay ────────────────────────────────────────────────
+
+@overlay WASM_METHOD_TABLE function Base.getindex(
+        a::Base.ReinterpretArray{T,N,S,A,false}, r::UnitRange{Int}
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
+    out = Vector{T}(undef, length(r))
+    source_index = first(r)
+    for destination_index in eachindex(out)
+        out[destination_index] = getindex(a, source_index)
+        source_index += 1
+    end
+    return out
+end
 
 # Julia's native implementation walks mutable BindingPartition history. Keep
 # the native meaning for ordinary Julia execution, but preserve one non-inlined
