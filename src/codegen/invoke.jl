@@ -2477,25 +2477,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bmul = _ctx_builder(ctx, "compile_invoke")
                 num!(bmul, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
                 append_builder!(fb, bmul)
-            elseif name === :throw_boundserror || name === :throw || name === :throw_inexacterror ||
-                   name === :throw_complex_domainerror || name === :throw_complex_domainerror_neg1 ||
-                   name === :throw_exp_domainerror || name === :_throw_argerror ||
-                   name === :throw_domerr_powbysq || name === :__throw_gcd_overflow ||
-                   # P2-batch26 (gap 5922408579a8): checked_mul inside lcm —
-                   # OverflowError must be catchable, not an unreachable stub.
-                   name === :throw_overflowerr_binaryop || name === :throw_overflowerr_negation
-                # PURE-1102: Error throwing functions - emit throw (catchable) instead of unreachable (trap)
-                # Clear the stack first (arguments were pushed but not needed)
-                bt = _ctx_builder(ctx, "compile_invoke")  # Reset - don't need the pushed args
-                ensure_exception_tag!(ctx.mod)
-                # PURE-9032: Stash a ref.null any as exception (no specific value for these)
-                exn_global = ensure_exception_global!(ctx.mod)
-                ref_null!(bt, AnyRef)        # ref.null any
-                global_set!(bt, exn_global)
-                global_get!(bt, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bt, ExternRef); throw_!(bt, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
-                return append_builder!(b, bt)
-
             # Power operator: x ^ y for floats
             # WASM doesn't have a native pow instruction, so we need to handle this
             # For now, we require the pow import to be available
@@ -3030,99 +3011,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # semantics. These used to push NaN ("graceful degradation"), but the IR
             # statement after a Union{} invoke is `unreachable`, so the NaN was never
             # observed and the function trapped uncatchably (gap c6dae81c0ef4).
-            elseif name === :sin_domain_error || name === :cos_domain_error ||
-                   name === :tan_domain_error || name === :asin_domain_error ||
-                   name === :acos_domain_error || name === :log_domain_error ||
-                   name === :sqrt_domain_error
-                bdm = _ctx_builder(ctx, "compile_invoke")  # Reset - don't need the pushed args
-                ensure_exception_tag!(ctx.mod)
-                # PURE-9032: Stash a ref.null any as exception (no specific value)
-                exn_global = ensure_exception_global!(ctx.mod)
-                ref_null!(bdm, AnyRef)        # ref.null any
-                global_set!(bdm, exn_global)
-                global_get!(bdm, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bdm, ExternRef); throw_!(bdm, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
-                return append_builder!(b, bdm)
-
-            # ================================================================
-            # WASM-055: Base.string dispatch to int_to_string
-            # Base.string(n::Int) internally calls Base.#string#NNN(base, pad, string, n)
-            # where NNN is a version-dependent kwarg counter (530 in 1.11, 403 in 1.12).
-            # We intercept this and redirect to WasmTarget.int_to_string
-            # ================================================================
-            elseif startswith(String(name), "#string#") && length(args) >= 4
-                # #string#530(base::Int64, pad::Int64, ::typeof(string), value)
-                # The actual value to convert is the last argument (args[4])
-                value_arg = args[4]
-                value_type = infer_value_type(value_arg, ctx)
-
-                # Check if we're converting an integer type
-                if value_type === Int32 || value_type === Int64 ||
-                   value_type === UInt32 || value_type === UInt64 ||
-                   value_type === Int16 || value_type === UInt16 ||
-                   value_type === Int8 || value_type === UInt8
-
-                    # Clear the bytes (args were already pushed)
-                    bis = _ctx_builder(ctx, "compile_invoke")
-
-                    # Check if int_to_string is in the function registry
-                    int_to_string_info = nothing
-                    if ctx.func_registry !== nothing
-                        # Try to find int_to_string with Int32 signature
-                        try
-                            int_to_string_func = getfield(WasmTarget, :int_to_string)
-                            int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
-                        catch
-                            # Function not found
-                        end
-                    end
-
-                    if int_to_string_info !== nothing
-                        # int_to_string is in registry - call it
-                        # Compile the value argument, converting to Int32 if needed
-                        emit_value!(bis, value_arg, ctx,
-                                    value_type in (Int64, UInt64) ? I64 : I32)
-
-                        # Convert to Int32 if needed
-                        if value_type === Int64
-                            num!(bis, Opcode.I32_WRAP_I64)
-                        elseif value_type === UInt32 || value_type === UInt64
-                            # Treat as signed for string conversion
-                            if value_type === UInt64
-                                num!(bis, Opcode.I32_WRAP_I64)
-                            end
-                        elseif value_type !== Int32
-                            # Smaller types - extend to i32
-                            # Already handled by compile_value which produces correct type
-                        end
-
-                        # Call int_to_string
-                        call!(bis, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
-                        return append_builder!(b, bis)
-                    else
-                        # int_to_string not in registry - provide helpful error
-                        error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
-                              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
-                    end
-                else
-                    # Non-integer type - not yet supported
-                    error("Base.string(::$(value_type)) not yet supported. " *
-                          "Supported types: Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
-                end
-
-            # ================================================================
-            # Julia 1.11+ Memory API: Core.memoryref
-            # Creates MemoryRef from Memory - in WasmGC this is a no-op
-            # ================================================================
-            elseif name === :memoryref && length(args) == 1
-                # Core.memoryref(memory::Memory{T}) -> MemoryRef{T}
-                # In WasmGC, Memory and MemoryRef are both the array reference
-                # Clear args bytes (already pushed) and re-compile just the memory arg
-                bmr = _ctx_builder(ctx, "compile_invoke")
-                local _mr_expected = static_wasm_type(args[1], ctx)
-                emit_value!(bmr, args[1], ctx, _mr_expected)
-                return append_builder!(b, bmr)
-
             # ================================================================
             # PURE-9032: Error constructors — create proper exception struct
             # These are typically followed by throw(). The constructor produces

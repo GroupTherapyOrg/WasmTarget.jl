@@ -183,12 +183,9 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
-    if info !== nothing
-        emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
-        struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
-    else
-        ref_null!(bld, AnyRef)
-    end
+    info === nothing && error("exception layout is unavailable for $ErrT")
+    emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
+    struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
     global_set!(bld, exn_global)
     global_get!(bld, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bld, ExternRef); throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
     return bld

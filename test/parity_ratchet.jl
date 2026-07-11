@@ -135,6 +135,17 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L59_real_base_exception_helpers" => ("Bounds/Inexact/Domain/Overflow helper bodies construct and throw their real Julia exceptions; no name-routed null-payload helper family remains",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["Stash a ref.null any as exception", "no specific value for these",
+                         "no specific value)"]
+            required = ["_wt_bounds_helper_catch", "_wt_inexact_helper_catch",
+                        "_wt_domain_helper_catch", "_wt_overflow_helper_catch"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
     "L58_no_bottom_invoke_stub" => ("Bottom-returning invokes compile their collected target and preserve native catch flow; no generic null exception may replace an unresolved invoke",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
