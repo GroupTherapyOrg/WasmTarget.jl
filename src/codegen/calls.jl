@@ -867,6 +867,20 @@ end
 _egal_num_eqop(w::WasmValType)::UInt8 =
     w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
 
+function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContext)
+    value isa Core.SSAValue || return nothing
+    1 <= value.id <= length(ctx.code_info.code) || return nothing
+    stmt = ctx.code_info.code[value.id]
+    if stmt isa Core.PiNode
+        return _trace_field_owner(stmt.val, field, ctx)
+    elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
+           is_func(stmt.args[1], :getfield)
+        fld = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fld === field && return stmt.args[2]
+    end
+    return nothing
+end
+
 """
     _emit_egal_box_vs_num!(bld, ctx, ref_local, ref_is_extern, num_local, num_type)
 
@@ -1878,6 +1892,54 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
     args = expr.args[2:end]
+
+    # `Core.invoke_in_world(world, f, args...)` selects a method in Julia's
+    # mutable world-age model. A WT module is already one immutable collected
+    # world, so the exact lowering is the ordinary closed-world call to `f`;
+    # the captured world token has no runtime state to mutate.
+    if (func === Core.invoke_in_world ||
+        (is_func(func, :invoke_in_world) && func isa GlobalRef && func.mod === Core)) &&
+       length(args) >= 2
+        # The intrinsic's Julia SSA result is `Any`, but that is a consumer-side
+        # widening, not the callee's return contract. Do not use it to reject the
+        # concrete collected target; statement storage will box/widen afterward.
+        had_result = haskey(ctx.ssa_types, idx)
+        old_result = get(ctx.ssa_types, idx, Any)
+        delete!(ctx.ssa_types, idx)
+        try
+            return compile_call!(b, Expr(:call, args[2], args[3:end]...), idx, ctx)
+        finally
+            had_result && (ctx.ssa_types[idx] = old_result)
+        end
+    end
+
+    if is_func(func, :isdefinedglobal) && length(args) == 2
+        module_owner = _trace_field_owner(args[1], :module, ctx)
+        name_owner = _trace_field_owner(args[2], :singletonname, ctx)
+        if module_owner !== nothing && isequal(module_owner, name_owner)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            tn_idx === nothing && error("JlTypeName layout is unavailable")
+            ib = _ctx_builder(ctx, "compile_call.isdefinedglobal_typename")
+            emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+            struct_get!(ib, tn_idx, UInt32(6), I32)
+            append_builder!(b, ib)
+            return b
+        end
+    end
+
+    if is_func(func, :getglobal) && length(args) >= 2
+        module_owner = _trace_field_owner(args[1], :module, ctx)
+        name_owner = _trace_field_owner(args[2], :singletonname, ctx)
+        if module_owner !== nothing && isequal(module_owner, name_owner)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            jl_type_idx = ctx.type_registry.jl_type_idx
+            ib = _ctx_builder(ctx, "compile_call.getglobal_typename")
+            emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+            struct_get!(ib, tn_idx, UInt32(4), ConcreteRef(UInt32(jl_type_idx), true))
+            append_builder!(b, ib)
+            return b
+        end
+    end
 
     # PURE-6024: Resolve indirect calls through SSAValue callees.
     # Unoptimized IR (may_optimize=false) produces patterns like:
@@ -3040,6 +3102,37 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
+    end
+
+    # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
+    # arrays have no undefined representation and are always assigned. Reference
+    # arrays encode Julia's undefined slot as null and require an actual load.
+    if is_func(func, :memoryref_isassigned) && !isempty(args)
+        ref_arg = args[1]
+        ref_type = get_ssa_type(ctx, ref_arg)
+        elem_type = if ref_type isa DataType && ref_type.name.name === :GenericMemoryRef
+            ref_type.parameters[2]
+        elseif ref_type isa DataType && ref_type.name.name === :MemoryRef
+            ref_type.parameters[1]
+        else
+            Any
+        end
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+        arr_def = ctx.mod.types[array_type_idx + 1]
+        elem_wasm = arr_def isa ArrayType ? arr_def.elem.valtype : AnyRef
+        mib = _ctx_builder(ctx, "compile_call.memoryref_isassigned")
+        emit_value!(mib, ref_arg, ctx)  # R17-floor: consumes MemoryRef's tracked (array,index) multi-value representation
+        if _wt_is_ref(elem_wasm)
+            array_get!(mib, array_type_idx, elem_wasm;
+                       signed=packed_array_signedness(elem_type))
+            ref_is_null!(mib); num!(mib, Opcode.I32_EQZ)
+        else
+            drop!(mib) # index
+            drop!(mib) # array
+            i32_const!(mib, 1)
+        end
+        append_builder!(fb, mib)
+        return append_builder!(b, fb)
     end
 
     # Special case for memoryrefget - array element access
@@ -6027,8 +6120,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # parity(M10b): getfield(closure_value, :boxfield) — the box was born in a
         # callee; read the registered struct field here (the ONE shared cell).
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
-           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
-            local _gfb_T = args[1] isa Core.SSAValue ? get(ctx.ssa_types, args[1].id, Any) : Any
+           ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
+            local _gfb_T = get_ssa_type(ctx, args[1])
             local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
             if _gfb_T isa DataType && _gfb_fld isa Symbol &&
                !(isstructtype(_gfb_T) && _gfb_fld in fieldnames(_gfb_T))
@@ -6037,11 +6130,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 append_builder!(fb, _gfb_ib)
                 _gfc_done = true
             end
-            if !_gfc_done && _gfb_T isa DataType && isstructtype(_gfb_T) &&
-               haskey(ctx.type_registry.structs, _gfb_T)
-                local _gfb_info = ctx.type_registry.structs[_gfb_T]
-                local _gfb_fi = findfirst(==(_gfb_fld), fieldnames(_gfb_T))
-                if _gfb_fi !== nothing
+            if !_gfc_done && _gfb_T isa DataType && isstructtype(_gfb_T)
+                local _gfb_info = haskey(ctx.type_registry.structs, _gfb_T) ?
+                                  ctx.type_registry.structs[_gfb_T] :
+                                  register_struct_type!(ctx.mod, ctx.type_registry, _gfb_T)
+                if _gfb_info !== nothing
+                  local _gfb_fi = findfirst(==(_gfb_fld), _gfb_info.field_names)
+                  if _gfb_fi !== nothing
                     # the wasm field index comes from the REGISTERED layout's offset
                     # (1 = classId header present, 0 = headerless) — never hardcoded.
                     local _gfb_wfi = _gfb_fi - 1 + Int(_gfb_info.field_offset)
@@ -6055,6 +6150,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         append_builder!(fb, _gfb_ib)
                         _gfc_done = true
                     end
+                  end
                 end
             end
         end
@@ -6171,7 +6267,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         end
              end
                 # Cross-function call - emit call instruction with target index
-                local _xcb = _ctx_builder(ctx, "compile_call")
+                # Arguments already live on `fb`; emit the call and result bridge
+                # on that same authoritative builder stack. A detached fragment
+                # here used to hide the call's parameter pops from validation.
+                local _xcb = fb
                 call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
                 # PURE-3111: If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
@@ -6218,7 +6317,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         end
                     end
                 end
-                append_builder!(fb, _xcb)
             else
                 # P4-stdlib (Random hash_seed): dynamic ==/!= on BOXED operands
                 # (Any-typed foldl results in anyref locals) is LIVE code — the
@@ -6499,8 +6597,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # PURE-908: Clear pre-pushed args before UNREACHABLE
         local _urb = _ctx_builder(ctx, "compile_call")
-        record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)"; idx=idx)
-        unreachable!(_urb)
+        record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)";
+                            idx=idx, detail=expr)
+        unreachable!(_urb)  # structural trap after recorded unsupported
         fb = _urb   # discard-and-replace (march4)
         ctx.last_stmt_was_stub = true  # PURE-908
     end

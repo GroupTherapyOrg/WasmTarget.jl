@@ -1269,13 +1269,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             info = register_struct_type!(ctx.mod, ctx.type_registry, T)
             type_idx = info.wasm_type_idx
             _emit_tid!(T)
-            for field_name in fieldnames(T)
+            physical_fields = ctx.mod.types[type_idx + 1].fields
+            for (fi, field_name) in enumerate(fieldnames(T))
                 field_val = getfield(inner, field_name)
-                if field_val isa Int
-                    i64_const!(b, Int64(field_val))
-                else
-                    emit_value!(b, field_val, ctx)  # R17-floor: literal IR field owns its physical type
-                end
+                expected = physical_fields[Int(info.field_offset) + fi].valtype
+                emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))
             end
             struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         else

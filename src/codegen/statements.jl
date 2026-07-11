@@ -32,47 +32,6 @@ function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
     return val isa Symbol ? val : nothing
 end
 
-# Exact utf8proc width oracle compressed into non-default runs at package build
-# time. Julia itself ships utf8proc and defines `textwidth(Char)` by this ABI;
-# serializing the runs into the precompile image lets emitted Wasm execute the
-# same versioned table without a target-side FFI dependency.
-const _UTF8PROC_WIDTH_RUNS = let runs = NTuple{3,UInt32}[], start = UInt32(0),
-                                 previous = Int32(1)
-    for cp in UInt32(0):UInt32(0x10ffff)
-        width = ccall(:utf8proc_charwidth, Cint, (UInt32,), cp)
-        if width != previous
-            previous != 1 && push!(runs, (start, cp - UInt32(1), UInt32(previous)))
-            start = cp
-            previous = width
-        end
-    end
-    previous != 1 && push!(runs, (start, UInt32(0x10ffff), UInt32(previous)))
-    runs
-end
-
-"""Emit a balanced exact lookup over `_UTF8PROC_WIDTH_RUNS`; default width is 1."""
-function _emit_utf8proc_charwidth!(b::InstrBuilder, cp_local::Integer,
-                                   lo::Int=1, hi::Int=length(_UTF8PROC_WIDTH_RUNS))
-    if lo > hi
-        i32_const!(b, 1)
-        return b
-    end
-    mid = (lo + hi) >>> 1
-    first_cp, last_cp, width = _UTF8PROC_WIDTH_RUNS[mid]
-    local_get!(b, cp_local); i32_const!(b, first_cp); num!(b, Opcode.I32_LT_U)
-    if_!(b, I32)
-    _emit_utf8proc_charwidth!(b, cp_local, lo, mid - 1)
-    else_!(b)
-    local_get!(b, cp_local); i32_const!(b, last_cp); num!(b, Opcode.I32_LE_U)
-    if_!(b, I32)
-    i32_const!(b, width)
-    else_!(b)
-    _emit_utf8proc_charwidth!(b, cp_local, mid + 1, hi)
-    end_block!(b)
-    end_block!(b)
-    return b
-end
-
 """
     _trace_memmove_ptr(arg, ctx) -> (vector_value, [(is_add, offset_value)...]) | nothing
 
@@ -1296,7 +1255,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             array_new_default!(b, str_arr_type)
             emit_string_wrap!(b, ctx)   # parity(M9): a String is classed from birth
             return b
-        elseif name === :jl_string_ptr
+        elseif name === :jl_string_ptr || name === :jl_symbol_name
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
             # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
@@ -1306,115 +1265,22 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             i64_const!(b, 1)
             return b
         elseif name === :jl_id_start_char
-            # PURE-316: jl_id_start_char(c::UInt32) -> Int32
-            # Checks if a Unicode codepoint is a valid identifier start character.
-            # For ASCII: letters (A-Z, a-z) and underscore (_).
-            # For non-ASCII (>= 128): return 1 (assume valid, conservative).
-            if length(expr.args) >= 6
-                cp_arg = expr.args[6]  # UInt32 codepoint
-
-                # Stack: [c]
-                # Result: (c - 65) < 26 || (c - 97) < 26 || c == 95
-                #         [A-Z]           [a-z]             [_]
-                # For non-ASCII (c >= 128): return 1
-
-                # Check ASCII vs non-ASCII
-                # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
-                emit_value!(b, cp_arg, ctx, I32)  # [c]
-                i32_const!(b, 128)
-                num!(b, Opcode.I32_LT_U)  # c < 128?
-
-                if_!(b, 0x7F; results=WasmValType[I32])  # result type: i32
-
-                # ASCII path: (c - 65) < 26 || (c - 97) < 26 || c == 95
-                emit_value!(b, cp_arg, ctx, I32)  # [c]
-                i32_const!(b, 65)
-                num!(b, Opcode.I32_SUB)
-                i32_const!(b, 26)
-                num!(b, Opcode.I32_LT_U)  # (c - 65) < 26  [A-Z]
-
-                emit_value!(b, cp_arg, ctx, I32)  # [c]
-                i32_const!(b, 97)
-                num!(b, Opcode.I32_SUB)
-                i32_const!(b, 26)
-                num!(b, Opcode.I32_LT_U)  # (c - 97) < 26  [a-z]
-
-                num!(b, Opcode.I32_OR)
-
-                emit_value!(b, cp_arg, ctx, I32)  # [c]
-                i32_const!(b, 95)
-                num!(b, Opcode.I32_EQ)  # c == 95  [_]
-
-                num!(b, Opcode.I32_OR)
-
-                else_!(b)
-                # Non-ASCII path: return 1 (assume valid identifier char)
-                i32_const!(b, 1)
-                end_block!(b)
-            else
-                # No argument — return 0
-                i32_const!(b, 0)
-            end
+            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
+                "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
+            emit_value!(b, expr.args[6], ctx, I32)
+            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
+            i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
         elseif name === :jl_id_char
-            # PURE-316: jl_id_char(c::UInt32) -> Int32
-            # Checks if a Unicode codepoint is a valid identifier continuation character.
-            # For ASCII: letters (A-Z, a-z), digits (0-9), underscore (_), and bang (!).
-            # For non-ASCII (>= 128): return 1 (assume valid, conservative).
-            if length(expr.args) >= 6
-                cp_arg = expr.args[6]  # UInt32 codepoint
-
-                # Check ASCII vs non-ASCII
-                # NOTE: i32.const takes SIGNED LEB128, so use encode_leb128_signed
-                emit_value!(b, cp_arg, ctx, I32)  # [c]
-                i32_const!(b, 128)
-                num!(b, Opcode.I32_LT_U)  # c < 128?
-
-                if_!(b, 0x7F; results=WasmValType[I32])  # result type: i32
-
-                # ASCII path: letter || digit || _ || !
-                # (c - 65) < 26 || (c - 97) < 26 || (c - 48) < 10 || c == 95 || c == 33
-                emit_value!(b, cp_arg, ctx, I32)   # step4: codepoint arithmetic
-                i32_const!(b, 65)
-                num!(b, Opcode.I32_SUB)
-                i32_const!(b, 26)
-                num!(b, Opcode.I32_LT_U)  # [A-Z]
-
-                emit_value!(b, cp_arg, ctx, I32)   # step4: codepoint arithmetic
-                i32_const!(b, 97)
-                num!(b, Opcode.I32_SUB)
-                i32_const!(b, 26)
-                num!(b, Opcode.I32_LT_U)  # [a-z]
-
-                num!(b, Opcode.I32_OR)
-
-                emit_value!(b, cp_arg, ctx, I32)   # step4: codepoint arithmetic
-                i32_const!(b, 48)
-                num!(b, Opcode.I32_SUB)
-                i32_const!(b, 10)
-                num!(b, Opcode.I32_LT_U)  # [0-9]
-
-                num!(b, Opcode.I32_OR)
-
-                emit_value!(b, cp_arg, ctx, I32)   # step4: codepoint arithmetic
-                i32_const!(b, 95)
-                num!(b, Opcode.I32_EQ)  # _
-
-                num!(b, Opcode.I32_OR)
-
-                emit_value!(b, cp_arg, ctx, I32)   # step4: codepoint arithmetic
-                i32_const!(b, 33)
-                num!(b, Opcode.I32_EQ)  # !
-
-                num!(b, Opcode.I32_OR)
-
-                else_!(b)
-                # Non-ASCII path: return 1 (assume valid)
-                i32_const!(b, 1)
-                end_block!(b)
-            else
-                i32_const!(b, 0)
-            end
+            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
+                "jl_id_char missing codepoint"; idx=idx, detail=expr)
+            emit_value!(b, expr.args[6], ctx, I32)
+            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
+            i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
         elseif name === :jl_string_to_genericmemory
             # PURE-316: jl_string_to_genericmemory(s::String) -> Memory{UInt8}
@@ -1474,6 +1340,20 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 emit_value!(b, mem_arg, ctx, ConcreteRef(UInt32(str_arr_type), true))
                 emit_string_wrap!(b, ctx)
             end
+            return b
+        elseif name === :jl_cstr_to_string && length(expr.args) >= 6
+            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+            if traced !== nothing
+                source, _ = traced
+                str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
+                return b
+            end
+            record_unsupported!(ctx, :unsupported_method,
+                "jl_cstr_to_string pointer cannot be traced to a String/Symbol";
+                idx=idx, detail=expr)
+            unreachable!(b)  # structural trap after recorded unsupported
+            ctx.last_stmt_was_stub = true
             return b
         elseif name === :jl_pchar_to_string
             # PURE-325: jl_pchar_to_string(ptr, n) -> String
@@ -2054,6 +1934,20 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         # pointerref/pointerset trace the object identity separately.
         i64_const!(b, 0)
         return b
+    elseif _fc_sym === :jl_get_tls_world_age
+        # A Wasm module is one immutable closed-world snapshot. Its TLS world
+        # age is therefore the exact collection world captured at compilation.
+        i64_const!(b, reinterpret(Int64, UInt64(Base.get_world_counter())))
+        return b
+    elseif _fc_sym === :jl_is_const && length(expr.args) >= 7
+        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
+        name_owner = _trace_field_owner(expr.args[7], :singletonname, ctx)
+        if module_owner !== nothing && isequal(module_owner, name_owner)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            emit_value!(b, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+            struct_get!(b, tn_idx, UInt32(7), I32)
+            return b
+        end
     elseif _fc_sym === :jl_genericmemory_owner && length(expr.args) >= 6
         # Julia's GenericMemory owner is the memory allocation itself. Memory is
         # represented directly by its non-null WasmGC array, so ownership is an
@@ -2061,10 +1955,17 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         emit_value!(b, expr.args[6], ctx, AnyRef)
         return b
     elseif _fc_sym === :utf8proc_charwidth && length(expr.args) >= 6
-        cp_local = allocate_local!(ctx, I32)
         emit_value!(b, expr.args[6], ctx, I32)
-        local_set!(b, cp_local)
-        _emit_utf8proc_charwidth!(b, cp_local)
+        prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+        call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+        i32_const!(b, 5); num!(b, Opcode.I32_SHR_U)
+        i32_const!(b, 0x03); num!(b, Opcode.I32_AND)
+        return b
+    elseif _fc_sym === :utf8proc_category && length(expr.args) >= 6
+        emit_value!(b, expr.args[6], ctx, I32)
+        prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+        call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+        i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
         return b
     elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
         # datatype_storedinline(T) — pure layout predicate; fold when the
@@ -2101,7 +2002,8 @@ function _trace_string_ptr(ptr_ssa, code)
     end
     stmt = code[ptr_ssa.id]
     if stmt isa Expr && stmt.head === :foreigncall &&
-       extract_foreigncall_name(stmt.args[1]) === :jl_string_ptr && length(stmt.args) >= 6
+       extract_foreigncall_name(stmt.args[1]) in (:jl_string_ptr, :jl_symbol_name) &&
+       length(stmt.args) >= 6
         return (stmt.args[6], nothing)
     end
     if !(stmt isa Expr && stmt.head === :call)

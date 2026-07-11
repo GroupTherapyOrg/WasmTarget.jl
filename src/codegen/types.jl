@@ -74,6 +74,8 @@ mutable struct TypeRegistry
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
     # PURE-9065: String hash helper function index for Dict{String,...} support
     string_hash_func_idx::Union{Nothing, UInt32}
+    # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
+    unicode_property_func_idx::Union{Nothing, UInt32}
     # F3 (dev/F3_LOOP.md): specialized Core.Box struct types, keyed by contents WASM type.
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
@@ -121,6 +123,7 @@ TypeRegistry() = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
+    nothing,  # unicode_property_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
@@ -142,6 +145,7 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # string_hash_func_idx
+    nothing,  # unicode_property_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals (march7)
@@ -705,7 +709,7 @@ This is separate from \$JlBase (which is for user struct typeId extraction).
 
 Hierarchy (from §3.2.5):
   \$JlType         = (struct (field \$kind i32))
-  \$JlDataType     = (sub \$JlType (struct \$kind, \$name, \$super, \$parameters, \$hash, \$abstract, \$dfs_low, \$dfs_high))
+  \$JlDataType     = (sub \$JlType (struct \$kind, \$name, \$super, \$parameters, \$hash, \$abstract, \$dfs_low, \$dfs_high, \$flags))
   \$JlUnion        = (sub \$JlType (struct \$kind, \$a, \$b))
   \$JlUnionAll     = (sub \$JlType (struct \$kind, \$body, \$var))
   \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
@@ -735,6 +739,9 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         FieldType(ConcreteRef(str_arr_idx, true), true),       # name (mut string ref)
         FieldType(ConcreteRef(str_arr_idx, true), true),       # module_name (mut string ref)
         FieldType(ConcreteRef(jl_type_idx, true), true),       # wrapper (mut ref null $JlType)
+        FieldType(ConcreteRef(str_arr_idx, true), true),       # singletonname (mut string ref)
+        FieldType(I32, true),                                  # singleton is defined in module
+        FieldType(I32, true),                                  # singleton binding is const
     ], object_idx)
     jl_typename_idx = add_type!(mod, jl_typename)
     registry.jl_typename_idx = jl_typename_idx
@@ -757,6 +764,7 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         FieldType(I32, true),                                    # abstract (mut i32): 1 if abstract, 0 if concrete
         FieldType(I32, true),                                    # dfs_low (mut i32)
         FieldType(I32, true),                                    # dfs_high (mut i32)
+        FieldType(I32, true),                                    # Julia DataType flags (UInt16 widened to i32)
     ], jl_type_idx)  # sub $JlType
     jl_datatype_idx = add_type!(mod, jl_datatype)
     registry.jl_datatype_idx = jl_datatype_idx
@@ -802,11 +810,11 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         UInt32(1)  # skip kind field
     )
 
-    # DataType: fields name, super, parameters, hash, abstract, dfs_low, dfs_high
+    # DataType: runtime fields plus Julia's flags metadata used by Base display.
     registry.structs[DataType] = StructInfo(
         DataType, jl_datatype_idx,
-        [:name, :super, :parameters, :hash, :abstract, :dfs_low, :dfs_high],
-        Type[Core.TypeName, DataType, Core.SimpleVector, Int32, Int32, Int32, Int32],
+        [:name, :super, :parameters, :hash, :abstract, :dfs_low, :dfs_high, :flags],
+        Type[Core.TypeName, DataType, Core.SimpleVector, Int32, Int32, Int32, Int32, UInt16],
         UInt32(1)  # skip kind field
     )
 
@@ -826,11 +834,12 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         UInt32(1)  # skip kind field
     )
 
-    # Core.TypeName: Object prefix followed by name, module_name, wrapper.
+    # Core.TypeName: Object prefix followed by name, module_name, wrapper,
+    # singletonname. Keep the StructInfo order identical to the physical suffix.
     registry.structs[Core.TypeName] = StructInfo(
         Core.TypeName, jl_typename_idx,
-        [:name, :module, :wrapper],
-        Type[String, String, Any],
+        [:name, :module, :wrapper, :singletonname, :singleton_defined, :singleton_const],
+        Type[String, String, Any, Symbol, Bool, Bool],
         UInt32(2)
     )
 end
@@ -1239,6 +1248,62 @@ function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
     return registry.string_struct_idx
 end
 
+const _UTF8PROC_PROPERTY_DATA = let data = Vector{UInt8}(undef, 2 * 0x110000)
+    for cp in UInt32(0):UInt32(0x10ffff)
+        category = ccall(:utf8proc_category, Cint, (UInt32,), cp)
+        width = ccall(:utf8proc_charwidth, Cint, (UInt32,), cp)
+        id_start = ccall(:jl_id_start_char, Cint, (UInt32,), cp)
+        id_char = ccall(:jl_id_char, Cint, (UInt32,), cp)
+        (0 <= category <= 31 && 0 <= width <= 3) ||
+            error("utf8proc property outside packed table range at U+$(string(cp; base=16))")
+        packed = UInt16(category | (width << 5) | (id_start << 7) | (id_char << 8))
+        i = 2 * Int(cp) + 1
+        data[i] = UInt8(packed & 0xff)
+        data[i + 1] = UInt8(packed >> 8)
+    end
+    data
+end
+
+"""
+    get_or_create_unicode_property_func!(mod, registry) → UInt32
+
+Create one lazy, module-global packed utf8proc table and a helper `(i32 cp) -> i32`.
+Bits 0–4 are `utf8proc_category`; bits 5–6 are `utf8proc_charwidth`; bits 7–8
+are Julia identifier-start/continuation predicates. The table is
+generated from the exact utf8proc ABI Julia itself uses and serialized into the
+package precompile image; target Wasm performs no FFI.
+"""
+function get_or_create_unicode_property_func!(mod::WasmModule,
+                                              registry::TypeRegistry)::UInt32
+    registry.unicode_property_func_idx !== nothing &&
+        return registry.unicode_property_func_idx
+    arr_idx = get_array_type!(mod, registry, UInt16)
+    seg_idx = add_passive_data_segment!(mod, _UTF8PROC_PROPERTY_DATA)
+    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(arr_idx)))
+    global_idx = add_global_ref!(mod, arr_idx, true, init)
+    arr_ref = ConcreteRef(arr_idx, true)
+    block_type = add_type!(mod, FuncType(WasmValType[], WasmValType[arr_ref]))
+    b = InstrBuilder(WasmValType[I32, arr_ref], WasmValType[I32];
+                     func_name="unicode_property")
+    block!(b, Int(block_type); results=WasmValType[arr_ref])
+    global_get!(b, global_idx, arr_ref)
+    br_on_non_null!(b, 0)
+    i32_const!(b, 0)
+    i32_const!(b, 0x110000)
+    array_new_data!(b, arr_idx, seg_idx)
+    global_set!(b, global_idx)
+    global_get!(b, global_idx, arr_ref)
+    end_block!(b)
+    local_get!(b, 0)
+    array_get!(b, arr_idx, I32; signed=false)
+    return_!(b)
+    end_block!(b)
+    idx = add_function!(mod, WasmValType[I32], WasmValType[I32],
+                        WasmValType[arr_ref], builder_code(b))
+    registry.unicode_property_func_idx = idx
+    return idx
+end
+
 """
     get_or_create_string_hash_func!(mod, registry) → UInt32
 
@@ -1522,9 +1587,13 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
     ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
     ref_null!(b, Int64(jl_type_idx), ConcreteRef(jl_type_idx, true))
+    ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
+    i32_const!(b, 0)
+    i32_const!(b, 0)
     struct_new!(b, tn_type_idx,
                 WasmValType[I32, I32, ConcreteRef(str_arr_idx, true),
-                            ConcreteRef(str_arr_idx, true), ConcreteRef(jl_type_idx, true)])
+                            ConcreteRef(str_arr_idx, true), ConcreteRef(jl_type_idx, true),
+                            ConcreteRef(str_arr_idx, true), I32, I32])
     init_bytes = builder_code(b)
 
     # Mutable global — needs patching by init function
@@ -1714,6 +1783,15 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
         i32_const!(b, Int64(dfs_high))
         struct_set!(b, dt_type_idx, UInt32(7), I32)  # field 7 = dfs_high
+
+        # Field 8: Julia DataType flags (the runtime stores UInt16; Wasm i32).
+        begin
+            local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
+            global_get!(b, dt_global_idx, _gvt)
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)
+        end
+        i32_const!(b, Int64(getfield(type_val, :flags)))
+        struct_set!(b, dt_type_idx, UInt32(8), I32)
     end
 
     # Populate $JlTypeName fields
@@ -1725,6 +1803,23 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         # Field 1: module_name → string (i8 array)
         mod_name = tn.module !== nothing ? string(nameof(tn.module)) : ""
         _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(3), mod_name)
+
+        # Field 5: singletonname → symbol bytes (same physical byte-array payload).
+        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx,
+                                     UInt32(5), String(tn.singletonname))
+
+        # Field 6: whether module.singletonname is a real binding.
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        singleton_defined = tn.module !== nothing &&
+                            isdefined(tn.module, tn.singletonname)
+        i32_const!(b, singleton_defined ? 1 : 0)
+        struct_set!(b, tn_type_idx, UInt32(6), I32)
+
+        # Field 7: constness of that singleton binding.
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        singleton_const = singleton_defined && isconst(tn.module, tn.singletonname)
+        i32_const!(b, singleton_const ? 1 : 0)
+        struct_set!(b, tn_type_idx, UInt32(7), I32)
 
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper

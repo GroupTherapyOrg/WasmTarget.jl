@@ -829,6 +829,25 @@ function _compile_closed_world_plan(functions::Vector;
         get_or_create_string_hash_func!(mod, type_registry)
     end
 
+    # Pre-create the shared utf8proc property table/helper before function-index
+    # assignment. Both category and character width read the same packed byte.
+    needs_unicode_properties = false
+    for (_, _, _, code_info, _, _, _) in function_data
+        code_info === nothing && continue
+        for stmt in code_info.code
+            if stmt isa Expr && stmt.head === :foreigncall && !isempty(stmt.args)
+                fc_sym = extract_foreigncall_name(stmt.args[1])
+                if fc_sym in (:utf8proc_category, :utf8proc_charwidth,
+                              :jl_id_start_char, :jl_id_char)
+                    needs_unicode_properties = true
+                    break
+                end
+            end
+        end
+        needs_unicode_properties && break
+    end
+    needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
+
     # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
     # their init functions NOW — the same index-freeze constraint (functions cannot be
     # added during body compilation without shifting indices). dart constants.dart:454.

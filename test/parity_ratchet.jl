@@ -135,6 +135,30 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper; target Wasm never substitutes ASCII-only answers",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["const _UTF8PROC_PROPERTY_DATA",
+                        "get_or_create_unicode_property_func!",
+                        "needs_unicode_properties && get_or_create_unicode_property_func!",
+                        "_fc_sym === :utf8proc_category",
+                        "_fc_sym === :utf8proc_charwidth",
+                        "name === :jl_id_start_char", "name === :jl_id_char"]
+            forbidden = ["assume valid, conservative", "true = always a grapheme break"]
+            all_src = types_src * compile_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L41_cross_calls_share_builder_stack" => ("cross-function argument pushes, call pops, and result coercion execute on the same authoritative builder stack",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["local _xcb = fb", "Arguments already live on `fb`"]
+            forbidden = ["local _xcb = _ctx_builder(ctx, \"compile_call\")\n                call!(_xcb, target_info.wasm_idx"]
+            count(p -> !occursin(p, calls_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
     "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled before selector discovery; unspecialized Vararg signatures never become physical Wasm entries",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)

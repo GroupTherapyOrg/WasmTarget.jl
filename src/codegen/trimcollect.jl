@@ -29,10 +29,39 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
         for stmt in src.code
-            stmt isa Expr && stmt.head === :invoke && !isempty(stmt.args) || continue
-            target = stmt.args[1]
-            mi = target isa Core.MethodInstance ? target :
-                 target isa Core.CodeInstance ? target.def : nothing
+            stmt isa Expr || continue
+            mi = nothing
+            if stmt.head === :invoke && !isempty(stmt.args)
+                target = stmt.args[1]
+                mi = target isa Core.MethodInstance ? target :
+                     target isa Core.CodeInstance ? target.def : nothing
+            elseif stmt.head === :call && length(stmt.args) >= 3 &&
+                   stmt.args[1] === Core.invoke_in_world
+                target = stmt.args[3]
+                f = target isa GlobalRef ?
+                    (try getfield(target.mod, target.name) catch; nothing end) : target
+                f isa Function || continue
+                arg_types = Any[]
+                valid = true
+                for arg in stmt.args[4:end]
+                    T = if arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
+                           arg.id <= length(src.ssavaluetypes)
+                        CC.widenconst(src.ssavaluetypes[arg.id])
+                    else
+                        Core.Typeof(arg)
+                    end
+                    T isa Type || (valid = false; break)
+                    push!(arg_types, T)
+                end
+                if valid
+                    ats = Tuple(arg_types)
+                    m = try which(f, ats) catch; nothing end
+                    m === nothing || (mi = CC.specialize_method(
+                        m, Tuple{Core.Typeof(f), arg_types...}, Core.svec()))
+                end
+            else
+                continue
+            end
             mi isa Core.MethodInstance || continue
             mi in seen && continue
             push!(seen, mi)
