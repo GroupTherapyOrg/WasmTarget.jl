@@ -135,6 +135,20 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain",
+        () -> begin
+            linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
+            required = ["LinearAlgebra.norm(x::Array{T,N})",
+                        "LinearAlgebra.opnorm(", "_wt_osj_svdvals(A)",
+                        "a::T, x::Vector{T}, y::Vector{T}",
+                        "a::T, x::Vector{T}, b::T, y::Vector{T}",
+                        "LinearAlgebra.rotate!(", "LinearAlgebra.reflect!(",
+                        "length(x) == length(y)", "for i in eachindex(x)"]
+            forbidden = ["for i in eachindex(x, y)",
+                         "LinearAlgebra.norm(x::Vector{T})"]
+            count(p -> !occursin(p, linalg_src), required) +
+                count(p -> occursin(p, linalg_src), forbidden)
+        end),
     "L52_dynamic_storage_owner_and_generic_norm" => ("pointer consumers retain runtime Memory/MemoryRef ownership across allocation phis, memmove returns its exact destination, and float norm uses LinearAlgebra's pure generic reference path instead of BLAS FFI",
         () -> begin
             statements_src = read(joinpath(CODEGEN, "statements.jl"), String)

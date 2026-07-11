@@ -31,11 +31,11 @@ using Base.Experimental: @overlay
 # the WasmGC target. LinearAlgebra.generic_norm2 is Julia's own scaling-safe
 # reference implementation (including zero/Inf/underflow handling), so retain
 # the library semantics without admitting an FFI escape.
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.norm(x::Vector{T}) where {T<:Union{Float32,Float64}} =
+@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.norm(x::Array{T,N}) where {T<:Union{Float32,Float64},N} =
     isempty(x) ? zero(T) : LinearAlgebra.generic_norm2(x)
 
 @overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.norm(
-        x::Vector{T}, p::Real) where {T<:Union{Float32,Float64}}
+        x::Array{T,N}, p::Real) where {T<:Union{Float32,Float64},N}
     isempty(x) && return zero(T)
     LinearAlgebra.norm_recursive_check(x)
     p == 2 && return LinearAlgebra.generic_norm2(x)
@@ -89,15 +89,43 @@ end
     y
 end
 # axpy!/axpby! (BLAS) — y += a·x  /  y = a·x + b·y
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpy!(a::Number, x::Vector{Float64}, y::Vector{Float64})
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpy!(
+        a::T, x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}}
     length(x) == length(y) || throw(DimensionMismatch("axpy!"))
-    @inbounds for i in eachindex(x, y); y[i] += a * x[i]; end
+    @inbounds for i in eachindex(x); y[i] += a * x[i]; end
     y
 end
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpby!(a::Number, x::Vector{Float64}, b::Number, y::Vector{Float64})
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpby!(
+        a::T, x::Vector{T}, b::T, y::Vector{T}) where {T<:Union{Float32,Float64}}
     length(x) == length(y) || throw(DimensionMismatch("axpby!"))
-    @inbounds for i in eachindex(x, y); y[i] = a * x[i] + b * y[i]; end
+    @inbounds for i in eachindex(x); y[i] = a * x[i] + b * y[i]; end
     y
+end
+
+# Julia's generic Givens kernels are numerically pure, but their dimension-error
+# branch constructs a lazy AnnotatedString through world-age display machinery.
+# Keep the same arithmetic and mutation contract in the Wasm closed world while
+# making the homogeneous dense specialization explicit.
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.rotate!(
+        x::Vector{T}, y::Vector{T}, c::T, s::T) where {T<:Union{Float32,Float64}}
+    length(x) == length(y) || throw(DimensionMismatch("rotate!"))
+    @inbounds for i in eachindex(x)
+        xi, yi = x[i], y[i]
+        x[i] = c * xi + s * yi
+        y[i] = -s * xi + c * yi
+    end
+    return x, y
+end
+
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.reflect!(
+        x::Vector{T}, y::Vector{T}, c::T, s::T) where {T<:Union{Float32,Float64}}
+    length(x) == length(y) || throw(DimensionMismatch("reflect!"))
+    @inbounds for i in eachindex(x)
+        xi, yi = x[i], y[i]
+        x[i] = c * xi + s * yi
+        y[i] = s * xi - c * yi
+    end
+    return x, y
 end
 
 # det / logdet: native dispatches to LAPACK LU (getrf), a ccall WT cannot lower
@@ -197,6 +225,31 @@ end
 @overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
 @overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
+
+@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.opnorm(
+        A::Matrix{Float64}, p::Real=2)
+    if p == 2
+        values = _wt_osj_svdvals(A)
+        return isempty(values) ? 0.0 : values[1]
+    elseif p == 1
+        best = 0.0
+        @inbounds for j in axes(A, 2)
+            total = 0.0
+            for i in axes(A, 1); total += abs(A[i, j]); end
+            best = max(best, total)
+        end
+        return best
+    elseif p == Inf
+        best = 0.0
+        @inbounds for i in axes(A, 1)
+            total = 0.0
+            for j in axes(A, 2); total += abs(A[i, j]); end
+            best = max(best, total)
+        end
+        return best
+    end
+    throw(ArgumentError("invalid p=$p for matrix opnorm"))
+end
 
 # full (thin) SVD via one-sided Jacobi, tracking V (and U = A·V/Σ). Singular
 # vectors are sign/order-ambiguous vs LAPACK, but A ≈ U·Diagonal(S)·Vᵀ

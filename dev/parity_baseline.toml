@@ -3,6 +3,7 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
+L53_pure_dense_linalg_kernels = 0
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
