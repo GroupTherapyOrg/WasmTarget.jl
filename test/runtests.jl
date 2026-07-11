@@ -5092,13 +5092,8 @@ begin
             ]
             all_functions = [base_functions..., overlay_functions...]
 
-            # Compile with overlay entries specified
-            overlay_set = Set{Tuple{Any,Tuple}}([
-                (disp_val, (DispOverlay1,)),
-                (disp_val, (DispOverlay2,)),
-            ])
             mod, type_registry, func_registry, dt_registry = compile_module(
-                all_functions; return_registries=true, overlay_entries=overlay_set)
+                all_functions; return_registries=true)
 
             # parity(M8.4): overlays are ROWS in the one selector table, not a parallel
             # apparatus — disp_val stays in the dispatch registry with 12 targets
@@ -5131,12 +5126,7 @@ begin
                     (make_disp_overlay2, (Int32,)),
                 ]
 
-                overlay_set = Set{Tuple{Any,Tuple}}([
-                    (disp_val, (DispOverlay1,)),
-                    (disp_val, (DispOverlay2,)),
-                ])
-
-                bytes = to_bytes(compile_module(functions; overlay_entries=overlay_set))
+                bytes = to_bytes(compile_module(functions))
 
                 wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
                 write(wasm_path, bytes)

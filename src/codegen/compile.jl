@@ -497,7 +497,6 @@ function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         return_registries::Bool=false,
-                        overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false
                         )
@@ -897,13 +896,6 @@ function _compile_closed_world_plan(functions::Vector;
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
-
-    # PURE-9062: Build overlay tables if overlay_entries are specified.
-    # parity(M8.4): overlays are NOT a parallel table apparatus — a user method is
-    # just a higher-priority ROW in the same selector (dart has one table, period).
-    # dt.entries already carries one entry per tuple with the user registration
-    # winning at register time; same-tuple collisions were resolved before build.
-    # The old split (build_overlay_tables → parallel tables checked first) is DELETED.
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
@@ -1599,14 +1591,13 @@ function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         return_registries::Bool=false,
-                        overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         discovery::Symbol=:trim)
     discovery === :trim || throw(ArgumentError(
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
-        existing_module, import_stubs, return_registries, overlay_entries,
+        existing_module, import_stubs, return_registries,
         optimize_ir, register_ir_types)
 end
 
