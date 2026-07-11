@@ -54,6 +54,7 @@ L54_pure_dense_statistics_correlation = 0
 L55_static_type_rendering_excludes_compiler_metadata = 0
 L56_real_bottom_exception_bodies = 0
 L57_exact_typeassert_exception = 0
+L58_no_bottom_invoke_stub = 0
 L5_no_tagged_union = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
@@ -61,7 +62,7 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 486
+R11_patch_markers = 485
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 11

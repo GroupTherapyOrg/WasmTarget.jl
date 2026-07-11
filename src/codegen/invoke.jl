@@ -4020,20 +4020,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     ctx.last_stmt_was_stub = true
                 end
 
-            elseif get(ctx.ssa_types, idx, Any) === Union{}
-                # P3 gap 8029d25b6d15: an :invoke with inferred rettype Union{}
-                # ALWAYS throws natively (e.g. Int32(::Int64) after const-prop
-                # pins an out-of-range literal). The native behaviour IS a
-                # throw, so emit a catchable tag-0 throw — unreachable would
-                # turn a natively-catchable error into an uncatchable trap.
-                bi32 = _ctx_builder(ctx, "compile_invoke")  # discard pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                ref_null!(bi32, AnyRef)        # ref.null any
-                global_set!(bi32, exn_global)
-                global_get!(bi32, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bi32, ExternRef); throw_!(bi32, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
-                return append_builder!(b, bi32)
             elseif name === :padding && length(args) == 2 &&
                    args[1] isa Type && args[2] isa Integer
                 # `padding(T,n)` is a compile-time SimpleVector constant.

@@ -135,6 +135,16 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L58_no_bottom_invoke_stub" => ("Bottom-returning invokes compile their collected target and preserve native catch flow; no generic null exception may replace an unresolved invoke",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["get(ctx.ssa_types, idx, Any) === Union{}",
+                         "an :invoke with inferred rettype Union{}"]
+            required = ["_wt_bottom_invoke_catch", "typemax(Int64)"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
     "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func, context, expected type, and the concretely boxed got value",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)

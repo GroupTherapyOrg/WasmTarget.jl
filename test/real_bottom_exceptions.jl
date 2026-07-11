@@ -19,7 +19,14 @@ function _wt_typeassert_payload(x::Int64)::Int64
     end
 end
 
+_wt_bottom_invoke_catch(x::Int32)::Int32 = try
+    div(Int32(0), Int32(typemax(Int64)))
+catch
+    x
+end
+
 @testset "Union{} bodies preserve their real exception" begin
     @test compare_julia_wasm(_wt_bottom_catch, Int64(7)).pass
     @test compare_julia_wasm(_wt_typeassert_payload, Int64(7)).pass
+    @test compare_julia_wasm(_wt_bottom_invoke_catch, Int32(7)).pass
 end
