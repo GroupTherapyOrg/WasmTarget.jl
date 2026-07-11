@@ -31,7 +31,7 @@ diagnosed validating trap.
 | Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
 | Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | separate Top/Object types; ordinary structs, tuples, and Array wrappers inherit `{classId, identityHash}` at registration; value boxes remain Top-only; closure contexts remain internal; `jl_object_id` reads/writes field 1 | Locks L20/L28; mutable-object identity differential; focused shards and external validation | ✅ for current representations; final clean whole-suite rerun remains required |
 | Recursive type groups | wasm_builder `builder/types.dart:45-70`, `serialize/sections.dart:45-66`; definitions may reference only the same or earlier contiguous recursion group | self-recursive structs reserve their final index after supertypes/dependencies, group the contiguous struct/array/wrapper interval, then fill the reserved definition; serializer rejects unordered/noncontiguous groups | Lock L29; direct-recursive and `Vector{Self}` execution plus external validation | ✅ for Julia-realizable recursive layouts |
-| Runtime spread/apply | dart codegen flattens spread operands through typed container representations; no empty-value substitution | runtime Julia Vararg tuples use an Object/data/size wrapper with arity-aware `Tuple{}` tests and indexed access; homogeneous multi-Vector `+`/`*` traverse every container through one reduction generator | Locks L30/L31; empty/nonempty tuple and multi-container differential tests | 🟡 all-empty invalid vararg calls trap honestly; exact MethodError payload remains |
+| Runtime spread/apply | dart codegen flattens spread operands through typed container representations; no empty-value substitution | runtime Julia Vararg tuples use an Object/data/size wrapper with arity-aware `Tuple{}` tests and indexed access; homogeneous multi-Vector `+`/`*` traverse every container through one reduction generator; all-empty calls throw `MethodError(f, (), world)` through the typed exception tag | Locks L30-L32; empty/nonempty tuple, multi-container, exception-type, and exception-payload differential tests | ✅ for the supported homogeneous Vector spread surface |
 | Dynamic dispatch table | `dynamic_dispatch_table.dart:25+`; classId/selector-based table construction | one selector table, classId + offset + indirect call; FNV dispatch deleted | Lock L10; dispatch suites | ✅ for current supported call surface |
 | Module strategy | `modules.dart:182,219`; default and deferred strategies are explicit | one monolithic closed-world Wasm module | Deferred loading is excluded | ✅ within declared monolithic scope |
 | Loud unsupported behavior | dart `unimplemented` paths diagnose and trap; `convertType` has no guess-and-continue arm | `record_unsupported!`/`emit_unsupported_stub!` distinguish fatal wrong-value replacements from diagnosed traps | Locks L8, L14-L19; soundness tests | ✅ |
@@ -60,9 +60,8 @@ the source rows and locks above are independently required.
 ## Remaining blockers to a final green certificate
 
 1. Close current builder/codegen gaps that are not excluded. Runtime-length composition,
-   runtime Vararg tuples, homogeneous multi-container `_apply_iterate`, and packed i8/i16
-   arrays are executable and locked. The all-empty `+()`/`*()` path traps honestly but
-   still needs Julia's exact MethodError payload.
+   runtime Vararg tuples, homogeneous multi-container `_apply_iterate` (including exact
+   empty-call MethodError payloads), and packed i8/i16 arrays are executable and locked.
 2. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
    architectural floors, with every remaining site classified against current dart.
 3. Re-audit dynamic/static dispatch and constant construction against current files

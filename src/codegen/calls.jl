@@ -886,6 +886,31 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
         local arg1_is_ref = is_ref_type_or_union(arg_type) && arg_type !== Nothing
         local arg2_is_ref = is_ref_type_or_union(arg2_type) && arg2_type !== Nothing
 
+        # `()` is an immutable zero-field singleton. When one operand is
+        # statically Any (for example MethodError.args) and the other is the
+        # literal Tuple{}, ref.eq is wrong: independently materialized empty
+        # tuples are still egal in Julia. Test the dynamic operand's concrete
+        # heap type and discard the known singleton operand.
+        if (arg_type === Any && arg2_type === Tuple{}) ||
+           (arg_type === Tuple{} && arg2_type === Any)
+            local empty_info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
+            if arg_type === Any
+                drop!(bld) # known Tuple{} (arg2)
+                local dyn_ty = length(bld.seeded) >= 2 ? bld.seeded[end - 1] : AnyRef
+                dyn_ty === ExternRef && any_convert_extern!(bld)
+            else
+                local dyn_ty = isempty(bld.seeded) ? AnyRef : bld.seeded[end]
+                local dyn_local = allocate_local!(ctx, dyn_ty)
+                local_set!(bld, dyn_local)
+                drop!(bld) # known Tuple{} (arg1)
+                local_get!(bld, dyn_local)
+                dyn_ty === ExternRef && any_convert_extern!(bld)
+            end
+            ref_test!(bld, Int64(empty_info.wasm_type_idx), false)
+            append_builder!(fb, bld)
+            return nothing
+        end
+
         # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
         # they can't be equal via ref.eq OR i32/i64 eq. Drop both and return false.
         if (arg1_is_ref && arg2_type === Nothing) || (arg2_is_ref && arg_type === Nothing)
@@ -5780,11 +5805,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx)
             else
                 # Resolve target function to a WASM opcode for binary reduce
-                reduce_op = _get_binary_reduce_opcode(target_name, elem_type)
+                reduce_op = _get_binary_reduce_opcode(target_value, elem_type)
                 if reduce_op !== nothing
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
                     _emit_apply_iterate_reduce!(fb, container_args, container_types,
-                                                elem_type, reduce_op, target_name, ctx)
+                                                elem_type, reduce_op, target_value, ctx)
                 else
                     # Unknown reduce target — can't lower. Loud reject (reduce returns a value natively).
                     emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -6514,31 +6539,26 @@ end
 # ============================================================================
 
 """
-Map a known binary function name to its WASM reduce opcode for the given element type.
+Map a resolved known binary function object to its WASM reduce opcode for the given element type.
 Returns nothing if the function is not a known binary reduce operation.
 """
-function _get_binary_reduce_opcode(func_name::Union{Symbol, Nothing}, elem_type::Type)::Union{UInt8, Nothing}
-    func_name === nothing && return nothing
+function _get_binary_reduce_opcode(func, elem_type::Type)::Union{UInt8, Nothing}
+    local is_add = func === (+) || func === Core.Intrinsics.add_int ||
+                   func === Core.Intrinsics.add_float
+    local is_mul = func === (*) || func === Core.Intrinsics.mul_int ||
+                   func === Core.Intrinsics.mul_float
     if elem_type === Int64 || elem_type === UInt64
-        func_name === :+ && return Opcode.I64_ADD
-        func_name === :add_int && return Opcode.I64_ADD
-        func_name === :* && return Opcode.I64_MUL
-        func_name === :mul_int && return Opcode.I64_MUL
+        is_add && return Opcode.I64_ADD
+        is_mul && return Opcode.I64_MUL
     elseif elem_type === Int32 || elem_type === UInt32
-        func_name === :+ && return Opcode.I32_ADD
-        func_name === :add_int && return Opcode.I32_ADD
-        func_name === :* && return Opcode.I32_MUL
-        func_name === :mul_int && return Opcode.I32_MUL
+        is_add && return Opcode.I32_ADD
+        is_mul && return Opcode.I32_MUL
     elseif elem_type === Float64
-        func_name === :+ && return Opcode.F64_ADD
-        func_name === :add_float && return Opcode.F64_ADD
-        func_name === :* && return Opcode.F64_MUL
-        func_name === :mul_float && return Opcode.F64_MUL
+        is_add && return Opcode.F64_ADD
+        is_mul && return Opcode.F64_MUL
     elseif elem_type === Float32
-        func_name === :+ && return Opcode.F32_ADD
-        func_name === :add_float && return Opcode.F32_ADD
-        func_name === :* && return Opcode.F32_MUL
-        func_name === :mul_float && return Opcode.F32_MUL
+        is_add && return Opcode.F32_ADD
+        is_mul && return Opcode.F32_MUL
     end
     return nothing
 end
@@ -6546,11 +6566,37 @@ end
 """
 Emit one reduction over the concatenation of one or more homogeneous vectors.
 The first observed element initializes the accumulator; later elements use the
-operator. An all-empty input traps instead of fabricating an identity value.
+operator. An all-empty input throws a real MethodError with Julia's `(f, (), world)`
+payload instead of fabricating an identity value.
 """
+function _emit_apply_method_error!(bld::InstrBuilder, target_value,
+                                   ctx::AbstractCompilationContext)
+    ensure_exception_tag!(ctx.mod)
+    local exn_global = ensure_exception_global!(ctx.mod)
+    local error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
+    local args_info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
+    error_info === nothing && error("MethodError layout is unavailable")
+    args_info === nothing && error("Tuple{} layout is unavailable")
+
+    # MethodError(f, (), world): all three fields are real Julia values. The
+    # closed-world module is compiled at one world snapshot, so the current
+    # counter is the dispatch world that produced this lowering.
+    emit_struct_prefix!(bld, ctx.type_registry, MethodError, error_info)
+    emit_value!(bld, target_value, ctx, AnyRef; from_julia=typeof(target_value))
+    emit_struct_prefix!(bld, ctx.type_registry, Tuple{}, args_info)
+    struct_new!(bld, args_info.wasm_type_idx)
+    i64_const!(bld, reinterpret(Int64, UInt64(Base.get_world_counter())))
+    struct_new!(bld, error_info.wasm_type_idx)
+    global_set!(bld, exn_global)
+    global_get!(bld, exn_global, AnyRef)
+    ref_null!(bld, ExternRef)
+    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bld
+end
+
 function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
                                       container_types::Vector{DataType}, elem_type::Type,
-                                      reduce_op::UInt8, target_name::Symbol, ctx)
+                                      reduce_op::UInt8, target_value, ctx)
     bld = _ctx_builder(ctx, "_emit_apply_iterate_reduce!")
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
@@ -6572,16 +6618,6 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
     acc_local = allocate_local!(ctx, elem_wasm_type)
     has_value = allocate_local!(ctx, I32)
     elem_local = allocate_local!(ctx, elem_wasm_type)
-    if elem_wasm_type === I64
-        i64_const!(bld, target_name === :* || target_name === :mul_int ? 1 : 0)
-    elseif elem_wasm_type === I32
-        i32_const!(bld, target_name === :* || target_name === :mul_int ? 1 : 0)
-    elseif elem_wasm_type === F64
-        f64_const!(bld, target_name === :* || target_name === :mul_float ? 1.0 : 0.0)
-    elseif elem_wasm_type === F32
-        f32_const!(bld, target_name === :* || target_name === :mul_float ? 1.0f0 : 0.0f0)
-    end
-    local_set!(bld, acc_local)
     i32_const!(bld, 0)
     local_set!(bld, has_value)
 
@@ -6641,9 +6677,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
     local_get!(bld, has_value)
     num!(bld, Opcode.I32_EQZ)
     if_!(bld)
-    # Julia's +()/*() raises MethodError. Until the MethodError payload can be
-    # built exactly here, trap rather than return a fabricated identity.
-    unreachable!(bld)  # structural trap (invalid zero-argument reduction; exact MethodError pending)
+    _emit_apply_method_error!(bld, target_value, ctx)
     end_block!(bld)
     local_get!(bld, acc_local)
     append_builder!(fb, bld)

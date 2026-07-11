@@ -26,6 +26,7 @@ L28_ordinary_object_prefix = 0
 L29_recursive_type_groups = 0
 L30_runtime_vararg_tuple = 0
 L31_multi_container_apply = 0
+L32_empty_tuple_egal = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 L4_no_postemit_reguess = 0

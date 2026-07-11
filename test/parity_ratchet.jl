@@ -135,14 +135,28 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton: dynamic Any-versus-() egal tests its concrete tuple type rather than heap identity",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["tuples are still egal in Julia",
+                        "(arg_type === Any && arg2_type === Tuple{})",
+                        "ref_test!(bld, Int64(empty_info.wasm_type_idx), false)"]
+            count(p -> !occursin(p, calls_src), required)
+        end),
     "L31_multi_container_apply" => ("homogeneous multi-Vector _apply_iterate reductions traverse every container through one loop generator and never return an identity for Julia's invalid all-empty +()/*() call",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["container_args = args[3:end]",
                         "for (container_arg, container_type) in zip(container_args, container_types)",
-                        "An all-empty input traps instead of fabricating an identity value",
+                        "_emit_apply_method_error!",
+                        "MethodError(f, (), world)",
+                        "Base.get_world_counter()",
+                        "_get_binary_reduce_opcode(target_value, elem_type)",
+                        "func === (+)",
                         "local_set!(bld, has_value)"]
-            count(p -> !occursin(p, calls_src), required)
+            forbidden = ["_get_binary_reduce_opcode(func_name"]
+            count(p -> !occursin(p, calls_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
         end),
     "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples and tests Tuple{} from runtime arity; it never fabricates an empty tuple",
         () -> begin
