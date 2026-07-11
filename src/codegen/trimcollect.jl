@@ -90,7 +90,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 while parentmodule(root) !== root
                     root = parentmodule(root)
                 end
-                root === Main && push!(_fn_callables, T)
+                (root === Main || T <: _RuntimeComposition) && push!(_fn_callables, T)
             elseif isdefined(T, :instance)
                 # A named/generic function singleton is Dart's static tear-off
                 # counterpart. Enrollment remains co-occurrence-gated below.
@@ -237,11 +237,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     return out
 end
 
-# WASMTARGET dynamic dispatch: number of (CodeInstance, CodeInfo) PAIRS collected by
-# the BASE (pre-dynamic-dispatch) closed-world pass. Pairs beyond this are pulled in
-# ONLY by the dispatch-candidate discovery below; trim_compile_plan marks them as
-# selector candidates rather than ordinary direct-call targets. 0 = no discovery ran.
-const _TRIM_BASE_PAIRS = Ref{Int}(0)
+# Dynamic-dispatch selector roots, distinct from the ordinary dependencies that
+# their candidate compilation discovers transitively.
+const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 
 # march16: the conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
@@ -250,6 +248,7 @@ const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
+    _DYNAMIC_ROOT_MIS[] = Set{Any}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -258,7 +257,6 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     append!(workqueue, entries)
     CC.compile!(codeinfos, workqueue; invokelatest_queue)
     CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
-    _TRIM_BASE_PAIRS[] = length(codeinfos) ÷ 2   # everything after this is discovery-added
     # WASMTARGET dynamic dispatch — GATED OFF BY DEFAULT (set WT_DYNDISPATCH=1 to enable).
     # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
     # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
@@ -283,6 +281,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         for _round in 1:8
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
             extra = Any[mi for mi in extra if !(mi in base_mis)]
+            union!(_DYNAMIC_ROOT_MIS[], extra)
             # march16: remember WHICH callable types were enrolled — the conversion
             # arm converts ONLY these (converting every userland closure pair changed
             # unrelated compiles: the randsubseq suite regression, bisect-certified).
@@ -363,18 +362,15 @@ function trim_compile_plan(entries_named::Vector)
     # Functions pulled in only by dispatch-candidate discovery are registered as
     # candidates rather than ordinary direct-call targets.
     dispatch_candidates = Set{Any}()
-    base_pairs = _TRIM_BASE_PAIRS[]
     # Pre-seed with entry names: a discovered function processed before its
     # same-named entry must not claim the entry's export name (duplicate-export
     # validation failure in multi-function modules).
     used_names = Set{String}(values(entry_keys))
     seen_sigs = Set{Tuple{Any, Any}}()   # T1.1 step 3: dedup the function list by (f, arg_types)
     i = 1
-    pair_no = 0
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
-        pair_no += 1
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
         mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         sig = mi.specTypes
@@ -420,8 +416,9 @@ function trim_compile_plan(entries_named::Vector)
         push!(used_names, name)
         push!(functions, (f, arg_types, name))
         ir_cache[(f, arg_types)] = (src, ci.rettype)
-        # Discovery-added (beyond the base collection) and not also an entry.
-        if base_pairs > 0 && pair_no > base_pairs && !haskey(entry_keys, mi)
+        # Only discovery ROOTS are selector candidates. Dependencies compiled
+        # transitively with a root remain ordinary cross-call-visible functions.
+        if mi in _DYNAMIC_ROOT_MIS[] && !haskey(entry_keys, mi)
             push!(dispatch_candidates, (f, arg_types))
         end
     end

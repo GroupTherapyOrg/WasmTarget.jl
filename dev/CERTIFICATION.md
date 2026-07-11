@@ -61,10 +61,10 @@ the source rows and locks above are independently required.
    retain Top-only layouts for primitive value boxes. Extend `jl_object_id` to the entire
    Object subtree and add distinguishability/identity tests across mutable objects.
 2. Close current builder/codegen gaps that are not excluded, including mixed-container
-   `_apply_iterate`, composition objects escaping through heterogeneous storage, and
-   principled recursive type groups. Direct runtime-length composition and packed i8/i16
-   arrays are now executable and locked; a diagnosed remaining failure is sound but is
-   not feature parity.
+   `_apply_iterate`, mixed multi-callable heterogeneous construction, and principled
+   recursive type groups. Runtime-length composition (including Any-storage escape) and
+   packed i8/i16 arrays are now executable and locked; a diagnosed remaining failure is
+   sound but is not feature parity.
 3. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
    architectural floors, with every remaining site classified against current dart.
 4. Re-audit dynamic/static dispatch and constant construction against current files

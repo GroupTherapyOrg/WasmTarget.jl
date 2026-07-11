@@ -277,6 +277,11 @@ end
 _wt_compose_step(x::Int64)::Int64 = Int64(3) * x + Int64(1)
 _wt_runtime_compose(x::Int64, n::Int64)::Int64 =
     ((∘)(fill(_wt_compose_step, n)...))(x)
+function _wt_runtime_compose_escape(x::Int64, n::Int64)::Int64
+    c = (∘)(fill(_wt_compose_step, n)...)
+    erased = Any[c]
+    return (erased[1](x))::Int64
+end
 # WASMTARGET-FUZZ (Loop B/B4c): Char is i32-rep but NOT <:Number, so it was excluded from
 # both the boxing decision (needs_anyref_boxing required all(<:Number)) and the isa
 # discriminator (gated on check_type<:Number) → Union{Char,Int32} collapsed + isa Char
@@ -6947,6 +6952,7 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(1); optimize=opt).pass
                 @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(2); optimize=opt).pass
                 @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(4); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose_escape, Int64(2), Int64(4); optimize=opt).pass
             end
         end
 
