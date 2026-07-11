@@ -22,6 +22,26 @@
 # dead empty-reduce branches dynamic); collection itself (TRIM_UNSAFE
 # semantics — what this function does) works on both.
 
+"""Return explicit `:invoke` MethodInstances missing from a collected world."""
+function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
+    out = Any[]
+    for i in 2:2:length(codeinfos)
+        src = codeinfos[i]
+        src isa Core.CodeInfo || continue
+        for stmt in src.code
+            stmt isa Expr && stmt.head === :invoke && !isempty(stmt.args) || continue
+            target = stmt.args[1]
+            mi = target isa Core.MethodInstance ? target :
+                 target isa Core.CodeInstance ? target.def : nothing
+            mi isa Core.MethodInstance || continue
+            mi in seen && continue
+            push!(seen, mi)
+            push!(out, mi)
+        end
+    end
+    return out
+end
+
 """
     collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         -> Vector{Any}   # alternating CodeInstance, CodeInfo pairs
@@ -257,6 +277,36 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     append!(workqueue, entries)
     CC.compile!(codeinfos, workqueue; invokelatest_queue)
     CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
+    # Julia's queue may leave an explicit invoke with an abstract callable slot
+    # as an IR edge without materializing its body (e.g. Base.with_output_color's
+    # `Function` argument). A closed world cannot defer that edge to codegen.
+    # Enroll every explicit invoke to a fixpoint before selector discovery.
+    base_mis = Set{Any}()
+    for k in 1:2:length(codeinfos)
+        codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+    end
+    invoke_seen = copy(base_mis)
+    for _round in 1:8
+        extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen)
+        isempty(extra_invokes) && break
+        invoke_interp = WasmInterpreter(Base.RefValue(0))
+        invoke_ci = Any[]
+        invoke_wq = CC.CompilationQueue(; interp=invoke_interp)
+        invoke_ilq = CC.CompilationQueue(; interp=invoke_interp)
+        append!(invoke_wq, extra_invokes)
+        CC.compile!(invoke_ci, invoke_wq; invokelatest_queue=invoke_ilq)
+        CC.compile!(invoke_ci, invoke_ilq; invokelatest_queue=invoke_ilq)
+        added = false
+        for k in 1:2:length(invoke_ci)
+            (invoke_ci[k] isa Core.CodeInstance && invoke_ci[k + 1] isa Core.CodeInfo) || continue
+            mi = invoke_ci[k].def
+            mi in base_mis && continue
+            push!(base_mis, mi)
+            push!(codeinfos, invoke_ci[k], invoke_ci[k + 1])
+            added = true
+        end
+        added || break
+    end
     # WASMTARGET dynamic dispatch — GATED OFF BY DEFAULT (set WT_DYNDISPATCH=1 to enable).
     # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
     # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
@@ -273,10 +323,6 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     # whether or not discovery runs — so dynamic dispatch is ON BY DEFAULT (WT_DYNDISPATCH=0
     # to disable).
     if get(ENV, "WT_DYNDISPATCH", "1") != "0"
-        base_mis = Set{Any}()
-        for k in 1:2:length(codeinfos)
-            codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
-        end
         seen_disp = Set{Any}()   # dedup candidate MIs across fixpoint rounds
         for _round in 1:8
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
@@ -396,6 +442,11 @@ function trim_compile_plan(entries_named::Vector)
             continue
         end
         arg_types = Tuple(sig.parameters[2:end])
+        # An unspecialized `Vararg{T}` is not a physical Wasm parameter. Calls
+        # with a known arity are represented by their concrete specialization;
+        # intrinsic/error constructors are lowered at the call site. Never let
+        # the open-ended signature become a second, fake compilation route.
+        any(T -> T isa Core.TypeofVararg, arg_types) && continue
         # T1.1 step 3: a discovery candidate can duplicate an explicitly-listed
         # specialization (e.g. compile_multi entries + a megamorphic dynamic call's
         # candidates) → duplicate wasm export. Dedup by (f, arg_types); the first

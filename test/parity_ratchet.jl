@@ -135,6 +135,14 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled before selector discovery; unspecialized Vararg signatures never become physical Wasm entries",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["function _missing_explicit_invoke_mis",
+                        "extra_invokes = _missing_explicit_invoke_mis",
+                        "any(T -> T isa Core.TypeofVararg, arg_types) && continue"]
+            count(p -> !occursin(p, trim_src), required)
+        end),
     "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",
         () -> begin
             diag_src = read(joinpath(CODEGEN, "diagnostics.jl"), String)
