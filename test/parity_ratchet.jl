@@ -509,7 +509,9 @@ const LOCKS = [
             missing = count(p -> !occursin(p, gen_src * flow_src * builder_src),
                             ["finish_function!(b)", "structured IR has"])
             forbidden = count(p -> occursin(p, gen_src),
-                              ["strip_excess_after_function_end", "Truncate everything after this byte"])
+                              ["strip_excess_after_function_end", "Truncate everything after this byte",
+                               "_last_instr_starts", "_instr_next", "_skip_leb_count",
+                               "bytes[_tail", "dead returns at the very end"])
             missing + forbidden
         end),
     "L26_dispatch_roots_only" => ("dynamic selector candidates are only discovery roots; their transitive helper dependencies remain ordinary cross-call-visible functions",
