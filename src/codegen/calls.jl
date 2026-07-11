@@ -914,7 +914,9 @@ function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
     local_set!(b, symbol_data)
     local_get!(b, symbol_data)
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, UInt32(5), ConcreteRef(UInt32(str_idx), true))
+    struct_get!(b, tn_idx, UInt32(5),
+                ConcreteRef(UInt32(symbol_struct_idx), true))
+    struct_get!(b, symbol_struct_idx, UInt32(2), ConcreteRef(UInt32(str_idx), true))
     num!(b, Opcode.REF_EQ)
     if_!(b, I32)
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))

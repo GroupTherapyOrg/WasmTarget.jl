@@ -1274,6 +1274,33 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 julia_to_wasm_type(expr.args[2]) === I64 && widen_length_to_i64!(b)
                 return b
             end
+        elseif name in (:jl_is_operator, :jl_is_syntactic_operator) && length(expr.args) >= 6
+            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+            if traced !== nothing
+                source, _ = traced
+                bit = name === :jl_is_operator ? Int32(0x01) : Int32(0x02)
+                literal = source isa QuoteNode ? source.value : source
+                if literal isa Symbol || literal isa AbstractString
+                    i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
+                    return b
+                end
+                if get_ssa_type(ctx, source) === Symbol
+                    string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                    emit_value!(b, source, ctx, ConcreteRef(UInt32(string_idx), true))
+                    struct_get!(b, string_idx, UInt32(3), I32)
+                    local status_local = allocate_local!(ctx, I32)
+                    local_tee!(b, status_local)
+                    i32_const!(b, -1); num!(b, Opcode.I32_EQ)
+                    if_!(b, I32)
+                    unreachable!(b)  # structural trap: dynamically-created Symbol lacks operator metadata
+                    else_!(b)
+                    local_get!(b, status_local)
+                    i32_const!(b, bit); num!(b, Opcode.I32_AND)
+                    i32_const!(b, bit); num!(b, Opcode.I32_EQ)
+                    end_block!(b)
+                    return b
+                end
+            end
         elseif name === :jl_id_start_char
             length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
@@ -1974,11 +2001,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         return b
     elseif _fc_sym === :jl_module_name && length(expr.args) >= 6
         module_info = ctx.type_registry.structs[Module]
-        str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(2),
-                    ConcreteRef(UInt32(str_idx), true))
-        emit_string_wrap!(b, ctx)
+                    ConcreteRef(UInt32(string_idx), true))
         return b
     elseif _fc_sym === :jl_genericmemory_owner && length(expr.args) >= 6
         # Julia's GenericMemory owner is the memory allocation itself. Memory is

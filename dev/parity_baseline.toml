@@ -41,6 +41,7 @@ L42_exact_unicode_property_table = 0
 L43_typename_world_bounds_metadata = 0
 L44_interned_module_metadata = 0
 L45_one_source_slot_and_vararg_abi = 0
+L46_symbol_syntax_value_metadata = 0
 L4_no_postemit_reguess = 0
 L5_no_tagged_union = 0
 L6_all_builders_strict = 0

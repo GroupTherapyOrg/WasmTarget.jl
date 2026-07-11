@@ -156,6 +156,10 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing                     # step5 class-DAG synthetics
 )
 
+symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
+    Int32((Base._isoperator(s) ? 0x01 : 0x00) |
+          (Base.is_syntactic_operator(Symbol(s)) ? 0x02 : 0x00))
+
 """
     get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
 
@@ -178,7 +182,7 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, 0)   # local 0 = the scratch
+    emit_string_wrap!(b, mod, registry, 0; syntax_flags=symbol_syntax_flags(s))
     global_set_peek = length(b.instrs)
     # store AND return: local.tee via global — global.set then global.get
     global_set!(b, g)
@@ -316,6 +320,8 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     push!(init, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_FIXED)
     append!(init, encode_leb128_unsigned(UInt64(arr_idx)))
     append!(init, encode_leb128_unsigned(UInt64(length(bytes))))
+    push!(init, Opcode.I32_CONST)
+    append!(init, encode_leb128_signed(Int64(symbol_syntax_flags(s))))
     push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
     append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
     g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
@@ -738,10 +744,11 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     # printed name: distinct modules with the same name remain distinct refs.
     str_arr_idx = get_string_array_type!(mod, registry)
     object_idx = get_object_struct_type!(mod, registry)
+    string_struct_idx = get_string_struct_type!(mod, registry)
     jl_module = StructType([
         FieldType(I32, false),
         FieldType(I32, true),
-        FieldType(ConcreteRef(str_arr_idx, true), true),
+        FieldType(ConcreteRef(string_struct_idx, true), true),
         FieldType(AnyRef, true),
     ], object_idx)
     jl_module_idx = add_type!(mod, jl_module)
@@ -754,10 +761,10 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_typename = StructType([
         FieldType(I32, false),                                  # classId
         FieldType(I32, true),                                   # identityHash
-        FieldType(ConcreteRef(str_arr_idx, true), true),       # name (mut string ref)
+        FieldType(ConcreteRef(string_struct_idx, true), true),# name (mut Symbol ref)
         FieldType(ConcreteRef(jl_module_idx, true), true),     # module (mut interned Module ref)
         FieldType(ConcreteRef(jl_type_idx, true), true),       # wrapper (mut ref null $JlType)
-        FieldType(ConcreteRef(str_arr_idx, true), true),       # singletonname (mut string ref)
+        FieldType(ConcreteRef(string_struct_idx, true), true),# singletonname (mut Symbol ref)
         FieldType(I32, true),                                  # singleton is defined in module
         FieldType(I32, true),                                  # singleton binding is const
         FieldType(I32, true),                                  # name binding has a bounded valid world range
@@ -859,14 +866,14 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         UInt32(1)  # skip kind field
     )
 
-    # Core.TypeName: Object prefix followed by name, module_name, wrapper,
+    # Core.TypeName: Object prefix followed by Symbol name, Module, wrapper,
     # singletonname. Keep the StructInfo order identical to the physical suffix.
     registry.structs[Core.TypeName] = StructInfo(
         Core.TypeName, jl_typename_idx,
         [:name, :module, :wrapper, :singletonname, :singleton_defined, :singleton_const,
          :world_bounded, :world_min, :world_max, :name_deprecated,
          :singleton_deprecated, :name_visible_main, :singleton_visible_main],
-        Type[String, String, Any, Symbol, Bool, Bool, Bool, Int64, Int64, Bool, Bool,
+        Type[Symbol, Module, Any, Symbol, Bool, Bool, Bool, Int64, Int64, Bool, Bool,
              Bool, Bool],
         UInt32(2)
     )
@@ -877,18 +884,16 @@ function get_module_constant_global!(mod::WasmModule, registry::TypeRegistry,
     haskey(registry.constant_globals, module_value) &&
         return registry.constant_globals[module_value]
     info = registry.structs[Module]
-    str_idx = get_string_array_type!(mod, registry)
-    bytes = codeunits(String(nameof(module_value)))
+    string_idx = get_string_struct_type!(mod, registry)
+    name_global = get_string_constant_global!(mod, registry, String(nameof(module_value)))
+    name_global === nothing && error("Module name exceeds the eager Symbol constant limit")
     b = InstrBuilder(; func_name="get_module_constant_global!")
     i32_const!(b, Int64(ensure_type_id!(registry, Module)))
     i32_const!(b, 0)
-    for byte in bytes
-        i32_const!(b, Int64(byte))
-    end
-    array_new_fixed!(b, str_idx, length(bytes), I32)
+    global_get!(b, name_global, ConcreteRef(string_idx, false))
     ref_null!(b, AnyRef)
     struct_new!(b, info.wasm_type_idx,
-                WasmValType[I32, I32, ConcreteRef(str_idx, false), AnyRef])
+                WasmValType[I32, I32, ConcreteRef(string_idx, false), AnyRef])
     global_idx = add_global_ref!(mod, info.wasm_type_idx, false, builder_code(b);
                                  nullable=false)
     registry.constant_globals[module_value] = global_idx
@@ -1283,7 +1288,7 @@ end
 
 parity(M9): the CLASSED string — dart: String IS an Object class. A Julia String value is
 `(struct (field i32 classId) (field (mut i32) identityHash)
-         (field (ref null \$strbytes) data))`, SUBTYPE of \$JlObject,
+         (field (ref null \$strbytes) data) (field i32 syntaxFlags))`, SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
 table like every other value. String OPS unwrap `.data` once at entry and work on the
 byte array (dart's methods read the class's array field the same way).
@@ -1294,7 +1299,8 @@ function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
         object_idx = get_object_struct_type!(mod, registry)
         st = StructType(FieldType[FieldType(I32, false),
                                   FieldType(I32, true),
-                                  FieldType(ConcreteRef(arr_idx, true), true)],
+                                  FieldType(ConcreteRef(arr_idx, true), true),
+                                  FieldType(I32, false)],
                         object_idx)
         registry.string_struct_idx = add_type!(mod, st)
     end
@@ -1634,14 +1640,15 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     # begin null and are populated by the start function.
     b = InstrBuilder(; func_name="get_typename_constant_global!")
     str_arr_idx = get_string_array_type!(mod, registry)
+    string_idx = get_string_struct_type!(mod, registry)
     jl_type_idx = registry.jl_type_idx
     i32_const!(b, Int64(ensure_type_id!(registry, Core.TypeName)))
     i32_const!(b, 0)
     module_idx = registry.structs[Module].wasm_type_idx
-    ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
+    ref_null!(b, Int64(string_idx), ConcreteRef(string_idx, true))
     ref_null!(b, Int64(module_idx), ConcreteRef(module_idx, true))
     ref_null!(b, Int64(jl_type_idx), ConcreteRef(jl_type_idx, true))
-    ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
+    ref_null!(b, Int64(string_idx), ConcreteRef(string_idx, true))
     i32_const!(b, 0)
     i32_const!(b, 0)
     i32_const!(b, 0)
@@ -1652,9 +1659,9 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     i32_const!(b, 0)
     i32_const!(b, 0)
     struct_new!(b, tn_type_idx,
-                WasmValType[I32, I32, ConcreteRef(str_arr_idx, true),
+                WasmValType[I32, I32, ConcreteRef(string_idx, true),
                             ConcreteRef(module_idx, true), ConcreteRef(jl_type_idx, true),
-                            ConcreteRef(str_arr_idx, true), I32, I32, I32, I64, I64,
+                            ConcreteRef(string_idx, true), I32, I32, I32, I64, I64,
                             I32, I32, I32, I32])
     init_bytes = builder_code(b)
 
@@ -1674,7 +1681,7 @@ Type globals have been created.
 
 PURE-9063: When \$JlType hierarchy is available, populates \$JlDataType fields:
   kind=0, name→\$JlTypeName, super→\$JlType, parameters→\$JlSVec, hash, abstract, dfs_low, dfs_high
-And \$JlTypeName fields: name_str, module_name_str, wrapper
+And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
 Legacy path: populates Julia DataType/TypeName struct fields via wasm_field_idx.
 """
@@ -1872,9 +1879,13 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
 
     # Populate $JlTypeName fields
     for (tn, tn_global_idx) in registry.typename_constant_globals
-        # Field 0: name → string (i8 array)
-        name_str = string(tn.name)
-        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx, UInt32(2), name_str)
+        # Fields 2 and 5 are interned Symbol objects, carrying their exact
+        # content-derived metadata across ordinary calls.
+        string_idx = get_string_struct_type!(mod, registry)
+        name_global = get_string_constant_global!(mod, registry, String(tn.name))
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        global_get!(b, name_global, ConcreteRef(string_idx, false))
+        struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(string_idx, true))
 
         # Field 3: an interned Module object, never a name-string surrogate.
         if tn.module !== nothing
@@ -1885,9 +1896,10 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             struct_set!(b, tn_type_idx, UInt32(3), ConcreteRef(module_idx, true))
         end
 
-        # Field 5: singletonname → symbol bytes (same physical byte-array payload).
-        _emit_typename_string_field!(b, tn_global_idx, tn_type_idx, str_arr_idx,
-                                     UInt32(5), String(tn.singletonname))
+        singleton_global = get_string_constant_global!(mod, registry, String(tn.singletonname))
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        global_get!(b, singleton_global, ConcreteRef(string_idx, false))
+        struct_set!(b, tn_type_idx, UInt32(5), ConcreteRef(string_idx, true))
 
         # Field 6: whether module.singletonname is a real binding.
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
@@ -1938,6 +1950,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         i32_const!(b, singleton_visible_main ? 1 : 0)
         struct_set!(b, tn_type_idx, UInt32(14), I32)
 
+
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper
         if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
@@ -1965,34 +1978,6 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     body = builder_code(b)
     func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
     add_start_function!(mod, func_idx)
-end
-
-"""
-Emit bytecode to set a string field on a \$JlTypeName global.
-Creates an i8 array from UTF-8 bytes of the string.
-"""
-function _emit_typename_string_field!(b::InstrBuilder, tn_global_idx::UInt32,
-                                       tn_type_idx::UInt32, str_arr_idx::UInt32,
-                                       field_idx::UInt32, str::String)
-    utf8 = Vector{UInt8}(str)
-    n = length(utf8)
-
-    # march17: declare truth + narrow to the TypeName receiver
-    global_get!(b, tn_global_idx, AnyRef)
-    ref_cast!(b, Int64(tn_type_idx), true)
-
-    if n == 0
-        i32_const!(b, 0)
-        array_new_default!(b, str_arr_idx)
-    else
-        for byt in utf8
-            i32_const!(b, Int64(byt))
-        end
-        array_new_fixed!(b, str_arr_idx, UInt32(n), I32)
-    end
-
-    struct_set!(b, tn_type_idx, field_idx, ConcreteRef(str_arr_idx, true))
-    return b
 end
 
 """

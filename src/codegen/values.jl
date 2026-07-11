@@ -636,7 +636,7 @@ byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The 
 place a string value is born; every string producer routes here.
 """
 function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                           scratch::Integer)
+                           scratch::Integer; syntax_flags::Integer=-1)
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
@@ -644,16 +644,20 @@ function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     i32_const!(b, Int64(ensure_type_id!(registry, String)))
     i32_const!(b, 0) # identityHash: lazily assigned by objectid
     local_get!(b, scratch)
-    struct_new!(b, struct_idx, WasmValType[I32, I32, ConcreteRef(arr_idx, true)])
+    i32_const!(b, syntax_flags)
+    struct_new!(b, struct_idx,
+                WasmValType[I32, I32, ConcreteRef(arr_idx, true), I32])
     return b
 end
 
 """ctx convenience: allocates the scratch local itself."""
-function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext)
+function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
+                           syntax_flags::Integer=-1)
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     sc = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, ConcreteRef(arr_idx, true))
-    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc)
+    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc;
+                             syntax_flags=syntax_flags)
 end
 
 """
@@ -1241,7 +1245,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             i32_const!(b, Int32(n_bytes))  # length
             array_new_data!(b, type_idx, seg_idx)
         end
-        emit_string_wrap!(b, ctx)
+        emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif val isa GlobalRef
         # Check if this GlobalRef is a module-level global (mutable struct instance)
@@ -1322,7 +1326,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # i32.const operands are SIGNED LEB128 (see String path above).
         i32_const!(b, Int32(n_bytes))
         array_new_data!(b, type_idx, seg_idx)
-        emit_string_wrap!(b, ctx)   # parity(M9): Symbols share the classed string rep
+        emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif typeof(val) <: Tuple
         # march7: funnel-first (tuple) — tuples of constant-expressible fields intern

@@ -135,6 +135,20 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            all_src = types_src * values_src * stmt_src
+            required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
+                        "name in (:jl_is_operator, :jl_is_syntactic_operator)",
+                        "dynamically-created Symbol lacks operator metadata"]
+            forbidden = [":name_is_operator", ":singleton_is_operator",
+                         "ASCII-only operator"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L45_one_source_slot_and_vararg_abi" => ("semantic Core.Argument source types have one slot authority while the one physical vararg projection path maps fixed-prefix packs by their ABI offset",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

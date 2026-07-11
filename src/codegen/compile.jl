@@ -58,8 +58,9 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
         i32_const!(bb, 0)
         local_get!(bb, scratch_idx)
+        i32_const!(bb, -1)
         struct_new!(bb, get_string_struct_type!(mod, type_registry),
-                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true)])
+                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true), I32])
     end
     _str0!(bb) = (local_get!(bb, 0);
                   struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
