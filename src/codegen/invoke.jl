@@ -1914,6 +1914,11 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     end
     # self-prepended entries: arg_types are shifted +1 relative to `args`
     early_argtypes_offset = closure_self_to_push === nothing ? 0 : 1
+    if target_info_early !== nothing
+        first_explicit = 1 + early_argtypes_offset
+        param_types = first_explicit <= length(target_info_early.arg_types) ?
+            target_info_early.arg_types[first_explicit:end] : ()
+    end
 
     # ================================================================
     # Early dispatch: Julia Base string operations → str_* intrinsics
@@ -2040,13 +2045,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     static_wasm_type(closure_self_to_push, ctx))   # THE typed value channel
     end
 
-    # Push arguments (for non-signal calls)
-    # PURE-044: Track which args had extern.convert_any emitted to avoid double conversion
-    extern_convert_emitted_args = falses(length(args))
+    # Push arguments through the resolved target signature. Each value is converted
+    # while it is still on top of the stack; no post-push positional repairs exist.
     for (arg_idx, arg) in enumerate(args)
-        # PURE-036z: Track if extern.convert_any was already emitted for this arg
-        # to avoid double conversion (externref → externref fails because externref not subtype of anyref)
-        extern_convert_emitted = false
 
         # Check if this is a nothing argument that needs ref.null
         # PURE-044: Also check PiNode with typ === Nothing (Union dispatch pattern)
@@ -2103,7 +2104,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         else
             local _ab = _compile_value_b(arg, ctx)
             local arg_ty = isempty(_ab.v.stack) ? nothing : _ab.v.stack[end]
-            local _ab_is_local = length(_ab.instrs) == 1 && _ab.instrs[1] isa InstrIR.LocalGet
             local _ab_merged = false
             # P6-ioprint: function/type singleton args compile to EMPTY emissions, but
             # trim-collected callees keep the param in their wasm signature (legacy
@@ -2133,13 +2133,11 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if expected_julia_type isa Type
                     expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                     actual_julia_type = infer_value_type(arg, ctx)
-                    actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
                     # march5 F8 (census: dart wrap = 100% of expressions through convertType,
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
                     # re-implementing convertType — is ONE funnel call. The emission's own
                     # tracked type (dart carries the type with the value) refines `actual`;
                     # the old ssa_locals re-lookup died with the ladder.
-                    arg_ty isa WasmValType && actual_julia_type !== Nothing && (actual_wasm = arg_ty)
 
                     # PURE-3111/4155: Handle Nothing→ref conversion.
                     # compile_value emits i32_const 0 for Nothing,
@@ -2157,8 +2155,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 ref_null!(fb, expected_wasm)
                             end
                             _ab_merged = true   # the phantom replaced the arg emission
-                            # Update actual_wasm so bridging logic below is a no-op
-                            actual_wasm = expected_wasm
                         end
                     end
                     # merge the arg (unless the phantom replaced it) BEFORE the coercion
@@ -2166,46 +2162,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                     coerce_stack_top!(fb, expected_wasm, ctx;
                                       from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                    # the tail target_info_early second-guess reads this flag
-                    if expected_wasm === ExternRef && actual_wasm !== ExternRef
-                        extern_convert_emitted = true
-                    end
                 end
             end
 
             # merge fallback: paths without param_types (or non-Type entries) never
             # reached the typed merge above — the arg still lands exactly once
             _ab_merged || (append_builder!(fb, _ab); _ab_merged = true)
-            # PURE-036z: Also check against target_info_early if available
-            # This catches cases where param_types says ConcreteRef but the actual target function
-            # expects ExternRef (because it was registered with different type mapping)
-            if target_info_early !== nothing && arg_idx + early_argtypes_offset <= length(target_info_early.arg_types)
-                target_expected_julia = target_info_early.arg_types[arg_idx + early_argtypes_offset]
-                target_expected_wasm = get_concrete_wasm_type(target_expected_julia, ctx.mod, ctx.type_registry)
-                if target_expected_wasm === ExternRef && !extern_convert_emitted
-                    # Target function expects externref for this arg
-                    # Check if we pushed a non-externref value that needs conversion
-                    # PURE-036z: Skip if extern.convert_any was already emitted to avoid double conversion
-                    if _ab_is_local
-                        actual_local_wasm = arg_ty
-                        if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                            local _eca = _ctx_builder(ctx, "compile_invoke")
-                            extern_convert_any!(_eca)
-                            append_builder!(fb, _eca)
-                            extern_convert_emitted = true
-                        end
-                    elseif arg_ty isa ConcreteRef
-                        # a concrete GC ref (struct_new & co) — needs conversion
-                        local _eca = _ctx_builder(ctx, "compile_invoke")
-                        extern_convert_any!(_eca)
-                        append_builder!(fb, _eca)
-                        extern_convert_emitted = true
-                    end
-                end
-            end
         end
-        # PURE-044: Record if extern.convert_any was emitted for this arg
-        extern_convert_emitted_args[arg_idx] = extern_convert_emitted
     end
 
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
@@ -2355,95 +2318,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                     if target_info !== nothing
                         @debug "Cross-call resolved" name=name idx=idx return_type=target_info.return_type has_ssa_local=haskey(ctx.ssa_locals, idx)
-                        # PURE-036z: Check if any arg needs extern.convert_any insertion
-                        # The args were already pushed, but we need to convert concrete refs to externref
-                        # where the target function expects externref but we pushed a concrete ref.
-                        # Since args are pushed in order and we can only add conversions at the end,
-                        # we need to use a different strategy: after ALL args are pushed, we can
-                        # re-order/convert them using locals. But this is complex.
-                        #
-                        # Simpler approach: check each arg and add extern.convert_any if the LAST
-                        # arg needs it (since that's what's on top of the stack). For earlier args,
-                        # this won't work with pure stack manipulation.
-                        #
-                        # Even simpler: only handle the case where the LAST arg needs conversion
-                        # (most common case for the current error).
-                        n_args = length(args)
-                        if n_args > 0
-                            last_arg_idx = n_args
-                            # PURE-044: Skip if extern.convert_any was already emitted in argument loop
-                            if last_arg_idx <= length(target_info.arg_types) && !extern_convert_emitted_args[last_arg_idx]
-                                last_target_julia = target_info.arg_types[last_arg_idx]
-                                last_target_wasm = get_concrete_wasm_type(last_target_julia, ctx.mod, ctx.type_registry)
-                                last_actual_julia = call_arg_types[last_arg_idx]
-                                last_actual_wasm = get_concrete_wasm_type(last_actual_julia, ctx.mod, ctx.type_registry)
-                                last_arg = args[n_args]
-
-                                if last_target_wasm === ExternRef && (last_actual_wasm isa ConcreteRef || last_actual_wasm === StructRef || last_actual_wasm === ArrayRef || last_actual_wasm === AnyRef)
-                                    blca = _ctx_builder(ctx, "compile_invoke")
-                                    extern_convert_any!(blca)
-                                    append_builder!(fb, blca)
-                                elseif last_target_wasm === ExternRef && last_actual_wasm === ExternRef && last_arg isa Core.SSAValue
-                                    # Check actual local type for the last arg
-                                    if haskey(ctx.ssa_locals, last_arg.id)
-                                        local_idx = ctx.ssa_locals[last_arg.id]
-                                        local_arr_idx = local_idx - ctx.n_params + 1
-                                        if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                                            actual_local_wasm = ctx.locals[local_arr_idx]
-                                            if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                                                blca2 = _ctx_builder(ctx, "compile_invoke")
-                                                extern_convert_any!(blca2)
-                                                append_builder!(fb, blca2)
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-
-                        # Also handle middle args if needed (use locals to reorder)
-                        # For now, check if the SECOND arg (index 2) needs conversion when there are 3+ args
-                        # This handles the func 126 case: (ref null 36), externref, (ref null 14)
-                        # where the middle arg (externref) is getting a concrete ref
-                        if n_args >= 2
-                            for mid_arg_idx in n_args-1:-1:1  # Check from second-to-last to first
-                                # PURE-044: Skip if extern.convert_any was already emitted in argument loop
-                                if mid_arg_idx <= length(target_info.arg_types) && !extern_convert_emitted_args[mid_arg_idx]
-                                    mid_target_julia = target_info.arg_types[mid_arg_idx]
-                                    mid_target_wasm = get_concrete_wasm_type(mid_target_julia, ctx.mod, ctx.type_registry)
-                                    mid_actual_julia = call_arg_types[mid_arg_idx]
-                                    mid_actual_wasm = get_concrete_wasm_type(mid_actual_julia, ctx.mod, ctx.type_registry)
-                                    mid_arg = args[mid_arg_idx]
-
-                                    needs_convert = false
-                                    if mid_target_wasm === ExternRef && (mid_actual_wasm isa ConcreteRef || mid_actual_wasm === StructRef || mid_actual_wasm === ArrayRef || mid_actual_wasm === AnyRef)
-                                        needs_convert = true
-                                    elseif mid_target_wasm === ExternRef && mid_actual_wasm === ExternRef && mid_arg isa Core.SSAValue
-                                        if haskey(ctx.ssa_locals, mid_arg.id)
-                                            local_idx = ctx.ssa_locals[mid_arg.id]
-                                            local_arr_idx = local_idx - ctx.n_params + 1
-                                            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                                                actual_local_wasm = ctx.locals[local_arr_idx]
-                                                if actual_local_wasm isa ConcreteRef || actual_local_wasm === StructRef || actual_local_wasm === ArrayRef || actual_local_wasm === AnyRef
-                                                    needs_convert = true
-                                                end
-                                            end
-                                        end
-                                    end
-
-                                    if needs_convert
-                                        # Stack currently: [arg1, arg2, ..., argN]
-                                        # Need to convert arg at mid_arg_idx
-                                        # This is complex with pure stack ops; skip for now and
-                                        # rely on the initial arg loop to handle most cases.
-                                        # The error at func 126 is for arg index 2 (0-based: 1)
-                                        # which is the second param. If there are only 2 args on
-                                        # stack but 3 params needed, there's a different bug.
-                                    end
-                                end
-                            end
-                        end
-
                         # Cross-function call - emit call instruction with target index
                         # fullstrict: the args sit on the PARENT builder — seed the real
                         # param count (readable from the pre-declared placeholder).

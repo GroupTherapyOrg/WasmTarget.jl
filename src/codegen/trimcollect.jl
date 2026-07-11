@@ -25,6 +25,23 @@
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
     out = Any[]
+    ir_arg_type = function(arg, src)
+        T = if arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
+               1 <= arg.id <= length(src.ssavaluetypes)
+            src.ssavaluetypes[arg.id]
+        elseif arg isa Core.Argument && src.slottypes isa Vector &&
+               1 <= arg.n <= length(src.slottypes)
+            src.slottypes[arg.n]
+        elseif arg isa GlobalRef && isdefined(arg.mod, arg.name)
+            Core.Const(getfield(arg.mod, arg.name))
+        elseif arg isa QuoteNode
+            Core.Const(arg.value)
+        else
+            Core.Const(arg)
+        end
+        T = CC.widenconst(T)
+        return T isa Type ? T : nothing
+    end
     for i in 2:2:length(codeinfos)
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
@@ -35,6 +52,25 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 target = stmt.args[1]
                 mi = target isa Core.MethodInstance ? target :
                      target isa Core.CodeInstance ? target.def : nothing
+                # Explicit invoke records the selected Method, but Julia may leave
+                # its MethodInstance abstract. WT's subset monomorphizes: rebuild
+                # the MI from the concrete call-site SSA types, exactly as the
+                # compiler would for an ordinary specialized call.
+                if mi isa Core.MethodInstance && length(stmt.args) >= 2
+                    fref = stmt.args[2]
+                    f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
+                        getfield(fref.mod, fref.name) : fref
+                    arg_types = Any[ir_arg_type(arg, src) for arg in stmt.args[3:end]]
+                    if f isa Function && all(T -> T isa Type && isconcretetype(T), arg_types)
+                        ftype = Tuple{Core.Typeof(f), arg_types...}
+                        matches = Base._methods_by_ftype(ftype, -1, Base.get_world_counter())
+                        if matches !== nothing
+                            target_method = mi.def
+                            match = findfirst(mm -> mm.method === target_method, matches)
+                            match === nothing || (mi = CC.specialize_method(matches[match]))
+                        end
+                    end
+                end
             elseif stmt.head === :call && length(stmt.args) >= 3 &&
                    stmt.args[1] === Core.invoke_in_world
                 target = stmt.args[3]

@@ -70,7 +70,11 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
             emit_classid_unbox!(tb, mod, registry, pt)
         elseif pt isa ConcreteRef
             ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
-        end   # anyref/eq/struct params take the value as-is
+        elseif pt isa RefType && pt !== AnyRef
+            # Dynamic entries receive anyref. Abstract heap-typed body parameters
+            # still require the same explicit narrowing as nominal ConcreteRefs.
+            ref_cast!(tb, pt, true)
+        end   # AnyRef already has the body's exact representation.
     end
     call!(tb, body_idx, WasmValType[], body_results)
     if !isempty(body_results) && body_results[1] in (I32, I64, F32, F64)

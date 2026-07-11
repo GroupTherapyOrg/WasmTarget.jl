@@ -3941,6 +3941,30 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     end
 
+    # Runtime Union construction is Dart's RTI union node: a real $JlUnion
+    # containing the two runtime type operands. This is the dynamic counterpart
+    # of get_type_constant_global!(Union{A,B}); no host type fabrication occurs.
+    if is_func(func, :apply_type) && length(args) == 3
+        union_ctor = args[1] === Union ||
+            (args[1] isa GlobalRef && isdefined(args[1].mod, args[1].name) &&
+             getfield(args[1].mod, args[1].name) === Union)
+        if union_ctor
+            union_idx = ctx.type_registry.jl_union_idx
+            jl_type_idx = ctx.type_registry.jl_type_idx
+            (union_idx === nothing || jl_type_idx === nothing) &&
+                error("runtime Union construction requires the JlType hierarchy")
+            ub = _ctx_builder(ctx, "compile_apply_type_union")
+            i32_const!(ub, 1) # TYPE_UNION
+            expected_type = ConcreteRef(jl_type_idx, true)
+            emit_value!(ub, args[2], ctx, expected_type)
+            emit_value!(ub, args[3], ctx, expected_type)
+            struct_new!(ub, union_idx,
+                        WasmValType[I32, expected_type, expected_type])
+            append_builder!(fb, ub)
+            return append_builder!(b, fb)
+        end
+    end
+
     # PURE-9063: typeof(x) — returns a $JlDataType struct ref from the type lookup table
     # If the type lookup table exists, returns (ref null $DataType) for full type object support.
     # Falls back to i32 typeId if no lookup table.
@@ -3964,7 +3988,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             else
                 # Polymorphic value — extract typeId, look up in type table
-                emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
+                actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
+                actual_type === ExternRef && any_convert_extern!(_tofb)
                 base_idx = ctx.type_registry.base_struct_idx
                 if base_idx !== nothing
                     # Need a scratch local for the typeId. Use a convention:
@@ -3982,7 +4007,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 type_id = get_type_id(ctx.type_registry, arg_type)
                 i32_const!(_tofb, Int64(type_id))
             else
-                emit_value!(_tofb, arg, ctx)  # R17-floor: fallback typeof consumes the actual representation
+                actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: fallback typeof consumes the actual representation
+                actual_type === ExternRef && any_convert_extern!(_tofb)
                 base_idx = ctx.type_registry.base_struct_idx
                 if base_idx !== nothing
                     emit_typeof!(_tofb, base_idx)

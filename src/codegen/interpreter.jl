@@ -104,6 +104,16 @@ end
     return v
 end
 
+# `partialsort!` permits arbitrary permutation of its input outside the selected
+# indices. A full stable sort is therefore an exact (if less asymptotically
+# selective) implementation and stays on the same pure-Julia array path.
+@overlay WASM_METHOD_TABLE function Base.partialsort!(v::AbstractVector, k;
+        lt=isless, by=identity, rev::Bool=false,
+        order::Base.Order.Ordering=Base.Order.Forward)
+    sort!(v; lt=lt, by=by, rev=rev, order=order)
+    return v[k]
+end
+
 # ─── sort Overlay (non-mutating) ──────────────────────────────────────────
 # Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
 #      Use our copy overlay + sort! overlay for a clean path.
@@ -766,6 +776,21 @@ end
 end
 @overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS8) where {Out<:_WT_BITS8}
     Core.bitcast(Out, x)
+end
+
+# Same-size, padding-free ReinterpretArray elements are the parent's bits with a
+# primitive reinterpret. Julia's generic implementation probes GC object headers
+# through pointer_from_objref; WasmGC has no such header ABI, while this valid-Julia
+# definition states the representation-independent semantics directly.
+@overlay WASM_METHOD_TABLE function Base.getindex(
+        a::Base.ReinterpretArray{T,N,S,A,false}, i::Int) where {T,N,S,A}
+    return reinterpret(T, getindex(parent(a), i))
+end
+@overlay WASM_METHOD_TABLE function Base.setindex!(
+        a::Base.ReinterpretArray{T,N,S,A,false}, value, i::Int) where {T,N,S,A}
+    converted = convert(T, value)
+    setindex!(parent(a), reinterpret(S, converted), i)
+    return value
 end
 
 # ─── show typeinfo overlay ────────────────────────────────────────────────

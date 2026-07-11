@@ -27,6 +27,22 @@ using Base.Experimental: @overlay
 @overlay WasmTarget.WASM_METHOD_TABLE Statistics.cor(x::AbstractVector, y::AbstractVector) =
     Statistics.corm(x, Statistics.mean(x), y, Statistics.mean(y))
 
+# Statistics only requires the requested quantile interval to be ordered and
+# explicitly permits mutation of `v`. Fully sorting through WT's pure-Julia sort
+# implementation is semantically exact and avoids Julia's host-header radix path.
+@overlay WasmTarget.WASM_METHOD_TABLE function Statistics._quantilesort!(
+        v::AbstractVector, sorted::Bool, minp::Real, maxp::Real)
+    isempty(v) && throw(ArgumentError("empty data vector"))
+    if !sorted
+        sort!(v)
+    end
+    if (ismissing(v[end]) || (v[end] isa Number && isnan(v[end]))) ||
+       any(x -> ismissing(x) || (x isa Number && isnan(x)), v)
+        throw(ArgumentError("quantiles are undefined in presence of NaNs or missing values"))
+    end
+    return v
+end
+
 # On 1.13, the `median(v)` / `quantile(v, p)` WRAPPER specializations inline
 # into an IR shape that hits a known generator limitation (a dead-coded
 # boundscheck arm interacting with an intra-range jump target — see the

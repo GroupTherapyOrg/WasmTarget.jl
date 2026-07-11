@@ -135,6 +135,23 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            required = ["ir_arg_type = function", "Base._methods_by_ftype",
+                        "param_types = first_explicit <= length(target_info_early.arg_types)",
+                        "Push arguments through the resolved target signature",
+                        "Base.ReinterpretArray{T,N,S,A,false}"]
+            forbidden = ["only handle the case where the LAST arg",
+                         "Also handle middle args if needed",
+                         "extern_convert_emitted_args", "compile_compute_sparams"]
+            all_src = trim_src * invoke_src * calls_src * interp_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L48_exact_mutable_global_initialization" => ("mutable GlobalRefs use identity-keyed exact initializer functions behind the one module start; fabricated default objects and silent partial emission are forbidden",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
