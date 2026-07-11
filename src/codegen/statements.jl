@@ -65,13 +65,69 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
     return b
 end
 
+function _pointer_node_refs(value, ssa_id::Int)::Bool
+    value isa Core.SSAValue && return value.id == ssa_id
+    value isa Expr && return any(arg -> _pointer_node_refs(arg, ssa_id), value.args)
+    value isa Core.PiNode && return _pointer_node_refs(value.val, ssa_id)
+    if value isa Core.PhiNode
+        return any(eachindex(value.values)) do i
+            isassigned(value.values, i) && _pointer_node_refs(value.values[i], ssa_id)
+        end
+    end
+    value isa Core.ReturnNode && isdefined(value, :val) &&
+        return _pointer_node_refs(value.val, ssa_id)
+    return false
+end
+
+"""
+Prove that a `jl_value_ptr` result never escapes WT's storage-relative pointer
+algebra. In that algebra a storage object's base offset is exactly zero; the
+backing object is carried by the recognized consumer and may never be observed as
+a fabricated numeric address. Any return, aggregate store, comparison, or unknown
+consumer rejects the compilation.
+"""
+function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
+                                             root_ssa::Int)::Bool
+    code = ctx.code_info.code
+    pending = Int[root_ssa]
+    seen = Set{Int}()
+    while !isempty(pending)
+        source = pop!(pending)
+        source in seen && continue
+        push!(seen, source)
+        for (consumer_idx, consumer) in enumerate(code)
+            consumer_idx == source && continue
+            _pointer_node_refs(consumer, source) || continue
+            if consumer isa Core.PiNode || consumer isa Core.PhiNode
+                push!(pending, consumer_idx)
+                continue
+            end
+            consumer isa Expr || return false
+            if consumer.head === :call
+                callee = consumer.args[1]
+                name = callee isa GlobalRef ? callee.name : callee
+                name in (:add_ptr, :sub_ptr, :bitcast, :pointerref, :pointerset) || return false
+                result_type = get(ctx.ssa_types, consumer_idx, Any)
+                result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
+            elseif consumer.head === :foreigncall
+                name = extract_foreigncall_name(consumer.args[1])
+                name in (:memcpy, :memmove, :memset) || return false
+                result_type = get(ctx.ssa_types, consumer_idx, Any)
+                result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
+            else
+                return false
+            end
+        end
+    end
+    return true
+end
+
 function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
-                            eltypes = (UInt8, Int8), allow_ref::Bool = false)
-    # Walk permissively (through bitcast/add_ptr/sub_ptr/PiNode and any phi
-    # edge) looking ONLY for the backing vector's identity. Offsets are NOT
-    # collected: in WasmGC the fake base pointer (getfield :ptr_or_offset)
-    # compiles to 0, so the POINTER VALUE ITSELF is the byte offset — callers
-    # compile the original pointer arg as the array.copy offset.
+                            eltypes = (UInt8, Int8), allow_ref::Bool = false,
+                            _seen::Set{Int} = Set{Int}())
+    # Walk through recognized storage-relative operations looking only for the
+    # backing object's identity. Offsets remain runtime values and are compiled
+    # by the consumer; no raw host address is ever synthesized.
     _mm_dbg = haskey(ENV, "WT_TRACE_MM")
     _fail = function (why, what)
         _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
@@ -80,15 +136,16 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
     cur = arg
     for _ in 1:48
         cur isa Core.SSAValue || return _fail("non-ssa", cur)
+        cur.id in _seen && return _fail("pointer-cycle", cur)
+        push!(_seen, cur.id)
         st = ctx.code_info.code[cur.id]
         _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
         if st isa Core.PiNode
             cur = st.val
         elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
                extract_foreigncall_name(st.args[1]) === :jl_value_ptr
-            # P4-stdlib: pointer_from_objref-style base pointers
-            # (jl_value_ptr(obj)) — in the fake-pointer model the base is 0,
-            # so just hop to the object and keep walking toward the vector.
+            # `jl_value_ptr(obj)` contributes the backing identity; its exact
+            # target address component is the storage-relative base offset.
             cur = st.args[6]
         elseif st isa Expr && st.head === :foreigncall &&
                extract_foreigncall_name(st.args[1]) === :jl_string_to_genericmemory
@@ -100,8 +157,18 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
             # The pointed-to bytes belong to the classed String/Symbol operand.
             return st.args[6]
         elseif st isa Core.PhiNode
-            (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
-            cur = st.values[1]
+            terminals = Any[]
+            for i in eachindex(st.values)
+                isassigned(st.values, i) || continue
+                value = st.values[i]
+                value isa Core.SSAValue && value.id == cur.id && continue
+                terminal = _trace_memmove_ptr(value, ctx; eltypes, allow_ref,
+                                              _seen=copy(_seen))
+                terminal === nothing && return _fail("phi-untraceable", st)
+                any(t -> isequal(t, terminal), terminals) || push!(terminals, terminal)
+            end
+            length(terminals) == 1 || return _fail("phi-multiple-storage", st)
+            return terminals[1]
         elseif allow_ref && st isa Expr && st.head === :new
             # P4-stdlib: pointer into a Base.RefValue{T} box (radix sort
             # counters use pointer_from_objref(Ref(...))) — the terminal IS
@@ -1936,9 +2003,17 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
     if _fc_sym === :jl_value_ptr
-        # pointer_from_objref-style base pointer — in the fake-pointer model
-        # every base is byte offset 0. A benign value, NOT a stub: typed
-        # pointerref/pointerset trace the object identity separately.
+        # Internal pointer_from_objref is representable only when its entire use
+        # graph stays inside the storage-relative pointer algebra proved above.
+        # The backing storage is recovered by the consuming array operation, and
+        # zero is then the exact relative offset of the object's first byte.
+        _storage_relative_pointer_is_closed(ctx, idx) || begin
+            record_unsupported!(ctx, :unsupported_method,
+                "jl_value_ptr escapes storage-relative WasmGC operations";
+                idx=idx, detail=expr, soundness_fatal=true)
+            ctx.last_stmt_was_stub = true
+            return b
+        end
         i64_const!(b, 0)
         return b
     elseif _fc_sym === :jl_get_tls_world_age

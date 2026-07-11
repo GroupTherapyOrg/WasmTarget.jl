@@ -2885,8 +2885,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 length(_mrb.v.stack) == 2 && drop!(fb)
                 return append_builder!(b, fb)
             elseif field_sym === :ptr_or_offset
-                # P4-stdlib (SHA update!): the fake-pointer VALUE is the byte
-                # offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
+                # P4-stdlib (SHA update!): the target pointer value is a
+                # storage-relative byte offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
                 # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
                 # pointer arithmetic over indexed refs stays faithful.
                 local _poo_idx = obj_arg isa Core.SSAValue ?
@@ -4377,7 +4377,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # P4-stdlib (Statistics median/quantile): TYPED loads through
         # Vector{T} storage pointers — sort's radix path reads UInt64 through
         # Ptr{UInt64} into Float64 storage (reinterpret(uinttype(T), v)).
-        # Same fake-pointer model: the pointer VALUE is the byte offset;
+        # The pointer value is the proven storage-relative byte offset;
         # element index = (ptr + (i-1)*sizeof(Te)) >> log2(sizeof(Te));
         # a same-size reinterpret bridges element type vs pointer target.
         local _PRG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,

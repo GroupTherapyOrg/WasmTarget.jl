@@ -135,6 +135,19 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L51_no_escaping_or_ambiguous_storage_pointers" => ("jl_value_ptr is an exact storage-relative offset only under whole-use-graph proof; escaping values and phis over different backing objects reject",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["_storage_relative_pointer_is_closed(ctx, idx)",
+                        "jl_value_ptr escapes storage-relative WasmGC operations",
+                        "phi-multiple-storage",
+                        "soundness_fatal=true"]
+            forbidden = ["fake-pointer", "fake pointer"]
+            all_src = statements_src * calls_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L50_closed_world_result_lub_and_reinterpret_bits" => ("dynamic selector results use the closed-world target LUB, proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
