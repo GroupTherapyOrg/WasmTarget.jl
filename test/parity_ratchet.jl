@@ -135,6 +135,20 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L52_dynamic_storage_owner_and_generic_norm" => ("pointer consumers retain runtime Memory/MemoryRef ownership across allocation phis, memmove returns its exact destination, and float norm uses LinearAlgebra's pure generic reference path instead of BLAS FFI",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
+            required = ["owner_is_memory ? owner_arg",
+                        "Canonicalize repeated `.mem` projections",
+                        "emit_value!(b, dest_ptr_arg, ctx, I64)",
+                        "LinearAlgebra.generic_norm2(x)",
+                        "LinearAlgebra.generic_normp(x, p)"]
+            forbidden = ["memmove returns dest ptr — push i64.const 0"]
+            all_src = statements_src * linalg_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L51_no_escaping_or_ambiguous_storage_pointers" => ("jl_value_ptr is an exact storage-relative offset only under whole-use-graph proof; escaping values and phis over different backing objects reject",
         () -> begin
             statements_src = read(joinpath(CODEGEN, "statements.jl"), String)

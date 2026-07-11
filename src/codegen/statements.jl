@@ -193,17 +193,73 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                 _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
                 return cur
             elseif cfn === :memoryrefnew
-                # P4-stdlib: identity hop through memoryrefnew — base refs are
-                # offset 0, and INDEXED refs now encode (i-1)*elsize in the
-                # pointer VALUE (getfield(:ptr_or_offset) reads
-                # ctx.memoryref_offsets), so the walk only needs the identity.
-                cur = st.args[2]
+                # The MemoryRef value itself is the runtime owner. Keeping it as
+                # the terminal preserves resize/copy phis that legitimately select
+                # different allocations; following into one constructor arm would
+                # invent a single backing identity.
+                local _mr_t = get_ssa_type(ctx, cur)
+                local _mr_el = _mr_t isa DataType && _mr_t.name.name === :GenericMemoryRef &&
+                               length(_mr_t.parameters) >= 2 ? _mr_t.parameters[2] :
+                               (_mr_t isa DataType && !isempty(_mr_t.parameters) ? _mr_t.parameters[1] : nothing)
+                _mr_el in eltypes || return _fail("memoryrefnew-elty: $_mr_t", st)
+                return cur
             elseif cfn === :getfield && length(st.args) >= 3
                 fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
-                if fld === :ptr_or_offset || fld === :ptr || fld === :mem
-                    # memoryref.ptr_or_offset, memory.ptr, memoryref.mem — all
-                    # hops toward the backing vector; all compile to offset-0
-                    # bases in WasmGC.
+                if fld === :ptr_or_offset || fld === :ptr
+                    owner = st.args[2]
+                    owner_type = get_ssa_type(ctx, owner)
+                    if owner_type isa DataType &&
+                       owner_type.name.name in (:MemoryRef, :GenericMemoryRef) &&
+                       owner isa Core.SSAValue
+                        # Normalize a MemoryRef pointer projection to its sibling
+                        # `.mem` projection when present. Julia's layout branch forms
+                        # both `mem.ptr + offset` and `ref.ptr_or_offset`; they denote
+                        # the same dynamic allocation and must converge before a phi.
+                        for (projection_idx, projection) in enumerate(ctx.code_info.code)
+                            projection isa Expr && projection.head === :call &&
+                                length(projection.args) >= 3 || continue
+                            projection.args[1] isa GlobalRef &&
+                                projection.args[1].name === :getfield || continue
+                            projection.args[2] == owner || continue
+                            projected_field = projection.args[3] isa QuoteNode ?
+                                projection.args[3].value : projection.args[3]
+                            projected_field === :mem || continue
+                            return Core.SSAValue(projection_idx)
+                        end
+                        return owner
+                    elseif owner_type isa DataType &&
+                       owner_type.name.name in (:Memory, :GenericMemory)
+                        if owner isa Core.SSAValue
+                            cur = owner
+                        else
+                            return owner
+                        end
+                    else
+                        cur = owner
+                    end
+                elseif fld === :mem
+                    memory_type = get_ssa_type(ctx, cur)
+                    if memory_type isa DataType &&
+                       memory_type.name.name in (:Memory, :GenericMemory)
+                        owner = st.args[2]
+                        if owner isa Core.SSAValue
+                            # Canonicalize repeated `.mem` projections of the same
+                            # MemoryRef so pointer-layout phis compare by semantic
+                            # owner, not by incidental SSA projection number.
+                            for (projection_idx, projection) in enumerate(ctx.code_info.code)
+                                projection isa Expr && projection.head === :call &&
+                                    length(projection.args) >= 3 || continue
+                                projection.args[1] isa GlobalRef &&
+                                    projection.args[1].name === :getfield || continue
+                                projection.args[2] == owner || continue
+                                projected_field = projection.args[3] isa QuoteNode ?
+                                    projection.args[3].value : projection.args[3]
+                                projected_field === :mem || continue
+                                return Core.SSAValue(projection_idx)
+                            end
+                        end
+                        return cur
+                    end
                     cur = st.args[2]
                 elseif fld === :ref
                     vec = st.args[2]
@@ -1458,7 +1514,16 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             if length(expr.args) >= 7
                 ptr_arg = expr.args[6]
                 len_arg = expr.args[7]
-                data_owner = _trace_memmove_ptr(ptr_arg, ctx; eltypes=(UInt8, Int8))
+                # Julia passes the GC owner as the final preserve argument. Prefer
+                # that runtime value over reconstructing identity from pointer phis:
+                # resize! legitimately switches an IOBuffer from its empty allocation
+                # to a grown allocation, so the owner phi is the exact dynamic storage.
+                owner_arg = length(expr.args) >= 9 ? expr.args[end] : nothing
+                owner_type = owner_arg === nothing ? nothing : get_ssa_type(ctx, owner_arg)
+                owner_is_memory = owner_type isa DataType &&
+                    owner_type.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
+                data_owner = owner_is_memory ? owner_arg :
+                    _trace_memmove_ptr(ptr_arg, ctx; eltypes=(UInt8, Int8))
                 if data_owner !== nothing
                     str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
@@ -1769,8 +1834,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 end
                 # Emit array.copy
                 array_copy!(b, arr_copy_type, arr_copy_type)
-                # memmove returns dest ptr — push i64.const 0
-                i64_const!(b, 0)
+                # C memmove returns the exact destination pointer. In WT's
+                # storage-relative algebra that is the already-computed offset,
+                # not a fabricated base value.
+                emit_value!(b, dest_ptr_arg, ctx, I64)
                 return b
             end
         end
@@ -1850,8 +1917,8 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             end
             # emit array.copy
             array_copy!(b, arr_copy_type, arr_copy_type)  # dest type, src type
-            # memmove returns dest ptr — push i64.const 0 as the result
-            i64_const!(b, 0)
+            # C memmove returns its exact destination pointer.
+            emit_value!(b, dest_ptr_arg, ctx, I64)
             return b
         end
     end

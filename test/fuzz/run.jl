@@ -291,7 +291,16 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
         res = @check db=db rng=Xoshiro(seed + i) max_examples=max_examples function ci_prop(body = gen)
             property_holds(body, T0) || _hits_known_gap(body, known)   # known-open gaps don't fail the ratchet
         end
-        something(res.result) isa Supposition.Fail && (allpass = false)
+        result = something(res.result)
+        if result isa Supposition.Fail
+            body = result.example.body
+            outcome = differential(body, T0)
+            @error("bounded differential fuzz counterexample",
+                input_type=T0, body=body, category=outcome.category,
+                input=outcome.input, native=outcome.native, wasm=outcome.wasm,
+                source=outcome.src, detail=outcome.detail)
+            allpass = false
+        end
     end
     return allpass
 end
