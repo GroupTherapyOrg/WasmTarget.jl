@@ -135,6 +135,24 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L45_one_source_slot_and_vararg_abi" => ("semantic Core.Argument source types have one slot authority while the one physical vararg projection path maps fixed-prefix packs by their ABI offset",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
+            helpers_src = read(joinpath(CODEGEN, "helpers.jl"), String)
+            required = ["function source_slot_type", "source_type = source_slot_type(ctx, val.n)",
+                        "local _gft_fixed = args[1].n - 2",
+                        "physical_offset + i - 1", "_gft_result_T isa Union ? AnyRef",
+                        "function is_builtin_func"]
+            forbidden = ["ctx.code_info.slottypes[args[1].n]",
+                         "ctx.code_info.slottypes[val.id]",
+                         "func.name in (:isdefined, :getfield, :setfield!) && func.mod in"]
+            all_src = context_src * calls_src * values_src * flow_src * helpers_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L44_interned_module_metadata" => ("Module is one interned identity object with exact name/parent and collected binding visibility metadata; no empty shell or TypeName module-name string surrogate remains",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

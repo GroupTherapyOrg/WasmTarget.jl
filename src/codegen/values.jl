@@ -68,8 +68,9 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         end
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
-        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
-            return julia_to_wasm_type_concrete(ctx.code_info.slottypes[val.id], ctx)
+        else
+            source_type = source_slot_type(ctx, val.id)
+            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
         end
         return AnyRef
     elseif val isa Core.Argument

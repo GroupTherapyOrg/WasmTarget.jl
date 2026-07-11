@@ -225,7 +225,8 @@ end
 
 """Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot."""
 function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
-                                    arg_types::Tuple, index_local::Integer)
+                                    arg_types::Tuple, physical_offset::Integer,
+                                    index_local::Integer)
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     tuple_type = Tuple{arg_types...}
@@ -237,7 +238,7 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
     emit_struct_prefix!(bld, ctx.type_registry, BoundsError, error_info)
     emit_struct_prefix!(bld, ctx.type_registry, tuple_type, tuple_info)
     for (i, T) in enumerate(arg_types)
-        local_get!(bld, i - 1)
+        local_get!(bld, physical_offset + i - 1)
     end
     struct_new!(bld, tuple_info.wasm_type_idx)
     coerce_stack_top!(bld, AnyRef, ctx; from_julia=tuple_type)
@@ -6041,8 +6042,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         _emit_svec_values!(fb, args, ctx)
 
     # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
-    # These are dead code paths from dynamic dispatch — trap silently in WasmGC.
-    elseif func isa GlobalRef && func.name in (:isdefined, :getfield, :setfield!) && func.mod in (Core, Base)
+    # These builtins share the ordinary typed struct/tuple lowering below.
+    elseif func isa GlobalRef &&
+           any(name -> is_builtin_func(func, name), (:isdefined, :getfield, :setfield!))
         # PURE-908: Clear pre-pushed args
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         # P4-stdlib (Statistics median): getfield on a compile-time CONSTANT
@@ -6058,29 +6060,37 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                            (args[2] isa QuoteNode ? args[2].value : args[2]) : nothing
         if func.name === :getfield && length(args) >= 2 &&
            args[1] isa Core.Argument && !ctx.is_compiled_closure &&
-           args[1].n <= length(ctx.code_info.slottypes) && !(_gft_index isa Integer)
-            local _gft_slot_T = ctx.code_info.slottypes[args[1].n]
+           !(_gft_index isa Integer)
+            local _gft_slot_T = get_ssa_type(ctx, args[1])
+            local _gft_fixed = args[1].n - 2
+            local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
             if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
-               fieldcount(_gft_slot_T) == length(ctx.arg_types)
+               _gft_fixed >= 0 && fieldcount(_gft_slot_T) == _gft_pack_n
                 local _gft_result_T = get(ctx.ssa_types, idx, Any)
-                local _gft_result_w = get_concrete_wasm_type(_gft_result_T, ctx.mod,
-                                                              ctx.type_registry)
+                # A runtime index over heterogeneous tuple fields joins at the
+                # value representation LUB. Julia inference reports that join
+                # as a Union; WT's single boxed-value channel for such unions is
+                # AnyRef, never one arbitrarily selected variant layout.
+                local _gft_result_w = _gft_result_T isa Union ? AnyRef :
+                    get_concrete_wasm_type(_gft_result_T, ctx.mod, ctx.type_registry)
                 local _gft_ib = _ctx_builder(ctx, "compile_call.vararg_dynamic_getfield")
                 local _gft_index_local = allocate_local!(ctx, I64)
                 emit_value!(_gft_ib, args[2], ctx, I64)
                 local_set!(_gft_ib, _gft_index_local)
                 local function _emit_case!(i::Int)
-                    if i > length(ctx.arg_types)
-                        _emit_vararg_bounds_error!(_gft_ib, ctx, ctx.arg_types,
+                    if i > _gft_pack_n
+                        _emit_vararg_bounds_error!(_gft_ib, ctx,
+                                                   ctx.arg_types[_gft_fixed + 1:end],
+                                                   _gft_fixed,
                                                    _gft_index_local)
                         return
                     end
                     local_get!(_gft_ib, _gft_index_local); i64_const!(_gft_ib, i)
                     num!(_gft_ib, Opcode.I64_EQ)
                     if_!(_gft_ib, _gft_result_w)
-                    local_get!(_gft_ib, i - 1)
+                    local_get!(_gft_ib, _gft_fixed + i - 1)
                     coerce_stack_top!(_gft_ib, _gft_result_w, ctx;
-                                      from_julia=ctx.arg_types[i])
+                                      from_julia=ctx.arg_types[_gft_fixed + i])
                     else_!(_gft_ib)
                     _emit_case!(i + 1)
                     end_block!(_gft_ib)
@@ -6097,13 +6107,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # one physical parameter per specialized vararg. A literal tuple
             # projection is therefore exactly the corresponding parameter read.
             if args[1] isa Core.Argument && !ctx.is_compiled_closure &&
-               args[1].n <= length(ctx.code_info.slottypes)
-                local _gft_slot_T = ctx.code_info.slottypes[args[1].n]
+               source_slot_type(ctx, args[1].n) !== nothing
+                local _gft_slot_T = get_ssa_type(ctx, args[1])
+                local _gft_fixed = args[1].n - 2
+                local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
                 if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
-                   fieldcount(_gft_slot_T) == length(ctx.arg_types) &&
-                   1 <= _gft_i <= length(ctx.arg_types)
+                   _gft_fixed >= 0 && fieldcount(_gft_slot_T) == _gft_pack_n &&
+                   1 <= _gft_i <= _gft_pack_n
                     local _gft_ib = _ctx_builder(ctx, "compile_call.vararg_getfield")
-                    local_get!(_gft_ib, _gft_i - 1)
+                    local_get!(_gft_ib, _gft_fixed + _gft_i - 1)
                     append_builder!(fb, _gft_ib)
                     _gfc_done = true
                 end

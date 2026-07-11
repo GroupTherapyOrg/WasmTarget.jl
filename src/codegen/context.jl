@@ -1891,11 +1891,26 @@ end
 Get the Julia type of an SSA value or other value reference.
 Used for type checking (e.g., in isa() calls).
 """
+function source_slot_type(ctx::AbstractCompilationContext, slot::Integer)::Union{Type, Nothing}
+    slottypes = ctx.code_info.slottypes
+    slottypes isa Vector || return nothing
+    1 <= slot <= length(slottypes) || return nothing
+    slot_type = slottypes[slot]
+    widened = slot_type isa Type ? slot_type : Core.Compiler.widenconst(slot_type)
+    return widened isa Type ? widened : nothing
+end
+
 function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
     if val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
     elseif val isa Core.Argument
-        # Handle argument references
+        # Core.Argument indexes Julia IR slots, whose inferred source contract
+        # is CodeInfo.slottypes. `ctx.arg_types` is the flattened physical Wasm
+        # signature and intentionally differs for packed Vararg slots, closures,
+        # and other ABI transformations; it is only a legacy fallback when the
+        # source slot table is unavailable.
+        source_type = source_slot_type(ctx, val.n)
+        source_type !== nothing && return source_type
         if ctx.is_compiled_closure
             idx = val.n
         else
@@ -2120,9 +2135,9 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         end
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
-        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
-            # Local variable slot — return its inferred type from CodeInfo
-            return ctx.code_info.slottypes[val.id]
+        else
+            source_type = source_slot_type(ctx, val.id)
+            source_type !== nothing && return source_type
         end
     elseif val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)

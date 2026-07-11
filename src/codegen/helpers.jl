@@ -27,6 +27,22 @@ function is_func(func, name::Symbol)::Bool
     return false
 end
 
+"""True when a reference resolves to the named Core/Base builtin binding."""
+function is_builtin_func(func, name::Symbol)::Bool
+    resolved = if func isa GlobalRef
+        try
+            getglobal(func.mod, func.name)
+        catch
+            return false
+        end
+    else
+        func
+    end
+    core_target = isdefined(Core, name) ? getglobal(Core, name) : nothing
+    base_target = isdefined(Base, name) ? getglobal(Base, name) : nothing
+    return resolved === core_target || resolved === base_target
+end
+
 """
 Check if a function is a comparison operation.
 """

@@ -81,8 +81,9 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         arg_types_idx = val.id - 1
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
             return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
-        elseif val.id >= 1 && val.id <= length(ctx.code_info.slottypes)
-            return julia_to_wasm_type_concrete(ctx.code_info.slottypes[val.id], ctx)
+        else
+            source_type = source_slot_type(ctx, val.id)
+            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
         end
     elseif val isa Core.Argument
         # PURE-036ab: Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
