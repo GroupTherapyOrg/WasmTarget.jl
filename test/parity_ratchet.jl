@@ -135,6 +135,16 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L54_pure_dense_statistics_correlation" => ("dense float correlation retains Statistics corm arithmetic over one explicitly length-validated index domain",
+        () -> begin
+            stats_src = read(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl"), String)
+            required = ["Statistics.corm(", "x::Vector{T}, mx::T, y::Vector{T}, my::T",
+                        "length(y) == n", "@simd for i in eachindex(x)",
+                        "Statistics.clampcor("]
+            forbidden = ["@simd for i in eachindex(x, y)"]
+            count(p -> !occursin(p, stats_src), required) +
+                count(p -> occursin(p, stats_src), forbidden)
+        end),
     "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain",
         () -> begin
             linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)

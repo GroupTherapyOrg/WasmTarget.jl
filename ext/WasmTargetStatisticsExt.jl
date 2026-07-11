@@ -27,6 +27,30 @@ using Base.Experimental: @overlay
 @overlay WasmTarget.WASM_METHOD_TABLE Statistics.cor(x::AbstractVector, y::AbstractVector) =
     Statistics.corm(x, Statistics.mean(x), y, Statistics.mean(y))
 
+# The stdlib implementation has already established equal lengths before its
+# `eachindex(x, y)` loop, but that multi-array iterator retains a lazy
+# AnnotatedString mismatch path. This dense specialization is the same corm
+# accumulation over the one validated index domain.
+@overlay WasmTarget.WASM_METHOD_TABLE function Statistics.corm(
+        x::Vector{T}, mx::T, y::Vector{T}, my::T) where {T<:Union{Float32,Float64}}
+    n = length(x)
+    length(y) == n || throw(DimensionMismatch("inconsistent lengths"))
+    n > 0 || throw(ArgumentError("correlation only defined for non-empty vectors"))
+    @inbounds begin
+        xx = zero(sqrt(abs2(one(x[1]))))
+        yy = zero(sqrt(abs2(one(y[1]))))
+        xy = zero(x[1] * y[1]')
+        @simd for i in eachindex(x)
+            xi = x[i] - mx
+            yi = y[i] - my
+            xx += abs2(xi)
+            yy += abs2(yi)
+            xy += xi * yi'
+        end
+    end
+    Statistics.clampcor(xy / max(xx, yy) / sqrt(min(xx, yy) / max(xx, yy)))
+end
+
 # Statistics only requires the requested quantile interval to be ordered and
 # explicitly permits mutation of `v`. Fully sorting through WT's pure-Julia sort
 # implementation is semantically exact and avoids Julia's host-header radix path.
