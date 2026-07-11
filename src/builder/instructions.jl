@@ -552,46 +552,14 @@ function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})
             _module_invalid(:add_rec_group, "a type may occur only once in a recursive group")
         all(i -> Int(i) < length(mod.types), type_indices) ||
             _module_invalid(:add_rec_group, "recursive group contains an unknown type index")
+        issorted(type_indices) ||
+            _module_invalid(:add_rec_group, "recursive group indices must be in type-section order")
+        all(type_indices[i] + UInt32(1) == type_indices[i + 1] for i in 1:length(type_indices)-1) ||
+            _module_invalid(:add_rec_group, "recursive groups must be contiguous type-section intervals")
         existing = Set(Iterators.flatten(mod.rec_groups))
         any(i -> i in existing, type_indices) &&
             _module_invalid(:add_rec_group, "a type may belong to only one recursive group")
         push!(mod.rec_groups, type_indices)
-    end
-end
-
-"""
-    ensure_nominal_struct_types!(mod)
-
-Group structurally-equivalent StructType entries into rec groups so they are
-nominally distinct for ref.test dispatch.  In WasmGC, types in separate
-singleton rec groups with identical structure are considered equivalent;
-placing them in the same rec group makes them distinct by position.
-"""
-function ensure_nominal_struct_types!(mod::WasmModule)
-    # Already-grouped type indices (skip them)
-    grouped = Set{UInt32}()
-    for g in mod.rec_groups
-        for ti in g
-            push!(grouped, ti)
-        end
-    end
-
-    # Build groups of struct types with identical layout
-    # Key: structural signature → list of type indices
-    buckets = Dict{Vector{Tuple{Any,Bool}}, Vector{UInt32}}()
-    for (i, ct) in enumerate(mod.types)
-        ti = UInt32(i - 1)
-        ti in grouped && continue
-        ct isa StructType || continue
-        sig = [(f.valtype, f.mutable_) for f in ct.fields]
-        bucket = get!(buckets, sig, UInt32[])
-        push!(bucket, ti)
-    end
-
-    # Create rec groups for buckets with 2+ types
-    for (_, indices) in buckets
-        length(indices) >= 2 || continue
-        push!(mod.rec_groups, indices)
     end
 end
 

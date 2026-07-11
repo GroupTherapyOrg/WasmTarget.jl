@@ -164,6 +164,7 @@ Check if a type is self-referential (has fields that reference itself).
 function is_self_referential_type(T::DataType)::Bool
     for i in 1:fieldcount(T)
         ft = fieldtype(T, i)
+        ft === T && return true
         # Check nullable fields (Union{Nothing, T})
         if ft isa Union
             inner = get_nullable_inner_type(ft)
@@ -182,36 +183,36 @@ end
 """
 Register a Julia struct type in the Wasm module.
 """
-# Cycle guard for register_struct_type!: the haskey fast-path only helps AFTER
-# a registration completes, so mutually/self-recursive struct types (Luxor/
-# Karnak/Graphs object graphs inside Makie figures) recursed to StackOverflow.
-# WasmGC rec-groups could support these properly (future); until then, refuse
-# with a NAMED error so pipelines degrade honestly instead of crashing.
-const _STRUCT_REG_STACK = Vector{DataType}()
+# A per-compile diagnostic stack for unexpected registration-dependency cycles.
+# Julia's realizable self-recursive layouts take the reserved rec-group path
+# below; this guard catches unbounded registration algorithms without sharing
+# mutable state between concurrent compilation tasks.
+_struct_reg_stack() = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
 
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
-    if T in _STRUCT_REG_STACK
+    local reg_stack = _struct_reg_stack()
+    if T in reg_stack
         throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-            "recursive struct type $(T) (registration cycle: $(join(_STRUCT_REG_STACK, " → ")) → $(T)); WasmGC rec-group support not implemented",
+            "struct registration dependency cycle $(join(reg_stack, " → ")) → $(T) escaped the reserved recursion-group path",
             nothing, nothing)))
     end
-    if length(_STRUCT_REG_STACK) > 120
+    if length(reg_stack) > 120
         # not a cycle — unbounded DESCENT through ever-new parametric types
         # (each nesting level mints a fresh type, so the cycle check never
         # fires). Name the tail of the chain so the growth pattern is visible.
-        tail = join((string(nameof(t)) for t in _STRUCT_REG_STACK[end-7:end]), " → ")
+        tail = join((string(nameof(t)) for t in reg_stack[end-7:end]), " → ")
         throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
             "struct type registration exceeded depth 120 (type-descent, last: … → $(tail) → $(T))",
             nothing, nothing)))
     end
-    push!(_STRUCT_REG_STACK, T)
+    push!(reg_stack, T)
     try
         return _register_struct_type_inner!(mod, registry, T)
     finally
-        pop!(_STRUCT_REG_STACK)
+        pop!(reg_stack)
     end
 end
 
@@ -322,6 +323,21 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         end
         delete!(_registering_types, T)
 
+        # The wrapper's size tuple must precede the contiguous recursive group.
+        # Registering it after the reserved struct would split the group interval.
+        local has_recursive_vector = any(1:fieldcount(T)) do i
+            local ft = fieldtype(T, i)
+            local inner = ft isa Union ? get_nullable_inner_type(ft) : ft
+            inner isa DataType && inner <: AbstractVector && eltype(inner) === T
+        end
+        if has_recursive_vector && !haskey(registry.structs, Tuple{Int64})
+            register_tuple_type!(mod, registry, Tuple{Int64})
+        end
+
+        # The recursive struct's own superclass must also precede its reserved
+        # index; a supertype in a later recursion group is invalid Wasm.
+        dag_supertype_idx!(mod, registry, T)
+
         # Any recursive Vector wrapper must know its class parent before the
         # contiguous recursive group begins; creating a parent inside the group
         # would split its type-index interval.
@@ -410,6 +426,7 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         end
         append!(rec_group_types, vector_wrapper_indices)
         if length(rec_group_types) > 1
+            sort!(rec_group_types)
             add_rec_group!(mod, rec_group_types)
         end
 

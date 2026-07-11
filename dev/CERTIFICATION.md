@@ -30,6 +30,7 @@ diagnosed validating trap.
 | One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
 | Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
 | Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | separate Top/Object types; ordinary structs, tuples, and Array wrappers inherit `{classId, identityHash}` at registration; value boxes remain Top-only; closure contexts remain internal; `jl_object_id` reads/writes field 1 | Locks L20/L28; mutable-object identity differential; focused shards and external validation | ✅ for current representations; final clean whole-suite rerun remains required |
+| Recursive type groups | wasm_builder `builder/types.dart:45-70`, `serialize/sections.dart:45-66`; definitions may reference only the same or earlier contiguous recursion group | self-recursive structs reserve their final index after supertypes/dependencies, group the contiguous struct/array/wrapper interval, then fill the reserved definition; serializer rejects unordered/noncontiguous groups | Lock L29; direct-recursive and `Vector{Self}` execution plus external validation | ✅ for Julia-realizable recursive layouts |
 | Dynamic dispatch table | `dynamic_dispatch_table.dart:25+`; classId/selector-based table construction | one selector table, classId + offset + indirect call; FNV dispatch deleted | Lock L10; dispatch suites | ✅ for current supported call surface |
 | Module strategy | `modules.dart:182,219`; default and deferred strategies are explicit | one monolithic closed-world Wasm module | Deferred loading is excluded | ✅ within declared monolithic scope |
 | Loud unsupported behavior | dart `unimplemented` paths diagnose and trap; `convertType` has no guess-and-continue arm | `record_unsupported!`/`emit_unsupported_stub!` distinguish fatal wrong-value replacements from diagnosed traps | Locks L8, L14-L19; soundness tests | ✅ |
@@ -57,8 +58,8 @@ the source rows and locks above are independently required.
 
 ## Remaining blockers to a final green certificate
 
-1. Close current builder/codegen gaps that are not excluded, including mixed-container
-   `_apply_iterate` and principled recursive type groups. Runtime-length composition
+1. Close current builder/codegen gaps that are not excluded, including the remaining
+   mixed-container `_apply_iterate` audit. Runtime-length composition
    (including mixed Any-storage escape) and packed i8/i16 arrays are now executable and
    locked; a diagnosed remaining failure is sound but is not feature parity.
 2. Drive R17 unwrapped emissions and R16 external conversion calls to their justified

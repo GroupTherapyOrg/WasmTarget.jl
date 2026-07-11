@@ -37,6 +37,9 @@ const MBV = WasmTarget
         @test MBV.add_tag!(m, tag_ft) == 0
         @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, structidx])
         @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[99])
+        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[tag_ft, result_ft])
+        late = MBV.add_struct_type!(m, MBV.FieldType[])
+        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, late])
     end
 
     @testset "GC struct subtype prefix" begin

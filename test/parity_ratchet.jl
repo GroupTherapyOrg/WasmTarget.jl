@@ -135,6 +135,24 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
+        () -> begin
+            builder_src = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            required = [
+                "recursive groups must be contiguous type-section intervals",
+                "recursive group indices must be in type-section order",
+                "sort!(rec_group_types)",
+                "_struct_reg_stack() = get!",
+                "ft === T && return true",
+                "The wrapper's size tuple must precede the contiguous recursive group",
+                "The recursive struct's own superclass must also precede its reserved",
+            ]
+            all_src = builder_src * structs_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src),
+                      ["ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"])
+        end),
     "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
