@@ -1342,37 +1342,16 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # Get the struct type definition to check expected field types
         struct_type_def = ctx.mod.types[type_idx + 1]
 
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        _emit_tid!(T)
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
 
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
             field_val = val[i]
-            # PURE-141: When field value is a Type constant and field expects a ref type,
-            # emit ref.null instead of i32.const 0 (compile_value(Type) returns i32)
-            expected_wasm = nothing
             local _wasm_fi = i + Int(info.field_offset)  # PURE-9024: skip typeId
-            if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
-                expected_wasm = struct_type_def.fields[_wasm_fi].valtype
-            end
-            if field_val isa Type && expected_wasm !== nothing &&
-               (expected_wasm isa ConcreteRef || expected_wasm === StructRef ||
-                expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef)
-                # Type value needs ref type - emit ref.null of expected type
-                if expected_wasm isa ConcreteRef
-                    ref_null!(b, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
-                elseif expected_wasm === ArrayRef
-                    ref_null!(b, ArrayRef)
-                elseif expected_wasm === ExternRef
-                    ref_null!(b, ExternRef)
-                elseif expected_wasm === AnyRef
-                    ref_null!(b, AnyRef)
-                else
-                    ref_null!(b, StructRef)
-                end
-            else
-                emit_value!(b, field_val, ctx)  # R17-floor: registered constant field fallback
-            end
+            (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
+                error("tuple constant field lacks a physical Wasm type")
+            local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
+            emit_value!(b, field_val, ctx, expected_wasm; from_julia=fieldtype(T, i))
         end
 
         # Create the struct
@@ -1404,8 +1383,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
         info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
         type_idx = info.wasm_type_idx
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        _emit_tid!(Module)
+        emit_struct_prefix!(b, ctx.type_registry, Module, info)
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
@@ -1420,8 +1398,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        _emit_tid!(T)
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
@@ -1445,11 +1422,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        _emit_tid!(T)
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
-            emit_value!(b, field_val, ctx)  # R17-floor: closure constant field fallback
+            local _fw = struct_type_def.fields[fi + Int(info.field_offset)].valtype
+            emit_value!(b, field_val, ctx, _fw; from_julia=fieldtype(T, fi))
         end
 
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
@@ -1682,139 +1659,22 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
 
-        # Check for undefined fields — if ALL fields are undefined, emit ref.null.
-        # If only SOME fields are undefined, emit default values for those and still
-        # construct the struct (TRUE-TI-001: enables Method objects with optional fields).
-        n_undefined = count(!isdefined(val, fn) for fn in fieldnames(T))
-        if n_undefined == length(fieldnames(T))
-            # Fully undefined struct - emit ref.null
-            ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return b
-        end
+        local undefined_fields = Symbol[fn for fn in fieldnames(T) if !isdefined(val, fn)]
+        isempty(undefined_fields) || throw(WasmCompileError(WasmDiagnostic(
+            :unsupported_type, string(nameof(T)),
+            "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values",
+            nothing, nothing)))
 
-        # Push field values with type safety checks
         struct_type_def = ctx.mod.types[type_idx + 1]
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
-        _emit_tid!(T)
+        struct_type_def isa StructType || error("constant $T has no struct Wasm layout")
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
         for (fi, field_name) in enumerate(fieldnames(T))
-            # TRUE-TI-001: Handle undefined fields with type-correct defaults
-            if !isdefined(val, field_name)
-                local _undef_wasm_fi = fi + Int(info.field_offset)
-                if struct_type_def isa StructType && _undef_wasm_fi <= length(struct_type_def.fields)
-                    undef_field_type = struct_type_def.fields[_undef_wasm_fi].valtype
-                    if undef_field_type isa ConcreteRef
-                        ref_null!(b, Int64(undef_field_type.type_idx), ConcreteRef(UInt32(undef_field_type.type_idx), true))
-                    elseif undef_field_type === AnyRef
-                        ref_null!(b, AnyRef)
-                    elseif undef_field_type === EqRef
-                        ref_null!(b, EqRef)
-                    elseif undef_field_type === ExternRef
-                        ref_null!(b, ExternRef)
-                    elseif undef_field_type === StructRef
-                        ref_null!(b, StructRef)
-                    elseif undef_field_type === ArrayRef
-                        ref_null!(b, ArrayRef)
-                    elseif undef_field_type === I32
-                        i32_const!(b, 0)
-                    elseif undef_field_type === I64
-                        i64_const!(b, 0)
-                    elseif undef_field_type === F32
-                        f32_const!(b, Float32(0.0))
-                    elseif undef_field_type === F64
-                        f64_const!(b, Float64(0.0))
-                    else
-                        # Fallback: try ref.null with the generic type
-                        ref_null!(b, AnyRef)
-                    end
-                else
-                    ref_null!(b, AnyRef)
-                end
-                continue
-            end
             field_val = getfield(val, field_name)
-            local _fvc_b = _compile_value_b(field_val, ctx)
-            local _fv_ty = isempty(_fvc_b.v.stack) ? nothing : _fvc_b.v.stack[end]
-            local _fvc_done = false
-            # B4/U2: the union-typed-field tagged-union-wrapper box-coercion is RETIRED — a
-            # union field is AnyRef (the classId box / struct ref), never the {typeId,tag,value}
-            # wrapper, so the constant's field value (a ref) is already anyref-compatible.
-            # TRUE-TI-001: If compile_value produced no bytes (e.g., Module, Function),
-            # emit ref.null for the field's expected type
-            if isempty(_fvc_b.instrs)
-                local _empty_fi = fi + Int(info.field_offset)
-                if struct_type_def isa StructType && _empty_fi <= length(struct_type_def.fields)
-                    empty_field_type = struct_type_def.fields[_empty_fi].valtype
-                    if empty_field_type isa ConcreteRef
-                        ref_null!(b, Int64(empty_field_type.type_idx), ConcreteRef(UInt32(empty_field_type.type_idx), true))
-                    elseif empty_field_type === AnyRef
-                        ref_null!(b, AnyRef)
-                    elseif empty_field_type === ExternRef
-                        ref_null!(b, ExternRef)
-                    elseif empty_field_type === I32
-                        i32_const!(b, 0)
-                    elseif empty_field_type === I64
-                        i64_const!(b, 0)
-                    else
-                        ref_null!(b, AnyRef)
-                    end
-                    continue
-                end
-            end
-            # Check field type compatibility — decided by the emission's TRACKED type
-            # (march3: the struct.new LEB re-decode and the 0x41/0x42/0x20 first-byte
-            # scans are DELETED; _fv_ty is the byproduct dart carries with every value).
-            replaced = false
-            local _wasm_fi = fi + Int(info.field_offset)  # PURE-9024: skip typeId
-            if struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)
-                expected_wasm = struct_type_def.fields[_wasm_fi].valtype
-                if expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef || expected_wasm === ExternRef
-                    need_replace = false
-                    if _fv_ty isa ConcreteRef && _wt_heap_kind(_fv_ty, ctx.mod) === :concrete_struct
-                        # behavior-preserving: the old scan fired only on values ENDING in
-                        # struct.new — struct-kind refs, never the array-kind (string data)
-                        if expected_wasm isa ConcreteRef && _fv_ty.type_idx != expected_wasm.type_idx
-                            # mismatched concrete struct ref (exact-idx test, as before)
-                            need_replace = true
-                        elseif expected_wasm === ArrayRef || expected_wasm === ExternRef
-                            # a GC struct ref where an array/extern slot is expected
-                            need_replace = true
-                        end
-                    elseif _fv_ty === I32 || _fv_ty === I64
-                        # numeric value meeting a ref-typed field slot
-                        need_replace = true
-                    end
-                    if need_replace
-                        if expected_wasm isa ConcreteRef
-                            ref_null!(b, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
-                        elseif expected_wasm === ArrayRef
-                            ref_null!(b, ArrayRef)
-                        elseif expected_wasm === ExternRef
-                            ref_null!(b, ExternRef)
-                        else
-                            ref_null!(b, StructRef)
-                        end
-                        _fvc_done = true
-                        replaced = true
-                    end
-                end
-            end
-            _fvc_done || isempty(_fvc_b.instrs) || append_builder!(b, _fvc_b)   # typed merge
-            # If field expects externref but we produced a GC-managed ref (anyref subtype, e.g.
-            # string/symbol array or struct), emit extern.convert_any to bridge the two worlds.
-            # (Strings/Symbols compile as ConcreteRef to char array; externref slots need conversion.)
-            local _wasm_fi2 = fi + Int(info.field_offset)  # PURE-9024: skip typeId
-            if !replaced && struct_type_def isa StructType && _wasm_fi2 <= length(struct_type_def.fields)
-                local _ef = struct_type_def.fields[_wasm_fi2].valtype
-                if _ef === ExternRef
-                    # march3: decided by the TRACKED type — an internal (anyref-family)
-                    # ref bridges via extern.convert_any; an ExternRef value is already
-                    # there (this also covers global.get of Type constants, whose tracked
-                    # type is the global's declared valtype — the LEB re-decode is gone).
-                    if _fv_ty !== nothing && _fv_ty !== ExternRef && _wt_is_ref(_fv_ty)
-                        extern_convert_any!(b)
-                    end
-                end
-            end
+            local wasm_fi = fi + Int(info.field_offset)
+            wasm_fi <= length(struct_type_def.fields) ||
+                error("constant $T field $field_name has no physical Wasm slot")
+            local expected = struct_type_def.fields[wasm_fi].valtype
+            emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))
         end
 
         # Create the struct

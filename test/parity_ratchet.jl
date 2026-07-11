@@ -135,6 +135,29 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L37_no_fabricated_constant_fields" => ("constant fallbacks emit the registered Object prefix and every real field through its physical expected type; undefined fields are rejected",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            required = ["WT never fabricates field values",
+                        "emit_struct_prefix!(b, ctx.type_registry, T, info)",
+                        "emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))"]
+            forbidden = ["emit ref.null for the field's expected type",
+                         "type-correct defaults",
+                         "mismatched concrete struct ref"]
+            count(p -> !occursin(p, values_src), required) +
+                count(p -> occursin(p, values_src), forbidden)
+        end),
+    "L36_no_hash_dispatch_residue" => ("the live selector registry contains no FNV-era hash/table/global fields and never fabricates a numeric value for a void target",
+        () -> begin
+            dispatch_src = read(joinpath(CODEGEN, "dispatch.jl"), String)
+            forbidden = ["hash::UInt32", "table_size::Int32", "mask::Int32",
+                         "keys_global_idx::", "values_global_idx::", "typeids_global_idx::",
+                         "func_table_idx::", "i32_array_type_idx::",
+                         "VALUE-typed dispatch signature over a", "MIRROR hole"]
+            required = ["all_no_return ? nothing"]
+            count(p -> occursin(p, dispatch_src), forbidden) +
+                count(p -> !occursin(p, dispatch_src), required)
+        end),
     "L34_single_pointer_lowering" => ("add_ptr/sub_ptr/pointerref/pointerset each have one compile_call lowering route",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)

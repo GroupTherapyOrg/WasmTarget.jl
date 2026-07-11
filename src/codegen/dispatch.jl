@@ -9,12 +9,10 @@
 
 """
 One entry in a dispatch table (compile-time): the typeId tuple of a registered
-specialization and its target/wrapper function indices. (`hash` is a dead field
-kept through M8.4 for ctor stability; removed with the M11 registry cleanup.)
+specialization and its target/wrapper function indices.
 """
 struct DispatchEntry
     type_ids::Vector{Int32}   # DFS type IDs per argument
-    hash::UInt32              # DEAD (M8.4) — always 0
     target_idx::UInt32        # Wasm func index of actual specialization
     wrapper_idx::UInt32       # Wasm func index of anyref wrapper (filled later)
     return_type::Type         # Julia return type of this specialization
@@ -27,16 +25,9 @@ mutable struct DispatchTable
     func_ref::Any              # Julia function being dispatched
     arity::Int32               # Number of dispatch arguments
     entries::Vector{DispatchEntry}
-    table_size::Int32          # Power of 2
-    mask::Int32                # table_size - 1
     # Filled during emit phase:
     dispatch_sig_idx::UInt32   # Type idx for uniform dispatch signature
-    keys_global_idx::UInt32    # Global: i32 array of hash keys
-    values_global_idx::UInt32  # Global: i32 array of funcref table indices
-    typeids_global_idx::UInt32 # Global: i32 array of flat type IDs
-    func_table_idx::UInt32     # funcref table index for call_indirect
-    i32_array_type_idx::UInt32 # Type idx for (array (mut i32))
-    result_wasm_type::WasmValType  # Return type of dispatch
+    result_wasm_type::Union{WasmValType,Nothing}  # `nothing` means a genuinely void selector
     # march11 (dart _computeSignature's unboxed-primitive fast lane,
     # dispatch_table.dart:172-205): per-slot signature types — a slot where ALL
     # specializations agree on ONE primitive stays UNBOXED; everything else AnyRef.
@@ -167,23 +158,17 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             end
             all_valid || continue
 
-            h = UInt32(0)   # parity(M8.4): hashing DELETED — the selector table keys on classId
             # march13: dedup by tuple — the un-capped discovery can register a candidate
             # COPY of an explicit specialization; first registration wins (M8.4 rule).
             any(e -> e.type_ids == type_ids, entries) && continue
-            push!(entries, DispatchEntry(type_ids, h, info.wasm_idx, UInt32(0), info.return_type))
+            push!(entries, DispatchEntry(type_ids, info.wasm_idx, UInt32(0), info.return_type))
         end
 
         length(entries) < threshold && continue
 
-        # Table size: next power of 2 with load factor ≤ 0.75
-        min_size = ceil(Int, length(entries) / 0.75)
-        table_size = Int32(1)
-        while table_size < min_size
-            table_size *= Int32(2)
-        end
-
-        result_wasm = mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
+        all_no_return = all(T -> T === Nothing || T === Union{}, return_types)
+        result_wasm = all_no_return ? nothing :
+                      mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
 
         # march11: per-slot LUB — dart's unboxed-primitive fast lane
         # (dispatch_table.dart:172-205). A slot stays unboxed iff EVERY
@@ -236,9 +221,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
 
         dt = DispatchTable(
             func_ref, Int32(arity), entries,
-            table_size, table_size - Int32(1),
-            UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0), UInt32(0),
-            result_wasm, slot_types
+            UInt32(0), result_wasm, slot_types
         )
         dt_registry.tables[func_ref] = dt
     end
@@ -261,7 +244,7 @@ function emit_dispatch_metadata!(mod::WasmModule,
     # tables) is DELETED — the selector table is the only dispatch structure. All this
     # phase does now is create each selector's uniform call_indirect signature.
     for (func_ref, dt) in dt_registry.tables
-        param_types = copy(dt.slot_types)   # march11: the per-slot LUB (was fill(AnyRef))
+        param_types = copy(dt.slot_types)   # march11: the per-slot LUB (was uniform AnyRef)
         result_types = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
             WasmValType[dt.result_wasm_type] : WasmValType[]
         dt.dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
@@ -379,14 +362,6 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 # return — the 2-entry tables surfaced wrappers left unbalanced
                 # ("values remaining on stack"; Base.get's wrapper, func 9).
                 drop!(b)
-            elseif dt.result_wasm_type in (I32, I64, F32, F64) &&
-                   (entry.return_type === Nothing || entry.return_type === Union{})
-                # step3: the MIRROR hole — a VALUE-typed dispatch signature over a
-                # VOID target must push a default (the Dates fn#35 fallthru-0 stopper:
-                # mixed Nothing/Int32 returns joined to i32).
-                dt.result_wasm_type === I32 ? i32_const!(b, 0) :
-                dt.result_wasm_type === I64 ? i64_const!(b, 0) :
-                dt.result_wasm_type === F32 ? f32_const!(b, 0.0f0) : f64_const!(b, 0.0)
             end
 
             end_block!(b)
@@ -405,7 +380,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             push!(wrapper_indices, wrapper_idx)
 
             dt.entries[entry_i] = DispatchEntry(
-                entry.type_ids, entry.hash, entry.target_idx, wrapper_idx, entry.return_type
+                entry.type_ids, entry.target_idx, wrapper_idx, entry.return_type
             )
         end
 
