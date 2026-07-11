@@ -135,6 +135,21 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L48_exact_mutable_global_initialization" => ("mutable GlobalRefs use identity-keyed exact initializer functions behind the one module start; fabricated default objects and silent partial emission are forbidden",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            all_src = compile_src * context_src * types_src * values_src
+            required = ["mutable_constant_globals", "module_init_functions",
+                        "finalize_module_initializers!", "function_wasm_signature",
+                        "GlobalRef is not defined in its source module"]
+            forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
+                         "If we can't evaluate, might be a type reference"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L47_single_memmove_lowering" => ("memmove/memcpy has one array-copy lowering and its one pointer walk recognizes Vector, Memory, String, and Symbol backing identities",
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)

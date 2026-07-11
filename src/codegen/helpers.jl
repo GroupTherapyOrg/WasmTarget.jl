@@ -83,3 +83,8 @@ function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
     end
     return false
 end
+# Julia IR nodes whose value is supplied at runtime rather than embedded as a
+# literal/global constant. Keep this classification centralized so optimized
+# (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
+is_runtime_ir_value(x) = x isa Core.SSAValue || x isa Core.Argument ||
+                         x isa Core.SlotNumber || x isa Core.PiNode

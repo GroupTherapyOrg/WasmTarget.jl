@@ -35,12 +35,12 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # DOM bindings for Therapy.jl - emit DOM update calls after signal writes
     # Maps global_idx -> [(import_idx, [hk_arg, ...]), ...]
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
-    # Module-level globals: maps (Module, Symbol) -> Wasm global index
-    # Used for const mutable struct instances that should be shared across functions
-    module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}
     # Scratch local indices for string operations (fixed at allocation time)
     # Tuple of (result_local, str1_local, str2_local, len1_local, i_local) or nothing
     scratch_locals::Union{Nothing, NTuple{5, Int}}
+    # Central convertType boxing reuses one scratch local per physical numeric
+    # representation; scratch lifetime ends at each synchronous box emission.
+    boxing_scratch_locals::Dict{WasmValType, Int}
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
     memoryref_offsets::Dict{Int, Any}
@@ -77,7 +77,6 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
-                           module_globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}=Tuple{Tuple{Module, Symbol}, UInt32}[],
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
                            invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
@@ -104,8 +103,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, UInt32}(),    # signal_ssa_setters
         captured_signal_fields, # captured signal field mappings
         dom_bindings,           # DOM bindings for Therapy.jl
-        module_globals,         # Module-level globals (const mutable structs)
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
+        Dict{WasmValType, Int}(), # boxing_scratch_locals
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
         false,                  # last_stmt_was_stub (PURE-908)
         Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
@@ -124,18 +123,6 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
     allocate_ssa_locals!(ctx)
     allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     return ctx
-end
-
-"""
-    _lookup_module_global(globals, key) -> Union{UInt32, Nothing}
-
-Linear scan lookup for module globals stored as Vector{Tuple{Tuple{Module,Symbol}, UInt32}}.
-"""
-function _lookup_module_global(globals::Vector{Tuple{Tuple{Module, Symbol}, UInt32}}, key::Tuple{Module, Symbol})::Union{UInt32, Nothing}
-    for (k, v) in globals
-        k === key && return v
-    end
-    return nothing
 end
 
 """
@@ -369,6 +356,13 @@ function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType
     end
     push!(ctx.locals, actual_type)
     return local_idx
+end
+
+function boxing_scratch_local!(ctx::AbstractCompilationContext,
+                               wasm_type::WasmValType)::Int
+    get!(ctx.boxing_scratch_locals, wasm_type) do
+        allocate_local!(ctx, wasm_type)
+    end
 end
 
 """

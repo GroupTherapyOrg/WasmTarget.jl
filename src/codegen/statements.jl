@@ -375,32 +375,20 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # MIGRATED: straight-line global.get/local.set via typed methods on `b`; the
         # value_bytes safety-scan stays a local buffer (byte-inspecting) then bridges via
         # emit_raw!. `bytes` stays empty for this branch (trailing common code appends after).
-        # GlobalRef statement - check if it's a module-level global first
-        key = (stmt.mod, stmt.name)
-        global_idx = _lookup_module_global(ctx.module_globals, key)
-        if global_idx !== nothing
-            global_get!(b, global_idx, AnyRef)
-
-            # If this SSA value needs a local, store it
-            if haskey(ctx.ssa_locals, idx)
-                local_idx = ctx.ssa_locals[idx]
-                local_set!(b, local_idx)
-            end
-        else
-            # Regular GlobalRef - evaluate the constant and push it
-            # This handles things like Main.SLOT_EMPTY that are module-level constants
-            val = getfield(stmt.mod, stmt.name)
-            local _gv_b = _compile_value_b(val, ctx)
-            append_builder!(b, _gv_b)
-            if haskey(ctx.ssa_locals, idx) && !isempty(_gv_b.v.stack)
-                local_idx = ctx.ssa_locals[idx]
-                local_array_idx = local_idx - ctx.n_params + 1
-                1 <= local_array_idx <= length(ctx.locals) || error(
-                    "GlobalRef SSA local has no declared Wasm type")
-                coerce_stack_top!(b, ctx.locals[local_array_idx], ctx;
-                                  from_julia=get(ctx.ssa_types, idx, typeof(val)))
-                local_set!(b, local_idx)
-            end
+        isdefined(stmt.mod, stmt.name) || throw(WasmCompileError(WasmDiagnostic(
+            :unsupported_global, string(stmt), "GlobalRef is not defined in its source module",
+            nothing, nothing)))
+        val = getfield(stmt.mod, stmt.name)
+        local _gv_b = _compile_value_b(val, ctx)
+        append_builder!(b, _gv_b)
+        if haskey(ctx.ssa_locals, idx) && !isempty(_gv_b.v.stack)
+            local_idx = ctx.ssa_locals[idx]
+            local_array_idx = local_idx - ctx.n_params + 1
+            1 <= local_array_idx <= length(ctx.locals) || error(
+                "GlobalRef SSA local has no declared Wasm type")
+            coerce_stack_top!(b, ctx.locals[local_array_idx], ctx;
+                              from_julia=get(ctx.ssa_types, idx, typeof(val)))
+            local_set!(b, local_idx)
         end
 
     elseif stmt isa Expr

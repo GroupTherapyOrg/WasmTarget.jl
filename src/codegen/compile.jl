@@ -2,6 +2,20 @@
 # Main Compilation Entry Point
 # ============================================================================
 
+"""The one Julia-signature → physical Wasm-signature derivation."""
+function function_wasm_signature(arg_types, return_type, global_args,
+                                 mod::WasmModule, type_registry::TypeRegistry)
+    pts = WasmValType[]
+    for (j, T) in enumerate(arg_types)
+        j in global_args && continue
+        push!(pts, T isa Union && needs_anyref_boxing(T) ? AnyRef :
+                   get_concrete_wasm_type(T, mod, type_registry))
+    end
+    rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+          WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+    return pts, rts
+end
+
 """
     compile_function(f, arg_types, func_name) -> WasmModule
 
@@ -718,44 +732,6 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # Scan all function IR for GlobalRef to mutable structs (module-level globals)
-    # These need to be shared across all functions as WASM globals
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
-    for (f, arg_types, name, code_info, return_type, global_args, is_closure) in function_data
-        for stmt in code_info.code
-            if stmt isa GlobalRef
-                # Check if this GlobalRef points to a mutable struct instance
-                try
-                    actual_val = getfield(stmt.mod, stmt.name)
-                    T = typeof(actual_val)
-                    # Check if it's a mutable struct (but not a type, function, or module)
-                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                        key = (stmt.mod, stmt.name)
-                        if _lookup_module_global(module_globals, key) === nothing
-                            # Register the struct type first
-                            info = register_struct_type!(mod, type_registry, T)
-                            type_idx = info.wasm_type_idx
-
-                            # Build initialization expression: struct.new_default
-                            # Use struct_new_default to safely initialize all fields to defaults
-                            # (0 for numerics, null for refs). The global is mutable and gets
-                            # patched at runtime, so exact field values don't matter here.
-                            _init_b = InstrBuilder(; func_name="module_global_init")
-                            struct_new_default!(_init_b, type_idx)
-                            init_bytes = builder_code(_init_b)
-
-                            # Add global with reference type
-                            global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            push!(module_globals, (key, global_idx))
-                        end
-                    end
-                catch
-                    # If we can't evaluate, skip it
-                end
-            end
-        end
-    end
-
     # PURE-9035: Pre-register all 12 core exception types for DFS typeIds.
     # Only register types with simple fields to avoid creating complex types.
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
@@ -873,22 +849,6 @@ function _compile_closed_world_plan(functions::Vector;
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
-    _fn_signature = function(arg_types, return_type, global_args)
-        local pts = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            if !(j in global_args)
-                if T isa Union && needs_anyref_boxing(T)
-                    push!(pts, AnyRef)
-                else
-                    push!(pts, get_concrete_wasm_type(T, mod, type_registry))
-                end
-            end
-        end
-        local rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
-                    WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-        return (pts, rts)
-    end
-
     n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
@@ -899,7 +859,8 @@ function _compile_closed_world_plan(functions::Vector;
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
         # fullstrict: the PLACEHOLDER carries the true signature from birth
-        local _pp, _rr = _fn_signature(arg_types, return_type, global_args)
+        local _pp, _rr = function_wasm_signature(arg_types, return_type, global_args,
+                                                  mod, type_registry)
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
@@ -1007,14 +968,14 @@ function _compile_closed_world_plan(functions::Vector;
             # Generate function body from Julia IR
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                    global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals)
+                                    global_args=global_args, is_compiled_closure=is_closure)
             body = generate_body(ctx)
             locals = ctx.locals
         end
 
         # fullstrict: FILL the pre-declared placeholder (same signature derivation)
-        param_types, result_types = _fn_signature(arg_types, return_type, global_args)
+        param_types, result_types = function_wasm_signature(arg_types, return_type, global_args,
+                                                             mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
         mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body)
@@ -1041,6 +1002,7 @@ function _compile_closed_world_plan(functions::Vector;
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
+    finalize_module_initializers!(mod, type_registry)
 
     # PURE-9040/9042/9043: Clear module-level state after compilation
     clear_io_imports!()

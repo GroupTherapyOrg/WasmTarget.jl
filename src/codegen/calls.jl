@@ -2224,7 +2224,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
     # Signature + call_ref). Devirtualizable callees (concrete/small-union types)
     # never reach here — the existing paths outrank.
-    if func isa Core.SSAValue
+    if is_runtime_ir_value(func)
         local _dfc_t = infer_value_type(func, ctx)
         if is_callable_julia_type(_dfc_t) &&
            emit_dynamic_closure_call!(fb, ctx, func, args, idx) === true
@@ -2999,9 +2999,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 findfirst(==(field_sym), info.field_names)
             if field_idx !== nothing
                 local _sfgb = _ctx_builder(ctx, "compile_call")
+                set_context!(_sfgb, first(string(expr), 120))
                 # march14: the typed wrap subsumes the PURE-701 structref-narrow helper
                 emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                struct_get!(_sfgb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                local _sfg_wfi = wasm_field_idx(info, field_idx)
+                local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
+                _sfg_layout isa StructType || error("registered getfield owner has no struct layout")
+                local _sfg_fields = _sfg_layout.fields
+                local _sfg_ft = _sfg_fields[Int(_sfg_wfi) + 1].valtype
+                struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi, _sfg_ft)
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
             end

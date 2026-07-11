@@ -89,6 +89,11 @@ mutable struct TypeRegistry
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
     # identity that structural keying would wrongly merge.
     constant_globals::Union{Nothing, Dict{Any, UInt32}}
+    # Closed-world mutable bindings retain object identity too, but must never be
+    # structurally deduplicated. IdDict keys by host identity; nullable mutable
+    # storage is published once by module start, then all reads share the object.
+    mutable_constant_globals::Union{Nothing, IdDict{Any, Tuple{UInt32, UInt32}}}
+    module_init_functions::Union{Nothing, Vector{UInt32}}
     # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
@@ -127,6 +132,8 @@ TypeRegistry() = TypeRegistry(
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
+    IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
+    UInt32[],                    # module_init_functions
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
     Dict{Type, Vector{Int32}}(),            # type_extra_ids (march9)
@@ -149,6 +156,8 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals (march7)
+    nothing,  # mutable_constant_globals
+    nothing,  # module_init_functions
     nothing,  # string_constant_globals (census F3)
     nothing,  # lazy_string_globals (march7)
     nothing,  # type_extra_ids (march9)
@@ -1697,6 +1706,26 @@ function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry
     else
         _populate_legacy_types!(mod, registry)
     end
+end
+
+"""
+Compose every generated closed-world initializer behind the module's single start
+entry. Mutable constant globals contain only nullable storage before this runs;
+their initializer functions construct exact object snapshots and publish them.
+"""
+function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)
+    funcs = registry.module_init_functions
+    (funcs === nothing || isempty(funcs)) && return
+    previous_start = mod.start_function
+    b = InstrBuilder(; func_name="module_start", mod=mod)
+    previous_start === nothing || call!(b, previous_start, WasmValType[], WasmValType[])
+    for func_idx in funcs
+        call!(b, func_idx, WasmValType[], WasmValType[])
+    end
+    end_block!(b)
+    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b))
+    add_start_function!(mod, func_idx)
+    return
 end
 
 """

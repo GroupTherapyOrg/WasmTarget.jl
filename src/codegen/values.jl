@@ -585,8 +585,7 @@ Pushes the box ref. This is THE single boxing producer (dart `convertType` box a
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
                            wasm_type::WasmValType, julia_type::Union{Type,Nothing})
     box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
-    sc = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, wasm_type)
+    sc = boxing_scratch_local!(ctx, wasm_type)
     builder_set_local_type!(b, sc, wasm_type)
     local_set!(b, sc)                       # save the value
     if julia_type === nothing
@@ -867,6 +866,29 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Uni
     ty = isempty(vb.v.stack) ? nothing : vb.v.stack[end]
     append_builder!(b, vb)
     return ty
+end
+
+function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)
+    saved_n_params = ctx.n_params
+    saved_locals = ctx.locals
+    saved_scratch = ctx.scratch_locals
+    saved_boxing = ctx.boxing_scratch_locals
+    saved_typeof = ctx.typeof_scratch_local
+    ctx.n_params = 0
+    ctx.locals = WasmValType[]
+    ctx.scratch_locals = nothing
+    ctx.boxing_scratch_locals = Dict{WasmValType,Int}()
+    ctx.typeof_scratch_local = nothing
+    try
+        b = _compile_value_b(val, ctx)
+        return b, copy(ctx.locals)
+    finally
+        ctx.n_params = saved_n_params
+        ctx.locals = saved_locals
+        ctx.scratch_locals = saved_scratch
+        ctx.boxing_scratch_locals = saved_boxing
+        ctx.typeof_scratch_local = saved_typeof
+    end
 end
 
 """
@@ -1248,19 +1270,46 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif val isa GlobalRef
-        # Check if this GlobalRef is a module-level global (mutable struct instance)
-        key = (val.mod, val.name)
-        global_idx = _lookup_module_global(ctx.module_globals, key)
-        if global_idx !== nothing
-            global_get!(b, global_idx, AnyRef)
-        else
-            # GlobalRef to a constant - evaluate and compile the value
-            try
-                actual_val = getfield(val.mod, val.name)
-                emit_value!(b, actual_val, ctx)  # R17-floor: recursive constant emission has no sink yet
-            catch
-                # If we can't evaluate, might be a type reference (no runtime value)
+        isdefined(val.mod, val.name) || throw(WasmCompileError(WasmDiagnostic(
+            :unsupported_global, string(val), "GlobalRef is not defined in its source module",
+            nothing, nothing)))
+        actual_val = getfield(val.mod, val.name)
+        if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
+           !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
+            globals = ctx.type_registry.mutable_constant_globals
+            globals === nothing && throw(WasmCompileError(WasmDiagnostic(
+                :unsupported_global, string(val),
+                "mutable GlobalRef identity registry is unavailable", nothing, nothing)))
+            if haskey(globals, actual_val)
+                global_idx, type_idx = globals[actual_val]
+                global_get!(b, global_idx, ConcreteRef(type_idx, true))
+                ref_as_non_null!(b)
+            else
+                init_b, init_locals = compile_module_initializer(actual_val, ctx)
+                length(init_b.v.stack) == 1 || throw(StackImbalanceError(
+                    "mutable GlobalRef initializer must produce exactly one value",
+                    copy(init_b.v.stack), 0, "compile_value"))
+                init_type = only(init_b.v.stack)
+                init_type isa ConcreteRef || throw(WasmCompileError(WasmDiagnostic(
+                    :unsupported_global, string(val),
+                    "mutable GlobalRef initializer produced non-concrete type $init_type",
+                    nothing, nothing)))
+                null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
+                ref_null!(null_b, Int64(init_type.type_idx),
+                          ConcreteRef(init_type.type_idx, true))
+                global_idx = add_global_ref!(ctx.mod, init_type.type_idx, true,
+                                             builder_code(null_b); nullable=true)
+                global_set!(init_b, global_idx)
+                end_block!(init_b)
+                init_func = add_function!(ctx.mod, WasmValType[], WasmValType[],
+                                          init_locals, builder_code(init_b))
+                push!(ctx.type_registry.module_init_functions, init_func)
+                globals[actual_val] = (global_idx, init_type.type_idx)
+                global_get!(b, global_idx, ConcreteRef(init_type.type_idx, true))
+                ref_as_non_null!(b)
             end
+        else
+            emit_value!(b, actual_val, ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
         end
 
     elseif val isa QuoteNode
@@ -1447,51 +1496,34 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # Helper: emit default value for an array element type (captures `b`, `ctx`)
-        emit_array_default! = function(arr_type_idx, elem_type)
-            wasm_et = julia_to_wasm_type(elem_type)
-            if wasm_et === I32
-                i32_const!(b, 0)
-            elseif wasm_et === I64
-                i64_const!(b, 0)
-            elseif wasm_et === F32
-                f32_const!(b, Float32(0))
-            elseif wasm_et === F64
-                f64_const!(b, Float64(0))
-            else
-                # Ref type (String, struct, etc.) — look up concrete array element type
-                arr_type_def = ctx.mod.types[arr_type_idx + 1]
-                if arr_type_def isa ArrayType
-                    evtype = arr_type_def.elem.valtype
-                    if evtype isa ConcreteRef
-                        ref_null!(b, Int64(evtype.type_idx), ConcreteRef(UInt32(evtype.type_idx), true))
-                    else
-                        ref_null!(b, StructRef)
-                    end
-                else
-                    ref_null!(b, StructRef)
-                end
-            end
-        end
-
-        # Helper: compile Memory elements, handling UndefRefError for ref-typed slots
+        # Dict's backing Memory contains intentionally unassigned hash-table slots.
+        # Those are physical nullable-reference slots, not fabricated Julia values.
+        # Every assigned element goes through the same typed wrap funnel used by
+        # ordinary array stores, including boxing heterogeneous Union keys.
         compile_memory_elements! = function(mem, arr_type_idx, elem_type)
+            arr_type_def = ctx.mod.types[arr_type_idx + 1]
+            arr_type_def isa ArrayType || error("Dict backing storage has no Wasm array layout")
+            expected = arr_type_def.elem.valtype
             for i in 1:length(mem)
                 # PURE-6022: Stop emitting elements after stub/unreachable
                 if ctx.last_stmt_was_stub
                     break
                 end
-                try
+                if isassigned(mem, i)
                     v = mem[i]
-                    emit_value!(b, v, ctx)  # R17-floor: Dict memory element type is runtime-selected
-                catch e
-                    if e isa UndefRefError
-                        emit_array_default!(arr_type_idx, elem_type)
-                    else
-                        rethrow()
-                    end
+                    emit_value!(b, v, ctx, expected; from_julia=typeof(v))
+                elseif expected isa RefType
+                    ref_null!(b, expected)
+                elseif expected isa ConcreteRef && expected.nullable
+                    ref_null!(b, Int64(expected.type_idx), expected)
+                else
+                    throw(WasmCompileError(WasmDiagnostic(
+                        :unsupported_type, string(typeof(mem)),
+                        "unassigned Dict backing slot $i has non-nullable physical type $expected",
+                        nothing, nothing)))
                 end
             end
+            return expected
         end
 
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
@@ -1504,12 +1536,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         array_new_fixed!(b, slots_arr_type, length(dict_slots), I32)
 
         # field 2: keys — array of K (may have undef for ref-typed keys)
-        compile_memory_elements!(dict_keys, keys_arr_type, K)
-        array_new_fixed!(b, keys_arr_type, length(dict_keys), AnyRef)
+        keys_wasm_type = compile_memory_elements!(dict_keys, keys_arr_type, K)
+        array_new_fixed!(b, keys_arr_type, length(dict_keys), keys_wasm_type)
 
         # field 3: vals — array of V (may have undef for ref-typed vals)
-        compile_memory_elements!(dict_vals, vals_arr_type, V)
-        array_new_fixed!(b, vals_arr_type, length(dict_vals), AnyRef)
+        vals_wasm_type = compile_memory_elements!(dict_vals, vals_arr_type, V)
+        array_new_fixed!(b, vals_arr_type, length(dict_vals), vals_wasm_type)
 
         # fields 4-8: ndel, count, age, idxfloor, maxprobe (i64)
         i64_const!(b, Int64(getfield(val, :ndel)))
