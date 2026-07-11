@@ -63,8 +63,8 @@ end
 """
     WasmValidationError(msg, details)
 
-Thrown when `wasm-tools validate` rejects the emitted module (the default-on
-soundness gate). `details` carries the validator's stderr when available.
+Thrown when the opt-in independent `wasm-tools validate` cross-check rejects the
+emitted module. `details` carries the validator's stderr when available.
 """
 struct WasmValidationError <: Exception
     msg::String
@@ -150,35 +150,37 @@ const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(no
 
 
 """
-    record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=(kind===:value_stub)) -> Nothing
+    record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=nothing) -> Nothing
 
 Single funnel for "codegen cannot fully translate this". Always records a
 [`WasmDiagnostic`](@ref) on `ctx.diagnostics` (so every gap is queryable, even
 when compilation proceeds).
 
-`soundness_fatal` decides whether the compile is rejected:
+By default compilation is rejected. A diagnosed trap is permitted only when the
+current Julia CFG proves the statement unreachable. `soundness_fatal=true` forces
+rejection; `false` is reserved for callers that already possess an equally strong
+structural proof.
 
-  * **`:value_stub`** (default fatal) — the stub would emit a *wrong value* inline
+  * **`:value_stub`** — the stub would emit a *wrong value* inline
     (e.g. `jl_object_id`→constant, non-zero `memset`). This is unsound regardless
     of reachability, so it throws [`WasmCompileError`](@ref).
-  * **`:unsupported_method` / `:unsupported_type`** (default non-fatal) — the stub
-    emits `unreachable`, which is *sound*: it traps if executed, never computes a
-    wrong value, and in practice sits on dead error-branches Julia's IR couldn't
-    prove dead (`kwerr`, `throw_*domainerror`, `mapreduce_empty_iter`, …). Rejecting
-    these at compile time would reject working core functions, so we report + trap
-    exactly like dart2wasm's `unimplemented` path.
+  * **`:unsupported_method` / `:unsupported_type`** — reachable or uncertain
+    unsupported code rejects instead of leaving a latent runtime trap.
 
 Callers pass the SSA statement `idx` (already in scope at every codegen site) for
 source attribution. Pass `soundness_fatal=true` to force rejection.
 """
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
-                             soundness_fatal::Bool=(kind === :value_stub))
+                             soundness_fatal::Union{Nothing,Bool}=nothing)
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail)
     push!(ctx.diagnostics, diag)
     DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
-    if soundness_fatal
+    fatal = soundness_fatal === nothing ?
+            !stmt_is_proven_unreachable(try ctx.code_info.code catch; nothing end, idx) :
+            soundness_fatal
+    if fatal
         _sink = DIAGNOSTICS_SINK[]
         throw(WasmCompileError(diag, _sink === nothing ? WasmDiagnostic[diag] : copy(_sink)))
     else
@@ -208,9 +210,10 @@ function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)
     local _code2 = try ctx.code_info.code catch; nothing end
-    local _me2 = idx > 0 && _code2 !== nothing && stmt_must_execute(_code2, idx)
-    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail, soundness_fatal=(soundness_fatal && _me2))
-    unreachable!(b)
+    local _dead2 = stmt_is_proven_unreachable(_code2, idx)
+    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
+                        soundness_fatal=(soundness_fatal && !_dead2))
+    unreachable!(b)  # structural trap after recorded, proven-dead unsupported lowering
     ctx.last_stmt_was_stub = true
     return nothing
 end
@@ -218,17 +221,11 @@ end
 function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)
-    # Strict Approach A — REACHABILITY GATE: only loud-reject (fatal) when the construct
-    # is DEFINITELY executed on a returning call (`stmt_must_execute`). A non-must-execute
-    # stub is a sound *silent* trap: it sits on a branch WT can't prove dead (e.g. a Base
-    # dependency's fallback path that's never taken for the actual args — `Base.unsigned`'s
-    # `_apply_iterate` arm), and rejecting it would over-reject working code (the batch-4
-    # boundary). A working function can't have a must-execute trap-stub, so this never
-    # regresses valid code. See `stmt_must_execute` + test/fuzz/STRICT_MODE_INVENTORY.md.
+    # A trap is retained only for a block the Julia CFG proves unreachable.
     local _code = try ctx.code_info.code catch; nothing end
-    local _me = idx > 0 && _code !== nothing && stmt_must_execute(_code, idx)
+    local _dead = stmt_is_proven_unreachable(_code, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
-                        soundness_fatal=(soundness_fatal && _me))
+                        soundness_fatal=(soundness_fatal && !_dead))
     push!(bytes, Opcode.UNREACHABLE)
     ctx.last_stmt_was_stub = true
     return nothing

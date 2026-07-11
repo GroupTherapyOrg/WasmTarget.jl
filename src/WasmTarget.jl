@@ -344,7 +344,7 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
 end
 
 # ============================================================================
-# Validation gate — wasm-tools validate (default-on soundness check)
+# Independent validation cross-check — opt-in; the typed builder is the gate
 # ============================================================================
 
 const _WARNED_NO_WASM_TOOLS = Ref(false)

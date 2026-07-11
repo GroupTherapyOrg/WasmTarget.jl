@@ -32,6 +32,47 @@ function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
     return val isa Symbol ? val : nothing
 end
 
+# Exact utf8proc width oracle compressed into non-default runs at package build
+# time. Julia itself ships utf8proc and defines `textwidth(Char)` by this ABI;
+# serializing the runs into the precompile image lets emitted Wasm execute the
+# same versioned table without a target-side FFI dependency.
+const _UTF8PROC_WIDTH_RUNS = let runs = NTuple{3,UInt32}[], start = UInt32(0),
+                                 previous = Int32(1)
+    for cp in UInt32(0):UInt32(0x10ffff)
+        width = ccall(:utf8proc_charwidth, Cint, (UInt32,), cp)
+        if width != previous
+            previous != 1 && push!(runs, (start, cp - UInt32(1), UInt32(previous)))
+            start = cp
+            previous = width
+        end
+    end
+    previous != 1 && push!(runs, (start, UInt32(0x10ffff), UInt32(previous)))
+    runs
+end
+
+"""Emit a balanced exact lookup over `_UTF8PROC_WIDTH_RUNS`; default width is 1."""
+function _emit_utf8proc_charwidth!(b::InstrBuilder, cp_local::Integer,
+                                   lo::Int=1, hi::Int=length(_UTF8PROC_WIDTH_RUNS))
+    if lo > hi
+        i32_const!(b, 1)
+        return b
+    end
+    mid = (lo + hi) >>> 1
+    first_cp, last_cp, width = _UTF8PROC_WIDTH_RUNS[mid]
+    local_get!(b, cp_local); i32_const!(b, first_cp); num!(b, Opcode.I32_LT_U)
+    if_!(b, I32)
+    _emit_utf8proc_charwidth!(b, cp_local, lo, mid - 1)
+    else_!(b)
+    local_get!(b, cp_local); i32_const!(b, last_cp); num!(b, Opcode.I32_LE_U)
+    if_!(b, I32)
+    i32_const!(b, width)
+    else_!(b)
+    _emit_utf8proc_charwidth!(b, cp_local, mid + 1, hi)
+    end_block!(b)
+    end_block!(b)
+    return b
+end
+
 """
     _trace_memmove_ptr(arg, ctx) -> (vector_value, [(is_add, offset_value)...]) | nothing
 
@@ -90,6 +131,11 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
             # (jl_value_ptr(obj)) — in the fake-pointer model the base is 0,
             # so just hop to the object and keep walking toward the vector.
             cur = st.args[6]
+        elseif st isa Expr && st.head === :foreigncall &&
+               extract_foreigncall_name(st.args[1]) === :jl_string_to_genericmemory
+            # This foreigncall's Wasm representation is the source String's
+            # byte array, so its SSA result is itself a valid backing identity.
+            return cur
         elseif st isa Core.PhiNode
             (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
             cur = st.values[1]
@@ -137,10 +183,14 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                     return vec
                 else
                     # P4-stdlib (SHA update!): getfield(obj, fld) whose RESULT
-                    # type is an allowed Vector (ctx.buffer::Vector{UInt8}) is
-                    # itself the backing-store identity.
+                    # type is an allowed Vector/Memory is itself the backing-store
+                    # identity.
                     local _gf_vt = infer_value_type(cur, ctx)
                     if _gf_vt isa DataType && _gf_vt <: Vector && eltype(_gf_vt) in eltypes
+                        return cur
+                    elseif _gf_vt isa DataType &&
+                           _gf_vt.name.name in (:Memory, :GenericMemory) &&
+                           eltype(_gf_vt) in eltypes
                         return cur
                     end
                     return _fail("getfield-fld=$fld", st)
@@ -1239,7 +1289,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                     num!(b, Opcode.I32_WRAP_I64)
                 end
             else
-                i32_const!(b, 0)
+                record_unsupported!(ctx, :value_stub,
+                    "jl_alloc_string without its required length operand";
+                    idx=idx, detail=expr, soundness_fatal=true)
             end
             array_new_default!(b, str_arr_type)
             emit_string_wrap!(b, ctx)   # parity(M9): a String is classed from birth
@@ -1430,8 +1482,8 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             if length(expr.args) >= 7
                 ptr_arg = expr.args[6]
                 len_arg = expr.args[7]
-                data_ssa = _trace_ptr_to_data(ptr_arg, ctx)
-                if data_ssa !== nothing
+                data_owner = _trace_memmove_ptr(ptr_arg, ctx; eltypes=(UInt8, Int8))
+                if data_owner !== nothing
                     str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
                     # Allocate locals for dest array and length
@@ -1454,9 +1506,12 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
 
                     # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
                     i32_const!(b, 0)  # dest offset
-                    # parity(M9): the traced source may be a CLASSED string — funnel to DATA
-                    emit_value!(b, data_ssa, ctx, ConcreteRef(UInt32(str_arr_type), true))  # src array
-                    i32_const!(b, 0)  # src offset
+                    # The pointer representation carries its byte offset while the
+                    # traced owner carries the GC array identity. For UInt8/Int8,
+                    # byte offset and array index are identical.
+                    _emit_backing_array!(b, data_owner, ctx, str_arr_type)
+                    emit_value!(b, ptr_arg, ctx, I64)
+                    coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8})
                     local_get!(b, len_local)  # count
                     array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
 
@@ -1479,10 +1534,12 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         elseif name === :utf8proc_grapheme_break_stateful
             # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
-            # In WasmGC, we don't have the utf8proc C library. Return true (break)
-            # for all character pairs. This is conservative: it treats every codepoint
-            # as its own grapheme cluster, which is correct for ASCII/BMP parsing.
-            i32_const!(b, 1)  # true = always a grapheme break
+            # WT has no utf8proc runtime yet.  Returning a constant here silently
+            # corrupted grapheme boundaries, so this remains explicitly unsupported
+            # until the real Unicode state machine is available.
+            record_unsupported!(ctx, :value_stub,
+                "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime";
+                idx=idx, detail=expr, soundness_fatal=true)
             return b
         elseif name === :jl_ptr_to_array_1d
             # PURE-324: jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
@@ -1997,6 +2054,18 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         # pointerref/pointerset trace the object identity separately.
         i64_const!(b, 0)
         return b
+    elseif _fc_sym === :jl_genericmemory_owner && length(expr.args) >= 6
+        # Julia's GenericMemory owner is the memory allocation itself. Memory is
+        # represented directly by its non-null WasmGC array, so ownership is an
+        # identity operation widened to the foreigncall's `Any` result.
+        emit_value!(b, expr.args[6], ctx, AnyRef)
+        return b
+    elseif _fc_sym === :utf8proc_charwidth && length(expr.args) >= 6
+        cp_local = allocate_local!(ctx, I32)
+        emit_value!(b, expr.args[6], ctx, I32)
+        local_set!(b, cp_local)
+        _emit_utf8proc_charwidth!(b, cp_local)
+        return b
     elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
         # datatype_storedinline(T) — pure layout predicate; fold when the
         # type argument is a compile-time constant.
@@ -2031,6 +2100,10 @@ function _trace_string_ptr(ptr_ssa, code)
         return nothing
     end
     stmt = code[ptr_ssa.id]
+    if stmt isa Expr && stmt.head === :foreigncall &&
+       extract_foreigncall_name(stmt.args[1]) === :jl_string_ptr && length(stmt.args) >= 6
+        return (stmt.args[6], nothing)
+    end
     if !(stmt isa Expr && stmt.head === :call)
         return nothing
     end

@@ -202,6 +202,54 @@ function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilatio
     return bytes
 end
 
+"""Emit Julia's exact `FieldError(type, field)` through the typed exception tag."""
+function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
+                            @nospecialize(owner_type), field::Symbol)
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    info = register_struct_type!(ctx.mod, ctx.type_registry, FieldError)
+    info === nothing && error("FieldError layout is unavailable")
+    emit_struct_prefix!(bld, ctx.type_registry, FieldError, info)
+    fields = ctx.mod.types[info.wasm_type_idx + 1].fields
+    emit_value!(bld, owner_type, ctx, fields[Int(info.field_offset) + 1].valtype;
+                from_julia=DataType)
+    emit_value!(bld, field, ctx, fields[Int(info.field_offset) + 2].valtype;
+                from_julia=Symbol)
+    struct_new!(bld, info.wasm_type_idx)
+    global_set!(bld, exn_global)
+    global_get!(bld, exn_global, AnyRef)
+    ref_null!(bld, ExternRef)
+    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bld
+end
+
+"""Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot."""
+function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
+                                    arg_types::Tuple, index_local::Integer)
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    tuple_type = Tuple{arg_types...}
+    tuple_info = haskey(ctx.type_registry.structs, tuple_type) ?
+                 ctx.type_registry.structs[tuple_type] :
+                 register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, BoundsError)
+    error_info === nothing && error("BoundsError layout is unavailable")
+    emit_struct_prefix!(bld, ctx.type_registry, BoundsError, error_info)
+    emit_struct_prefix!(bld, ctx.type_registry, tuple_type, tuple_info)
+    for (i, T) in enumerate(arg_types)
+        local_get!(bld, i - 1)
+    end
+    struct_new!(bld, tuple_info.wasm_type_idx)
+    coerce_stack_top!(bld, AnyRef, ctx; from_julia=tuple_type)
+    local_get!(bld, index_local)
+    coerce_stack_top!(bld, AnyRef, ctx; from_julia=Int64)
+    struct_new!(bld, error_info.wasm_type_idx)
+    global_set!(bld, exn_global)
+    global_get!(bld, exn_global, AnyRef); ref_null!(bld, ExternRef)
+    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bld
+end
+
 # Guard an integer div/rem so Julia-visible error cases THROW (catchable
 # DivideError) instead of reaching the wasm instruction's uncatchable trap:
 #   * divisor == 0                  → DivideError   (div_s/div_u/rem_s/rem_u trap)
@@ -2068,38 +2116,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                       cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
                       cond_wasm_type === AnyRef || cond_wasm_type === EqRef
 
-        # If cond produces ref, fall back to just the true value (can't use as SELECT condition)
+        # A non-i32 condition is invalid Julia lowering for `ifelse`; never choose
+        # one arm and fabricate a result.
         if cond_is_ref
-            append_builder!(fb, _tv_b)
-            return append_builder!(b, fb)
+            record_unsupported!(ctx, :value_stub,
+                "ifelse condition did not lower to i32"; idx=idx, detail=expr,
+                soundness_fatal=true)
         end
 
         local _ieb = _ctx_builder(ctx, "compile_call")
-        # If any value emission is empty, select would have insufficient operands.
-        # Fall back to emitting just the true value (or a type-safe default).
+        # Empty value emission is a compiler error, never permission to select an
+        # arbitrary arm or synthesize a zero/null value.
         if isempty(_tv_b.instrs) || isempty(_fv_b.instrs) || isempty(_cv_b.instrs)
-            if !isempty(_tv_b.instrs)
-                append_builder!(_ieb, _tv_b)
-            elseif !isempty(_fv_b.instrs)
-                append_builder!(_ieb, _fv_b)
-            else
-                # All empty — emit type-safe default for the value type
-                val_type = infer_value_type(args[2], ctx)
-                wasm_type = julia_to_wasm_type_concrete(val_type, ctx)
-                if wasm_type isa ConcreteRef
-                    ref_null!(_ieb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
-                elseif wasm_type === ExternRef
-                    ref_null!(_ieb, ExternRef)
-                elseif wasm_type === I64
-                    i64_const!(_ieb, 0)
-                elseif wasm_type === F64
-                    f64_const!(_ieb, 0.0)
-                else
-                    i32_const!(_ieb, 0)
-                end
-            end
-            append_builder!(fb, _ieb)
-            return append_builder!(b, fb)
+            record_unsupported!(ctx, :value_stub,
+                "ifelse operand emitted no runtime value"; idx=idx, detail=expr,
+                soundness_fatal=true)
         end
 
         # All three values are non-empty, emit proper select — typed merges
@@ -3938,6 +3969,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
         if str_info !== nothing
             str_ssa, idx_ssa = str_info
+            idx_ssa === nothing && (idx_ssa = length(args) >= 2 ? args[2] : 1)
             local _prsb = _ctx_builder(ctx, "compile_call")
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             # parity(M9): the classed string → its DATA array (the funnel adjusts)
@@ -4178,8 +4210,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
         let _prub = _ctx_builder(ctx, "compile_call")
-            record_unsupported!(ctx, :unsupported_method, "un-lowerable popfirst!/array-mutation call shape"; idx=idx)
-            unreachable!(_prub); append_builder!(fb, _prub)
+            record_unsupported!(ctx, :unsupported_method,
+                                "pointerref source cannot be traced to WasmGC storage";
+                                idx=idx, detail=expr)
+            unreachable!(_prub); append_builder!(fb, _prub)  # structural trap after recorded unsupported
         end
         ctx.last_stmt_was_stub = true  # PURE-908
         return append_builder!(b, fb)
@@ -5806,6 +5840,79 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # constant when it has a primitive/string representation. (The :names
         # svec form stays trapped — no constant emission for SimpleVector.)
         local _gfc_done = false
+        # getfield(tuple, literal_index[, boundscheck]) is the canonical optimized
+        # varargs access shape (including Core.Argument receivers). Route it through
+        # the registered tuple layout instead of requiring an SSA+Symbol shape.
+        local _gft_index = length(args) >= 2 ?
+                           (args[2] isa QuoteNode ? args[2].value : args[2]) : nothing
+        if func.name === :getfield && length(args) >= 2 &&
+           args[1] isa Core.Argument && !ctx.is_compiled_closure &&
+           args[1].n <= length(ctx.code_info.slottypes) && !(_gft_index isa Integer)
+            local _gft_slot_T = ctx.code_info.slottypes[args[1].n]
+            if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
+               fieldcount(_gft_slot_T) == length(ctx.arg_types)
+                local _gft_result_T = get(ctx.ssa_types, idx, Any)
+                local _gft_result_w = get_concrete_wasm_type(_gft_result_T, ctx.mod,
+                                                              ctx.type_registry)
+                local _gft_ib = _ctx_builder(ctx, "compile_call.vararg_dynamic_getfield")
+                local _gft_index_local = allocate_local!(ctx, I64)
+                emit_value!(_gft_ib, args[2], ctx, I64)
+                local_set!(_gft_ib, _gft_index_local)
+                local function _emit_case!(i::Int)
+                    if i > length(ctx.arg_types)
+                        _emit_vararg_bounds_error!(_gft_ib, ctx, ctx.arg_types,
+                                                   _gft_index_local)
+                        return
+                    end
+                    local_get!(_gft_ib, _gft_index_local); i64_const!(_gft_ib, i)
+                    num!(_gft_ib, Opcode.I64_EQ)
+                    if_!(_gft_ib, _gft_result_w)
+                    local_get!(_gft_ib, i - 1)
+                    coerce_stack_top!(_gft_ib, _gft_result_w, ctx;
+                                      from_julia=ctx.arg_types[i])
+                    else_!(_gft_ib)
+                    _emit_case!(i + 1)
+                    end_block!(_gft_ib)
+                end
+                _emit_case!(1)
+                append_builder!(fb, _gft_ib)
+                _gfc_done = true
+            end
+        end
+        if func.name === :getfield && length(args) >= 2 && _gft_index isa Integer
+            local _gft_i = Int(_gft_index)
+            # Optimized Julia represents a varargs method's entire argument pack
+            # as slot `_2::Tuple{...}`, while the closed-world Wasm signature has
+            # one physical parameter per specialized vararg. A literal tuple
+            # projection is therefore exactly the corresponding parameter read.
+            if args[1] isa Core.Argument && !ctx.is_compiled_closure &&
+               args[1].n <= length(ctx.code_info.slottypes)
+                local _gft_slot_T = ctx.code_info.slottypes[args[1].n]
+                if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
+                   fieldcount(_gft_slot_T) == length(ctx.arg_types) &&
+                   1 <= _gft_i <= length(ctx.arg_types)
+                    local _gft_ib = _ctx_builder(ctx, "compile_call.vararg_getfield")
+                    local_get!(_gft_ib, _gft_i - 1)
+                    append_builder!(fb, _gft_ib)
+                    _gfc_done = true
+                end
+            end
+            local _gft_T = infer_value_type(args[1], ctx)
+            if !_gfc_done && _gft_T isa DataType && _gft_T <: Tuple && 1 <= _gft_i <= fieldcount(_gft_T)
+                local _gft_info = haskey(ctx.type_registry.structs, _gft_T) ?
+                                  ctx.type_registry.structs[_gft_T] :
+                                  register_tuple_type!(ctx.mod, ctx.type_registry, _gft_T)
+                local _gft_wfi = wasm_field_idx(_gft_info, _gft_i)
+                local _gft_fields = ctx.mod.types[_gft_info.wasm_type_idx + 1].fields
+                local _gft_ft = _gft_fields[Int(_gft_wfi) + 1].valtype
+                local _gft_ib = _ctx_builder(ctx, "compile_call.tuple_getfield")
+                emit_value!(_gft_ib, args[1], ctx,
+                            ConcreteRef(UInt32(_gft_info.wasm_type_idx), true))
+                struct_get!(_gft_ib, _gft_info.wasm_type_idx, _gft_wfi, _gft_ft)
+                append_builder!(fb, _gft_ib)
+                _gfc_done = true
+            end
+        end
         if func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
             local _gfc_fld = args[2] isa QuoteNode ? args[2].value : args[2]
             if _gfc_fld isa Symbol
@@ -5870,6 +5977,38 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _bxd_ib)
             _gfc_done = true
         end
+        # General concrete-struct field definedness. Reference fields use null
+        # as Julia's undefined-field state; physical numeric fields are always
+        # initialized in Wasm and therefore defined.
+        if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
+           args[1] isa Core.SSAValue &&
+           ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
+            local _isd_T = get(ctx.ssa_types, args[1].id, Any)
+            local _isd_f = args[2] isa QuoteNode ? args[2].value : args[2]
+            if _isd_T isa DataType && isstructtype(_isd_T) &&
+               _isd_f in fieldnames(_isd_T)
+                local _isd_info = haskey(ctx.type_registry.structs, _isd_T) ?
+                                  ctx.type_registry.structs[_isd_T] :
+                                  register_struct_type!(ctx.mod, ctx.type_registry, _isd_T)
+                if _isd_info !== nothing
+                    local _isd_i = findfirst(==(_isd_f), fieldnames(_isd_T))
+                    local _isd_wfi = wasm_field_idx(_isd_info, _isd_i)
+                    local _isd_fields = ctx.mod.types[_isd_info.wasm_type_idx + 1].fields
+                    local _isd_ft = _isd_fields[Int(_isd_wfi) + 1].valtype
+                    local _isd_b = _ctx_builder(ctx, "compile_call.isdefined_field")
+                    emit_value!(_isd_b, args[1], ctx,
+                                ConcreteRef(UInt32(_isd_info.wasm_type_idx), true))
+                    if _wt_is_ref(_isd_ft)
+                        struct_get!(_isd_b, _isd_info.wasm_type_idx, _isd_wfi, _isd_ft)
+                        ref_is_null!(_isd_b); num!(_isd_b, Opcode.I32_EQZ)
+                    else
+                        drop!(_isd_b); i32_const!(_isd_b, 1)
+                    end
+                    append_builder!(fb, _isd_b)
+                    _gfc_done = true
+                end
+            end
+        end
         # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read). The cell is the F3 anyref box struct.
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
@@ -5890,10 +6029,17 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
             local _gfb_T = args[1] isa Core.SSAValue ? get(ctx.ssa_types, args[1].id, Any) : Any
-            if _gfb_T isa DataType && isstructtype(_gfb_T) &&
+            local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+            if _gfb_T isa DataType && _gfb_fld isa Symbol &&
+               !(isstructtype(_gfb_T) && _gfb_fld in fieldnames(_gfb_T))
+                local _gfb_ib = _ctx_builder(ctx, "compile_call.fielderror")
+                _emit_field_error!(_gfb_ib, ctx, _gfb_T, _gfb_fld)
+                append_builder!(fb, _gfb_ib)
+                _gfc_done = true
+            end
+            if !_gfc_done && _gfb_T isa DataType && isstructtype(_gfb_T) &&
                haskey(ctx.type_registry.structs, _gfb_T)
                 local _gfb_info = ctx.type_registry.structs[_gfb_T]
-                local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
                 local _gfb_fi = findfirst(==(_gfb_fld), fieldnames(_gfb_T))
                 if _gfb_fi !== nothing
                     # the wasm field index comes from the REGISTERED layout's offset
@@ -5913,7 +6059,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
         if !_gfc_done
-                record_unsupported!(ctx, :unsupported_method, "getfield call shape not lowerable"; idx=idx)
+            record_unsupported!(ctx, :unsupported_method,
+                                "$(func.name) call shape not lowerable";
+                                idx=idx, detail=expr)
             ctx.last_stmt_was_stub = true  # PURE-908
         end
 
@@ -6438,8 +6586,7 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     bld = _ctx_builder(ctx, "_emit_apply_iterate_vect_prefix!")
     if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
         emit_unsupported_stub!(ctx, bld, :unsupported_method,
-                               "apply-iterate vect: vector layout unavailable";
-                               soundness_fatal=false)
+                               "apply-iterate vect: vector layout unavailable")
         append_builder!(fb, bld)
         return
     end

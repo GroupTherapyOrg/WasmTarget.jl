@@ -334,72 +334,41 @@ function has_try_catch(code)::Bool
 end
 
 """
-    stmt_must_execute(code, idx) -> Bool
+    stmt_is_proven_unreachable(code, idx) -> Bool
 
-Strict-mode reachability gate. Returns `true` iff statement `idx`'s basic block
-**dominates every normal-return block** — i.e. the statement is executed on every call
-that returns normally. Used to make loud strict rejects SOUND: an un-lowerable construct
-is rejected only when it is DEFINITELY hit. A working (compiles+runs) function can never
-have a must-execute trap-stub (it would trap on every call, so it wouldn't work), so
-gating rejects on this can never regress valid code; branch/dead-code-guarded stubs stay
-sound *silent* traps.
-
-Conservative by construction: any uncertainty → `false` (don't reject). Functions with
-`try`/`catch` (exception edges this simple CFG doesn't model) return `false` outright.
+Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reached
+from entry.  This is the sole condition under which an unsupported lowering may be
+kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
+(including exception-bearing CFGs) is reachable for soundness purposes.
 """
-function stmt_must_execute(code, idx::Int)::Bool
+function stmt_is_proven_unreachable(code, idx::Int)::Bool
     (code isa AbstractVector && 1 <= idx <= length(code)) || return false
-    has_try_catch(code) && return false          # exception edges unmodeled → never reject
+    has_try_catch(code) && return false
     blocks = analyze_blocks(code)
-    nb = length(blocks)
-    nb == 0 && return false
+    isempty(blocks) && return false
     bidx = findfirst(b -> b.start_idx <= idx <= b.end_idx, blocks)
     bidx === nothing && return false
-    start2id = Dict{Int,Int}(blocks[i].start_idx => i for i in 1:nb)
-    succs = [Int[] for _ in 1:nb]
-    retids = Int[]
-    for i in 1:nb
-        t = blocks[i].terminator
-        if t isa Core.ReturnNode
-            isdefined(t, :val) && push!(retids, i)   # normal return (unreachable-return has no val)
-        elseif t isa Core.GotoNode
-            haskey(start2id, t.label) && push!(succs[i], start2id[t.label])
-        elseif t isa Core.GotoIfNot
-            haskey(start2id, t.dest) && push!(succs[i], start2id[t.dest])
-            i < nb && push!(succs[i], i + 1)
-        else
-            i < nb && push!(succs[i], i + 1)         # fall-through (nothing terminator)
+    start2id = Dict{Int,Int}(blocks[i].start_idx => i for i in eachindex(blocks))
+    reachable = falses(length(blocks))
+    reachable[1] = true
+    work = Int[1]
+    while !isempty(work)
+        bi = pop!(work)
+        term = blocks[bi].terminator
+        successors = Int[]
+        if term isa Core.GotoNode
+            haskey(start2id, term.label) && push!(successors, start2id[term.label])
+        elseif term isa Core.GotoIfNot
+            haskey(start2id, term.dest) && push!(successors, start2id[term.dest])
+            bi < length(blocks) && push!(successors, bi + 1)
+        elseif !(term isa Core.ReturnNode)
+            bi < length(blocks) && push!(successors, bi + 1)
+        end
+        for si in successors
+            reachable[si] || (reachable[si] = true; push!(work, si))
         end
     end
-    # reachable-from-entry (block 1); only consider reachable normal returns
-    reach = falses(nb); stack = [1]; reach[1] = true
-    while !isempty(stack)
-        b = pop!(stack)
-        for s in succs[b]; reach[s] || (reach[s] = true; push!(stack, s)); end
-    end
-    retids = filter(r -> reach[r], retids)
-    isempty(retids) && return false              # always-throws / no reachable normal return
-    reach[bidx] || return false
-    preds = [Int[] for _ in 1:nb]
-    for i in 1:nb, s in succs[i]; push!(preds[s], i); end
-    # iterative dominators: dom[b] = blocks dominating b
-    full = Set(1:nb)
-    dom = Vector{Set{Int}}(undef, nb)
-    for i in 1:nb; dom[i] = (i == 1 ? Set([1]) : copy(full)); end
-    changed = true
-    while changed
-        changed = false
-        for b in 2:nb
-            reach[b] || continue
-            ps = [p for p in preds[b] if reach[p]]
-            isempty(ps) && continue
-            nd = copy(dom[ps[1]])                    # fresh copy — never mutate a shared dom set
-            for k in 2:length(ps); intersect!(nd, dom[ps[k]]); end
-            push!(nd, b)
-            nd == dom[b] || (dom[b] = nd; changed = true)
-        end
-    end
-    return all(r -> bidx in dom[r], retids)
+    return !reachable[bidx]
 end
 
 """

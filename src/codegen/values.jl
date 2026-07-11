@@ -1581,47 +1581,33 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
-        # P6-ioprint: materialize the contents (the old ref.null emission silently
-        # dropped them — Base's constant IdSet/show tables arrived empty). Large
-        # memories fall back to null to avoid bytecode blowup.
+        # Materialize the exact contents.  Size is never a license to replace a
+        # real Memory constant with null, and undefined slots are not values.
         T = typeof(val)
         elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         mem = T.name.name in (:MemoryRef, :GenericMemoryRef) ? getfield(val, :mem) : val
         n_mem = length(mem)
-        if n_mem == 0 || n_mem > 4096
-            n_mem > 4096 && @debug "Memory constant too large to materialize ($n_mem elements) — emitting null" T
-            ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
+        if n_mem > 4096
+            record_unsupported!(ctx, :value_stub,
+                "Memory constant of type $T has $n_mem elements; exact materialization is not implemented";
+                detail=val, soundness_fatal=true)
         else
             arr_type_def = ctx.mod.types[array_type_idx + 1]
             for i in 1:n_mem
-                local _el_vb = nothing
                 defined = isassigned(mem, i)
-                if defined
-                    _el_vb = _compile_value_b(mem[i], ctx)
-                end
-                if !defined || isempty(_el_vb.instrs)
-                    # undef slot (or uncompilable element) — type-correct default.
-                    # Straight-line emission: emit the typed default directly on `b`.
-                    evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
-                    if evt === I32
-                        i32_const!(b, 0)
-                    elseif evt === I64
-                        i64_const!(b, 0)
-                    elseif evt === F32
-                        f32_const!(b, Float32(0))
-                    elseif evt === F64
-                        f64_const!(b, Float64(0))
-                    elseif evt isa ConcreteRef
-                        ref_null!(b, Int64(evt.type_idx), ConcreteRef(UInt32(evt.type_idx), true))
-                    else
-                        ref_null!(b, AnyRef)  # 0x6E any
-                    end
-                else
-                    append_builder!(b, _el_vb)   # typed merge
-                end
+                defined || record_unsupported!(ctx, :value_stub,
+                    "Memory constant of type $T has an undefined slot at index $i";
+                    detail=val, soundness_fatal=true)
+                evt = arr_type_def isa ArrayType ? arr_type_def.elem.valtype : nothing
+                evt isa WasmValType || record_unsupported!(ctx, :value_stub,
+                    "Memory constant of type $T has no physical element type";
+                    detail=val, soundness_fatal=true)
+                emit_value!(b, mem[i], ctx, evt; from_julia=elem_type)
             end
-            array_new_fixed!(b, array_type_idx, n_mem, AnyRef)
+            # `array.new_fixed 0` is the real non-null empty array representation.
+            array_new_fixed!(b, array_type_idx, n_mem,
+                             arr_type_def isa ArrayType ? arr_type_def.elem.valtype : AnyRef)
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)

@@ -135,6 +135,37 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",
+        () -> begin
+            diag_src = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            required = ["function stmt_is_proven_unreachable",
+                        "!stmt_is_proven_unreachable",
+                        "soundness_fatal=(soundness_fatal && !_dead2)",
+                        "soundness_fatal=(soundness_fatal && !_dead)"]
+            forbidden = ["soundness_fatal && _me", "soundness_fatal && _me2",
+                         "sound *silent* trap", "A non-must-execute"]
+            count(p -> !occursin(p, diag_src * gen_src), required) +
+                count(p -> occursin(p, diag_src), forbidden)
+        end),
+    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, and grapheme gaps reject instead of substituting null, zero, one, or an arbitrary arm",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["Memory constant of type \$T has an undefined slot",
+                        "array.new_fixed 0",
+                        "ifelse condition did not lower to i32",
+                        "ifelse operand emitted no runtime value",
+                        "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime",
+                        "jl_alloc_string without its required length operand"]
+            forbidden = ["Memory constant too large to materialize (\$n_mem elements) — emitting null",
+                         "Fall back to emitting just the true value",
+                         "true = always a grapheme break"]
+            all_src = values_src * calls_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L37_no_fabricated_constant_fields" => ("constant fallbacks emit the registered Object prefix and every real field through its physical expected type; undefined fields are rejected",
         () -> begin
             values_src = read(joinpath(CODEGEN, "values.jl"), String)

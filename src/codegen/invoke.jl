@@ -3856,7 +3856,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
                 return append_builder!(b, bsh)
 
-            elseif meth.module === Base && startswith(string(name), "#")
+            elseif meth.module === Base &&
+                   occursin(r"^#_(?:growend|growbeg|growat)!", string(name))
                 # Clear any accumulated bytes from argument compilation
                 fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
 
@@ -3976,8 +3977,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 else
                     # Fallback: can't determine vector type — emit unreachable
                     bgrf = _ctx_builder(ctx, "compile_invoke")
-                    record_unsupported!(ctx, :unsupported_method, "vector op: element type undeterminable"; idx=idx)
-                    unreachable!(bgrf)
+                    record_unsupported!(ctx, :unsupported_method,
+                                        "vector op: element type undeterminable";
+                                        idx=idx, detail=expr)
+                    unreachable!(bgrf)  # structural trap after recorded unsupported
                     append_builder!(fb, bgrf)
                     ctx.last_stmt_was_stub = true  # PURE-908
                 end
