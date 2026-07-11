@@ -135,6 +135,16 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L30_no_fabricated_apply_tuple" => ("Core._apply_iterate may emit Tuple{} only from a proof that the iterable is empty; runtime-length tuples remain diagnosed until they have a real representation",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["_iterable_proven_empty(container_arg, ctx)",
+                        "runtime-length Core.tuple materialization requires a variable-tuple representation"]
+            forbidden = ["produces a Tuple{Vararg{Symbol}} which is checked",
+                         "must emit a struct.new of the actual Tuple{} type"]
+            count(p -> !occursin(p, calls_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
     "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
         () -> begin
             builder_src = read(joinpath(SRC, "builder", "instructions.jl"), String)

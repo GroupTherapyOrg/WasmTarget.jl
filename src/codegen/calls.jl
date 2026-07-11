@@ -5678,13 +5678,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Get container Julia type
         container_type = infer_value_type(container_arg, ctx)
 
-        # Handle Core.tuple target (kwarg dispatch pattern):
-        # _apply_iterate(iterate, Core.tuple, vec_of_symbols) converts remaining
-        # unknown kwargs into a tuple. The subsequent isa(result, Tuple{}) check
-        # determines whether to proceed or call kwerr.
-        # Emit struct.new with Tuple{}'s typeId — the isa check uses typeId
-        # comparison (shared wasm type at base struct index), so the typeId must
-        # match Tuple{}'s assigned ID for the check to pass correctly.
+        # Core.tuple is only directly representable when the iterable is proven
+        # empty. A runtime-length Julia tuple needs a genuine variable-tuple
+        # representation; never fabricate Tuple{} for a nonempty/unknown input.
         target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
         target_is_vect = (target_func isa GlobalRef && target_func.name === :vect && target_func.mod === Base)
         target_is_typed_vect = (target_func isa GlobalRef && target_func.name === :getindex && target_func.mod === Base)
@@ -5695,13 +5691,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
 
         if target_is_tuple
-            # Kwarg dispatch pattern: _apply_iterate(iterate, Core.tuple, unknown_kwargs_vec)
-            # produces a Tuple{Vararg{Symbol}} which is checked by isa(result, Tuple{}).
-            # The isa check uses ref.test against Tuple{}'s concrete WasmGC type,
-            # so we must emit a struct.new of the actual Tuple{} type (not base struct).
-            info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
-            emit_struct_prefix!(fb, ctx.type_registry, Tuple{}, info)
-            struct_new!(fb, info.wasm_type_idx)
+            if _iterable_proven_empty(container_arg, ctx)
+                info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
+                emit_struct_prefix!(fb, ctx.type_registry, Tuple{}, info)
+                struct_new!(fb, info.wasm_type_idx)
+            else
+                emit_unsupported_stub!(ctx, fb, :unsupported_method,
+                    "runtime-length Core.tuple materialization requires a variable-tuple representation";
+                    idx=idx)
+            end
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
         # or a known binary-reduce intrinsic.
         elseif target_is_compose && length(args) == 3 &&
@@ -6325,6 +6323,32 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     return append_builder!(b, fb)
+end
+
+"""Prove emptiness from Julia IR without inventing a runtime value."""
+function _iterable_proven_empty(arg, ctx)::Bool
+    arg isa QuoteNode && return arg.value isa Tuple && isempty(arg.value)
+    arg isa Tuple && return isempty(arg)
+    arg isa Core.SSAValue || return false
+    get_ssa_type(ctx, arg) === Tuple{} && return true
+    1 <= arg.id <= length(ctx.code_info.code) || return false
+    local stmt = ctx.code_info.code[arg.id]
+    stmt isa Expr || return false
+    if stmt.head === :new && length(stmt.args) >= 2
+        local T = stmt.args[1]
+        local dims = stmt.args[end] isa QuoteNode ? stmt.args[end].value : stmt.args[end]
+        return T isa Type && T <: AbstractVector && dims isa Tuple &&
+               length(dims) == 1 && dims[1] == 0
+    end
+    if stmt.head === :call && !isempty(stmt.args)
+        local f = stmt.args[1]
+        local empty_constructor =
+            (f isa GlobalRef && f.mod === Core && f.name in (:tuple, :svec)) ||
+            (f isa GlobalRef && f.mod === Base && f.name === :vect) ||
+            (f === Core.tuple || (isdefined(Core, :svec) && f === Core.svec))
+        return empty_constructor && length(stmt.args) == 1
+    end
+    return false
 end
 
 """Allocate the valid-Julia `_RuntimeComposition{V}` captured context."""
