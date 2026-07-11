@@ -147,6 +147,8 @@ const LOCKS = [
                 "fields = value_branch ? FieldType[FieldType(I32, false)] : object_prefix_fields()",
                 "T <: Number ? registry.base_struct_idx : get_object_struct_type!",
                 "wasm_fields = object_prefix_fields()",
+                "if T === Core.Box",
+                "StructInfo(T, idx, [:contents], Type[Any], UInt32(1))",
                 "StructInfo(T, type_idx, field_names, field_types, UInt32(2))",
                 "StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))",
                 "emit_struct_prefix!(b, ctx.type_registry, struct_type, info)",

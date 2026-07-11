@@ -244,6 +244,17 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         return info
     end
 
+    # Core.Box is a mutable captured-variable CELL inside Dart's context model,
+    # not a user-visible Object allocation. Keep its `{classId, contents}` Top
+    # representation and its one-field Julia offset; the closure object owns
+    # identity, while all closures sharing this cell observe the same contents.
+    if T === Core.Box
+        idx = get_box_type!(mod, registry, AnyRef)
+        info = StructInfo(T, idx, [:contents], Type[Any], UInt32(1))
+        registry.structs[T] = info
+        return info
+    end
+
     # Redirect Tuple types to their specialized registration function
     # Tuples have integer field names (1, 2, ...) not symbols
     if T <: Tuple
