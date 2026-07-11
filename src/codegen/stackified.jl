@@ -55,7 +55,8 @@ function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType,
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
     # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx)
+    emit_value!(b, val, ctx, val_wasm;
+                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     extern_convert_any!(b)
     return b
@@ -86,7 +87,8 @@ function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ct
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx)
+    emit_value!(b, val, ctx, val_wasm;
+                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     return b  # No extern_convert_any — struct ref is already anyref
 end
@@ -669,7 +671,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_sb, ctx)
-                    emit_value!(_sb, val, ctx)
+                    emit_value!(_sb, val, ctx)  # R17-floor: phi converter consumes the actual recomputed type
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
                         emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
@@ -677,12 +679,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
-                    emit_value!(pvb, val, ctx)
+                    emit_value!(pvb, val, ctx, I32)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     compile_statement!(pvb, stmt, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
-                    emit_value!(pvb, val, ctx)
+                    emit_value!(pvb, val, ctx)  # R17-floor: i32 phi widening is selected after actual emission
                 end
             end
         elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
@@ -733,7 +735,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     return _cpv_ret()
                 end
             end
-            emit_value!(pvb, val, ctx)
+            emit_value!(pvb, val, ctx)  # R17-floor: literal phi edge has no sink when destination is unavailable
         end
         return _cpv_ret()
     end

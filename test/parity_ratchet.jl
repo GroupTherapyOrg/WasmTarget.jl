@@ -135,6 +135,25 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L34_single_pointer_lowering" => ("add_ptr/sub_ptr/pointerref/pointerset each have one compile_call lowering route",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            sum(max(count(line -> occursin("func.name === :$(name)", line), split(calls_src, '\n')) - 1, 0)
+                for name in (:add_ptr, :sub_ptr, :pointerref, :pointerset))
+        end),
+    "L35_unwrapped_emissions_classified" => ("every intentional no-expectedType emission is explicitly classified by why its actual type is the consumer contract",
+        () -> begin
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    occursin(r"emit_value!\([^()]*, ctx\)", line) || continue
+                    occursin("function emit_value!", line) && continue
+                    occursin("R17-floor:", line) || (n += 1)
+                end
+            end
+            n
+        end),
     "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton: dynamic Any-versus-() egal tests its concrete tuple type rather than heap identity",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)

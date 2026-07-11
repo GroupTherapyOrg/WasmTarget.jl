@@ -24,7 +24,7 @@ diagnosed validating trap.
 | Invariant | Current dart2wasm oracle | Current WasmTarget implementation | Evidence | Result |
 |---|---|---|---|---|
 | Typed validating instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart:172,474-554`; `_verifyTypes` is called by instruction methods | `src/builder/instr_builder.jl:51,117`; every emission updates and checks the abstract operand stack | Locks L6, L13; clean `Pkg.test()` | ✅ |
-| Typed expression channel | `pkg/dart2wasm/lib/code_generator.dart:28,60,677`; `CodeGenerator`/`AstCodeGenerator` carry expected and produced value types | `src/codegen/values.jl:857-905`; `emit_value!` derives the actual type from emission and owns expected-type wrapping | Locks L4, L9; R17 ratchet | ✅, remaining unwrapped call sites ratcheted |
+| Typed expression channel | `pkg/dart2wasm/lib/code_generator.dart:28,60,677`; `CodeGenerator`/`AstCodeGenerator` carry expected and produced value types | `src/codegen/values.jl:857-905`; `emit_value!` derives the actual type from emission and owns expected-type wrapping; all 35 no-expectedType sites are actual-type consumers or multi-value producers with a machine-checked `R17-floor` classification | Locks L4, L9, L35; R17 = 35 | ✅ at classified architectural floor |
 | One conversion funnel | `pkg/dart2wasm/lib/translator.dart:1597-1655`; `convertType` owns drop, unreachable, null-check, cast, box, and unbox | `src/codegen/values.jl:400+`; `convert_type!` is the sole conversion implementation; external producers request a target through `emit_value!(…, expected)` or builder-tracked `coerce_stack_top!` | Locks L1, L2, L5; R7/R16 ratchets (R16 = 0) | ✅, intrinsic-local numeric ops remain tracked debt |
 | One production compilation route | dart compilation constructs one translator/module strategy and all bodies use the `CodeGenerator` interface | `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → exactly one production `generate_body(ctx)` call | Lock L17; legacy/self-host/byte-shell compilers deleted | ✅ |
 | One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
@@ -62,13 +62,11 @@ the source rows and locks above are independently required.
 1. Close current builder/codegen gaps that are not excluded. Runtime-length composition,
    runtime Vararg tuples, homogeneous multi-container `_apply_iterate` (including exact
    empty-call MethodError payloads), and packed i8/i16 arrays are executable and locked.
-2. Drive R17 unwrapped emissions to its justified architectural floor, with every
-   remaining site classified against current dart. R16 external conversion calls are zero.
-3. Re-audit dynamic/static dispatch and constant construction against current files
+2. Re-audit dynamic/static dispatch and constant construction against current files
    (`dynamic_dispatch_table.dart`, `static_dispatch_table.dart`, `constants.dart`) after
    the Object migration, then add exact locks for the final invariants.
-4. Run the clean full suite, differential matrix, external validators, and this audit
+3. Run the clean full suite, differential matrix, external validators, and this audit
    again at the final candidate commit.
 
-Until all five blockers are closed, this file is an evidence-backed progress audit—not a
+Until all three blockers are closed, this file is an evidence-backed progress audit—not a
 claim of strict 1:1 parity.

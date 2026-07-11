@@ -765,7 +765,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         return_!(b)
         return b
     end
-    ty = emit_value!(b, val, ctx)
+    ty = emit_value!(b, val, ctx)  # R17-floor: actual type drives return compatibility
     # numeric→ref precedence (boxing) is checked before compatibility, as before.
     needs_box = ty !== nothing && !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
     if ty === nothing || (!needs_box && !return_type_compatible(ty, func_ret_wasm))
@@ -796,7 +796,7 @@ function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilati
         end
     end
     set_context!(b, "GotoIfNot cond → i32")
-    emit_value!(b, cond, ctx)
+    emit_value!(b, cond, ctx)  # R17-floor: actual local representation drives Bool unboxing
     # Check if the condition value is in a non-i32 local
     if cond isa Core.SSAValue
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
@@ -845,7 +845,7 @@ const _VALUE_COMPILE_STACK = Vector{Any}()
 # builder, and `emit_value!` is the sole merge/coercion channel.
 
 """
-    emit_value!(b, val, ctx) -> Union{WasmValType,Nothing}
+    emit_value!(b, val, ctx[, expected]) -> Union{WasmValType,Nothing}
 
 Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
 emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-guess via
@@ -884,7 +884,7 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     # REVERTED (gate-caught, Dates corpus): its SSA-shape detection misfired across
     # contexts, swallowing live values. Rebuild it WITH the weave folds it serves,
     # keyed on ctx.ssa_types (the typed slot), not statement sniffing.
-    ty = emit_value!(b, val, ctx)
+    ty = emit_value!(b, val, ctx)  # R17-floor: this wrapper consumes the actual emission type
     ty === nothing && return expected
     if ty !== expected
         # Like dart's wrap(node, expectedType), the single wrap funnel owns both
@@ -1028,7 +1028,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_value!(b, stmt.val, ctx)
+                    emit_value!(b, stmt.val, ctx)  # R17-floor: Pi source representation selects unboxing
                     # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
@@ -1252,7 +1252,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             # GlobalRef to a constant - evaluate and compile the value
             try
                 actual_val = getfield(val.mod, val.name)
-                emit_value!(b, actual_val, ctx)
+                emit_value!(b, actual_val, ctx)  # R17-floor: recursive constant emission has no sink yet
             catch
                 # If we can't evaluate, might be a type reference (no runtime value)
             end
@@ -1274,12 +1274,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 if field_val isa Int
                     i64_const!(b, Int64(field_val))
                 else
-                    emit_value!(b, field_val, ctx)
+                    emit_value!(b, field_val, ctx)  # R17-floor: literal IR field owns its physical type
                 end
             end
             struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         else
-            emit_value!(b, inner, ctx)
+            emit_value!(b, inner, ctx)  # R17-floor: QuoteNode delegates before a consumer exists
         end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
@@ -1371,7 +1371,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     ref_null!(b, StructRef)
                 end
             else
-                emit_value!(b, field_val, ctx)
+                emit_value!(b, field_val, ctx)  # R17-floor: registered constant field fallback
             end
         end
 
@@ -1449,7 +1449,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         _emit_tid!(T)
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
-            emit_value!(b, field_val, ctx)
+            emit_value!(b, field_val, ctx)  # R17-floor: closure constant field fallback
         end
 
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
@@ -1511,7 +1511,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 end
                 try
                     v = mem[i]
-                    emit_value!(b, v, ctx)
+                    emit_value!(b, v, ctx)  # R17-floor: Dict memory element type is runtime-selected
                 catch e
                     if e isa UndefRefError
                         emit_array_default!(arr_type_idx, elem_type)

@@ -1940,20 +1940,20 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     _x = args[4]  # the integer value
 
                     # Push abs(x) as I64 (same bits as UInt64): select(x, -x, x >= 0)
-                    emit_value!(bd, _x, ctx)  # x (true branch)
+                    emit_value!(bd, _x, ctx, I64)  # x (true branch)
                     i64_const!(bd, 0)                                   # 0
-                    emit_value!(bd, _x, ctx)  # x
+                    emit_value!(bd, _x, ctx, I64)  # x
                     num!(bd, Opcode.I64_SUB)                            # -x (false branch)
-                    emit_value!(bd, _x, ctx)  # x
+                    emit_value!(bd, _x, ctx, I64)  # x
                     i64_const!(bd, 0)                                   # 0
                     num!(bd, Opcode.I64_GE_S)                           # x >= 0 (i32 condition)
                     select!(bd)                                         # abs(x)
 
                     # Push pad (arg 2)
-                    emit_value!(bd, args[2], ctx)
+                    emit_value!(bd, args[2], ctx, I64)
 
                     # Push x < 0 as i32 Bool
-                    emit_value!(bd, _x, ctx)
+                    emit_value!(bd, _x, ctx, I64)
                     i64_const!(bd, 0)
                     num!(bd, Opcode.I64_LT_S)
 
@@ -1992,10 +1992,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if _rep_at === Char
                     br = _ctx_builder(ctx, "compile_invoke")
                     str_t = get_string_array_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(br, args[1], ctx)  # char i32 (left-packed)
+                    emit_value!(br, args[1], ctx, I32)  # char i32 (left-packed)
                     i32_const!(br, 24)
                     num!(br, Opcode.I32_SHR_U)                    # utf8 byte
-                    emit_value!(br, args[2], ctx)  # count i64
+                    emit_value!(br, args[2], ctx, I64)  # count i64
                     num!(br, Opcode.I32_WRAP_I64)
                     array_new!(br, str_t, I32)                    # fill (value, len)
                     return append_builder!(b, br)
@@ -2018,7 +2018,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     # 453393ca4ba4: closure callee — the compiled function takes the closure
     # object as wasm param 1; push it before the explicit args
     if closure_self_to_push !== nothing
-        emit_value!(fb, closure_self_to_push, ctx)   # THE typed value channel
+        emit_value!(fb, closure_self_to_push, ctx,
+                    static_wasm_type(closure_self_to_push, ctx))   # THE typed value channel
     end
 
     # Push arguments (for non-signal calls)
@@ -2631,7 +2632,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             bpow = _ctx_builder(ctx, "compile_invoke")  # Reset
                             emit_value!(bpow, args[1], ctx, F32)   # step4: the promote follows
                             num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
-                            emit_value!(bpow, args[2], ctx)
+                            emit_value!(bpow, args[2], ctx, arg2_type === Float32 ? F32 : F64)
                             if arg2_type === Float32
                                 num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
                             end
@@ -2829,7 +2830,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bsc = _ctx_builder(ctx, "compile_invoke")
 
                 # Compile string
-                emit_value!(bsc, args[1], ctx)
+                emit_value!(bsc, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
 
                 # Compile index and convert to 0-based
                 idx_type = infer_value_type(args[2], ctx)
@@ -2885,7 +2886,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bcp = _ctx_builder(ctx, "compile_invoke")
 
                 # dst array
-                emit_value!(bcp, args[3], ctx)
+                emit_value!(bcp, args[3], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 # dst offset (0-based)
                 dst_idx_type = infer_value_type(args[4], ctx)
                 emit_value!(bcp, args[4], ctx, (dst_idx_type === Int64 || dst_idx_type === Int) ? I64 : I32)   # march14
@@ -2896,7 +2897,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 num!(bcp, Opcode.I32_SUB)
 
                 # src array
-                emit_value!(bcp, args[1], ctx)
+                emit_value!(bcp, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 # src offset (0-based)
                 src_idx_type = infer_value_type(args[2], ctx)
                 emit_value!(bcp, args[2], ctx, (src_idx_type === Int64 || src_idx_type === Int) ? I64 : I32)   # march14
@@ -2936,8 +2937,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local_set!(bss, src_local)
 
                 # Create new string of specified length
-                emit_value!(bss, args[3], ctx)  # len
                 len_type = infer_value_type(args[3], ctx)
+                emit_value!(bss, args[3], ctx,
+                            (len_type === Int64 || len_type === Int) ? I64 : I32)  # len
                 if len_type === Int64 || len_type === Int
                     num!(bss, Opcode.I32_WRAP_I64)
                 end
@@ -3088,7 +3090,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
 
                 # Array ref
-                emit_value!(bas, args[1], ctx)
+                emit_value!(bas, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
 
                 # Index (convert to 0-based)
                 idx_type = infer_value_type(args[2], ctx)
@@ -3186,7 +3188,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     if int_to_string_info !== nothing
                         # int_to_string is in registry - call it
                         # Compile the value argument, converting to Int32 if needed
-                        emit_value!(bis, value_arg, ctx)
+                        emit_value!(bis, value_arg, ctx,
+                                    value_type in (Int64, UInt64) ? I64 : I32)
 
                         # Convert to Int32 if needed
                         if value_type === Int64
@@ -3224,7 +3227,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # In WasmGC, Memory and MemoryRef are both the array reference
                 # Clear args bytes (already pushed) and re-compile just the memory arg
                 bmr = _ctx_builder(ctx, "compile_invoke")
-                emit_value!(bmr, args[1], ctx)
+                local _mr_expected = static_wasm_type(args[1], ctx)
+                emit_value!(bmr, args[1], ctx, _mr_expected)
                 return append_builder!(b, bmr)
 
             # ================================================================
@@ -3268,9 +3272,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     for fi in 1:nfields
                         if fi <= length(args)
                             local _expected = _ctor_field_wasm(fi)
-                            _expected === nothing ? emit_value!(bec, args[fi], ctx) :
-                                emit_value!(bec, args[fi], ctx, _expected;
-                                            from_julia=fieldtype(_ctor_type, fi))
+                            _expected === nothing && error("exception constructor field lacks a physical Wasm type")
+                            emit_value!(bec, args[fi], ctx, _expected;
+                                        from_julia=fieldtype(_ctor_type, fi))
                         else
                             # Default: push null ref for ref fields, 0 for i32/i64 —
                             # the NULL HEAP TYPE must match the wasm field type
@@ -3318,16 +3322,18 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     start_arg = args[2]
                     stop_arg = args[3]
                     local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+                    local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
+                    local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
                     emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
                     # Field 1: string (ref null array<i32>)
-                    emit_value!(bsub2, str_arg, ctx)
+                    emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
                     # Field 2: offset = start - 1
-                    emit_value!(bsub2, start_arg, ctx)
+                    emit_value!(bsub2, start_arg, ctx, I64)
                     i64_const!(bsub2, 1)
                     num!(bsub2, Opcode.I64_SUB)
                     # Field 3: ncodeunits = stop - start + 1
-                    emit_value!(bsub2, stop_arg, ctx)
-                    emit_value!(bsub2, start_arg, ctx)
+                    emit_value!(bsub2, stop_arg, ctx, I64)
+                    emit_value!(bsub2, start_arg, ctx, I64)
                     num!(bsub2, Opcode.I64_SUB)
                     i64_const!(bsub2, 1)
                     num!(bsub2, Opcode.I64_ADD)
@@ -3340,11 +3346,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # SubString(str) — view of entire string
                     str_arg = args[1]
                     local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+                    local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
+                    local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
                     emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
-                    emit_value!(bsub2, str_arg, ctx)
+                    emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
                     i64_const!(bsub2, 0)  # offset = 0
                     # ncodeunits = array.len(str)
-                    emit_value!(bsub2, str_arg, ctx)
+                    emit_value!(bsub2, str_arg, ctx,
+                                ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
                     array_len!(bsub2)
                     num!(bsub2, Opcode.I64_EXTEND_I32_S)
                     # Emit struct.new
@@ -3364,9 +3373,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bti = _ctx_builder(ctx, "compile_invoke")
                 # Closure form: (closure, string, index, len) → return index
                 if length(args) >= 3
-                    emit_value!(bti, args[2], ctx)
+                    emit_value!(bti, args[2], ctx, I64)
                 else
-                    emit_value!(bti, args[1], ctx)
+                    emit_value!(bti, args[1], ctx, I64)
                 end
                 return append_builder!(b, bti)
 
@@ -3374,9 +3383,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bni = _ctx_builder(ctx, "compile_invoke")
                 # nextind(s, i) = i + 1 in WasmGC
                 if length(args) >= 3
-                    emit_value!(bni, args[2], ctx)
+                    emit_value!(bni, args[2], ctx, I64)
                 else
-                    emit_value!(bni, args[1], ctx)
+                    emit_value!(bni, args[1], ctx, I64)
                 end
                 i64_const!(bni, 1)
                 num!(bni, Opcode.I64_ADD)
@@ -3486,7 +3495,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     end
 
                     if int_to_string_info !== nothing
-                        emit_value!(bis1, value_arg, ctx)
+                        emit_value!(bis1, value_arg, ctx,
+                                    value_type in (Int64, UInt64) ? I64 : I32)
 
                         # Convert to Int32 if needed
                         if value_type === Int64
@@ -3586,21 +3596,21 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             emit_jl_string_to_js!(bsh2, io.decode_idx)
                             call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, I64)
                             call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Int32
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, I32)
                             num!(bsh2, Opcode.I64_EXTEND_I32_S)
                             call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Float64
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, F64)
                             call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Float32
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, F32)
                             num!(bsh2, Opcode.F64_PROMOTE_F32)
                             call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Bool
-                            emit_value!(bsh2, arg, ctx)
+                            emit_value!(bsh2, arg, ctx, I32)
                             call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
                         else
                             @debug "show: unsupported argument type $arg_type, skipping"
@@ -3670,7 +3680,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 catch; end
                             end
                             if int_to_string_info_pt !== nothing
-                                emit_value!(bpts, args[i], ctx)
+                                emit_value!(bpts, args[i], ctx,
+                                            arg_type in (Int64, UInt64) ? I64 : I32)
                                 if arg_type === Int64 || arg_type === UInt64
                                     num!(bpts, Opcode.I32_WRAP_I64)
                                 end
@@ -3755,7 +3766,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
                     # Field 1: msg (ArrayRef for AbstractString)
                     if length(args) >= 1
-                        emit_value!(berr, args[1], ctx)
+                        local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
+                        local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
+                        emit_value!(berr, args[1], ctx, _ee_msg_w; from_julia=String)
                     else
                         ref_null!(berr, ArrayRef)
                     end
@@ -3815,7 +3828,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Discard accumulated argument bytes and re-compile just src (arg 2)
                 bua = _ctx_builder(ctx, "compile_invoke")
                 src_arg = expr.args[4]  # args: [mi, func_ref, dest, src]
-                emit_value!(bua, src_arg, ctx)
+                emit_value!(bua, src_arg, ctx, static_wasm_type(src_arg, ctx))
                 return append_builder!(b, bua)
 
             # Handle push!/pop! growth closures from Base (_growend!)
@@ -3836,7 +3849,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
                           (length(args) >= 4 ? args[4] : nothing)
                 if vec_arg !== nothing
-                    emit_value!(bsh, vec_arg, ctx)
+                    emit_value!(bsh, vec_arg, ctx, static_wasm_type(vec_arg, ctx))
                 else
                     record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
                     unreachable!(bsh)
@@ -3895,7 +3908,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     bgr = _ctx_builder(ctx, "compile_invoke")
 
                     # 1. Get the vector and store in local
-                    emit_value!(bgr, vec_arg, ctx)
+                    emit_value!(bgr, vec_arg, ctx, ConcreteRef(UInt32(vec_type_idx), true))
                     # PURE-045: heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(vec_type_idx), true)
                     local_set!(bgr, vec_scratch_local)
@@ -4021,14 +4034,15 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
                     # len arg
                     if length(expr.args) >= 4
-                        emit_value!(bhb, expr.args[4], ctx)  # length i64
+                        emit_value!(bhb, expr.args[4], ctx, I64)  # length i64
                     else
                         i64_const!(bhb, 0)
                     end
                     # seed arg (UInt64 → i32)
                     if length(expr.args) >= 5
-                        emit_value!(bhb, expr.args[5], ctx)
                         seed_type = infer_value_type(expr.args[5], ctx)
+                        emit_value!(bhb, expr.args[5], ctx,
+                                    (seed_type === UInt64 || seed_type === Int64 || seed_type === Int) ? I64 : I32)
                         if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
                             num!(bhb, Opcode.I32_WRAP_I64)
                         end
@@ -4093,8 +4107,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         local _field_idx = _fi + Int(_ctor_sinfo.field_offset)
                         local _expected = (_ctor_def isa StructType && _field_idx <= length(_ctor_def.fields)) ?
                             _ctor_def.fields[_field_idx].valtype : nothing
-                        _expected === nothing ? emit_value!(fb, args[_fi], ctx) :
-                            emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
+                        _expected === nothing && error("constructor field lacks a physical Wasm type")
+                        emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
                     end
                     # struct.new
                     bscn = _ctx_builder(ctx, "compile_invoke")
