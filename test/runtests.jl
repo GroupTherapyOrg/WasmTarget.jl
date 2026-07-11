@@ -196,10 +196,15 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 struct _WTI128Box; x::Int128; n::Int64; end
 struct _WTU128Box; x::UInt128; n::Int64; end
 
-# Phase 77: a value-stub (`objectid`/jl_object_id) in a discovered callee is
-# unconditionally fatal. Top-level so trim sees _g1_objid as a non-entry MI.
+# Phase 77: ordinary heap structs carry dart2wasm's Object prefix even through a
+# discovered callee. Top-level so trim sees _g1_objid as a non-entry MI.
 @noinline _g1_objid(c::TestCounter)::UInt64 = objectid(c)
-_g1_entry(n::Int64)::UInt64 = _g1_objid(TestCounter(n))
+function _g1_entry(n::Int64)::Int32
+    a = TestCounter(n)
+    b = TestCounter(n)
+    (_g1_objid(a) != 0 && _g1_objid(a) == _g1_objid(a) &&
+     _g1_objid(a) != _g1_objid(b)) ? Int32(1) : Int32(0)
+end
 # WASMTARGET-FUZZ: tagged-union FLOAT members round-trip (wrap boxes the float into
 # a numeric box, unwrap unboxes it) — the old code DROPPED floats → silent data loss.
 _wt_uf(a::Int64)::Int64 = begin
@@ -10102,16 +10107,11 @@ console.log(JSON.stringify({
     # select_t/if ref operand. The downstream-regression INTENT is preserved end-to-end by
     # the Loop-1 backfills, e.g. _no_wrap_after_i32_op in test/cleanup_loop1_backfills.jl.)
 
-    # Soundness guard: wrong-value stubs are fatal in every function, including
-    # discovered dependencies. There is no mode or environment escape hatch.
-    @pphase "Phase 77: unconditional value-stub fatality" begin
-        @testset "Phase 77: discovered value-stubs are fatal" begin
-            _g1_try() = try
-                WasmTarget.compile(_g1_entry, (Int64,)); :ok
-            catch e
-                e isa WasmTarget.WasmCompileError ? :rejected : rethrow()
-            end
-            @test _g1_try() === :rejected
+    @pphase "Phase 77: ordinary Object identity" begin
+        @testset "Phase 77: discovered ordinary-object identity is real and stable" begin
+            result = compare_julia_wasm(_g1_entry, Int64(7))
+            @test result.pass
+            @test result.actual == 1
         end
     end
 

@@ -1475,7 +1475,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
 
                 # Get data array: struct.get field 1 (after typeId at field 0)
                 local_get!(b, vec_local)
-                struct_get!(b, vec_type_idx, UInt32(1), ConcreteRef(UInt32(data_array_idx), true))  # field 1 = data array
+                struct_get!(b, vec_type_idx, wasm_field_idx(vec_info, 1), ConcreteRef(UInt32(data_array_idx), true))
                 local_set!(b, data_local)
 
                 # Get length: array.len
@@ -1586,7 +1586,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                         local_get!(b, tup_local)
                         _et_wt = (et === Float64) ? F64 : (et === Float32) ? F32 :
                                  (et === Int64 || et === Int || et === UInt64) ? I64 : I32
-                        struct_get!(b, tuple_type_idx, UInt32(fi), _et_wt)  # field fi (1-based = after typeId)
+                        struct_get!(b, tuple_type_idx, wasm_field_idx(tuple_info, fi), _et_wt)
 
                         # Write element based on type
                         if et === Int32
@@ -2710,7 +2710,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if arg_type !== String && arg_type !== Symbol
                     if haskey(ctx.type_registry.structs, arg_type)
                         cu_info = ctx.type_registry.structs[arg_type]
-                        struct_get!(basc, cu_info.wasm_type_idx, UInt32(1), I32)  # field 1 = :s (String) (field 0 = typeId)
+                        struct_get!(basc, cu_info.wasm_type_idx, wasm_field_idx(cu_info, 1), I32)
                     end
                 end
 
@@ -3255,8 +3255,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
                 local _ctor_info = _ctor_type !== nothing ? register_struct_type!(ctx.mod, ctx.type_registry, _ctor_type) : nothing
                 if _ctor_info !== nothing
-                    # Push typeId (field 0)
-                    emit_type_id!(bec, ctx.type_registry, _ctor_type)
+                    emit_struct_prefix!(bec, ctx.type_registry, _ctor_type, _ctor_info)
                     # Push remaining fields: for msg-based exceptions, compile the msg arg as string array
                     nfields = length(fieldnames(_ctor_type))
                     # the ACTUAL wasm field types decide bridging/null heap types
@@ -3318,8 +3317,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     str_arg = args[1]
                     start_arg = args[2]
                     stop_arg = args[3]
-                    # Field 0: typeId = 0
-                    i32_const!(bsub2, 0)
+                    local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+                    emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
                     # Field 1: string (ref null array<i32>)
                     emit_value!(bsub2, str_arg, ctx)
                     # Field 2: offset = start - 1
@@ -3340,8 +3339,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 elseif length(args) >= 1
                     # SubString(str) — view of entire string
                     str_arg = args[1]
-                    # Field 0: typeId = 0
-                    i32_const!(bsub2, 0)
+                    local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+                    emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
                     emit_value!(bsub2, str_arg, ctx)
                     i64_const!(bsub2, 0)  # offset = 0
                     # ncodeunits = array.len(str)
@@ -3753,7 +3752,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # error("msg") → create ErrorException struct, stash, throw
                 local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
                 if _ee_info !== nothing
-                    emit_type_id!(berr, ctx.type_registry, ErrorException)
+                    emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
                     # Field 1: msg (ArrayRef for AbstractString)
                     if length(args) >= 1
                         emit_value!(berr, args[1], ctx)
@@ -3903,7 +3902,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                     # 2. Get old backing array and store
                     local_get!(bgr, vec_scratch_local)
-                    struct_get!(bgr, vec_type_idx, UInt32(1), ConcreteRef(UInt32(arr_type_idx), true))  # field 1 = array ref (field 0 = typeId)
+                    struct_get!(bgr, vec_type_idx, wasm_field_idx(vec_info, 1), ConcreteRef(UInt32(arr_type_idx), true))
                     # PURE-045: heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(arr_type_idx), true)
                     local_set!(bgr, old_arr_local)
@@ -3945,7 +3944,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # 7. Update vector's backing array field
                     local_get!(bgr, vec_scratch_local)
                     local_get!(bgr, new_arr_local)
-                    struct_set!(bgr, vec_type_idx, UInt32(1), ConcreteRef(UInt32(arr_type_idx), true))  # field 1 = array ref (field 0 = typeId)
+                    struct_set!(bgr, vec_type_idx, wasm_field_idx(vec_info, 1), ConcreteRef(UInt32(arr_type_idx), true))
 
                     append_builder!(fb, bgr)
 

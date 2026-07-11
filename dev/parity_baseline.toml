@@ -22,6 +22,7 @@ L24_unified_static_tearoffs = 0
 L25_flat_runtime_composition = 0
 L26_dispatch_roots_only = 0
 L27_no_postbuilder_byte_truncation = 0
+L28_ordinary_object_prefix = 0
 L2_ref_i31_callers = 0
 L3_legacy_flow_family = 0
 L4_no_postemit_reguess = 0
@@ -32,7 +33,7 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 531
+R11_patch_markers = 515
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12

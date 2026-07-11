@@ -254,8 +254,7 @@ function _wt_same_hierarchy(a, b, mod)::Bool
 end
 
 # The declared supertype index of a ConcreteRef's type, or `nothing`. Only
-# StructType carries a supertype_idx in WT (set by set_struct_supertypes! /
-# create_jl_type_hierarchy!); arrays never declare one.
+# StructType carries the supertype chosen at registration; arrays never declare one.
 function _wt_concrete_supertype_idx(idx::Integer, mod)
     mod === nothing && return nothing
     i = Int(idx) + 1
@@ -957,7 +956,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     b = _ctx_builder(ctx, "compile_value")
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
-    _emit_tid!(T) = emit_type_id!(b, ctx.type_registry, T)
+    _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
+        emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :
+        emit_type_id!(b, ctx.type_registry, T)
     # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).

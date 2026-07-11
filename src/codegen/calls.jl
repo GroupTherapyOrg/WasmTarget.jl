@@ -184,7 +184,7 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     if info !== nothing
-        emit_type_id!(bld, ctx.type_registry, ErrT)
+        emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
         struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
     else
         ref_null!(bld, AnyRef)
@@ -636,8 +636,11 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
         num!(bld, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         local_set!(bld, local_result)
 
-        # Push typeId for Tuple struct (field 0 = typeId)
-        i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
+        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        local tuple_info = haskey(ctx.type_registry.structs, tuple_type) ?
+                           ctx.type_registry.structs[tuple_type] :
+                           register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        emit_struct_prefix!(bld, ctx.type_registry, tuple_type, tuple_info)
         # Push result back for tuple field 1
         local_get!(bld, local_result)
 
@@ -2168,14 +2171,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 emit_value!(_lnb2, arg, ctx)
 
                 # Get field 2 (size tuple; field 0 = typeId, field 1 = ref)
-                struct_get!(_lnb2, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
+                struct_get!(_lnb2, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
                 # Get field 1 of the size tuple (the Int64 value; field 0 = typeId)
                 # Size tuple is Tuple{Int64}
                 size_tuple_type = Tuple{Int64}
                 if haskey(ctx.type_registry.structs, size_tuple_type)
                     size_info = ctx.type_registry.structs[size_tuple_type]
-                    struct_get!(_lnb2, size_info.wasm_type_idx, 1, I64)  # Field 1 of tuple (0=typeId)
+                    struct_get!(_lnb2, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
                 end
                 append_builder!(fb, _lnb2)
                 return append_builder!(b, fb)
@@ -2243,10 +2246,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local_tee!(_pshb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
-            struct_get!(_pshb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
+            struct_get!(_pshb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
             # Get size value (field 1 of tuple; field 0 = typeId)
-            struct_get!(_pshb, size_info.wasm_type_idx, 1, I64)  # Field 1 of tuple (0=typeId)
+            struct_get!(_pshb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
 
             # Add 1 to get new size
             i64_const!(_pshb, 1)
@@ -2257,7 +2260,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
             # Create new size tuple with new_size
             # struct.new for Tuple{Int64} (typeId=0, then value)
-            i32_const!(_pshb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
+            emit_struct_prefix!(_pshb, ctx.type_registry, Tuple{Int64}, size_info)
             local_get!(_pshb, size_local)
             struct_new!(_pshb, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
@@ -2269,12 +2272,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Get vec, set size field
             local_get!(_pshb, vec_local)
             local_get!(_pshb, size_tuple_local)
-            struct_set!(_pshb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size (0=typeId, 1=ref)
+            struct_set!(_pshb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
             # Now set the element at index new_size
             # Get ref (field 1 of vec; field 0 = typeId)
             local_get!(_pshb, vec_local)
-            struct_get!(_pshb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = ref/data array (0=typeId)
+            struct_get!(_pshb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
 
             # Index: new_size - 1 (convert to 0-based)
             local_get!(_pshb, size_local)
@@ -2355,10 +2358,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local_tee!(_popb, vec_local)
 
             # Get size tuple (field 2; field 0 = typeId, field 1 = ref)
-            struct_get!(_popb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
+            struct_get!(_popb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
             # Get size value (field 1 of tuple; field 0 = typeId)
-            struct_get!(_popb, size_info.wasm_type_idx, 1, I64)  # Field 1 of tuple (0=typeId)
+            struct_get!(_popb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
 
             # Store size in local
             local_tee!(_popb, size_local)
@@ -2366,7 +2369,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Get element at index size (1-based, so we use size-1 for 0-based)
             # First get ref (field 1; field 0 = typeId)
             local_get!(_popb, vec_local)
-            struct_get!(_popb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = ref/data array (0=typeId)
+            struct_get!(_popb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
 
             # Index: size - 1 (convert to 0-based)
             local_get!(_popb, size_local)
@@ -2390,7 +2393,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local_set!(_popb, _pop_newsize_local)
 
             # Create new size tuple (typeId=0, then value)
-            i32_const!(_popb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
+            emit_struct_prefix!(_popb, ctx.type_registry, Tuple{Int64}, size_info)
             local_get!(_popb, _pop_newsize_local)
             struct_new!(_popb, size_info.wasm_type_idx)   # mod-resolved fields (march3)
 
@@ -2401,7 +2404,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Set vec.size = new_size_tuple
             local_get!(_popb, vec_local)
             local_get!(_popb, size_tuple_local)
-            struct_set!(_popb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size (0=typeId, 1=ref)
+            struct_set!(_popb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
             # Return the element
             local_get!(_popb, elem_local)
@@ -2525,7 +2528,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     info = ctx.type_registry.structs[obj_type]
                     # march14 (wrap tail): typed arrival when the struct is registered
                     emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    struct_get!(_refb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array (0=typeId)
+                    struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
                 else
                     # parity(M11): an unregistered struct previously emitted an INCOMPLETE
                     # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
@@ -2542,7 +2545,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     info = ctx.type_registry.structs[obj_type]
                     # march14 (wrap tail): typed arrival when the struct is registered
                     emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    struct_get!(_szfb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
+                    struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
                 else
                     record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
                     unreachable!(_szfb)
@@ -3360,9 +3363,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if haskey(ctx.type_registry.structs, tuple_type)
             info = ctx.type_registry.structs[tuple_type]
 
-            # Push typeId for tuple struct (field 0 = typeId)
             local _tupb = _ctx_builder(ctx, "compile_call")
-            i32_const!(_tupb, Int64(ensure_type_id!(ctx.type_registry, tuple_type)))  # real classId (M3)
+            emit_struct_prefix!(_tupb, ctx.type_registry, tuple_type, info)
 
             # Push all tuple elements with type safety for externref fields
             # PURE-142: Core.tuple args may be phi locals typed as i64 but
@@ -3483,7 +3485,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     local_get!(_vrb, temp_local)
-                    struct_set!(_vrb, info.wasm_type_idx, 1, AnyRef)  # Field 1 = data array ref (0=typeId)
+                    struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
                     local_get!(_vrb, temp_local)
                     append_builder!(fb, _vrb)
                     return append_builder!(b, fb)
@@ -3515,7 +3517,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local_get!(_vsb, temp_local)
 
                 # struct.set
-                struct_set!(_vsb, info.wasm_type_idx, 2, AnyRef)  # Field 2 = size tuple (0=typeId, 1=ref)
+                struct_set!(_vsb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
 
                 # setfield! returns the value, so push it again
                 local_get!(_vsb, temp_local)
@@ -4040,7 +4042,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _prrb = _ctx_builder(ctx, "compile_call")
                 emit_value!(_prrb, _prg_vec, ctx)
                 ref_cast!(_prrb, Int64(_prr_info.wasm_type_idx), true)
-                struct_get!(_prrb, _prr_info.wasm_type_idx, UInt32(1), julia_to_wasm_type(_prr_te))   # field 0 = typeId, 1 = x
+                struct_get!(_prrb, _prr_info.wasm_type_idx, wasm_field_idx(_prr_info, 1), julia_to_wasm_type(_prr_te))
                 if _prr_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
                     num!(_prrb, Opcode.I64_REINTERPRET_F64)
                 elseif (_prr_te === UInt64 || _prr_te === Int64) && _prg_tp === Float64
@@ -4061,7 +4063,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _prgb = _ctx_builder(ctx, "compile_call")
                 emit_value!(_prgb, _prg_vec, ctx)
                 local _prg_vinfo = ctx.type_registry.structs[_prg_vt]
-                struct_get!(_prgb, _prg_vinfo.wasm_type_idx, UInt32(1), ConcreteRef(_prg_arr, true))
+                struct_get!(_prgb, _prg_vinfo.wasm_type_idx, wasm_field_idx(_prg_vinfo, 1), ConcreteRef(_prg_arr, true))
                 ref_cast!(_prgb, Int64(_prg_arr), true)
                 emit_value!(_prgb, ptr_arg, ctx)      # i64 byte offset
                 if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
@@ -4151,7 +4153,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 elseif (_psr_te === UInt32 || _psr_te === Int32) && _psg_tp === Float32
                     num!(_psrb, Opcode.I32_REINTERPRET_F32)
                 end
-                struct_set!(_psrb, _psr_info.wasm_type_idx, UInt32(1), julia_to_wasm_type(_psr_te))
+                struct_set!(_psrb, _psr_info.wasm_type_idx, wasm_field_idx(_psr_info, 1), julia_to_wasm_type(_psr_te))
                 emit_value!(_psrb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psrb)
                 return append_builder!(b, fb)
@@ -4176,7 +4178,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         register_struct_type!(ctx.mod, ctx.type_registry, _psg_vt)
                     end
                     local _psg_vinfo = ctx.type_registry.structs[_psg_vt]
-                    struct_get!(_psgb, _psg_vinfo.wasm_type_idx, UInt32(1), ConcreteRef(_psg_arr, true))
+                    struct_get!(_psgb, _psg_vinfo.wasm_type_idx, wasm_field_idx(_psg_vinfo, 1), ConcreteRef(_psg_arr, true))
                 end
                 ref_cast!(_psgb, Int64(_psg_arr), true)
                 emit_value!(_psgb, _ps_ptr, ctx)      # i64 byte offset
@@ -4517,7 +4519,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
         end
         local _nc_info = ctx.type_registry.structs[_nc_tt]
-        i32_const!(_ncb, 0)   # typeId
+        emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
         _nc_norm!()                                           # field 1: wrapped value
         _nc_norm!()                                           # flag: wrapped != raw
         local_get!(_ncb, _nc_r)
@@ -4552,8 +4554,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
             local_set!(_caddb, local_result)
 
-            # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_caddb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
+            local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+            local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
+                               ctx.type_registry.structs[_cadd_tt] :
+                               register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
+            emit_struct_prefix!(_caddb, ctx.type_registry, _cadd_tt, _cadd_info)
             # Push result back for tuple field 1
             local_get!(_caddb, local_result)
 
@@ -4613,8 +4618,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
             local_set!(_csubb, local_result)
 
-            # Push typeId for Tuple struct (field 0 = typeId)
-            i32_const!(_csubb, Int64(ensure_type_id!(ctx.type_registry, is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool})))  # real classId (M3)
+            local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+            local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
+                               ctx.type_registry.structs[_csub_tt] :
+                               register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
+            emit_struct_prefix!(_csubb, ctx.type_registry, _csub_tt, _csub_info)
             # Push result back for tuple field 1
             local_get!(_csubb, local_result)
 
@@ -5692,10 +5700,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # The isa check uses ref.test against Tuple{}'s concrete WasmGC type,
             # so we must emit a struct.new of the actual Tuple{} type (not base struct).
             info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
-            tuple_empty_tid = ensure_type_id!(ctx.type_registry, Tuple{})
-            # Emit: i32.const $typeId; struct.new $Tuple_empty_type_idx
-                i32_const!(fb, Int64(tuple_empty_tid))
-                struct_new!(fb, info.wasm_type_idx)   # mod-resolved fields (march3)
+            emit_struct_prefix!(fb, ctx.type_registry, Tuple{}, info)
+            struct_new!(fb, info.wasm_type_idx)
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
         # or a known binary-reduce intrinsic.
         elseif target_is_compose && length(args) == 3 &&
@@ -6174,8 +6180,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             tuple_local = allocate_local!(ctx, ConcreteRef(tuple_info.wasm_type_idx, true))
                             local_set!(_ntb, tuple_local)
 
-                            # Push typeId for NamedTuple struct (field 0 = typeId)
-                            i32_const!(_ntb, Int64(ensure_type_id!(ctx.type_registry, nt_type)))  # real classId (M3)
+                            emit_struct_prefix!(_ntb, ctx.type_registry, nt_type, info)
 
                             # Extract each field from tuple and push for struct.new
                             for (i, (name, vtype)) in enumerate(zip(names, value_types))
@@ -6261,7 +6266,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local_set!(fb, data_arr_local)
 
                 # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
-                i32_const!(fb, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))  # real classId (M3)
+                emit_struct_prefix!(fb, ctx.type_registry, Tuple{Int64}, size_tuple_info)
                 i64_const!(fb, Int64(n_expr_args))
                 struct_new!(fb, size_tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
             size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
@@ -6269,12 +6274,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local_set!(ib, size_local)
 
                 # Step 4: Assemble Expr struct
-                # Push typeId for Expr struct (field 0 = typeId)
-                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Expr)))  # real classId (M3)
+                emit_struct_prefix!(ib, ctx.type_registry, Expr, expr_info)
                 # Push head (Expr field 1)
                 local_get!(ib, head_local)
                 # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
-                i32_const!(ib, Int64(ensure_type_id!(ctx.type_registry, Vector{Any})))  # real classId (M3)
+                emit_struct_prefix!(ib, ctx.type_registry, Vector{Any}, vec_any_info)
                 local_get!(ib, data_arr_local)
                 local_get!(ib, size_local)
                 struct_new!(ib, vec_any_info.wasm_type_idx)   # mod-resolved fields (march3)
@@ -6413,10 +6417,10 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     local_get!(bld, tail_len)
     array_copy!(bld, arr_type_idx, arr_type_idx)
 
-    # Vector{T} = {classId, data, size}; size is the immutable Tuple{Int64}.
-    i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, container_type)))
+    # Vector{T} and its size tuple are ordinary Object descendants.
+    emit_struct_prefix!(bld, ctx.type_registry, container_type, vec_info)
     local_get!(bld, dst_local)
-    i32_const!(bld, Int64(ensure_type_id!(ctx.type_registry, Tuple{Int64})))
+    emit_struct_prefix!(bld, ctx.type_registry, Tuple{Int64}, size_info)
     local_get!(bld, total_len)
     widen_length_to_i64!(bld)
     struct_new!(bld, size_idx)
@@ -6595,8 +6599,8 @@ Emit a shallow copy for _apply_iterate(iterate, Base.vect, vec::Vector{T}) — i
 the `[v...]` splat-collect idiom, which for a single Vector argument is exactly
 `copy(v)`: a new Vector{T} with the same elements.
 
-Builds the result struct { typeId, data_array, size_tuple } from `vec`:
-  * typeId   — copied from the source (field 0)
+Builds the result Object struct from `vec`:
+  * classId / identityHash — canonical fresh Object prefix
   * data_array — a fresh array.new_default of the LOGICAL length (read from the
     size tuple, not array.len, since the backing array may carry extra capacity),
     populated via array.copy
@@ -6655,9 +6659,8 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     local_get!(bld, len_local)
     array_copy!(bld, arr_type_idx, arr_type_idx)
 
-    # result = struct.new vec_type_idx [ typeId(src), new_arr, size_tuple(src) ]
-    local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset - 1, I32)  # typeId
+    # result = struct.new vec_type_idx [Object prefix, new_arr, size_tuple(src)]
+    emit_struct_prefix!(bld, ctx.type_registry, container_type, vec_info)
     local_get!(bld, new_arr_local)
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple

@@ -29,7 +29,7 @@ diagnosed validating trap.
 | One production compilation route | dart compilation constructs one translator/module strategy and all bodies use the `CodeGenerator` interface | `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → exactly one production `generate_body(ctx)` call | Lock L17; legacy/self-host/byte-shell compilers deleted | ✅ |
 | One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
 | Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
-| Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | `types.jl:610-645`; separate Top/Object types and monotonic identity source. String/Symbol and Core.TypeName are Object descendants; `jl_object_id` reads/writes field 1 | Lock L20; explicit identity differential; padding/Statistics suites | 🟡 partial: remaining ordinary heap structs still need Object-prefix migration |
+| Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | separate Top/Object types; ordinary structs, tuples, and Array wrappers inherit `{classId, identityHash}` at registration; value boxes remain Top-only; closure contexts remain internal; `jl_object_id` reads/writes field 1 | Locks L20/L28; mutable-object identity differential; focused shards and external validation | ✅ for current representations; final clean whole-suite rerun remains required |
 | Dynamic dispatch table | `dynamic_dispatch_table.dart:25+`; classId/selector-based table construction | one selector table, classId + offset + indirect call; FNV dispatch deleted | Lock L10; dispatch suites | ✅ for current supported call surface |
 | Module strategy | `modules.dart:182,219`; default and deferred strategies are explicit | one monolithic closed-world Wasm module | Deferred loading is excluded | ✅ within declared monolithic scope |
 | Loud unsupported behavior | dart `unimplemented` paths diagnose and trap; `convertType` has no guess-and-continue arm | `record_unsupported!`/`emit_unsupported_stub!` distinguish fatal wrong-value replacements from diagnosed traps | Locks L8, L14-L19; soundness tests | ✅ |
@@ -57,19 +57,16 @@ the source rows and locks above are independently required.
 
 ## Remaining blockers to a final green certificate
 
-1. Migrate every ordinary heap struct from the Top-only prefix to the Object prefix;
-   retain Top-only layouts for primitive value boxes. Extend `jl_object_id` to the entire
-   Object subtree and add distinguishability/identity tests across mutable objects.
-2. Close current builder/codegen gaps that are not excluded, including mixed-container
+1. Close current builder/codegen gaps that are not excluded, including mixed-container
    `_apply_iterate` and principled recursive type groups. Runtime-length composition
    (including mixed Any-storage escape) and packed i8/i16 arrays are now executable and
    locked; a diagnosed remaining failure is sound but is not feature parity.
-3. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
+2. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
    architectural floors, with every remaining site classified against current dart.
-4. Re-audit dynamic/static dispatch and constant construction against current files
+3. Re-audit dynamic/static dispatch and constant construction against current files
    (`dynamic_dispatch_table.dart`, `static_dispatch_table.dart`, `constants.dart`) after
    the Object migration, then add exact locks for the final invariants.
-5. Run the clean full suite, differential matrix, external validators, and this audit
+4. Run the clean full suite, differential matrix, external validators, and this audit
    again at the final candidate commit.
 
 Until all five blockers are closed, this file is an evidence-backed progress audit—not a

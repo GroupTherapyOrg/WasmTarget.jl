@@ -135,6 +135,27 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = [
+                "object_prefix_fields()",
+                "emit_object_prefix!",
+                "emit_struct_prefix!",
+                "fields = value_branch ? FieldType[FieldType(I32, false)] : object_prefix_fields()",
+                "T <: Number ? registry.base_struct_idx : get_object_struct_type!",
+                "wasm_fields = object_prefix_fields()",
+                "StructInfo(T, type_idx, field_names, field_types, UInt32(2))",
+                "StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))",
+                "emit_struct_prefix!(b, ctx.type_registry, struct_type, info)",
+                "ctx.type_registry.structs[object_type].field_offset == 2",
+            ]
+            all_src = types_src * structs_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), ["set_struct_supertypes!"])
+        end),
     "L27_no_postbuilder_byte_truncation" => ("the finalized typed instruction IR is authoritative; no raw-byte scanner may truncate or repair function bodies afterward",
         () -> begin
             gen_src = read(joinpath(CODEGEN, "generate.jl"), String)

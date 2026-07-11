@@ -57,7 +57,7 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
                                  vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
     if !is_mem
         vinfo = ctx.type_registry.structs[vt]
-        struct_get!(b, vinfo.wasm_type_idx, UInt32(1), ConcreteRef(UInt32(arr_t), true))
+        struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1), ConcreteRef(UInt32(arr_t), true))
     end
     ref_cast!(b, Int64(arr_t), true)
     return b
@@ -647,8 +647,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         # Initial capacity of 16
         initial_cap = Int32(16)
 
-        # field 0: typeId (i32) - PURE-9024
-        i32_const!(b, 0)
+        emit_struct_prefix!(b, ctx.type_registry, struct_type, dict_info)
 
         # field 1: slots - array of UInt8, initialized to 0 (empty)
         i32_const!(b, initial_cap)
@@ -695,8 +694,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         end
         vec_info = ctx.type_registry.structs[struct_type]
 
-        # field 0: typeId (i32) - PURE-9024
-        i32_const!(b, 0)
+        emit_struct_prefix!(b, ctx.type_registry, struct_type, vec_info)
 
         # Compile field 1: the array reference (from MemoryRef)
         # Safety: if the SSA local is numeric (i64/i32) but the Vector struct expects a ref,
@@ -783,7 +781,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             end
             size_info = ctx.type_registry.structs[size_tuple_type]
             # M3: real classId for the size tuple header
-            i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, size_tuple_type)))
+            emit_struct_prefix!(b, ctx.type_registry, size_tuple_type, size_info)
             # Push array ref again for array.len
             emit_value!(b, field_values[1], ctx)
             array_len!(b)
@@ -831,9 +829,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     info = ctx.type_registry.structs[struct_type]
 
     # PURE-9024/9025: Push typeId (i32) as field 0 before Julia field values
-    if info.field_offset > 0
-        emit_type_id!(b, ctx.type_registry, struct_type)   # classId, field 0
-    end
+    emit_struct_prefix!(b, ctx.type_registry, struct_type, info)
 
     # Push field values in order, handling Union field types
     for (i, val) in enumerate(field_values)
@@ -1164,14 +1160,15 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # Non-literal args: fall through to the unknown-foreigncall stub below
         elseif name === :jl_object_id
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
-            # assign a non-zero module-local identity on first observation. String is
-            # the first migrated Object descendant; other layouts remain loud until
-            # they acquire the same Object prefix (never fabricate an identity).
+            # assign a non-zero module-local identity on first observation.
             local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
             local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
             local object_idx = (object_type === String || object_type === Symbol) ?
                                get_string_struct_type!(ctx.mod, ctx.type_registry) :
-                               object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx : nothing
+                               object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx :
+                               (object_type !== nothing && haskey(ctx.type_registry.structs, object_type) &&
+                                ctx.type_registry.structs[object_type].field_offset == 2 ?
+                                ctx.type_registry.structs[object_type].wasm_type_idx : nothing)
             if object_idx !== nothing
                 local object_ref = ConcreteRef(object_idx, false)
                 local object_local = allocate_local!(ctx, object_ref)
@@ -1499,12 +1496,12 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
 
                     # Stack: [typeId, data_array_ref, size_tuple_ref] for struct.new Vector
                     # M3: real classId for the Vector struct header
-                    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, ret_type)))
+                    emit_struct_prefix!(b, ctx.type_registry, ret_type, vec_info)
                     # 1. Push data array ref
                     emit_value!(b, data_source, ctx)
                     # 2. Push typeId + length as i64 for size tuple, then struct.new Tuple{Int64}
                     # M3: real classId for the Tuple{Int64} size header
-                    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, size_tuple_type)))
+                    emit_struct_prefix!(b, ctx.type_registry, size_tuple_type, size_info)
                     if len_arg !== nothing
                         emit_value!(b, len_arg, ctx)
                         len_type = infer_value_type(len_arg, ctx)

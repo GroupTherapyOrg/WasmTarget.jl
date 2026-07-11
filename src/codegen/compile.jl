@@ -798,11 +798,6 @@ function _compile_closed_world_plan(functions::Vector;
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
     # PURE-9065: Pre-create string hash helper function if any function uses memhash.
     # This must happen BEFORE function index assignment, because adding functions during
     # body compilation would shift indices and break cross-function calls.
@@ -1033,17 +1028,6 @@ function _compile_closed_world_plan(functions::Vector;
     clear_perf_now!()
     clear_char_array_type!()
     clear_utf8_to_js_func!()
-
-    # census F2 (march5, the ORIGINAL isa bug's second root): structs registered
-    # LAZILY during body compilation never received `sub $JlBase` — the early
-    # retrofit ran before bodies, so `ref.test (ref $JlBase)` (the isa/typeof gate)
-    # was FALSE for every late-registered struct at runtime. Re-run the idempotent
-    # retrofit now that every struct exists. (dart declares supertypes at class
-    # definition — class_info.dart:288 — so this second pass has no dart analog;
-    # it exists because WT registers lazily.)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)

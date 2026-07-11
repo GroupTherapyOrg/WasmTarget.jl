@@ -15,18 +15,15 @@ struct StructInfo
     wasm_type_idx::UInt32
     field_names::Vector{Symbol}
     field_types::Vector{Type}  # Can include Union types
-    field_offset::UInt32  # PURE-9024: offset for typeId field (1 if typeId present, 0 otherwise)
+    # 0 = raw internal representation, 1 = Top/value prefix, 2 = Object prefix.
+    field_offset::UInt32
 end
-
-# PURE-9024: Default field_offset=1 (all structs have typeId at field 0)
-StructInfo(julia_type::Type, wasm_type_idx::UInt32, field_names::Vector{Symbol}, field_types::Vector) =
-    StructInfo(julia_type, wasm_type_idx, field_names, convert(Vector{Type}, field_types), UInt32(1))
 
 """
     wasm_field_idx(info::StructInfo, julia_field_idx::Int) -> UInt32
 
 Convert a Julia 1-based field index to the Wasm 0-based field index,
-accounting for the typeId field offset (PURE-9024).
+accounting for the representation's inherited prefix.
 """
 wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx - 1 + info.field_offset)
 
@@ -223,13 +220,13 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
     # transform fields (unions, vectors, Nothing slots) — the funnel emits ONLY
     # when the REGISTERED layout is exactly [typeId, then one slot per Julia
     # field] AND the wasm struct's field list agrees; any other shape → inline path.
-    info.field_offset == 1 || return nothing
+    info.field_offset in (1, 2) || return nothing
     length(info.field_names) == fieldcount(T) || return nothing
     local _wst = mod.types[info.wasm_type_idx + 1]
     _wst isa StructType || return nothing
-    length(_wst.fields) == fieldcount(T) + 1 || return nothing
+    length(_wst.fields) == fieldcount(T) + Int(info.field_offset) || return nothing
     for k in 1:fieldcount(T)
-        local _fw = _wst.fields[k + 1].valtype
+        local _fw = _wst.fields[k + Int(info.field_offset)].valtype
         local _fv = isdefined(val, k) ? getfield(val, k) : nothing
         _fv === nothing && return nothing
         local _want = _fv isa Int64 || _fv isa UInt64 ? I64 :
@@ -245,6 +242,10 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
     # field 0: the typeId
     push!(init, Opcode.I32_CONST)
     append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
+    if info.field_offset == 2
+        push!(init, Opcode.I32_CONST)
+        append!(init, encode_leb128_signed(Int64(0))) # unassigned identityHash
+    end
     # fields: every one must itself be constant-expressible
     for i in 1:fieldcount(T)
         isdefined(val, i) || return nothing
@@ -635,6 +636,29 @@ function get_object_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
     return idx
 end
 
+"""The inherited field prefix of every identity-bearing Julia heap object."""
+object_prefix_fields() = FieldType[FieldType(I32, false), FieldType(I32, true)]
+
+"""Emit the allocation prefix shared by every identity-bearing heap object."""
+function emit_object_prefix!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
+    emit_type_id!(b, registry, T)
+    i32_const!(b, 0) # identityHash is assigned lazily by `objectid`
+    return b
+end
+
+"""Emit exactly the representation prefix declared by `StructInfo`."""
+function emit_struct_prefix!(b::InstrBuilder, registry::TypeRegistry,
+                             @nospecialize(T), info::StructInfo)
+    if info.field_offset == 2
+        emit_object_prefix!(b, registry, T)
+    elseif info.field_offset == 1
+        emit_type_id!(b, registry, T)
+    elseif info.field_offset != 0
+        error("unsupported struct field offset $(info.field_offset) for $T")
+    end
+    return b
+end
+
 """Return the module-local monotonic source for newly assigned object identities."""
 function get_identity_counter_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.identity_counter_global !== nothing && return registry.identity_counter_global
@@ -809,54 +833,6 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         Type[String, String, Any],
         UInt32(2)
     )
-end
-
-"""
-    set_struct_supertypes!(mod::WasmModule, base_idx::UInt32)
-
-Post-processing: set all StructType objects in the module to be subtypes of the
-base struct type (at base_idx). This enables typeof(x) via struct.get \$JlBase 0
-on any struct reference.
-
-Must be called AFTER all types are registered and BEFORE serialization.
-"""
-function set_struct_supertypes!(mod::WasmModule, base_idx::UInt32; registry::Union{Nothing, TypeRegistry}=nothing)
-    # PURE-9063: Collect JlType hierarchy indices to exclude from $JlBase subtyping
-    jl_exclude = Set{UInt32}()
-    if registry !== nothing
-        for idx in (registry.jl_type_idx, registry.jl_typename_idx)
-            idx !== nothing && push!(jl_exclude, idx)
-        end
-        # march16: closure VTABLE structs hold funcref fields — they are layout
-        # tables, not objects; they can never subtype {classId:i32} (dart's vtable
-        # structs subtype their own #Vtable base, not the object base).
-        if registry.closure_vtable_struct_idxs !== nothing
-            for (_, vti) in registry.closure_vtable_struct_idxs
-                push!(jl_exclude, vti)
-            end
-        end
-    end
-    for (i, ct) in enumerate(mod.types)
-        ti = UInt32(i - 1)
-        if ct isa StructType && ti != base_idx && ct.supertype_idx === nothing && !(ti in jl_exclude)
-            # step5: per-class re-parenting where a synthetic ALREADY exists (post-body
-            # creation would forward-reference — lookup only); else the flat base.
-            local _dag_parent = base_idx
-            if registry !== nothing && registry.abstract_struct_idxs !== nothing && registry.structs !== nothing
-                for (T2, info2) in registry.structs
-                    if info2.wasm_type_idx == ti && T2 isa DataType
-                        local P2 = supertype(T2)
-                        if P2 isa DataType && P2 !== Any && haskey(registry.abstract_struct_idxs, P2) &&
-                           registry.abstract_struct_idxs[P2] < ti
-                            _dag_parent = registry.abstract_struct_idxs[P2]
-                        end
-                        break
-                    end
-                end
-            end
-            mod.types[i] = StructType(ct.fields, _dag_parent)
-        end
-    end
 end
 
 # ============================================================================
@@ -1126,8 +1102,7 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         end
         size_tuple_idx = registry.structs[Tuple{Int64}].wasm_type_idx
 
-        # Field 0: typeId = 0
-        i32_const!(b, Int32(0))
+        emit_struct_prefix!(b, registry, Vector{String}, vec_info)
 
         # Field 1: data array — array of string refs
         for s in val
@@ -1139,13 +1114,14 @@ function compile_const_value(val, mod::WasmModule, registry::TypeRegistry)::Vect
         end
         array_new_fixed!(b, arr_of_str_type_idx, n, ConcreteRef(str_type_idx, true))
 
-        # Field 2: size tuple struct { typeId:i32, dim1:i64 }
-        i32_const!(b, Int32(0))
+        # Size tuple is itself an identity-bearing object.
+        size_info = registry.structs[Tuple{Int64}]
+        emit_struct_prefix!(b, registry, Tuple{Int64}, size_info)
         i64_const!(b, Int64(n))
-        struct_new!(b, size_tuple_idx, WasmValType[I32, I64])
+        struct_new!(b, size_tuple_idx)
 
         # struct.new Vector{String}
-        struct_new!(b, vec_info.wasm_type_idx, WasmValType[I32, ConcreteRef(arr_of_str_type_idx, true), ConcreteRef(size_tuple_idx, true)])
+        struct_new!(b, vec_info.wasm_type_idx)
     elseif val === nothing
         # For Nothing type, we use ref.null none (bottom of any hierarchy)
         ref_null_none!(b)
@@ -1380,10 +1356,9 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     end
     # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
-    # census F1 (march5): declare `sub $JlBase` AT CREATION (dart class_info.dart:288 —
-    # every class struct subtypes its super at definition). The finalization retrofit
-    # (set_struct_supertypes!) already made this true in the EMITTED module; creating it
-    # true lets the strict builder use the subtype relation DURING emission (a box-typed
+    # Declare `sub $JlBase` AT CREATION (dart class_info.dart:288 — every class
+    # struct subtypes its super at definition). This lets the strict builder use
+    # the subtype relation DURING emission (a box-typed
     # ref validates where a $JlBase ref is expected — the typed-channel prerequisite).
     base = registry.base_struct_idx
     type_idx = base === nothing ? add_struct_type!(mod, fields) :
@@ -1410,7 +1385,8 @@ function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_ty
     end
     # typeId (i32, immutable) + contents (T, MUTABLE)
     fields = [FieldType(I32, false), FieldType(contents_wasm_type, true)]
-    type_idx = add_struct_type!(mod, fields)
+    base = get_base_struct_type!(mod, registry)
+    type_idx = UInt32(add_type!(mod, StructType(fields, base)))
     registry.box_types === nothing || (registry.box_types[contents_wasm_type] = type_idx)
     return type_idx
 end
@@ -1425,7 +1401,8 @@ function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end
     # BoxedNothing: just typeId field (no value)
     fields = [FieldType(I32, false)]
-    type_idx = add_struct_type!(mod, fields)
+    base = get_base_struct_type!(mod, registry)
+    type_idx = UInt32(add_type!(mod, StructType(fields, base)))
     registry.nothing_box_idx = type_idx
     return type_idx
 end
@@ -2389,8 +2366,19 @@ function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Typ
     d = registry.abstract_struct_idxs
     d === nothing && return registry.base_struct_idx
     haskey(d, A) && return d[A]
-    parent_idx = ensure_abstract_struct!(mod, registry, supertype(A))
-    idx = UInt32(add_type!(mod, StructType([FieldType(I32, false)], parent_idx)))
+    # Value classes (Julia's Number branch) intentionally remain directly below
+    # Top: their second field is their payload, not Object.identityHash. All other
+    # abstract class nodes inherit Object's complete field prefix, exactly as
+    # dart2wasm copies superclass fields into every class representation.
+    local value_branch = A <: Number
+    parent_idx = if value_branch
+        ensure_abstract_struct!(mod, registry, supertype(A))
+    else
+        local P = supertype(A)
+        P === Any ? get_object_struct_type!(mod, registry) : ensure_abstract_struct!(mod, registry, P)
+    end
+    fields = value_branch ? FieldType[FieldType(I32, false)] : object_prefix_fields()
+    idx = UInt32(add_type!(mod, StructType(fields, parent_idx)))
     d[A] = idx
     return idx
 end
@@ -2405,6 +2393,9 @@ function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::U
     registry.base_struct_idx === nothing && return nothing   # bare registries (probes)
     (T isa DataType && registry.abstract_struct_idxs !== nothing) || return registry.base_struct_idx
     local P = supertype(T)
-    (P === Any || !(P isa DataType)) && return registry.base_struct_idx
+    # Primitive/value boxes are Top descendants. Ordinary Julia structs are
+    # identity-bearing Object descendants even when Julia reports `Any` as their
+    # immediate supertype.
+    (P === Any || !(P isa DataType)) && return (T <: Number ? registry.base_struct_idx : get_object_struct_type!(mod, registry))
     return ensure_abstract_struct!(mod, registry, P)
 end
