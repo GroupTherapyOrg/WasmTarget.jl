@@ -135,15 +135,30 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
-    "L30_no_fabricated_apply_tuple" => ("Core._apply_iterate may emit Tuple{} only from a proof that the iterable is empty; runtime-length tuples remain diagnosed until they have a real representation",
+    "L31_multi_container_apply" => ("homogeneous multi-Vector _apply_iterate reductions traverse every container through one loop generator and never return an identity for Julia's invalid all-empty +()/*() call",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["container_args = args[3:end]",
+                        "for (container_arg, container_type) in zip(container_args, container_types)",
+                        "An all-empty input traps instead of fabricating an identity value",
+                        "local_set!(bld, has_value)"]
+            count(p -> !occursin(p, calls_src), required)
+        end),
+    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples and tests Tuple{} from runtime arity; it never fabricates an empty tuple",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
             required = ["_iterable_proven_empty(container_arg, ctx)",
-                        "runtime-length Core.tuple materialization requires a variable-tuple representation"]
+                        "register_vararg_tuple_type!",
+                        "is_runtime_vararg_tuple_type",
+                        "unsupported Vararg tuple layout",
+                        "result_type=result_type",
+                        "A runtime-length tuple is empty iff its immutable size tuple says zero"]
             forbidden = ["produces a Tuple{Vararg{Symbol}} which is checked",
                          "must emit a struct.new of the actual Tuple{} type"]
-            count(p -> !occursin(p, calls_src), required) +
-                count(p -> occursin(p, calls_src), forbidden)
+            all_src = calls_src * structs_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
         end),
     "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
         () -> begin

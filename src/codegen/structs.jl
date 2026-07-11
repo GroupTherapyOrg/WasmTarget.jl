@@ -830,6 +830,47 @@ function _canonical_tuple_type(T::DataType)
     return changed ? Tuple{ps...} : T
 end
 
+is_vararg_tuple_type(@nospecialize(T)) =
+    T isa DataType && T <: Tuple && any(p -> typeof(p) === Core.TypeofVararg, T.parameters)
+
+"""True only for the homogeneous runtime tuple layout this backend represents."""
+function is_runtime_vararg_tuple_type(@nospecialize(T))
+    (T isa DataType && T <: Tuple && length(T.parameters) == 1) || return false
+    local v = T.parameters[1]
+    typeof(v) === Core.TypeofVararg || return false
+    isdefined(v, :T) || return false
+    return v.T isa Type && isconcretetype(v.T)
+end
+
+function vararg_tuple_eltype(T::DataType)::Type
+    is_runtime_vararg_tuple_type(T) ||
+        error("no homogeneous runtime Vararg tuple representation for $T")
+    return T.parameters[1].T
+end
+
+"""Register the runtime-length tuple wrapper `{Object, data, size}`."""
+function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+    is_runtime_vararg_tuple_type(T) ||
+        error("cannot register unsupported runtime Vararg tuple layout $T")
+    haskey(registry.structs, T) && return registry.structs[T]
+    local E = vararg_tuple_eltype(T)
+    local size_type = Tuple{Int64}
+    local size_info = haskey(registry.structs, size_type) ? registry.structs[size_type] :
+                      register_tuple_type!(mod, registry, size_type)
+    local data_idx = get_array_type!(mod, registry, E)
+    local fields = FieldType[
+        FieldType(I32, false),
+        FieldType(I32, true),
+        FieldType(ConcreteRef(data_idx, true), false),
+        FieldType(ConcreteRef(size_info.wasm_type_idx, true), false),
+    ]
+    local idx = UInt32(add_type!(mod, StructType(fields, get_object_struct_type!(mod, registry))))
+    local info = StructInfo(T, idx, [:ref, :size],
+                            Type[Array{E,1}, size_type], UInt32(2))
+    registry.structs[T] = info
+    return info
+end
+
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -845,6 +886,12 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # .parameters — only DataType does. Return nothing for non-concrete tuples.
     if T isa UnionAll
         return nothing
+    end
+
+    if is_vararg_tuple_type(T)
+        is_runtime_vararg_tuple_type(T) ||
+            error("unsupported Vararg tuple layout $T must not be registered as a fixed tuple")
+        return register_vararg_tuple_type!(mod, registry, T)
     end
 
     # P2-batch17: canonicalize Type{X} elements to DataType. Inference spells a

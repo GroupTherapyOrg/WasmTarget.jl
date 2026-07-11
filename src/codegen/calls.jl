@@ -1404,6 +1404,17 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         else
             ref_is_null!(bld)
         end
+    elseif check_type === Tuple{} && is_runtime_vararg_tuple_type(value_type)
+        # A runtime-length tuple is empty iff its immutable size tuple says zero.
+        # This is the semantic `isa Tuple{}` test; classId alone cannot encode a
+        # runtime arity.
+        local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
+        local size_info = ctx.type_registry.structs[Tuple{Int64}]
+        ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
+        struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2),
+                    ConcreteRef(size_info.wasm_type_idx, true))
+        struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+        num!(bld, Opcode.I64_EQZ)
     elseif check_type !== nothing && isconcretetype(check_type)
         # isa(x, ConcreteType) -> type check
         # Value is already on stack — check if it's actually a ref type
@@ -2414,6 +2425,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
+    # Runtime-length tuple arity comes from its immutable size tuple.
+    if is_func(func, :nfields) && length(args) == 1
+        local tuple_type = get_ssa_type(ctx, args[1])
+        if is_runtime_vararg_tuple_type(tuple_type)
+            local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+            local size_info = ctx.type_registry.structs[Tuple{Int64}]
+            local nb = _ctx_builder(ctx, "compile_call")
+            emit_value!(nb, args[1], ctx, ConcreteRef(info.wasm_type_idx, true))
+            struct_get!(nb, info.wasm_type_idx, wasm_field_idx(info, 2),
+                        ConcreteRef(size_info.wasm_type_idx, true))
+            struct_get!(nb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+            return append_builder!(b, nb)
+        end
+    end
+
     # Special case for getfield/getproperty - struct/tuple field access
     # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
     # rather than Core.getfield(obj, :field)
@@ -2421,6 +2447,22 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         obj_arg = args[1]
         field_ref = args[2]
         obj_type = infer_value_type(obj_arg, ctx)   # pre-existing query (the mega-arm relies on it)
+        if is_runtime_vararg_tuple_type(obj_type) && !(field_ref isa QuoteNode)
+            local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, obj_type)
+            local E = vararg_tuple_eltype(obj_type)
+            local arr_idx = get_array_type!(ctx.mod, ctx.type_registry, E)
+            local tb = _ctx_builder(ctx, "compile_call")
+            emit_value!(tb, obj_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
+            struct_get!(tb, info.wasm_type_idx, wasm_field_idx(info, 1),
+                        ConcreteRef(arr_idx, true))
+            emit_value!(tb, field_ref, ctx, I64)
+            i64_const!(tb, 1)
+            num!(tb, Opcode.I64_SUB)
+            narrow_length_to_i32!(tb)
+            local ew = julia_to_wasm_type(E)
+            array_get!(tb, arr_idx, ew; signed=packed_array_signedness(E))
+            return append_builder!(b, tb)
+        end
         # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read) through the box's REAL struct type.
         local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
@@ -5691,7 +5733,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
 
         if target_is_tuple
-            if _iterable_proven_empty(container_arg, ctx)
+            local result_type = get(ctx.ssa_types, idx, Any)
+            if container_type isa DataType && container_type <: Vector &&
+               is_runtime_vararg_tuple_type(result_type)
+                register_vararg_tuple_type!(ctx.mod, ctx.type_registry, result_type)
+                _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx;
+                                          result_type=result_type)
+            elseif _iterable_proven_empty(container_arg, ctx)
                 info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
                 emit_struct_prefix!(fb, ctx.type_registry, Tuple{}, info)
                 struct_new!(fb, info.wasm_type_idx)
@@ -5714,12 +5762,20 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local actual_prefix = target_is_typed_vect ? prefix_values[2:end] : prefix_values
             _emit_apply_iterate_vect_prefix!(fb, actual_prefix, args[4],
                                               tail_type, ctx)
-        elseif length(args) == 3 && container_type <: Vector && container_type isa DataType
+        elseif all(a -> begin
+                       local T = get_ssa_type(ctx, a)
+                       T isa DataType && T <: Vector
+                   end, args[3:end])
+            local container_args = args[3:end]
+            local container_types = DataType[get_ssa_type(ctx, a) for a in container_args]
             elem_type = eltype(container_type)
             target_name = target_func isa GlobalRef ? target_func.name : nothing
             target_mod  = target_func isa GlobalRef ? target_func.mod  : nothing
 
-            if target_name === :vect && target_mod === Base
+            if any(T -> eltype(T) !== elem_type, container_types)
+                emit_unsupported_stub!(ctx, fb, :unsupported_method,
+                    "_apply_iterate containers have different element types"; idx=idx)
+            elseif target_name === :vect && target_mod === Base && length(container_args) == 1
                 # `[v...]` ⇒ Base.vect(v...) ⇒ a shallow copy of the vector.
                 _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx)
             else
@@ -5727,7 +5783,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 reduce_op = _get_binary_reduce_opcode(target_name, elem_type)
                 if reduce_op !== nothing
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
-                    _emit_apply_iterate_reduce!(fb, container_arg, container_type, elem_type, reduce_op, ctx)
+                    _emit_apply_iterate_reduce!(fb, container_args, container_types,
+                                                elem_type, reduce_op, target_name, ctx)
                 else
                     # Unknown reduce target — can't lower. Loud reject (reduce returns a value natively).
                     emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -6477,43 +6534,24 @@ function _get_binary_reduce_opcode(func_name::Union{Symbol, Nothing}, elem_type:
         func_name === :add_float && return Opcode.F64_ADD
         func_name === :* && return Opcode.F64_MUL
         func_name === :mul_float && return Opcode.F64_MUL
-        func_name === :min && return Opcode.F64_MIN
-        func_name === :max && return Opcode.F64_MAX
     elseif elem_type === Float32
         func_name === :+ && return Opcode.F32_ADD
         func_name === :add_float && return Opcode.F32_ADD
         func_name === :* && return Opcode.F32_MUL
         func_name === :mul_float && return Opcode.F32_MUL
-        func_name === :min && return Opcode.F32_MIN
-        func_name === :max && return Opcode.F32_MAX
     end
     return nothing
 end
 
 """
-Emit a reduce loop for _apply_iterate(iterate, binary_op, vec::Vector{T}).
-
-Generates WASM that computes: acc = v[0]; for i in 1..len-1: acc = op(acc, v[i]); return acc
-Uses WasmGC array access (no MemoryRef indirection — the compiler flattens Vector{T}
-to struct { typeId, data_array, size_tuple }).
-
-Allocates 5 temporary locals: vec_ref, arr_ref, len (i32), loop_i (i32), acc.
+Emit one reduction over the concatenation of one or more homogeneous vectors.
+The first observed element initializes the accumulator; later elements use the
+operator. An all-empty input traps instead of fabricating an identity value.
 """
-function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_arg, container_type::DataType,
-                                      elem_type::Type, reduce_op::UInt8, ctx)
+function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
+                                      container_types::Vector{DataType}, elem_type::Type,
+                                      reduce_op::UInt8, target_name::Symbol, ctx)
     bld = _ctx_builder(ctx, "_emit_apply_iterate_reduce!")
-    # Get WasmGC type indices for the vector struct and its fields
-    vec_info = get(ctx.type_registry.structs, container_type, nothing)
-    if vec_info === nothing
-        record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector struct unregistered")
-        unreachable!(bld); append_builder!(fb, bld)
-        ctx.last_stmt_was_stub = true
-        return
-    end
-    vec_type_idx = vec_info.wasm_type_idx
-    field_offset = vec_info.field_offset  # usually 1 (after typeId)
-
-    # Data array type index
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
         record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: data array type unregistered")
@@ -6522,9 +6560,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_arg, container_
         return
     end
 
-    # Size tuple type index (Tuple{Int64})
-    size_tuple_type = Tuple{Int64}
-    size_info = get(ctx.type_registry.structs, size_tuple_type, nothing)
+    size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
     if size_info === nothing
         record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: size tuple type unregistered")
         unreachable!(bld); append_builder!(fb, bld)
@@ -6532,88 +6568,83 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_arg, container_
         return
     end
     size_type_idx = size_info.wasm_type_idx
-    size_field_offset = size_info.field_offset  # field 1 after typeId
-
-    # Determine the WASM element type for the accumulator local
     elem_wasm_type = julia_to_wasm_type(elem_type)
-
-    # Allocate temporary locals
-    vec_ref_local = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, ConcreteRef(vec_type_idx, true))
-
-    arr_ref_local = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, ConcreteRef(arr_type_idx, true))
-
-    len_local = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, I32)
-
-    loop_i_local = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, I32)
-
-    acc_local = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, elem_wasm_type)
-
-    # --- Emit WASM bytecode ---
-
-    # Step 1: Compile and store the container reference
-    emit_value!(bld, container_arg, ctx)
-    local_set!(bld, vec_ref_local)
-
-    # Step 2: Get the data array reference
-    local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset, ConcreteRef(arr_type_idx, true))  # data array field
-    local_set!(bld, arr_ref_local)
-
-    # Step 3: Get the length (vec → size tuple → i64 length → i32)
-    local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple field
-    struct_get!(bld, size_type_idx, size_field_offset, I64)  # i64 length
-    num!(bld, Opcode.I32_WRAP_I64)
-    local_set!(bld, len_local)
-
-    # Step 4: Initialize accumulator = arr[0] (first element)
-    local_get!(bld, arr_ref_local)
+    acc_local = allocate_local!(ctx, elem_wasm_type)
+    has_value = allocate_local!(ctx, I32)
+    elem_local = allocate_local!(ctx, elem_wasm_type)
+    if elem_wasm_type === I64
+        i64_const!(bld, target_name === :* || target_name === :mul_int ? 1 : 0)
+    elseif elem_wasm_type === I32
+        i32_const!(bld, target_name === :* || target_name === :mul_int ? 1 : 0)
+    elseif elem_wasm_type === F64
+        f64_const!(bld, target_name === :* || target_name === :mul_float ? 1.0 : 0.0)
+    elseif elem_wasm_type === F32
+        f32_const!(bld, target_name === :* || target_name === :mul_float ? 1.0f0 : 0.0f0)
+    end
+    local_set!(bld, acc_local)
     i32_const!(bld, 0)
-    array_get!(bld, arr_type_idx, elem_wasm_type;
-               signed=packed_array_signedness(elem_type))
-    local_set!(bld, acc_local)
+    local_set!(bld, has_value)
 
-    # Step 5: Initialize loop counter i = 1
-    i32_const!(bld, 1)
-    local_set!(bld, loop_i_local)
+    for (container_arg, container_type) in zip(container_args, container_types)
+        local vec_info = get(ctx.type_registry.structs, container_type, nothing)
+        vec_info === nothing && error("registered vector layout missing for $container_type")
+        local vec_idx = vec_info.wasm_type_idx
+        local vec_local = allocate_local!(ctx, ConcreteRef(vec_idx, true))
+        local arr_local = allocate_local!(ctx, ConcreteRef(arr_type_idx, true))
+        local len_local = allocate_local!(ctx, I32)
+        local i_local = allocate_local!(ctx, I32)
 
-    # Step 6: block { loop { if i >= len: br 1; acc = op(acc, arr[i]); i++; br 0 } }
-    block!(bld)  # void blocktype
-    loop!(bld)  # void blocktype
+        emit_value!(bld, container_arg, ctx, ConcreteRef(vec_idx, true))
+        local_set!(bld, vec_local)
+        local_get!(bld, vec_local)
+        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 1), ConcreteRef(arr_type_idx, true))
+        local_set!(bld, arr_local)
+        local_get!(bld, vec_local)
+        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 2), ConcreteRef(size_type_idx, true))
+        struct_get!(bld, size_type_idx, wasm_field_idx(size_info, 1), I64)
+        num!(bld, Opcode.I32_WRAP_I64)
+        local_set!(bld, len_local)
+        i32_const!(bld, 0)
+        local_set!(bld, i_local)
 
-    # if i >= len, exit loop
-    local_get!(bld, loop_i_local)
-    local_get!(bld, len_local)
-    num!(bld, Opcode.I32_GE_S)
-    br_if!(bld, 1)  # br 1 = exit block
+        block!(bld)
+        loop!(bld)
+        local_get!(bld, i_local)
+        local_get!(bld, len_local)
+        num!(bld, Opcode.I32_GE_S)
+        br_if!(bld, 1)
+        local_get!(bld, arr_local)
+        local_get!(bld, i_local)
+        array_get!(bld, arr_type_idx, elem_wasm_type;
+                   signed=packed_array_signedness(elem_type))
+        local_set!(bld, elem_local)
+        local_get!(bld, has_value)
+        if_!(bld, elem_wasm_type)
+        local_get!(bld, acc_local)
+        local_get!(bld, elem_local)
+        num!(bld, reduce_op)
+        else_!(bld)
+        local_get!(bld, elem_local)
+        end_block!(bld)
+        local_set!(bld, acc_local)
+        i32_const!(bld, 1)
+        local_set!(bld, has_value)
+        local_get!(bld, i_local)
+        i32_const!(bld, 1)
+        num!(bld, Opcode.I32_ADD)
+        local_set!(bld, i_local)
+        br!(bld, 0)
+        end_block!(bld)
+        end_block!(bld)
+    end
 
-    # acc = op(acc, arr[i])
-    local_get!(bld, acc_local)
-    local_get!(bld, arr_ref_local)
-    local_get!(bld, loop_i_local)
-    array_get!(bld, arr_type_idx, elem_wasm_type;
-               signed=packed_array_signedness(elem_type))
-    num!(bld, reduce_op)
-    local_set!(bld, acc_local)
-
-    # i++
-    local_get!(bld, loop_i_local)
-    i32_const!(bld, 1)
-    num!(bld, Opcode.I32_ADD)
-    local_set!(bld, loop_i_local)
-
-    # br 0 = continue loop
-    br!(bld, 0)
-
-    end_block!(bld)  # end loop
-    end_block!(bld)  # end block
-
-    # Step 7: Push accumulator as result
+    local_get!(bld, has_value)
+    num!(bld, Opcode.I32_EQZ)
+    if_!(bld)
+    # Julia's +()/*() raises MethodError. Until the MethodError payload can be
+    # built exactly here, trap rather than return a fabricated identity.
+    unreachable!(bld)  # structural trap (invalid zero-argument reduction; exact MethodError pending)
+    end_block!(bld)
     local_get!(bld, acc_local)
     append_builder!(fb, bld)
 end
@@ -6632,19 +6663,22 @@ Builds the result Object struct from `vec`:
 
 Allocates 4 temporary locals: vec_ref, src_arr, len (i32), new_arr.
 """
-function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_type::DataType, ctx)
+function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_type::DataType, ctx;
+                                   result_type::DataType=container_type)
     vec_info  = get(ctx.type_registry.structs, container_type, nothing)
+    result_info = get(ctx.type_registry.structs, result_type, nothing)
     elem_type = eltype(container_type)
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     size_info = get(ctx.type_registry.structs, Tuple{Int64}, nothing)
     bld = _ctx_builder(ctx, "_emit_apply_iterate_vect!")
-    if vec_info === nothing || arr_type_idx === nothing || size_info === nothing
+    if vec_info === nothing || result_info === nothing || arr_type_idx === nothing || size_info === nothing
         record_unsupported!(ctx, :unsupported_method, "apply-iterate reduce: vector layout unavailable")
         unreachable!(bld); append_builder!(fb, bld)
         ctx.last_stmt_was_stub = true
         return
     end
     vec_type_idx = vec_info.wasm_type_idx
+    result_type_idx = result_info.wasm_type_idx
     field_offset = vec_info.field_offset           # 1: data array (0 = typeId, 2 = size)
     size_type_idx = size_info.wasm_type_idx
     size_field_offset = size_info.field_offset
@@ -6683,12 +6717,12 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     local_get!(bld, len_local)
     array_copy!(bld, arr_type_idx, arr_type_idx)
 
-    # result = struct.new vec_type_idx [Object prefix, new_arr, size_tuple(src)]
-    emit_struct_prefix!(bld, ctx.type_registry, container_type, vec_info)
+    # result = struct.new [Object prefix, new_arr, size_tuple(src)]
+    emit_struct_prefix!(bld, ctx.type_registry, result_type, result_info)
     local_get!(bld, new_arr_local)
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple
-    struct_new!(bld, vec_type_idx)   # mod-resolved fields (march3)
+    struct_new!(bld, result_type_idx)
     append_builder!(fb, bld)
 end
 
