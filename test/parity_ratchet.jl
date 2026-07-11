@@ -135,6 +135,22 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L43_typename_world_bounds_metadata" => ("mutable Julia BindingPartition history is reduced once to exact immutable TypeName world-bound metadata; no partial Binding object or fake partition chain exists",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            all_src = types_src * calls_src * interp_src * trim_src
+            required = ["world_bounded", "Base.check_world_bounded(tn)",
+                        "emit_closed_world_type_bounds!",
+                        "_closed_world_type_bounds", "f === _closed_world_type_bounds"]
+            forbidden = ["registry.structs[Core.Binding]",
+                         "registry.structs[Core.BindingPartition]",
+                         "jl_bpart_get_restriction_value"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper; target Wasm never substitutes ASCII-only answers",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

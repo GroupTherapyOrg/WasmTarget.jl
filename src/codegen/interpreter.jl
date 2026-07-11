@@ -769,6 +769,35 @@ end
 end
 
 # ─── show typeinfo overlay ────────────────────────────────────────────────
+
+# Julia's native implementation walks mutable BindingPartition history. Keep
+# the native meaning for ordinary Julia execution, but preserve one non-inlined
+# semantic boundary for WT inference so codegen can read the immutable result
+# captured in its TypeName metadata. This is analogous to dart2wasm retaining a
+# recognized runtime operation instead of inlining VM implementation details.
+@noinline function _closed_world_type_bounds(tn::Core.TypeName)
+    binding = ccall(:jl_get_module_binding, Ref{Core.Binding},
+                    (Any, Any, Cint), tn.module, tn.name, true)
+    isdefined(binding, :partitions) || return nothing
+    partition = @atomic binding.partitions
+    while true
+        if Base.is_defined_const_binding(Base.binding_kind(partition))
+            value = Base.partition_restriction(partition)
+            if value isa Type && value <: tn.wrapper
+                max_world = @atomic partition.max_world
+                max_world == typemax(UInt) && return nothing
+                return Int(partition.min_world):Int(max_world)
+            end
+        end
+        isdefined(partition, :next) || return nothing
+        partition = @atomic partition.next
+    end
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.check_world_bounded(tn::Core.TypeName)
+    return _closed_world_type_bounds(tn)
+end
+
 # Why: `Base.nonnothing_nonmissing_typeinfo(io) =
 #      nonmissingtype(nonnothingtype(get(io,:typeinfo,Any)))` does RUNTIME type
 #      subtraction (typesplit over the type lattice), which the backend can't

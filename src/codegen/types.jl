@@ -714,7 +714,10 @@ Hierarchy (from §3.2.5):
   \$JlUnionAll     = (sub \$JlType (struct \$kind, \$body, \$var))
   \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
   \$JlTypeName     = (sub \$JlObject (struct \$classId, \$identityHash,
-                                      \$name_str, \$module_name_str, \$wrapper))
+                                      \$name_str, \$module_name_str, \$wrapper,
+                                      \$singletonname, \$singleton_defined,
+                                      \$singleton_const, \$world_bounded,
+                                      \$world_min, \$world_max))
   \$JlSVec         = (array (mut anyref))
 
 Must be called early, before type constant globals are created.
@@ -742,6 +745,9 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         FieldType(ConcreteRef(str_arr_idx, true), true),       # singletonname (mut string ref)
         FieldType(I32, true),                                  # singleton is defined in module
         FieldType(I32, true),                                  # singleton binding is const
+        FieldType(I32, true),                                  # name binding has a bounded valid world range
+        FieldType(I64, true),                                  # bounded world range minimum
+        FieldType(I64, true),                                  # bounded world range maximum
     ], object_idx)
     jl_typename_idx = add_type!(mod, jl_typename)
     registry.jl_typename_idx = jl_typename_idx
@@ -838,8 +844,9 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     # singletonname. Keep the StructInfo order identical to the physical suffix.
     registry.structs[Core.TypeName] = StructInfo(
         Core.TypeName, jl_typename_idx,
-        [:name, :module, :wrapper, :singletonname, :singleton_defined, :singleton_const],
-        Type[String, String, Any, Symbol, Bool, Bool],
+        [:name, :module, :wrapper, :singletonname, :singleton_defined, :singleton_const,
+         :world_bounded, :world_min, :world_max],
+        Type[String, String, Any, Symbol, Bool, Bool, Bool, Int64, Int64],
         UInt32(2)
     )
 end
@@ -1590,10 +1597,13 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
     ref_null!(b, Int64(str_arr_idx), ConcreteRef(str_arr_idx, true))
     i32_const!(b, 0)
     i32_const!(b, 0)
+    i32_const!(b, 0)
+    i64_const!(b, 0)
+    i64_const!(b, 0)
     struct_new!(b, tn_type_idx,
                 WasmValType[I32, I32, ConcreteRef(str_arr_idx, true),
                             ConcreteRef(str_arr_idx, true), ConcreteRef(jl_type_idx, true),
-                            ConcreteRef(str_arr_idx, true), I32, I32])
+                            ConcreteRef(str_arr_idx, true), I32, I32, I32, I64, I64])
     init_bytes = builder_code(b)
 
     # Mutable global — needs patching by init function
@@ -1820,6 +1830,20 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         singleton_const = singleton_defined && isconst(tn.module, tn.singletonname)
         i32_const!(b, singleton_const ? 1 : 0)
         struct_set!(b, tn_type_idx, UInt32(7), I32)
+
+        # Fields 8–10: the exact answer to Base.check_world_bounded. Julia
+        # derives it by walking mutable BindingPartition history; WT captures
+        # the result once at its immutable closed-world collection boundary.
+        world_bounds = Base.check_world_bounded(tn)
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        i32_const!(b, world_bounds === nothing ? 0 : 1)
+        struct_set!(b, tn_type_idx, UInt32(8), I32)
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        i64_const!(b, world_bounds === nothing ? 0 : first(world_bounds))
+        struct_set!(b, tn_type_idx, UInt32(9), I64)
+        global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
+        i64_const!(b, world_bounds === nothing ? 0 : last(world_bounds))
+        struct_set!(b, tn_type_idx, UInt32(10), I64)
 
         # Field 2: wrapper → $JlType ref
         wrapper = tn.wrapper

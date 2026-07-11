@@ -476,6 +476,12 @@ function trim_compile_plan(entries_named::Vector)
         # intrinsic/error constructors are lowered at the call site. Never let
         # the open-ended signature become a second, fake compilation route.
         any(T -> T isa Core.TypeofVararg, arg_types) && continue
+        # `check_world_bounded(::TypeName)` is a closed-world metadata operation,
+        # lowered directly at its call site from TypeName constants. Enrolling
+        # Base's mutable BindingPartition walker would create a second runtime
+        # route and require Julia-internal mutable-world objects WT does not own.
+        ((f === Base.check_world_bounded || f === _closed_world_type_bounds) &&
+         arg_types == (Core.TypeName,)) && continue
         # T1.1 step 3: a discovery candidate can duplicate an explicitly-listed
         # specialization (e.g. compile_multi entries + a megamorphic dynamic call's
         # candidates) → duplicate wasm export. Dedup by (f, arg_types); the first

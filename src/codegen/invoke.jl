@@ -1723,6 +1723,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         nothing
     end
 
+    if mi isa Core.MethodInstance && mi.def isa Method &&
+       mi.def.name in (:_closed_world_type_bounds, :check_world_bounded) && length(args) == 1
+        wb = _ctx_builder(ctx, "compile_invoke.closed_world_type_bounds")
+        emit_closed_world_type_bounds!(wb, args[1], ctx)
+        return append_builder!(b, wb)
+    end
+
     # Early self-call detection: check if this is a recursive call to ourselves
     func_ref_early = expr.args[2]
     actual_func_ref_early = func_ref_early

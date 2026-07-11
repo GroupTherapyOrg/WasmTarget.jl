@@ -1885,6 +1885,27 @@ Compile a function call expression — dart visitor shape (march4): emits INTO t
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
+function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompilationContext)
+    tn_idx = ctx.type_registry.jl_typename_idx
+    range_info = haskey(ctx.type_registry.structs, UnitRange{Int64}) ?
+                 ctx.type_registry.structs[UnitRange{Int64}] :
+                 register_struct_type!(ctx.mod, ctx.type_registry, UnitRange{Int64})
+    emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, UInt32(8), I32)
+    if_!(b, AnyRef)
+    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, UnitRange{Int64})))
+    i32_const!(b, 0) # ordinary immutable Object identity slot
+    emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, UInt32(9), I64)
+    emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, UInt32(10), I64)
+    struct_new!(b, range_info.wasm_type_idx, WasmValType[I32, I32, I64, I64])
+    else_!(b)
+    ref_null!(b, AnyRef)
+    end_block!(b)
+    return b
+end
+
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(string(expr), 80))   # march17: errors name the call
@@ -1939,6 +1960,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(b, ib)
             return b
         end
+    end
+
+    # Base normally answers this by walking Julia's mutable BindingPartition
+    # history. A WT module has one immutable collection world, so TypeName
+    # constants carry the already-resolved answer. This is the single runtime
+    # route; no Binding object or partial partition chain exists in Wasm.
+    if (is_func(func, :check_world_bounded) ||
+        is_func(func, :_closed_world_type_bounds)) && length(args) == 1 &&
+       get_ssa_type(ctx, args[1]) === Core.TypeName
+        wb = _ctx_builder(ctx, "compile_call.check_world_bounded")
+        emit_closed_world_type_bounds!(wb, args[1], ctx)
+        append_builder!(b, wb)
+        return b
     end
 
     # PURE-6024: Resolve indirect calls through SSAValue callees.
@@ -6084,7 +6118,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                   ctx.type_registry.structs[_isd_T] :
                                   register_struct_type!(ctx.mod, ctx.type_registry, _isd_T)
                 if _isd_info !== nothing
-                    local _isd_i = findfirst(==(_isd_f), fieldnames(_isd_T))
+                    # StructInfo can intentionally be an observable projection
+                    # of a Julia runtime object (Core.Binding is one example),
+                    # so physical Wasm indices come from its registered names,
+                    # never the host struct's full field ordinal.
+                    local _isd_i = findfirst(==(_isd_f), _isd_info.field_names)
+                    _isd_i === nothing && record_unsupported!(ctx, :unsupported_method,
+                        "isdefined field is absent from the registered runtime projection";
+                        idx=idx, detail=expr, soundness_fatal=true)
                     local _isd_wfi = wasm_field_idx(_isd_info, _isd_i)
                     local _isd_fields = ctx.mod.types[_isd_info.wasm_type_idx + 1].fields
                     local _isd_ft = _isd_fields[Int(_isd_wfi) + 1].valtype
