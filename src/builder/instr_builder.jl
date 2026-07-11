@@ -70,7 +70,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
     # ref-flowing builders); `nothing` for numeric-only emitters that never push a
     # ConcreteRef, where the heap-kind branch is never reached.
-    v = WasmStackValidator(; enabled=true, func_name=func_name, mod=mod)
+    v = WasmStackValidator(; func_name=func_name, mod=mod)
     # Seed the outermost label as a :block whose results are the function results,
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))

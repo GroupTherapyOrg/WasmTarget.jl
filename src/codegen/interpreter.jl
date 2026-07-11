@@ -2320,6 +2320,14 @@ end
 
 @overlay WASM_METHOD_TABLE Base.string(::Type{T}) where {T} = _wt_type_name_str(T)
 
+# Base.print(io, x::Type) reaches show through a deliberately unspecialized
+# argument and loses the concrete Type{T}. Preserve that static parameter at the
+# overlay boundary so generated type-name metadata never becomes runtime data.
+@overlay WASM_METHOD_TABLE function Base.print(io::IO, ::Type{T}) where {T}
+    print(io, _wt_type_name_str(T))
+    return nothing
+end
+
 @overlay WASM_METHOD_TABLE function Base.show(io::IO, ::Type{T}) where {T}
     print(io, _wt_type_name_str(T))
     return nothing
@@ -2519,6 +2527,10 @@ end
 # known compile-time constant, scoped surgically. MUST be total (runs during
 # inference of arbitrary code).
 function _is_typelevel_foldable(@nospecialize(f))::Bool
+    # This generated helper exists solely to bake the name of a statically known
+    # type into the module. Letting its `_compute_sparams(Method, ...)` body enter
+    # the runtime graph would incorrectly turn compiler metadata into user data.
+    f === _wt_type_name_str && return true
     f === Core.apply_type && return true
     (isdefined(Core, :_compute_sparams) && f === Core._compute_sparams) && return true
     (isdefined(Core, :_svec_ref)        && f === Core._svec_ref)        && return true

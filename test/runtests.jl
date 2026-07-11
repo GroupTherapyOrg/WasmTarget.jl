@@ -4296,12 +4296,11 @@ begin
             @test v.reachable == true
         end
 
-        @testset "disabled validator is no-op" begin
-            v = WasmStackValidator(enabled=false, func_name="disabled")
-            validate_push!(v, I32)
-            @test stack_height(v) == 0  # push was no-op
-            validate_pop!(v, I32)       # no underflow error
-            @test !has_errors(v)
+        @testset "validator cannot be disabled or skip unknown opcodes" begin
+            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled")
+            v = WasmStackValidator(func_name="strict")
+            @test_throws ArgumentError validate_instruction!(v, UInt8(0xff))
+            @test_throws ArgumentError validate_gc_instruction!(v, UInt8(0xff))
         end
 
         @testset "reachability after unconditional br" begin

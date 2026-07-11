@@ -135,6 +135,14 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L55_static_type_rendering_excludes_compiler_metadata" => ("Type{T} stays specialized through string/print/show so generated-function Method metadata never enters the runtime constant graph",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            required = ["Base.string(::Type{T})", "Base.print(io::IO, ::Type{T})",
+                        "Base.show(io::IO, ::Type{T})", "_wt_type_name_str(T)",
+                        "f === _wt_type_name_str"]
+            count(p -> !occursin(p, interp_src), required)
+        end),
     "L54_pure_dense_statistics_correlation" => ("dense float correlation retains Statistics corm arithmetic over one explicitly length-validated index domain",
         () -> begin
             stats_src = read(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl"), String)
@@ -638,10 +646,16 @@ const LOCKS = [
         end),
     "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
         () -> count_sites(r"validate::Bool\s*=\s*true")),
-    "L6_all_builders_strict" => ("instruction validation is unconditional: no strict field, environment switch, setter, constructor keyword, or production opt-out may exist.",
-        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=" ) +
-              count_sites(r"_wt_builder_strict|set_strict!|strict::Bool";
-                          roots=[joinpath(SRC, "builder")])),
+    "L6_all_builders_strict" => ("instruction validation is unconditional: no strict/enabled field, environment switch, setter, constructor keyword, production opt-out, or silently unmodeled opcode may exist.",
+        () -> begin
+            builder_root = joinpath(SRC, "builder")
+            validator_src = read(joinpath(builder_root, "validator.jl"), String)
+            required = ["unmodeled Wasm opcode", "unmodeled Wasm GC opcode"]
+            forbidden_count = count_sites(
+                r"InstrBuilder\([^)]*strict\s*=|_wt_builder_strict|set_strict!|strict::Bool|enabled::Bool|enabled\s*=|skip silently";
+                roots=[builder_root])
+            forbidden_count + count(p -> !occursin(p, validator_src), required)
+        end),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",

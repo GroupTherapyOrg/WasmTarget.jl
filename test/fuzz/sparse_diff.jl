@@ -22,13 +22,23 @@ const _SP_B = WasmTarget.Bridge
 
 function _sp_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     res = bridge_run_args(fn, argTs, inputs; rettype = rettype)
-    res isa Vector || return false
+    if !(res isa Vector)
+        @error("SparseArrays differential compile/run failure",
+            function_name=string(nameof(fn)), argument_types=argTs,
+            return_type=rettype, result=res)
+        return false
+    end
     rdesc = _SP_B.descriptor(rettype)[1]
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
         ok = r[1] === :ok ? (nat[1] && _SP_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
-        ok || return false
+        if !ok
+            @error("SparseArrays differential mismatch",
+                function_name=string(nameof(fn)), argument_types=argTs,
+                return_type=rettype, input=a, native=nat, wasm=r)
+            return false
+        end
     end
     return true
 end

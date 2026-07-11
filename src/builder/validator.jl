@@ -42,7 +42,6 @@ Modeled on dart2wasm's InstructionsBuilder._stackTypes / _checkStackTypes patter
 mutable struct WasmStackValidator
     stack::Vector{WasmValType}          # Current value stack (types)
     errors::Vector{String}              # Pending diagnostics thrown by InstrBuilder._check!
-    enabled::Bool                       # Can disable for debugging
     func_name::String                   # For error messages
     labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)
     reachable::Bool                     # Whether current code is reachable (PURE-412)
@@ -56,8 +55,8 @@ mutable struct WasmStackValidator
     context_hint::String   # march17: the emitting Julia statement (set via set_context!)
 end
 
-WasmStackValidator(; enabled=true, func_name="", mod=nothing) =
-    WasmStackValidator(WasmValType[], String[], enabled, func_name, ValidatorLabel[], true, mod, "")
+WasmStackValidator(; func_name="", mod=nothing) =
+    WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "")
 
 """
     validate_push!(v, typ)
@@ -65,7 +64,6 @@ WasmStackValidator(; enabled=true, func_name="", mod=nothing) =
 Push a type onto the validation stack. Mirrors dart2wasm's _stackTypes.addAll(outputs).
 """
 function validate_push!(v::WasmStackValidator, typ::WasmValType)
-    v.enabled || return
     push!(v.stack, typ)
 end
 
@@ -83,7 +81,6 @@ Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
 @inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
 
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType
-    v.enabled || return expected
     # wasm spec: post-unreachable code validates POLYMORPHICALLY — pops succeed
     # against the bottom type (the tag-run corpus tail's root: dead-path phi
     # stores popped an empty tracked stack that the spec says is bottomless).
@@ -109,7 +106,6 @@ Pop any type from the validation stack without type checking.
 Returns `nothing` on underflow.
 """
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
-    v.enabled || return nothing
     v.reachable || return nothing   # spec: polymorphic post-unreachable
     if length(v.stack) <= _base(v)
         push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow on pop_any (past block base) " *
@@ -253,7 +249,6 @@ assertion checks for numeric/parametric/conversion instructions.
 For GC-prefixed instructions (0xFB), use validate_gc_instruction! (PURE-413).
 """
 function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)
-    v.enabled || return
 
     # --- Numeric unary: pop T, push T (same type) ---
     if opcode in I32_UNARY_OPS
@@ -390,7 +385,8 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode == Opcode.MEMORY_GROW
         validate_pop!(v, I32); validate_push!(v, I32)
 
-    # Unknown opcode — skip silently (GC prefix instructions handled by validate_gc_instruction!)
+    else
+        throw(ArgumentError("unmodeled Wasm opcode 0x$(string(opcode, base=16, pad=2)) in strict instruction validator"))
     end
 end
 
@@ -410,7 +406,6 @@ For loops, `br` targets the loop start (no values consumed/produced by br).
 For blocks, `br` targets the block end (must have result_types on stack).
 """
 function validate_block_start!(v::WasmStackValidator, kind::Symbol, result_types::Vector{WasmValType}=WasmValType[])
-    v.enabled || return
     label = ValidatorLabel(kind, length(v.stack), result_types, v.reachable)
     push!(v.labels, label)
 end
@@ -427,7 +422,6 @@ entry was reachable, code after the block is reachable (even if the block body
 ended with an unconditional br).
 """
 function validate_block_end!(v::WasmStackValidator)
-    v.enabled || return
     if isempty(v.labels)
         push!(v.errors, "$(v.func_name): end without matching block/loop/if")
         return
@@ -471,7 +465,6 @@ Validate an unconditional branch. Checks that:
 After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
 """
 function validate_br!(v::WasmStackValidator, label_depth::Int)
-    v.enabled || return
     if !v.reachable
         return  # Skip validation in unreachable code
     end
@@ -513,7 +506,6 @@ label like br. Unlike br, code after br_if remains reachable.
 Mirrors dart2wasm's `br_if(label)`.
 """
 function validate_br_if!(v::WasmStackValidator, label_depth::Int)
-    v.enabled || return
     if !v.reachable
         return
     end
@@ -550,7 +542,6 @@ Validate an if instruction: pop i32 condition, push label for the then-branch.
 Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
 """
 function validate_if_start!(v::WasmStackValidator, result_types::Vector{WasmValType}=WasmValType[])
-    v.enabled || return
     validate_pop!(v, I32)  # condition
     label = ValidatorLabel(:if, length(v.stack), result_types, v.reachable, false)
     push!(v.labels, label)
@@ -564,7 +555,6 @@ block entry height for the else-branch, restore reachability.
 Mirrors dart2wasm's `else_()`.
 """
 function validate_else!(v::WasmStackValidator)
-    v.enabled || return
     if isempty(v.labels)
         push!(v.errors, "$(v.func_name): else without matching if")
         return
@@ -614,7 +604,6 @@ type context needed for validation (type index, field types, element types).
 Mirrors dart2wasm's InstructionsBuilder assertion checks for GC instructions.
 """
 function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_info=nothing)
-    v.enabled || return
 
     if gc_opcode == Opcode.STRUCT_NEW
         # struct.new $t: pop N field values (in reverse order), push (ref $t)
@@ -750,6 +739,7 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         # i31.get_s/u: pop (ref null i31), push i32
         validate_pop_any!(v); validate_push!(v, I32)
 
-    # Unknown GC opcode — skip silently
+    else
+        throw(ArgumentError("unmodeled Wasm GC opcode 0x$(string(gc_opcode, base=16, pad=2)) in strict instruction validator"))
     end
 end
