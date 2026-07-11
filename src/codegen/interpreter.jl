@@ -798,6 +798,32 @@ end
     return _closed_world_type_bounds(tn)
 end
 
+@noinline function _closed_world_isvisible(sym::Symbol, parent::Module, from::Module)
+    Base.isdeprecated(parent, sym) && return false
+    Base.isdefinedglobal(from, sym) || return false
+    Base.isdefinedglobal(parent, sym) || return false
+    parent_binding = convert(Core.Binding, GlobalRef(parent, sym))
+    from_binding = convert(Core.Binding, GlobalRef(from, sym))
+    while true
+        from_binding === parent_binding && return true
+        partition = Base.lookup_binding_partition(Base.tls_world_age(), from_binding)
+        Base.is_some_explicit_imported(Base.binding_kind(partition)) || break
+        from_binding = Base.partition_restriction(partition)::Core.Binding
+    end
+    parent_partition = Base.lookup_binding_partition(Base.tls_world_age(), parent_binding)
+    from_partition = Base.lookup_binding_partition(Base.tls_world_age(), from_binding)
+    if Base.is_defined_const_binding(Base.binding_kind(parent_partition)) &&
+       Base.is_defined_const_binding(Base.binding_kind(from_partition))
+        return parent_partition.restriction === from_partition.restriction
+    end
+    return false
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.isvisible(sym::Symbol, parent::Module,
+                                                              from::Module)
+    return _closed_world_isvisible(sym, parent, from)
+end
+
 # Why: `Base.nonnothing_nonmissing_typeinfo(io) =
 #      nonmissingtype(nonnothingtype(get(io,:typeinfo,Any)))` does RUNTIME type
 #      subtraction (typesplit over the type lattice), which the backend can't

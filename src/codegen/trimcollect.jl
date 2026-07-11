@@ -482,6 +482,8 @@ function trim_compile_plan(entries_named::Vector)
         # route and require Julia-internal mutable-world objects WT does not own.
         ((f === Base.check_world_bounded || f === _closed_world_type_bounds) &&
          arg_types == (Core.TypeName,)) && continue
+        ((f === Base.isvisible || f === _closed_world_isvisible) &&
+         arg_types == (Symbol, Module, Module)) && continue
         # T1.1 step 3: a discovery candidate can duplicate an explicitly-listed
         # specialization (e.g. compile_multi entries + a megamorphic dynamic call's
         # candidates) → duplicate wasm export. Dedup by (f, arg_types); the first

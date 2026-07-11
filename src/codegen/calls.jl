@@ -881,6 +881,50 @@ function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContex
     return nothing
 end
 
+function _trace_typename_symbol_owner(value, ctx::AbstractCompilationContext)
+    value isa Core.SSAValue || return nothing
+    1 <= value.id <= length(ctx.code_info.code) || return nothing
+    stmt = ctx.code_info.code[value.id]
+    if stmt isa Core.PiNode
+        return _trace_typename_symbol_owner(stmt.val, ctx)
+    elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
+           is_func(stmt.args[1], :getfield)
+        fld = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fld in (:name, :singletonname) && return stmt.args[2]
+    elseif stmt isa Core.PhiNode
+        owners = Any[_trace_typename_symbol_owner(v, ctx) for v in stmt.values
+                     if !(v isa Core.UndefInitializer)]
+        isempty(owners) && return nothing
+        any(isnothing, owners) && return nothing
+        all(o -> isequal(o, owners[1]), owners) && return owners[1]
+    end
+    return nothing
+end
+
+function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
+                                        name_field::UInt32, singleton_field::UInt32,
+                                        ctx::AbstractCompilationContext)
+    tn_idx = ctx.type_registry.jl_typename_idx
+    str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    symbol_struct_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+    symbol_data = allocate_local!(ctx, ConcreteRef(UInt32(str_idx), true))
+    emit_value!(b, symbol, ctx, ConcreteRef(UInt32(symbol_struct_idx), true))
+    struct_get!(b, symbol_struct_idx, UInt32(2), ConcreteRef(UInt32(str_idx), true))
+    local_set!(b, symbol_data)
+    local_get!(b, symbol_data)
+    emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, UInt32(5), ConcreteRef(UInt32(str_idx), true))
+    num!(b, Opcode.REF_EQ)
+    if_!(b, I32)
+    emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, singleton_field, I32)
+    else_!(b)
+    emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+    struct_get!(b, tn_idx, name_field, I32)
+    end_block!(b)
+    return b
+end
+
 """
     _emit_egal_box_vs_num!(bld, ctx, ref_local, ref_is_extern, num_local, num_type)
 
@@ -1906,6 +1950,33 @@ function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompil
     return b
 end
 
+function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, owner,
+                                      ctx::AbstractCompilationContext)
+    module_info = ctx.type_registry.structs[Module]
+    module_ref = ConcreteRef(module_info.wasm_type_idx, false)
+    parent_local = allocate_local!(ctx, module_ref)
+    from_local = allocate_local!(ctx, module_ref)
+    emit_value!(b, parent, ctx, module_ref); local_set!(b, parent_local)
+    emit_value!(b, from, ctx, module_ref); local_set!(b, from_local)
+
+    local_get!(b, parent_local); local_get!(b, from_local); num!(b, Opcode.REF_EQ)
+    if_!(b, I32)
+    # Same module means the same binding, provided it is not deprecated.
+    emit_typename_symbol_metadata!(b, symbol, owner, UInt32(11), UInt32(12), ctx)
+    num!(b, Opcode.I32_EQZ)
+    else_!(b)
+    main_global = get_module_constant_global!(ctx.mod, ctx.type_registry, Main)
+    local_get!(b, from_local); global_get!(b, main_global, module_ref)
+    num!(b, Opcode.REF_EQ)
+    if_!(b, I32)
+    emit_typename_symbol_metadata!(b, symbol, owner, UInt32(13), UInt32(14), ctx)
+    else_!(b)
+    unreachable!(b)  # structural trap: visibility from this runtime Module was not collected
+    end_block!(b)
+    end_block!(b)
+    return b
+end
+
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(string(expr), 80))   # march17: errors name the call
@@ -1944,6 +2015,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
             struct_get!(ib, tn_idx, UInt32(6), I32)
             append_builder!(b, ib)
+            return b
+        end
+    end
+
+
+    if (is_func(func, :isvisible) || is_func(func, :_closed_world_isvisible)) &&
+       length(args) == 3
+        symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
+        parent_owner = _trace_field_owner(args[2], :module, ctx)
+        if symbol_owner !== nothing && isequal(symbol_owner, parent_owner)
+            vb = _ctx_builder(ctx, "compile_call.closed_world_isvisible")
+            emit_closed_world_isvisible!(vb, args[1], args[2], args[3], symbol_owner, ctx)
+            append_builder!(b, vb)
             return b
         end
     end

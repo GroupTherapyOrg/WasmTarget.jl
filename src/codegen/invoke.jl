@@ -1730,6 +1730,17 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         return append_builder!(b, wb)
     end
 
+    if mi isa Core.MethodInstance && mi.def isa Method &&
+       mi.def.name in (:_closed_world_isvisible, :isvisible) && length(args) == 3
+        symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
+        parent_owner = _trace_field_owner(args[2], :module, ctx)
+        if symbol_owner !== nothing && isequal(symbol_owner, parent_owner)
+            vb = _ctx_builder(ctx, "compile_invoke.closed_world_isvisible")
+            emit_closed_world_isvisible!(vb, args[1], args[2], args[3], symbol_owner, ctx)
+            return append_builder!(b, vb)
+        end
+    end
+
     # Early self-call detection: check if this is a recursive call to ourselves
     func_ref_early = expr.args[2]
     actual_func_ref_early = func_ref_early

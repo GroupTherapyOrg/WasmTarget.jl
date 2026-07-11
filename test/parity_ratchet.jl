@@ -135,6 +135,21 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L44_interned_module_metadata" => ("Module is one interned identity object with exact name/parent and collected binding visibility metadata; no empty shell or TypeName module-name string surrogate remains",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            all_src = types_src * values_src * calls_src * stmt_src
+            required = ["get_module_constant_global!", "_closed_world_isvisible",
+                        "emit_closed_world_isvisible!", "name_visible_main",
+                        "_fc_sym === :jl_module_parent", "_fc_sym === :jl_module_name"]
+            forbidden = ["Module constant — empty struct", "module_name (mut string ref)",
+                         "module_name → string"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
     "L43_typename_world_bounds_metadata" => ("mutable Julia BindingPartition history is reduced once to exact immutable TypeName world-bound metadata; no partial Binding object or fake partition chain exists",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

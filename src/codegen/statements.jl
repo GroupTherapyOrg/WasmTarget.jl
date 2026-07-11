@@ -1264,6 +1264,16 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
             i64_const!(b, 1)
             return b
+        elseif name === :strlen && length(expr.args) >= 6
+            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+            if traced !== nothing
+                source, _ = traced
+                str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
+                array_len!(b)
+                julia_to_wasm_type(expr.args[2]) === I64 && widen_length_to_i64!(b)
+                return b
+            end
         elseif name === :jl_id_start_char
             length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
@@ -1948,6 +1958,28 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             struct_get!(b, tn_idx, UInt32(7), I32)
             return b
         end
+    elseif _fc_sym === :jl_is_binding_deprecated && length(expr.args) >= 7
+        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
+        symbol_owner = _trace_typename_symbol_owner(expr.args[7], ctx)
+        if module_owner !== nothing && isequal(module_owner, symbol_owner)
+            emit_typename_symbol_metadata!(b, expr.args[7], module_owner,
+                                           UInt32(11), UInt32(12), ctx)
+            return b
+        end
+    elseif _fc_sym === :jl_module_parent && length(expr.args) >= 6
+        module_info = ctx.type_registry.structs[Module]
+        emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
+        struct_get!(b, module_info.wasm_type_idx, UInt32(3), AnyRef)
+        ref_cast!(b, Int64(module_info.wasm_type_idx), false)
+        return b
+    elseif _fc_sym === :jl_module_name && length(expr.args) >= 6
+        module_info = ctx.type_registry.structs[Module]
+        str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+        emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
+        struct_get!(b, module_info.wasm_type_idx, UInt32(2),
+                    ConcreteRef(UInt32(str_idx), true))
+        emit_string_wrap!(b, ctx)
+        return b
     elseif _fc_sym === :jl_genericmemory_owner && length(expr.args) >= 6
         # Julia's GenericMemory owner is the memory allocation itself. Memory is
         # represented directly by its non-null WasmGC array, so ownership is an
@@ -2032,6 +2064,8 @@ function _trace_string_ptr(ptr_ssa, code)
             end
         end
         return nothing
+    elseif func.name === :bitcast && length(args) >= 2
+        return _trace_string_ptr(args[end], code)
     else
         return nothing
     end

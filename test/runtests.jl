@@ -173,6 +173,7 @@ _wt_shard0() && include("m1_void_backfills.jl")
 # march3: try/catch driver battery (the throw-arm-past-the-leave silent miscompile).
 _wt_shard0() && include("march3_try_backfills.jl")
 _wt_shard0() && include("type_world_bounds.jl")
+_wt_shard0() && include("module_metadata.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()

@@ -1370,19 +1370,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         global_get!(b, tn_global_idx, AnyRef)
 
     elseif val isa Module
-        # march7: funnel-first (module) — interned when eager-able
-        local _cg_2 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
-        if _cg_2 !== nothing
-            local _ci_2 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
-            global_get!(b, _cg_2, ConcreteRef(_ci_2.wasm_type_idx, false))
-            return b
-        end
-        # Module constant — empty struct (fieldcount=0), like Function singletons.
-        # Used for === identity checks (ref.eq). Each struct.new creates a unique ref.
-        info = register_struct_type!(ctx.mod, ctx.type_registry, Module)
-        type_idx = info.wasm_type_idx
-        emit_struct_prefix!(b, ctx.type_registry, Module, info)
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        # One interned identity object per Julia Module. Names are payload, never
+        # identity, and no call site may allocate an ad hoc empty Module shell.
+        global_idx = get_module_constant_global!(ctx.mod, ctx.type_registry, val)
+        info = ctx.type_registry.structs[Module]
+        global_get!(b, global_idx, ConcreteRef(info.wasm_type_idx, false))
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
         # march7: funnel-first (fn-singleton) — interned when eager-able
