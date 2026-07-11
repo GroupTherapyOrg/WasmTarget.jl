@@ -135,6 +135,16 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L56_real_bottom_exception_bodies" => ("Union{} functions compile their actual Julia body and preserve catchable exception identity; no null-payload whole-body stub may replace them",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["union_bottom_throw_stub", "Auto-stub functions that always throw",
+                         "if return_type === Union{}"]
+            required = ["_wt_bottom_throw", "err isa ArgumentError"]
+            count(p -> occursin(p, compile_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
     "L55_static_type_rendering_excludes_compiler_metadata" => ("Type{T} stays specialized through string/print/show so generated-function Method metadata never enters the runtime constant graph",
         () -> begin
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
@@ -608,7 +618,7 @@ const LOCKS = [
             missing + forbidden
         end),
     "L19_no_fabricated_invoke_results" => ("invoke/call lowering may not substitute dummy exceptions, empty strings, constant hashes, or null SimpleVectors",
-        () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|Core\.svec \(SimpleVector construction\)")),
+        () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|union_bottom_throw_stub|Core\.svec \(SimpleVector construction\)")),
     "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, returns, SSA stores, and struct fields preserve and coerce the emitted value; no zero/null repair helper or duplicate return ladder may remain",
         () -> begin
             statements_src = read(joinpath(CODEGEN, "statements.jl"), String)

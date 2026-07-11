@@ -931,25 +931,7 @@ function _compile_closed_world_plan(functions::Vector;
             dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
         end
 
-        if return_type === Union{}
-            # PARSE-001: Auto-stub functions that always throw (return type Union{}).
-            # These are error/throw functions (e.g., _parser_stuck_error) whose bodies
-            # produce invalid WASM due to Union{}-typed values. Since they only throw,
-            # a throw is the correct semantics — and P2-batch17: it must be the
-            # CATCHABLE tag-0 throw, not `unreachable`: callers inside try/catch
-            # must be able to catch it (an unreachable here was an uncatchable trap).
-            ensure_exception_tag!(mod)
-            _exn_g = ensure_exception_global!(mod)
-            _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub")
-            ref_null!(_stub_b, AnyRef)                     # ref.null any (0xD0 0x6E)
-            global_set!(_stub_b, _exn_g)                  # global.set _exn_g
-            global_get!(_stub_b, _exn_g, AnyRef)
-            ref_null!(_stub_b, ExternRef)
-            throw_!(_stub_b, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-            end_block!(_stub_b)                           # end
-            body = builder_code(_stub_b)
-            locals = WasmValType[]
-        elseif intrinsic_body !== nothing
+        if intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
         elseif dispatch_dt !== nothing
