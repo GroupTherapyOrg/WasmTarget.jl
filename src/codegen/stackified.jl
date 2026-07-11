@@ -634,8 +634,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if _cpv_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
                        ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
                         # funnel-unbox directly on the builder (no byte seam)
-                        convert_type!(pvb, ssa_local_type, julia_to_wasm_type(_cpv_refined), ctx;
-                                      from_julia=_cpv_refined)
+                        coerce_stack_top!(pvb, julia_to_wasm_type(_cpv_refined), ctx;
+                                          from_julia=_cpv_refined)
                     end
                 end
             elseif haskey(ctx.phi_locals, val.id)
@@ -951,7 +951,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
-                                        convert_type!(b, pv_ty, phi_local_type, ctx)
+                                        coerce_stack_top!(b, phi_local_type, ctx)
                                     end
                                     # parity(M11.4): ALWAYS store — the `ty===nothing`
                                     # skip orphaned the emitted value on the stack (the
@@ -1152,7 +1152,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 elseif !isempty(pv_b2.instrs)
                                     append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
-                                        convert_type!(bb, pv_ty2, phi_local_type, ctx)
+                                        coerce_stack_top!(bb, phi_local_type, ctx)
                                     end
                                     # parity(M11.4): ALWAYS store — an unknown-typed value
                                     # left on the stack (the old `ty===nothing` skip)
@@ -1410,7 +1410,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_arr = Int(ret_local) - ctx.n_params + 1
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
-                                convert_type!(b, _rl_wasm, func_ret_wasm, ctx)
+                                coerce_stack_top!(b, func_ret_wasm, ctx)
                             end
                             return_!(b)
                         else

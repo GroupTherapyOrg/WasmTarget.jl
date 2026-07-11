@@ -266,7 +266,7 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     local _rt = get(ctx.ssa_types, idx, Any)
     if _rt isa Type && _rt !== Any && _rt !== Union{}
         local _rw = get_concrete_wasm_type(_rt, ctx.mod, ctx.type_registry)
-        _rw !== AnyRef && convert_type!(b, AnyRef, _rw, ctx; from_julia=nothing)
+        _rw !== AnyRef && coerce_stack_top!(b, _rw, ctx)
     end
     return true
 end

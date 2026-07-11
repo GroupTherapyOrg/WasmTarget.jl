@@ -339,7 +339,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             end
             actual = only(value_builder.v.stack)
             append_builder!(b, value_builder)
-            actual === expected || convert_type!(b, actual, expected, ctx;
+            actual === expected || coerce_stack_top!(b, expected, ctx;
                 from_julia=(pi_type isa DataType ? pi_type : nothing))
             local_set!(b, local_idx)
         end

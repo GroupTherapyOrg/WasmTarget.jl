@@ -25,7 +25,7 @@ diagnosed validating trap.
 |---|---|---|---|---|
 | Typed validating instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart:172,474-554`; `_verifyTypes` is called by instruction methods | `src/builder/instr_builder.jl:51,117`; every emission updates and checks the abstract operand stack | Locks L6, L13; clean `Pkg.test()` | ✅ |
 | Typed expression channel | `pkg/dart2wasm/lib/code_generator.dart:28,60,677`; `CodeGenerator`/`AstCodeGenerator` carry expected and produced value types | `src/codegen/values.jl:857-905`; `emit_value!` derives the actual type from emission and owns expected-type wrapping | Locks L4, L9; R17 ratchet | ✅, remaining unwrapped call sites ratcheted |
-| One conversion funnel | `pkg/dart2wasm/lib/translator.dart:1597-1655`; `convertType` owns drop, unreachable, null-check, cast, box, and unbox | `src/codegen/values.jl:400+`; `convert_type!` is the coercion funnel and the expected-value wrapper owns static source typing | Locks L1, L2, L5; R7/R16 ratchets | ✅, intrinsic-local numeric ops remain tracked debt |
+| One conversion funnel | `pkg/dart2wasm/lib/translator.dart:1597-1655`; `convertType` owns drop, unreachable, null-check, cast, box, and unbox | `src/codegen/values.jl:400+`; `convert_type!` is the sole conversion implementation; external producers request a target through `emit_value!(…, expected)` or builder-tracked `coerce_stack_top!` | Locks L1, L2, L5; R7/R16 ratchets (R16 = 0) | ✅, intrinsic-local numeric ops remain tracked debt |
 | One production compilation route | dart compilation constructs one translator/module strategy and all bodies use the `CodeGenerator` interface | `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → exactly one production `generate_body(ctx)` call | Lock L17; legacy/self-host/byte-shell compilers deleted | ✅ |
 | One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
 | Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
@@ -62,8 +62,8 @@ the source rows and locks above are independently required.
 1. Close current builder/codegen gaps that are not excluded. Runtime-length composition,
    runtime Vararg tuples, homogeneous multi-container `_apply_iterate` (including exact
    empty-call MethodError payloads), and packed i8/i16 arrays are executable and locked.
-2. Drive R17 unwrapped emissions and R16 external conversion calls to their justified
-   architectural floors, with every remaining site classified against current dart.
+2. Drive R17 unwrapped emissions to its justified architectural floor, with every
+   remaining site classified against current dart. R16 external conversion calls are zero.
 3. Re-audit dynamic/static dispatch and constant construction against current files
    (`dynamic_dispatch_table.dart`, `static_dispatch_table.dart`, `constants.dart`) after
    the Object migration, then add exact locks for the final invariants.

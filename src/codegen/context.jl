@@ -2362,7 +2362,7 @@ function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Int
         # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
-        convert_type!(b, local_wasm_type, concrete_wasm, ctx; from_julia=ssa_julia_type)
+        coerce_stack_top!(b, concrete_wasm, ctx; from_julia=ssa_julia_type)
         return true
     end
     return false

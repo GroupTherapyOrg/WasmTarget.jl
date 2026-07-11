@@ -132,7 +132,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
                 local st = seeds[k]
                 if _wt_is_ref(st)
                     if k == n
-                        convert_type!(b, st, narrow_to, ctx)
+                        coerce_stack_top!(b, narrow_to, ctx)
                     else
                         # rotate: store the above values, convert, restore
                         local _tmp = UInt32[]
@@ -140,7 +140,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
                             local t2 = UInt32(allocate_local!(ctx, narrow_to))
                             local_set!(b, t2); pushfirst!(_tmp, t2)
                         end
-                        convert_type!(b, st, narrow_to, ctx)
+                        coerce_stack_top!(b, narrow_to, ctx)
                         for t2 in _tmp
                             local_get!(b, t2)
                         end
@@ -2506,7 +2506,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                              julia_to_wasm_type(_mb_jt) : nothing
             local _mb_out = _mb_ft
             if _mb_want !== nothing && _mb_want !== _mb_ft && _wt_is_ref(_mb_ft)
-                convert_type!(_mb_ib, _mb_ft, _mb_want, ctx)
+                coerce_stack_top!(_mb_ib, _mb_want, ctx)
                 _mb_out = _mb_want
             end
             # Land in a typed scratch + end with local.get (unambiguous tail for the
@@ -6050,8 +6050,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         # handled above.
                         _cw_arg_ty isa WasmValType && actual_julia_type !== Nothing && (actual_wasm = _cw_arg_ty)
                         _cab_merged || (append_builder!(fb, _cab); _cab_merged = true)
-                        convert_type!(fb, actual_wasm, expected_wasm, ctx;
-                                      from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
+                        coerce_stack_top!(fb, expected_wasm, ctx;
+                                          from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                         end
              end
                 # Cross-function call - emit call instruction with target index

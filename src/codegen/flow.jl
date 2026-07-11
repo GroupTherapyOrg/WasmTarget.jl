@@ -262,7 +262,7 @@ function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::Abstra
         # Dead path — the emission ended unreachable; nothing executes after it.
         return true
     end
-    vty === phi_local_type || convert_type!(b, vty, phi_local_type, ctx)
+    vty === phi_local_type || coerce_stack_top!(b, phi_local_type, ctx)
     local_set!(b, local_idx)
     return true
 end

@@ -2145,8 +2145,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # merge the arg (unless the phantom replaced it) BEFORE the coercion
                     _ab_merged || (append_builder!(fb, _ab); _ab_merged = true)
 
-                    convert_type!(fb, actual_wasm, expected_wasm, ctx;
-                                  from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
+                    coerce_stack_top!(fb, expected_wasm, ctx;
+                                      from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                     # the tail target_info_early second-guess reads this flag
                     if expected_wasm === ExternRef && actual_wasm !== ExternRef
                         extern_convert_emitted = true
