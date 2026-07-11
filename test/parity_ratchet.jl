@@ -135,6 +135,17 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L27_no_postbuilder_byte_truncation" => ("the finalized typed instruction IR is authoritative; no raw-byte scanner may truncate or repair function bodies afterward",
+        () -> begin
+            gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
+            builder_src = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            missing = count(p -> !occursin(p, gen_src * flow_src * builder_src),
+                            ["finish_function!(b)", "structured IR has"])
+            forbidden = count(p -> occursin(p, gen_src),
+                              ["strip_excess_after_function_end", "Truncate everything after this byte"])
+            missing + forbidden
+        end),
     "L26_dispatch_roots_only" => ("dynamic selector candidates are only discovery roots; their transitive helper dependencies remain ordinary cross-call-visible functions",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)

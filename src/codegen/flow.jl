@@ -25,8 +25,9 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
         generate_stackified_flow!(b, ctx, blocks, code)
     end
 
-    # Always end with END opcode
-    end_block!(b)
+    # Close exactly the seeded function frame. Any remaining block/loop is a
+    # stackifier bug and must fail here, never serialize into malformed Wasm.
+    finish_function!(b)
 
     return builder_code(b)
 end
@@ -273,4 +274,3 @@ function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::A
     append!(bytes, builder_code(lb))
     return r
 end
-

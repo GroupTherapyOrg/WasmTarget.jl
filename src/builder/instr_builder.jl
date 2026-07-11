@@ -12,7 +12,7 @@
 #
 # See dev/WASM_BUILDER_MIGRATION.md.
 
-export InstrBuilder, builder_code, builder_disasm, StackImbalanceError,
+export InstrBuilder, builder_code, builder_disasm, finish_function!, StackImbalanceError,
        set_context!, builder_diagnose, append_builder!
 
 """
@@ -265,6 +265,39 @@ function if_!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValTyp
 end
 else_!(b::InstrBuilder) = (validate_else!(b.v); _emit!(b, InstrIR.Else()))
 end_block!(b::InstrBuilder) = (validate_block_end!(b.v); _emit!(b, InstrIR.End()))
+
+"""Close the function label, rejecting any unclosed structured-control frames."""
+function finish_function!(b::InstrBuilder)
+    if length(b.v.labels) != 1
+        local frames = join((string(lbl.kind) for lbl in b.v.labels), " → ")
+        throw(StackImbalanceError(b.func_name, b.context,
+              "function finalization found $(length(b.v.labels) - 1) unclosed control frame(s): $frames",
+              _stack_snapshot(b), _byte_len(b)))
+    end
+    end_block!(b)
+    isempty(b.v.labels) || error("builder function label did not close")
+    # Independently audit the recorded IR structure. Fragment merges transfer
+    # already-validated instructions; this catches any validator/IR divergence
+    # before serialization (the final End closes the implicit function frame).
+    local depth = 0
+    for (i, ins) in enumerate(b.instrs)
+        if ins isa InstrIR.Block || ins isa InstrIR.Loop || ins isa InstrIR.If ||
+           ins isa InstrIR.TryTable
+            depth += 1
+        elseif ins isa InstrIR.End
+            depth -= 1
+            if depth < 0 && i != length(b.instrs)
+                throw(StackImbalanceError(b.func_name, b.context,
+                      "structured IR closes the function before instruction $i",
+                      _stack_snapshot(b), _byte_len(b)))
+            end
+        end
+    end
+    depth == -1 || throw(StackImbalanceError(b.func_name, b.context,
+          "structured IR has $(depth + 1) unclosed control frame(s) at function end",
+          _stack_snapshot(b), _byte_len(b)))
+    return b
+end
 br!(b::InstrBuilder, depth::Integer) = (validate_br!(b.v, Int(depth)); _emit!(b, InstrIR.Br(UInt32(depth))))
 br_if!(b::InstrBuilder, depth::Integer) = (validate_br_if!(b.v, Int(depth)); _emit!(b, InstrIR.BrIf(UInt32(depth))))
 function br_table!(b::InstrBuilder, targets::Vector{<:Integer}, default::Integer)
