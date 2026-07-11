@@ -731,10 +731,13 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # PURE-9035: Pre-register all 12 core exception types for DFS typeIds.
-    # Only register types with simple fields to avoid creating complex types.
+    # Exception objects synthesized by lowering must join the closed component
+    # before DFS class IDs freeze; late registration makes catch-side `isa`
+    # structurally unable to classify an otherwise real payload.
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError)
+                   StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
+                   DomainError, InexactError, KeyError, MethodError,
+                   AssertionError, UndefVarError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 

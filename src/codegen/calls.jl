@@ -1980,6 +1980,28 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     return b
 end
 
+function _emit_typeerror_throw!(b::InstrBuilder, got, target::Type, idx::Int,
+                                ctx::AbstractCompilationContext)
+    ensure_exception_tag!(ctx.mod)
+    local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
+    local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
+    def isa StructType || error("TypeError did not register as a Wasm struct")
+    emit_struct_prefix!(b, ctx.type_registry, TypeError, info)
+    local values = Any[:typeassert, "", target, got]
+    for i in 1:4
+        local expected = def.fields[wasm_field_idx(info, i) + 1].valtype
+        local source_type = i == 4 ? get_ssa_type(ctx, got) : fieldtype(TypeError, i)
+        emit_value!(b, values[i], ctx, expected;
+                    from_julia=(source_type isa Type ? source_type : fieldtype(TypeError, i)))
+    end
+    struct_new!(b, info.wasm_type_idx)
+    global_set!(b, ensure_exception_global!(ctx.mod))
+    global_get!(b, ensure_exception_global!(ctx.mod), AnyRef)
+    ref_null!(b, ExternRef)
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return b
+end
+
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(string(expr), 80))   # march17: errors name the call
@@ -4029,12 +4051,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
     if is_func(func, :typeassert)
         if length(args) >= 1
-            local _ta_ty = emit_value!(fb, args[1], ctx)  # R17-floor: typeassert chooses its runtime check from actual type
             local _ta_target = length(args) >= 2 ? (args[2] isa Type ? args[2] :
                 args[2] isa GlobalRef ? Core.eval(args[2].mod, args[2].name) : nothing) : nothing
             local _ta_static = get_ssa_type(ctx, args[1])
             if _ta_target isa Type && isconcretetype(_ta_target) &&
-               !(_ta_static isa Type && _ta_static <: _ta_target) &&
+               _ta_static isa Type && isconcretetype(_ta_static)
+                if _ta_static <: _ta_target
+                    emit_value!(fb, args[1], ctx,
+                                get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry))
+                else
+                    _emit_typeerror_throw!(fb, args[1], _ta_target, idx, ctx)
+                end
+                return append_builder!(b, fb)
+            end
+            local _ta_ty = emit_value!(fb, args[1], ctx)  # R17-floor: dynamic typeassert selects its class-range check from the actual reference representation
+            if _ta_target isa Type && isconcretetype(_ta_target) &&
                (_ta_ty === AnyRef || _ta_ty isa ConcreteRef || _ta_ty === StructRef) &&
                ctx.type_registry.base_struct_idx !== nothing
                 local _ta_range = get_type_range(ctx.type_registry, _ta_target)
@@ -4052,11 +4083,22 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         get(ctx.type_registry.type_extra_ids, _ta_target isa DataType && !isempty(_ta_target.parameters) ? _ta_target.name.wrapper : _ta_target, Int32[]))
                     num!(fb, Opcode.I32_EQZ)
                     if_!(fb)                                   # out of range → THROW
-                    # null-payload throw (the union_bottom_throw_stub shape): TypeError
-                    # carries 4 fields the check site can't populate; throw-PARITY is the
-                    # contract (native throws TypeError, wasm throws tag 0 — both catchable)
                     ensure_exception_tag!(ctx.mod)
-                    ref_null!(fb, AnyRef)
+                    local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
+                    local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
+                    _te_def isa StructType || error("TypeError did not register as a Wasm struct")
+                    emit_struct_prefix!(fb, ctx.type_registry, TypeError, _te_info)
+                    local _te_values = Any[:typeassert, "", _ta_target]
+                    for _te_i in 1:3
+                        local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
+                        emit_value!(fb, _te_values[_te_i], ctx, _te_w;
+                                    from_julia=fieldtype(TypeError, _te_i))
+                    end
+                    local_get!(fb, UInt32(_ta_tmp))
+                    local _te_got_w = _te_def.fields[wasm_field_idx(_te_info, 4) + 1].valtype
+                    coerce_stack_top!(fb, _te_got_w, ctx;
+                                      from_julia=(_ta_static isa Type ? _ta_static : nothing))
+                    struct_new!(fb, _te_info.wasm_type_idx)
                     global_set!(fb, ensure_exception_global!(ctx.mod))
                     global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                     end_block!(fb)

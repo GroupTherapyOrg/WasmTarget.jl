@@ -3,10 +3,6 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
-L56_real_bottom_exception_bodies = 0
-L55_static_type_rendering_excludes_compiler_metadata = 0
-L54_pure_dense_statistics_correlation = 0
-L53_pure_dense_linalg_kernels = 0
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
@@ -49,10 +45,15 @@ L46_symbol_syntax_value_metadata = 0
 L47_single_memmove_lowering = 0
 L48_exact_mutable_global_initialization = 0
 L49_monomorphic_invokes_and_typed_args = 0
+L4_no_postemit_reguess = 0
 L50_closed_world_result_lub_and_reinterpret_bits = 0
 L51_no_escaping_or_ambiguous_storage_pointers = 0
 L52_dynamic_storage_owner_and_generic_norm = 0
-L4_no_postemit_reguess = 0
+L53_pure_dense_linalg_kernels = 0
+L54_pure_dense_statistics_correlation = 0
+L55_static_type_rendering_excludes_compiler_metadata = 0
+L56_real_bottom_exception_bodies = 0
+L57_exact_typeassert_exception = 0
 L5_no_tagged_union = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
@@ -60,7 +61,7 @@ L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 493
+R11_patch_markers = 486
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 11
@@ -71,4 +72,4 @@ R18_anyref_dispatch_sigs = 0
 R2_emit_raw_bridges = 0
 R3_infer_value_type = 137
 R5_julia_type_reguess = 84
-R7_raw_coercion_ops = 118
+R7_raw_coercion_ops = 117

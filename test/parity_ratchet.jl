@@ -135,6 +135,18 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func, context, expected type, and the concretely boxed got value",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            required = ["function _emit_typeerror_throw!", "Any[:typeassert, \"\", target, got]",
+                        "i == 4 ? get_ssa_type(ctx, got)",
+                        "_emit_typeerror_throw!(fb, args[1], _ta_target",
+                        "err.expected === String", "err.got isa Int64"]
+            forbidden = ["null-payload throw", "union_bottom_throw_stub shape"]
+            count(p -> !occursin(p, calls_src * test_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
     "L56_real_bottom_exception_bodies" => ("Union{} functions compile their actual Julia body and preserve catchable exception identity; no null-payload whole-body stub may replace them",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
