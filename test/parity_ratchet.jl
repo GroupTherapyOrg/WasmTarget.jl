@@ -135,6 +135,14 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L47_single_memmove_lowering" => ("memmove/memcpy has one array-copy lowering and its one pointer walk recognizes Vector, Memory, String, and Symbol backing identities",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
+                        "backing_type === String || backing_type === Symbol"]
+            count(p -> !occursin(p, stmt_src), required) +
+                abs(length(collect(eachmatch(r"if \(name === :memmove \|\| name === :memcpy\)", stmt_src))) - 1)
+        end),
     "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)

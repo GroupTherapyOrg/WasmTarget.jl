@@ -95,6 +95,10 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
             # This foreigncall's Wasm representation is the source String's
             # byte array, so its SSA result is itself a valid backing identity.
             return cur
+        elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
+               extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)
+            # The pointed-to bytes belong to the classed String/Symbol operand.
+            return st.args[6]
         elseif st isa Core.PhiNode
             (length(st.values) >= 1 && isassigned(st.values, 1)) || return _fail("phi-unassigned", st)
             cur = st.values[1]
@@ -1633,24 +1637,33 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         local _mmv_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _MMV_PRIMS)
         local _mmv_s = _mmv_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _MMV_PRIMS) : nothing
         if _mmv_d !== nothing && _mmv_s !== nothing
-            local _mmv_te = eltype(infer_value_type(_mmv_d, ctx))
-            if _mmv_te === eltype(infer_value_type(_mmv_s, ctx)) && sizeof(_mmv_te) in (1, 4, 8)
+            local _mmv_eltype = value -> begin
+                local T = infer_value_type(value, ctx)
+                T === String || T === Symbol ? UInt8 : eltype(T)
+            end
+            local _mmv_te = _mmv_eltype(_mmv_d)
+            if _mmv_te === _mmv_eltype(_mmv_s) && sizeof(_mmv_te) in (1, 4, 8)
                 local _mmv_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmv_te)
                 local _mmv_sh = trailing_zeros(sizeof(_mmv_te))
                 local _mmv_emit_arr = vec -> begin
                     _emit_backing_array!(b, vec, ctx, _mmv_arr)
                 end
-                local _mmv_emit_off = a -> begin
+                local _mmv_emit_off = (a, backing) -> begin
                     emit_value!(b, a, ctx, I64)
+                    local backing_type = infer_value_type(backing, ctx)
+                    if backing_type === String || backing_type === Symbol
+                        i64_const!(b, 1)
+                        num!(b, Opcode.I64_SUB)
+                    end
                     num!(b, Opcode.I32_WRAP_I64)
                     i32_const!(b, Int64(_mmv_sh))
                     num!(b, Opcode.I32_SHR_U)
                 end
                 _mmv_emit_arr(_mmv_d)
-                _mmv_emit_off(dest_ptr_arg)
+                _mmv_emit_off(dest_ptr_arg, _mmv_d)
                 _mmv_emit_arr(_mmv_s)
-                _mmv_emit_off(src_ptr_arg)
-                _mmv_emit_off(nbytes_arg)
+                _mmv_emit_off(src_ptr_arg, _mmv_s)
+                _mmv_emit_off(nbytes_arg, nothing)
                 array_copy!(b, _mmv_arr, _mmv_arr)
                 # C memmove returns its destination pointer.
                 emit_value!(b, dest_ptr_arg, ctx, I64)
@@ -1820,37 +1833,6 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         # Typed builder emitter (was a raw 0xFC 0x07 splice — F17 retired it).
         trunc_sat!(b, Opcode.I64_TRUNC_SAT_F64_U)
         return b
-    end
-
-    # P3 gap 450889a9cb7e: memmove(dest, src, n) over Vector{UInt8} storage —
-    # Ryu's writeshortest shifts digit bytes in-buffer (decimal point
-    # insertion). Trace both pointers through add_ptr/sub_ptr chains to the
-    # backing vector and emit array.copy (overlap-safe per the wasm spec).
-    if (name === :memmove || name === :memcpy) && length(expr.args) >= 8
-        _mm_d = _trace_memmove_ptr(expr.args[6], ctx)
-        _mm_s = _trace_memmove_ptr(expr.args[7], ctx)
-        if _mm_d !== nothing && _mm_s !== nothing
-            _arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            _mm_emit_arr! = function (vec)
-                _emit_backing_array!(b, vec, ctx, _arr_t)
-            end
-            _mm_emit_ptr_off! = function (ptr_arg)
-                # fake base pointer compiles to 0 → pointer value == byte offset
-                emit_value!(b, ptr_arg, ctx, I64)
-                num!(b, Opcode.I32_WRAP_I64)
-            end
-            _mm_emit_arr!(_mm_d); _mm_emit_ptr_off!(expr.args[6])
-            _mm_emit_arr!(_mm_s); _mm_emit_ptr_off!(expr.args[7])
-            local _mm_nt = infer_value_type(expr.args[8], ctx)
-            emit_value!(b, expr.args[8], ctx,
-                        (_mm_nt === UInt64 || _mm_nt === Int64 || _mm_nt === Int) ? I64 : I32)
-            (_mm_nt === UInt64 || _mm_nt === Int64 || _mm_nt === Int) &&
-                num!(b, Opcode.I32_WRAP_I64)
-            array_copy!(b, _arr_t, _arr_t)
-            # C memmove returns its destination pointer.
-            emit_value!(b, expr.args[6], ctx, I64)
-            return b
-        end
     end
 
     # PURE-9065: Base.memhash(ptr, len, seed) → UInt64 string hash
