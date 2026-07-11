@@ -609,8 +609,14 @@ const LOCKS = [
         end),
     "L19_no_fabricated_invoke_results" => ("invoke/call lowering may not substitute dummy exceptions, empty strings, constant hashes, or null SimpleVectors",
         () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|Core\.svec \(SimpleVector construction\)")),
-    "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, SSA-store, and struct-field lowering preserve and coerce the emitted value; no zero/null repair helper may return",
-        () -> count_sites(r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch")),
+    "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, returns, SSA stores, and struct fields preserve and coerce the emitted value; no zero/null repair helper or duplicate return ladder may remain",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            forbidden_count = count_sites(
+                r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch|Push a type-correct default|compile_value produced empty bytes")
+            forbidden_count +
+                (occursin("emit_return_coerced!(b, stmt.val, ctx)", statements_src) ? 0 : 1)
+        end),
     "L17_one_compilation_path" => ("public compilation always enters the closed-world planner; legacy discovery, recursive mode switching, byte shells, and legacy body compilers are extinct",
         () -> count_sites(r"_TRIM_ACTIVE|discovery=:legacy|discover_dependencies|AUTODISCOVER|FrozenCompilationState|InplaceCompilationContext|compile_from_ir_(?:inplace|prebaked)|compile_module_from_ir_frozen|compile_handler|compile_closure_body|compile_function_into!|_autodiscover_closure_deps!|run_selfhost|run_direct|to_bytes_mvp|FakeGlobalRef|wasm_compile_(?:flat|source)|function _compile_function_legacy|function compile_(?:value|statement|call|invoke|new|foreigncall|condition_to_i32)\([^!]")),
     "L16_no_codegen_lax_mode" => ("codegen correctness is unconditional: no strict keyword/field, paranoid environment toggle, or entry-vs-dependency downgrade state",

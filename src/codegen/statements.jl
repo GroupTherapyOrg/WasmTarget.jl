@@ -354,70 +354,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     end
 
     if stmt isa Core.ReturnNode
-        # MIGRATED: ReturnNode emits straight-line via typed methods on `b`. External
-        # emit_*! helpers (emit_numeric_to_externref!, emit_box_type_id!) and compile_value
-        # bridge through a local temp buffer + emit_raw!. `bytes` stays empty for this branch
-        # (the trailing slot-assign/n_drops common code below appends after, order-preserved).
         if isdefined(stmt, :val)
-            # Check function return type
-            func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
-            val_wasm = get_phi_edge_wasm_type(stmt.val, ctx)
-            is_numeric_val = val_wasm === I32 || val_wasm === I64 || val_wasm === F32 || val_wasm === F64
-
-            if func_ret_wasm === ExternRef && is_numeric_val
-                # PURE-325: Box numeric value for ExternRef return (handles nothing too)
-                emit_numeric_to_externref!(b, stmt.val, val_wasm, ctx)
-            elseif func_ret_wasm isa ConcreteRef && is_numeric_val
-                # PURE-045: Numeric (nothing) to concrete ref - return ref.null of the type
-                ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-            elseif func_ret_wasm === AnyRef && is_numeric_val
-                # march14: the 4-arg wrap = emit typed + funnel box (byte-equivalent here)
-                emit_value!(b, stmt.val, ctx, AnyRef)
-            elseif (func_ret_wasm === StructRef || func_ret_wasm === ArrayRef) && is_numeric_val
-                # PURE-045: Numeric to abstract ref - return ref.null of the abstract type
-                ref_null!(b, func_ret_wasm)
-            else
-                local _rv_b = _compile_value_b(stmt.val, ctx)
-                local val_wasm2 = isempty(_rv_b.v.stack) ? nothing : _rv_b.v.stack[end]
-                if isempty(_rv_b.instrs)
-                    # TRUE-INT-002: compile_value produced empty bytes (stubbed SSA value on dead path).
-                    # Push a type-correct default so `return` has a value on the stack.
-                    if func_ret_wasm isa ConcreteRef
-                        ref_null!(b, Int64(func_ret_wasm.type_idx), func_ret_wasm)
-                    elseif func_ret_wasm === AnyRef || func_ret_wasm === EqRef || func_ret_wasm === StructRef || func_ret_wasm === ArrayRef
-                        ref_null!(b, func_ret_wasm)
-                    elseif func_ret_wasm === ExternRef
-                        ref_null!(b, ExternRef)  # externref (0x6F)
-                    elseif func_ret_wasm === I32
-                        i32_const!(b, 0)
-                    elseif func_ret_wasm === I64
-                        i64_const!(b, 0)
-                    elseif func_ret_wasm === F32
-                        f32_const!(b, 0.0f0)
-                    elseif func_ret_wasm === F64
-                        f64_const!(b, 0.0)
-                    end
-                else
-                    append_builder!(b, _rv_b)   # typed merge
-                end
-                # If function returns externref but value is a concrete ref, convert
-                if func_ret_wasm === ExternRef && val_wasm !== ExternRef
-                    extern_convert_any!(b)
-                # PURE-207: If value is I32 but return is I64, extend
-                elseif val_wasm === I32 && func_ret_wasm === I64
-                    num!(b, Opcode.I64_EXTEND_I32_S)
-                # PARSE-001: If function returns ConcreteRef but value is eqref/structref/anyref,
-                # cast to match the declared return type. This happens when Union{Nothing, T}
-                # phi nodes produce eqref but the return type is (ref null T_idx).
-                elseif func_ret_wasm isa ConcreteRef && !(val_wasm isa ConcreteRef)
-                    if val_wasm === EqRef || val_wasm === StructRef || val_wasm === AnyRef || val_wasm === ArrayRef
-                        ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
-                    end
-                end
-            end
+            emit_return_coerced!(b, stmt.val, ctx)
+        else
+            return_!(b)
         end
-        return_!(b)
-
     elseif stmt isa Core.GotoNode
         # Unconditional branch - handled by control flow analysis
 
