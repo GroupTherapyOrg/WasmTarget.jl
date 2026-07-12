@@ -1880,11 +1880,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     if ctx.func_registry !== nothing && !is_self_call_early
         called_func_early = nothing
         if actual_func_ref_early isa GlobalRef
-            called_func_early = try
-                getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
-            catch
-                nothing
-            end
+            called_func_early = isdefined(actual_func_ref_early.mod, actual_func_ref_early.name) ?
+                getfield(actual_func_ref_early.mod, actual_func_ref_early.name) : nothing
         elseif actual_func_ref_early isa Function
             # PURE-209a: func_ref can be a Function object directly (default-arg methods)
             called_func_early = actual_func_ref_early
@@ -1897,11 +1894,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if func_type isa DataType && func_type.name.name === :typeof
                     # typeof(f) — extract f
                     # The instance of typeof(f) is the function itself
-                    try
-                        called_func_early = func_type.instance
-                    catch
-                        # Couldn't get instance
-                    end
+                    isdefined(func_type, :instance) &&
+                        (called_func_early = func_type.instance)
                 end
             end
         end
@@ -1934,11 +1928,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 " ti_early=", target_info_early !== nothing)
     if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
        actual_func_ref_early !== nothing && !(actual_func_ref_early isa GlobalRef)
-        ft_early = try
-            infer_value_type(actual_func_ref_early, ctx)
-        catch
-            nothing
-        end
+        ft_early = infer_value_type(actual_func_ref_early, ctx)
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
             ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
@@ -2307,11 +2297,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Try to find this function in our registry
                 called_func = nothing
                 if actual_func_ref isa GlobalRef
-                    called_func = try
-                        getfield(actual_func_ref.mod, actual_func_ref.name)
-                    catch
-                        nothing
-                    end
+                    called_func = isdefined(actual_func_ref.mod, actual_func_ref.name) ?
+                        getfield(actual_func_ref.mod, actual_func_ref.name) : nothing
                 elseif actual_func_ref isa DataType || actual_func_ref isa UnionAll
                     # For constructor calls, the func_ref might be the type directly
                     called_func = actual_func_ref

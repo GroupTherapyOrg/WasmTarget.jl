@@ -68,12 +68,9 @@ function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataTy
         return val
     end
     if val isa GlobalRef
-        try
+        if isdefined(val.mod, val.name)
             actual = getfield(val.mod, val.name)
-            if actual isa Type && isconcretetype(actual)
-                return actual
-            end
-        catch
+            actual isa Type && isconcretetype(actual) && return actual
         end
     end
     return nothing
@@ -6075,11 +6072,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # nothing (builtins aren't in the function registry) and emits unreachable.
     elseif func isa GlobalRef && ctx.func_registry !== nothing && !is_func(func, :_expr)
         # Try to find this function in our registry
-        called_func = try
-            getfield(func.mod, func.name)
-        catch
-            nothing
-        end
+        called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
 
         # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
         # try looking up by name string in func_registry. This handles import stubs

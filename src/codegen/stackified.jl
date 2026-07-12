@@ -787,12 +787,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if val.name === :nothing
                 return I32
             end
-            try
-                actual_val = getfield(val.mod, val.name)
-                return get_phi_edge_wasm_type(actual_val)
-            catch
-                return nothing
-            end
+            isdefined(val.mod, val.name) || return nothing
+            return get_phi_edge_wasm_type(getfield(val.mod, val.name))
         elseif val isa Char
             # PURE-317: Char is a 4-byte primitive type, compiled as I32
             return I32

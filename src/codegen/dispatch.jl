@@ -410,11 +410,8 @@ function find_dispatch_call(code_info::Core.CodeInfo,
         if stmt isa Expr && stmt.head === :call
             callee = stmt.args[1]
             callee isa GlobalRef || continue
-            callee_func = try
-                getfield(callee.mod, callee.name)
-            catch
-                nothing
-            end
+            callee_func = isdefined(callee.mod, callee.name) ?
+                getfield(callee.mod, callee.name) : nothing
             callee_func === nothing && continue
             dt = get_dispatch_table(dt_registry, callee_func)
             dt === nothing && continue

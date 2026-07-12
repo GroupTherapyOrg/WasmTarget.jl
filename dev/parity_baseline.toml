@@ -72,6 +72,7 @@ L71_no_silent_io_argument_skip = 0
 L72_no_fabricated_string_encoder = 0
 L73_capture_analysis_never_silently_disables = 0
 L74_builder_owns_statement_arity = 0
+L75_globalref_absence_is_explicit = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0

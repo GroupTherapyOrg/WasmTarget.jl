@@ -256,6 +256,19 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L75_globalref_absence_is_explicit" => ("core typing, dispatch, and cross-call resolution test binding existence explicitly; broad catches cannot disguise internal resolution failures as a missing GlobalRef",
+        () -> begin
+            files = ["flow.jl", "stackified.jl", "dispatch.jl", "invoke.jl", "calls.jl"]
+            src = join((read(joinpath(CODEGEN, f), String) for f in files), "\n")
+            forbidden = ["actual_val = getfield(val.mod, val.name)\n            return get_phi_edge_wasm_type(actual_val",
+                         "called_func = try\n            getfield(func.mod, func.name)",
+                         "ft_early = try\n            infer_value_type"]
+            required = ["isdefined(val.mod, val.name) || return nothing",
+                        "isdefined(callee.mod, callee.name)",
+                        "isdefined(actual_func_ref.mod, actual_func_ref.name)",
+                        "isdefined(func.mod, func.name)"]
+            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
