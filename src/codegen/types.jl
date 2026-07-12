@@ -1247,9 +1247,9 @@ function get_or_create_unicode_property_func!(mod::WasmModule,
     block_type = add_type!(mod, FuncType(WasmValType[], WasmValType[arr_ref]))
     b = InstrBuilder(WasmValType[I32, arr_ref], WasmValType[I32];
                      func_name="unicode_property")
-    block!(b, Int(block_type); results=WasmValType[arr_ref])
+    initialized_label = block!(b, Int(block_type); results=WasmValType[arr_ref])
     global_get!(b, global_idx, arr_ref)
-    br_on_non_null!(b, 0)
+    br_on_non_null!(b, initialized_label)
     i32_const!(b, 0)
     i32_const!(b, 0x110000)
     array_new_data!(b, arr_idx, seg_idx)
@@ -1325,16 +1325,16 @@ function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry
     local_set!(b, UInt32(4))  # local 1 (offset 4) = i
 
     # block $break
-    block!(b)  # void
+    break_label = block!(b)  # void
 
     # loop $continue
-    loop!(b)  # void
+    continue_label = loop!(b)  # void
 
-    # if i >= array_len: br $break (label 1)
+    # if i >= array_len: branch to the symbolic break label
     local_get!(b, UInt32(4))  # i
     local_get!(b, UInt32(5))  # array_len
     num!(b, Opcode.I32_GE_U)
-    br_if!(b, UInt32(1))  # br to block (break)
+    br_if!(b, break_label)
 
     # byte = array.get_u(arr, i)
     local_get!(b, UInt32(0))  # arr
@@ -1355,8 +1355,8 @@ function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry
     num!(b, Opcode.I32_ADD)
     local_set!(b, UInt32(4))  # i = i + 1
 
-    # br $continue (label 0 = loop)
-    br!(b, UInt32(0))  # continue loop
+    # branch to the symbolic continue label
+    br!(b, continue_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block

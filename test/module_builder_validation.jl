@@ -54,4 +54,44 @@ const MBV = WasmTarget
             MBV.FieldType(MBV.I32, false), MBV.FieldType(MBV.I64, true)], base))
         @test sub == 1
     end
+
+    @testset "symbolic control labels" begin
+        b = MBV.InstrBuilder()
+        done = MBV.block!(b)
+        again = MBV.loop!(b)
+        @test done isa MBV.ControlLabel
+        @test again isa MBV.ControlLabel
+        MBV.i32_const!(b, 0)
+        MBV.br_if!(b, done)
+        # The public builder API cannot accept a fabricated numeric depth.
+        @test_throws MethodError MBV.br!(b, 0)
+        MBV.br!(b, again)
+        MBV.end_block!(b)
+        MBV.end_block!(b)
+        MBV.finish_function!(b)
+
+        closed = MBV.InstrBuilder()
+        stale = MBV.block!(closed)
+        MBV.end_block!(closed)
+        @test_throws ArgumentError MBV.br!(closed, stale)
+
+        m = MBV.WasmModule()
+        tag_type = MBV.add_type!(m, MBV.FuncType(
+            MBV.WasmValType[MBV.AnyRef, MBV.ExternRef], MBV.WasmValType[]))
+        tag = MBV.add_tag!(m, tag_type)
+        catches = MBV.InstrBuilder(; mod=m)
+        landing = MBV.block!(catches; results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
+        MBV.try_table!(catches, [MBV.catch_clause(tag, landing)])
+        MBV.end_block!(catches)
+        MBV.unreachable!(catches)
+        MBV.end_block!(catches)
+        MBV.drop!(catches)
+        MBV.drop!(catches)
+        MBV.finish_function!(catches)
+
+        bad_catch = MBV.InstrBuilder(; mod=m)
+        wrong = MBV.block!(bad_catch; results=MBV.WasmValType[MBV.I32])
+        @test_throws MBV.StackImbalanceError MBV.try_table!(
+            bad_catch, [MBV.catch_clause(tag, wrong)])
+    end
 end

@@ -1759,16 +1759,16 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             local_set!(b, result_local)
 
             # block $done
-            block!(b)  # void
+            done_label = block!(b)  # void
 
             #   loop $scan
-            loop!(b)  # void
+            scan_label = loop!(b)  # void
 
             #     if current >= end, break
             local_get!(b, current_local)
             local_get!(b, end_local)
             num!(b, Opcode.I64_GE_U)
-            br_if!(b, 1)  # br to block (depth 1 = $done)
+            br_if!(b, done_label)
 
             #     array_index = current - 1 (base=1, so ptr=1 means index=0)
             local_get!(b, str_local)
@@ -1785,7 +1785,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             #       result = current
             local_get!(b, current_local)
             local_set!(b, result_local)
-            br!(b, 2)  # br to block (depth 2 = $done)
+            br!(b, done_label)
             end_block!(b)  # end if
 
             #     current += 1
@@ -1795,7 +1795,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             local_set!(b, current_local)
 
             #     br $scan (continue loop)
-            br!(b, 0)  # br to loop (depth 0 = $scan)
+            br!(b, scan_label)
 
             #   end loop
             end_block!(b)

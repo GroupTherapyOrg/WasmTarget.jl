@@ -6738,12 +6738,12 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         i32_const!(bld, 0)
         local_set!(bld, i_local)
 
-        block!(bld)
-        loop!(bld)
+        done_label = block!(bld)
+        loop_label = loop!(bld)
         local_get!(bld, i_local)
         local_get!(bld, len_local)
         num!(bld, Opcode.I32_GE_S)
-        br_if!(bld, 1)
+        br_if!(bld, done_label)
         local_get!(bld, arr_local)
         local_get!(bld, i_local)
         array_get!(bld, arr_type_idx, elem_wasm_type;
@@ -6764,7 +6764,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         i32_const!(bld, 1)
         num!(bld, Opcode.I32_ADD)
         local_set!(bld, i_local)
-        br!(bld, 0)
+        br!(bld, loop_label)
         end_block!(bld)
         end_block!(bld)
     end

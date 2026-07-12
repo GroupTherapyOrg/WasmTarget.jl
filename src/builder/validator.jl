@@ -6,9 +6,16 @@
 
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, reset_validator!, validate_instruction!,
-       ValidatorLabel, validate_block_start!, validate_block_end!,
+       ControlLabel, ValidatorLabel, validate_block_start!, validate_block_end!,
        validate_br!, validate_br_if!, validate_if_start!, validate_else!,
        validate_gc_instruction!
+
+"""Symbolic structured-control target, matching dart2wasm's `Label` API."""
+mutable struct ControlLabel
+    kind::Symbol
+    input_types::Vector{WasmValType}
+    output_types::Vector{WasmValType}
+end
 
 """
     ValidatorLabel
@@ -21,15 +28,20 @@ Key insight from dart2wasm:
 - Block/If.targetTypes = outputs (br exits with block's result types)
 """
 struct ValidatorLabel
+    handle::ControlLabel                # identity-bearing branch target
     kind::Symbol                        # :block, :loop, :if
     stack_height_at_entry::Int          # Stack height when block was entered
+    input_types::Vector{WasmValType}    # Loop branch target types
     result_types::Vector{WasmValType}   # Block's result types (outputs)
     reachable_at_entry::Bool            # Was block entry reachable?
     has_else::Bool                      # For :if labels — has else branch been seen?
 end
 
-ValidatorLabel(kind::Symbol, stack_height::Int, result_types::Vector{WasmValType}, reachable::Bool) =
-    ValidatorLabel(kind, stack_height, result_types, reachable, false)
+function ValidatorLabel(kind::Symbol, stack_height::Int,
+                        input_types::Vector{WasmValType}, result_types::Vector{WasmValType},
+                        reachable::Bool; handle=ControlLabel(kind, input_types, result_types))
+    ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false)
+end
 
 """
     WasmStackValidator
@@ -405,9 +417,15 @@ it ends. Mirrors dart2wasm's `_pushLabel(Block(...))` / `_pushLabel(Loop(...))`.
 For loops, `br` targets the loop start (no values consumed/produced by br).
 For blocks, `br` targets the block end (must have result_types on stack).
 """
-function validate_block_start!(v::WasmStackValidator, kind::Symbol, result_types::Vector{WasmValType}=WasmValType[])
-    label = ValidatorLabel(kind, length(v.stack), result_types, v.reachable)
+function validate_block_start!(v::WasmStackValidator, kind::Symbol,
+                               input_types::Vector{WasmValType}=WasmValType[],
+                               result_types::Vector{WasmValType}=WasmValType[])
+    for t in reverse(input_types); validate_pop!(v, t); end
+    for t in input_types; validate_push!(v, t); end
+    label = ValidatorLabel(kind, length(v.stack) - length(input_types),
+                           input_types, result_types, v.reachable)
     push!(v.labels, label)
+    return label.handle
 end
 
 """
@@ -478,7 +496,7 @@ function validate_br!(v::WasmStackValidator, label_depth::Int)
 
     # For loops, br targets the loop start (no values needed — loop consumes nothing on restart)
     # For blocks/if, br targets the end (need result_types on stack)
-    target_types = label.kind === :loop ? WasmValType[] : label.result_types
+    target_types = label.kind === :loop ? label.input_types : label.result_types
 
     # Check stack has enough values above the label's base
     needed = length(target_types)
@@ -518,7 +536,7 @@ function validate_br_if!(v::WasmStackValidator, label_depth::Int)
         return
     end
     label = v.labels[end - label_depth]
-    target_types = label.kind === :loop ? WasmValType[] : label.result_types
+    target_types = label.kind === :loop ? label.input_types : label.result_types
 
     needed = length(target_types)
     available = length(v.stack) - label.stack_height_at_entry
@@ -541,10 +559,17 @@ end
 Validate an if instruction: pop i32 condition, push label for the then-branch.
 Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
 """
-function validate_if_start!(v::WasmStackValidator, result_types::Vector{WasmValType}=WasmValType[])
+function validate_if_start!(v::WasmStackValidator,
+                            input_types::Vector{WasmValType}=WasmValType[],
+                            result_types::Vector{WasmValType}=WasmValType[])
     validate_pop!(v, I32)  # condition
-    label = ValidatorLabel(:if, length(v.stack), result_types, v.reachable, false)
+    for t in reverse(input_types); validate_pop!(v, t); end
+    for t in input_types; validate_push!(v, t); end
+    handle = ControlLabel(:if, input_types, result_types)
+    label = ValidatorLabel(handle, :if, length(v.stack) - length(input_types),
+                           input_types, result_types, v.reachable, false)
     push!(v.labels, label)
+    return handle
 end
 
 """
@@ -578,8 +603,9 @@ function validate_else!(v::WasmStackValidator)
     end
 
     # Replace label with has_else=true
-    v.labels[end] = ValidatorLabel(label.kind, label.stack_height_at_entry,
-                                   label.result_types, label.reachable_at_entry, true)
+    v.labels[end] = ValidatorLabel(label.handle, label.kind, label.stack_height_at_entry,
+                                   label.input_types, label.result_types,
+                                   label.reachable_at_entry, true)
 
     # Reset stack to entry height for else-branch (dart2wasm: _stackTypes.length = baseStackHeight)
     resize!(v.stack, label.stack_height_at_entry)

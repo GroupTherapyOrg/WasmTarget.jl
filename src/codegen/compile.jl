@@ -273,10 +273,10 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # i = 0, count = 0 (already zero-initialized)
 
         # block $exit (result i32)
-        block!(b, UInt8(I32))
+        exit_label = block!(b, UInt8(I32))
 
         # loop $loop (void)
-        loop!(b)
+        loop_label = loop!(b)
 
         # if i >= len: break with count
         local_get!(b, 1)  # i
@@ -284,7 +284,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         num!(b, Opcode.I32_GE_U)
         if_!(b)
         local_get!(b, 2)  # count
-        br!(b, 2)  # br $exit
+        br!(b, exit_label)
         end_block!(b)
 
         # byte = s[i]; if (byte & 0xC0) != 0x80: count++
@@ -310,7 +310,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 1)
 
         # continue loop
-        br!(b, 0)
+        br!(b, loop_label)
 
         end_block!(b)  # end loop
         unreachable!(b)  # structural trap (dart-legit dead path)
@@ -342,10 +342,10 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 2)  # i = 0
 
         # block $exit (result i32) — for early return of false
-        block!(b, UInt8(I32))  # result type i32
+        exit_label = block!(b, UInt8(I32))  # result type i32
 
         # loop $loop (void)
-        loop!(b)  # void block type
+        loop_label = loop!(b)  # void block type
 
         # if i >= a.len → break out with true (all matched)
         local_get!(b, 2)  # i
@@ -355,7 +355,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         if_!(b)  # void
         # Done — push 1 (true) and break out of block
         i32_const!(b, 1)
-        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        br!(b, exit_label)
         end_block!(b)  # end if
 
         # Compare a[i] vs b[i] (array.get_u for packed i8)
@@ -369,7 +369,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         if_!(b)  # void
         # Mismatch — push 0 (false) and break out of block
         i32_const!(b, 0)
-        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        br!(b, exit_label)
         end_block!(b)  # end if
 
         # i++
@@ -379,7 +379,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 2)  # i = i + 1
 
         # br $loop (continue)
-        br!(b, 0)  # br to loop (depth 0 from here)
+        br!(b, loop_label)
         end_block!(b)  # end loop
         unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
         end_block!(b)  # end block

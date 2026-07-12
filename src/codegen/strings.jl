@@ -86,14 +86,14 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     local_set!(b, local_i)
 
     # block { loop {
-    block!(b)
-    loop!(b)
+    done_label = block!(b)
+    loop_label = loop!(b)
 
     # if i >= len, break
     local_get!(b, local_i)
     local_get!(b, local_len)
     num!(b, Opcode.I32_GE_U)
-    br_if!(b, 1)
+    br_if!(b, done_label)
 
     # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
     local_get!(b, local_i16arr)
@@ -110,7 +110,7 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     local_set!(b, local_i)
 
     # br loop
-    br!(b, 0)
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -496,12 +496,12 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
         i32_const!(b, 0)                                   # lengths differ → not equal
     else_!(b)
         i32_const!(b, 0); local_set!(b, i_local)           # i = 0
-        block!(b, 0x7F; results=WasmValType[I32])          # break-with-result block
-            loop!(b, 0x40)                                 # void loop
+        done_label = block!(b, 0x7F; results=WasmValType[I32]) # break-with-result block
+            loop_label = loop!(b, 0x40)                    # void loop
                 # if i >= len → all matched, push 1 and break to block
                 local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
                 if_!(b, 0x40)
-                    i32_const!(b, 1); br!(b, 2)
+                    i32_const!(b, 1); br!(b, done_label)
                 end_block!(b)
                 # compare str1[i] vs str2[i] (unsigned packed-byte get)
                 local_get!(b, str1_local); local_get!(b, i_local)
@@ -510,11 +510,11 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
                 array_get!(b, str_type_idx, I32; signed=false)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)
-                    i32_const!(b, 0); br!(b, 2)             # differ → not equal
+                    i32_const!(b, 0); br!(b, done_label)    # differ → not equal
                 end_block!(b)
                 # i += 1; continue
                 local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
-                br!(b, 0)
+                br!(b, loop_label)
             end_block!(b)                                  # end loop
             unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
         end_block!(b)                                      # end result block

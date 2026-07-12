@@ -1240,9 +1240,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         if _lz !== nothing
             local _lzs = get_string_struct_type!(ctx.mod, ctx.type_registry)
             local _lzt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[ConcreteRef(_lzs, true)]))
-            block!(b, Int(_lzt); results=WasmValType[ConcreteRef(_lzs, true)])
+            local _lazy_done = block!(b, Int(_lzt); results=WasmValType[ConcreteRef(_lzs, true)])
             global_get!(b, _lz[1], ConcreteRef(_lzs, true))
-            br_on_non_null!(b, 0)
+            br_on_non_null!(b, _lazy_done)
             call!(b, _lz[2], WasmValType[], WasmValType[ConcreteRef(_lzs, true)])
             end_block!(b)
             return b

@@ -52,14 +52,14 @@ function _compile_invoke_str_hash_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, i_local)
 
     # Loop over characters
-    block!(b, 0x40)  # outer block for exit
-    loop!(b, 0x40)  # loop
+    done_label = block!(b, 0x40)  # outer block for exit
+    loop_label = loop!(b, 0x40)  # loop
 
     # Check i < len
     local_get!(b, i_local)
     local_get!(b, len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break to outer block if done
+    br_if!(b, done_label)
 
     # hash = 31 * hash + char[i]
     local_get!(b, hash_local)
@@ -86,7 +86,7 @@ function _compile_invoke_str_hash_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, i_local)
 
     # Continue loop
-    br!(b, 0)
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -184,14 +184,14 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, i_local)
 
     # Outer loop over haystack positions
-    block!(b, 0x40)  # outer block for exit
-    loop!(b, 0x40)  # outer loop
+    outer_done = block!(b, 0x40)  # outer block for exit
+    outer_loop = loop!(b, 0x40)  # outer loop
 
     # Check i <= last_start
     local_get!(b, i_local)
     local_get!(b, last_start_local)
     num!(b, Opcode.I32_GT_S)
-    br_if!(b, 1)  # break outer block if done
+    br_if!(b, outer_done)
 
     # found = 1
     i32_const!(b, 1)
@@ -202,14 +202,14 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, j_local)
 
     # Inner loop - compare needle chars
-    block!(b, 0x40)  # inner block for break
-    loop!(b, 0x40)  # inner loop
+    inner_done = block!(b, 0x40)  # inner block for break
+    inner_loop = loop!(b, 0x40)  # inner loop
 
     # Check j < needle_len
     local_get!(b, j_local)
     local_get!(b, needle_len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break inner block if done
+    br_if!(b, inner_done)
 
     # Compare haystack[i + j - 1] with needle[j] (0-based array access)
     local_get!(b, haystack_local)
@@ -229,7 +229,7 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     # Characters don't match - set found = 0 and break
     i32_const!(b, 0)
     local_set!(b, found_local)
-    br!(b, 2)  # break inner block
+    br!(b, inner_done)
     end_block!(b)  # end if
 
     # j++
@@ -239,7 +239,7 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, j_local)
 
     # Continue inner loop
-    br!(b, 0)
+    br!(b, inner_loop)
 
     end_block!(b)  # end inner loop
     end_block!(b)  # end inner block
@@ -249,7 +249,7 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     if_!(b, 0x40)
     local_get!(b, i_local)
     local_set!(b, result_local)
-    br!(b, 2)  # break outer block (depth: if=0, loop=1, block=2)
+    br!(b, outer_done)
     end_block!(b)
 
     # i++
@@ -259,7 +259,7 @@ function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::Inst
     local_set!(b, i_local)
 
     # Continue outer loop
-    br!(b, 0)
+    br!(b, outer_loop)
 
     end_block!(b)  # end outer loop
     end_block!(b)  # end outer block
@@ -358,14 +358,14 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     local_set!(b, i_local)
 
     # Outer loop
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    outer_done = block!(b, 0x40)
+    outer_loop = loop!(b, 0x40)
 
     # Check i <= last_start
     local_get!(b, i_local)
     local_get!(b, last_start_local)
     num!(b, Opcode.I32_GT_S)
-    br_if!(b, 1)
+    br_if!(b, outer_done)
 
     # found = 1
     i32_const!(b, 1)
@@ -376,14 +376,14 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     local_set!(b, j_local)
 
     # Inner loop
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    inner_done = block!(b, 0x40)
+    inner_loop = loop!(b, 0x40)
 
     # Check j < needle_len
     local_get!(b, j_local)
     local_get!(b, needle_len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)
+    br_if!(b, inner_done)
 
     # Compare haystack[i + j] with needle[j]
     local_get!(b, haystack_local)
@@ -400,7 +400,7 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     if_!(b, 0x40)
     i32_const!(b, 0)
     local_set!(b, found_local)
-    br!(b, 2)
+    br!(b, inner_done)
     end_block!(b)
 
     # j++
@@ -409,7 +409,7 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     num!(b, Opcode.I32_ADD)
     local_set!(b, j_local)
 
-    br!(b, 0)
+    br!(b, inner_loop)
 
     end_block!(b)  # end inner loop
     end_block!(b)  # end inner block
@@ -419,7 +419,7 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     if_!(b, 0x40)
     i32_const!(b, 1)
     local_set!(b, result_local)
-    br!(b, 2)  # break outer block (depth: if=0, loop=1, block=2)
+    br!(b, outer_done)
     end_block!(b)
 
     # i++
@@ -428,7 +428,7 @@ function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)
+    br!(b, outer_loop)
 
     end_block!(b)  # end outer loop
     end_block!(b)  # end outer block
@@ -505,14 +505,14 @@ function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)
     local_set!(b, i_local)
 
     # Loop
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    done_label = block!(b, 0x40)
+    loop_label = loop!(b, 0x40)
 
     # Check i < prefix_len
     local_get!(b, i_local)
     local_get!(b, prefix_len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)
+    br_if!(b, done_label)
 
     # Compare s[i] with prefix[i]
     local_get!(b, s_local)
@@ -527,7 +527,7 @@ function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)
     if_!(b, 0x40)
     i32_const!(b, 0)
     local_set!(b, result_local)
-    br!(b, 2)  # break out of loop
+    br!(b, done_label)
     end_block!(b)
 
     # i++
@@ -536,7 +536,7 @@ function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -620,14 +620,14 @@ function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::
     local_set!(b, i_local)
 
     # Loop
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    done_label = block!(b, 0x40)
+    loop_label = loop!(b, 0x40)
 
     # Check i < suffix_len
     local_get!(b, i_local)
     local_get!(b, suffix_len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)
+    br_if!(b, done_label)
 
     # Compare s[start_pos + i] with suffix[i]
     local_get!(b, s_local)
@@ -644,7 +644,7 @@ function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::
     if_!(b, 0x40)
     i32_const!(b, 0)
     local_set!(b, result_local)
-    br!(b, 2)
+    br!(b, done_label)
     end_block!(b)
 
     # i++
@@ -653,7 +653,7 @@ function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -722,14 +722,14 @@ function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::In
     local_set!(b, i_local)
 
     # Loop: while i < n, copy s into result at offset i * s_len
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    done_label = block!(b, 0x40)
+    loop_label = loop!(b, 0x40)
 
     # if i >= n, break
     local_get!(b, i_local)
     local_get!(b, n_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break to outer block
+    br_if!(b, done_label)
 
     # array.copy: dst=result, dst_off=i*s_len, src=s, src_off=0, len=s_len
     local_get!(b, result_local)
@@ -751,7 +751,7 @@ function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::In
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)  # continue loop
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -1020,14 +1020,14 @@ function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext):
     local_set!(b, i_local)
 
     # Loop: while i < len
-    block!(b, 0x40)  # block for break
-    loop!(b, 0x40)   # loop
+    done_label = block!(b, 0x40)  # block for break
+    loop_label = loop!(b, 0x40)   # loop
 
     # Check i < len
     local_get!(b, i_local)
     local_get!(b, len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break if i >= len
+    br_if!(b, done_label)
 
     # c = s[i]
     local_get!(b, s_local)
@@ -1066,7 +1066,7 @@ function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext):
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)  # continue loop
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -1124,14 +1124,14 @@ function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext):
     local_set!(b, i_local)
 
     # Loop: while i < len
-    block!(b, 0x40)  # block for break
-    loop!(b, 0x40)   # loop
+    done_label = block!(b, 0x40)  # block for break
+    loop_label = loop!(b, 0x40)   # loop
 
     # Check i < len
     local_get!(b, i_local)
     local_get!(b, len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break if i >= len
+    br_if!(b, done_label)
 
     # c = s[i]
     local_get!(b, s_local)
@@ -1170,7 +1170,7 @@ function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext):
     num!(b, Opcode.I32_ADD)
     local_set!(b, i_local)
 
-    br!(b, 0)  # continue loop
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -1246,14 +1246,14 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Find start: skip leading whitespace
     # while start < len && is_whitespace(s[start])
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    start_done = block!(b, 0x40)
+    start_loop = loop!(b, 0x40)
 
     # Check start < len
     local_get!(b, start_local)
     local_get!(b, len_local)
     num!(b, Opcode.I32_GE_S)
-    br_if!(b, 1)  # break if start >= len
+    br_if!(b, start_done)
 
     # c = s[start]
     local_get!(b, s_local)
@@ -1280,7 +1280,7 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
 
     # If not whitespace, break
     num!(b, Opcode.I32_EQZ)
-    br_if!(b, 1)
+    br_if!(b, start_done)
 
     # start++
     local_get!(b, start_local)
@@ -1288,7 +1288,7 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
     num!(b, Opcode.I32_ADD)
     local_set!(b, start_local)
 
-    br!(b, 0)  # continue
+    br!(b, start_loop)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -1307,14 +1307,14 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Find end: skip trailing whitespace
     # while end >= start && is_whitespace(s[end])
-    block!(b, 0x40)
-    loop!(b, 0x40)
+    end_done = block!(b, 0x40)
+    end_loop = loop!(b, 0x40)
 
     # Check end >= start
     local_get!(b, end_local)
     local_get!(b, start_local)
     num!(b, Opcode.I32_LT_S)
-    br_if!(b, 1)  # break if end < start
+    br_if!(b, end_done)
 
     # c = s[end]
     local_get!(b, s_local)
@@ -1341,7 +1341,7 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
 
     # If not whitespace, break
     num!(b, Opcode.I32_EQZ)
-    br_if!(b, 1)
+    br_if!(b, end_done)
 
     # end--
     local_get!(b, end_local)
@@ -1349,7 +1349,7 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
     num!(b, Opcode.I32_SUB)
     local_set!(b, end_local)
 
-    br!(b, 0)
+    br!(b, end_loop)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -1493,14 +1493,14 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 local_set!(b, i_local)
 
                 # Loop: block { loop { ... } }
-                block!(b, 0x40)   # block (label 1 = break)
-                loop!(b, 0x40)    # loop (label 0 = continue)
+                done_label = block!(b, 0x40)
+                loop_label = loop!(b, 0x40)
 
                 # if i >= len, break
                 local_get!(b, i_local)
                 local_get!(b, len_local)
                 num!(b, Opcode.I32_GE_S)
-                br_if!(b, 1)  # break to outer block
+                br_if!(b, done_label)
 
                 # if i > 0, write ", "
                 local_get!(b, i_local)
@@ -1544,7 +1544,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 local_set!(b, i_local)
 
                 # Branch back to loop
-                br!(b, 0)  # continue loop
+                br!(b, loop_label)
 
                 end_block!(b)  # end loop
                 end_block!(b)  # end block
@@ -2546,15 +2546,15 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local_set!(basc, i_local)
 
                 # block $exit
-                block!(basc, 0x40)  # void
+                done_label = block!(basc, 0x40)  # void
                 #   loop $loop
-                loop!(basc, 0x40)  # void
+                loop_label = loop!(basc, 0x40)  # void
 
                 #     br_if $exit (i >= len)
                 local_get!(basc, i_local)
                 local_get!(basc, len_local)
                 num!(basc, Opcode.I32_GE_S)
-                br_if!(basc, 1)  # break to outer block
+                br_if!(basc, done_label)
 
                 #     accum |= array.get(str, i)
                 local_get!(basc, accum_local)
@@ -2571,7 +2571,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local_set!(basc, i_local)
 
                 #     br $loop
-                br!(basc, 0)  # continue loop
+                br!(basc, loop_label)
 
                 #   end loop
                 end_block!(basc)

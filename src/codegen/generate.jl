@@ -370,7 +370,7 @@ GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
 
 Structure:
   block \$catch_landing (void)          ; catch_all jumps here
-    try_table (catch_all 0) (void)     ; catch clause routes to label 0
+    try_table (catch \$exceptionTag)   ; catch clause retains its landing label
       ; generate_stackified_flow for all blocks before catch handler
       ; (handles phi nodes, nested control flow, all returns)
     end

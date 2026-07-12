@@ -109,7 +109,7 @@ const METRICS = [
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
     "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::Integer\)")),
+        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
     "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory — per-object identity, documented floor] + funnel fallbacks)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
@@ -405,6 +405,31 @@ const LOCKS = [
                         "if is_nothing_value(val, ctx)",
                         "before compiling SSA aliases"]
             count(p -> !occursin(p, unions_src * stack_src), required)
+        end),
+    "L87_symbolic_control_labels" => ("builder and codegen branch only to identity-bearing labels; numeric depths exist solely in the private serialization boundary, matching dart2wasm _labelIndex",
+        () -> begin
+            builder_src = read(joinpath(ROOT, "src", "builder", "instr_builder.jl"), String)
+            validator_src = read(joinpath(ROOT, "src", "builder", "validator.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            all_codegen = join((read(joinpath(dir, f), String)
+                                for (dir, _, files) in walkdir(CODEGEN)
+                                for f in files if endswith(f, ".jl")), "\n")
+            forbidden = [r"br!\([^,]+,\s*(?:UInt32\()?\d",
+                         r"br_if!\([^,]+,\s*(?:UInt32\()?\d",
+                         r"br_on_(?:non_)?null!\([^,]+,\s*\d",
+                         r"function\s+get_(?:forward|loop)_label_depth",
+                         r"br!\(b::InstrBuilder,\s*depth::Integer",
+                         r"catch_clause\(tag::Integer,\s*label::Integer"]
+            required = ["mutable struct ControlLabel", "handle::ControlLabel",
+                        "function _label_depth(b::InstrBuilder, target::ControlLabel)",
+                        "br!(b::InstrBuilder, target::ControlLabel)",
+                        "branch target is not an open label",
+                        "try_table catches must retain symbolic ControlLabel targets",
+                        "catch target type mismatch",
+                        "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
+                        "get_forward_label(target_block::Int)::ControlLabel"]
+            sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +
+                count(p -> !occursin(p, validator_src * builder_src * stack_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
