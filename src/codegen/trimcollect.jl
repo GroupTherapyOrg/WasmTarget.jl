@@ -555,10 +555,12 @@ function object.
 function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
+    entry_values = Dict{Any,Any}()     # explicit capturing-closure instances
     for (f, arg_types, name) in entries_named
         mi = entry_method_instance(f, arg_types)
         push!(entry_mis, mi)
         entry_keys[mi] = name
+        entry_values[mi] = f
     end
     external_mis = Set{Any}()
     for entry in external_entries
@@ -586,8 +588,13 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         sig = mi.specTypes
         (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) || continue
         ftyp = sig.parameters[1]
-        f = nothing
-        if ftyp isa DataType && isdefined(ftyp, :instance)
+        f = get(entry_values, mi, nothing)
+        if f !== nothing
+            # Explicit roots retain their actual value. This is load-bearing for
+            # capturing closures: the type has no singleton instance, while root
+            # bindings may validly substitute every captured field and elide the
+            # runtime closure context.
+        elseif ftyp isa DataType && isdefined(ftyp, :instance)
             f = ftyp.instance            # singleton functions incl. Core.kwcall
         elseif ftyp isa DataType && ftyp <: Type && length(ftyp.parameters) >= 1
             f = ftyp.parameters[1]       # constructors: Type{T} → T

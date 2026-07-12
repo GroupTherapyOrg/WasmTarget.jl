@@ -49,6 +49,7 @@ include("bridge.jl")
 
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
+export RootBindings
 export wasm_bytes_length, wasm_bytes_get
 export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
@@ -141,6 +142,9 @@ Hosts that provide typed WebAssembly imports may pass an `existing_module`
 containing those declarations together with `import_stubs`. Imported Julia stub
 calls then participate in the same closed-world collection, typed builder,
 serialization, optimization, and validation pipeline as every other root.
+Frameworks may attach a `RootBindings` value by export name to substitute
+captured signal fields with globals declared in that module. Context elision is
+fail-closed: every closure field must have an explicit substitution.
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
@@ -148,6 +152,7 @@ function compile_multi(functions::Vector; optimize=false,
                        discovery::Symbol=:trim,
                        existing_module::Union{WasmModule,Nothing}=nothing,
                        import_stubs::Vector=Any[],
+                       root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
@@ -155,7 +160,7 @@ function compile_multi(functions::Vector; optimize=false,
         compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types,
                        discovery=discovery, existing_module=existing_module,
-                       import_stubs=import_stubs)
+                       import_stubs=import_stubs, root_bindings=root_bindings)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end

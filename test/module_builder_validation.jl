@@ -16,6 +16,13 @@ end
 @noinline _mbv_external_leaf(x::Int64) = _mbv_native_only_dependency(x)
 _mbv_external_leaf_caller(x::Int64) = _mbv_external_leaf(x)
 _mbv_unsigned_i128(x::Int128)::UInt128 = unsigned(x)
+function _mbv_signal_closures()
+    state = Ref{Int64}(0)
+    getter = () -> state[]
+    setter = x -> (state[] = x)
+    handler = () -> setter(getter() + Int64(1))
+    return getter, setter, handler
+end
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -120,6 +127,42 @@ _mbv_unsigned_i128(x::Int128)::UInt128 = unsigned(x)
         bytes = MBV.compile_multi(Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")];
                                   validate=false)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+    end
+
+    @testset "closure roots use declared global substitutions" begin
+        getter, setter, handler = _mbv_signal_closures()
+        captured = Dict{Symbol,Tuple{Bool,UInt32}}()
+        for field in fieldnames(typeof(handler))
+            value = getfield(handler, field)
+            value === getter && (captured[field] = (true, UInt32(0)))
+            value === setter && (captured[field] = (false, UInt32(0)))
+        end
+        @test length(captured) == 2
+        m = MBV.WasmModule()
+        MBV.add_global!(m, MBV.I64, true, Int64(0))
+        bindings = MBV.RootBindings(captured_globals=captured,
+                                    elide_closure_context=true,
+                                    void_return=true)
+        compiled = MBV.compile_module(Any[(handler, (), "handler")];
+            existing_module=m, root_bindings=Dict("handler" => bindings))
+        exported = only(e for e in compiled.exports if e.name == "handler")
+        nimports = MBV.num_imported_funcs(compiled)
+        fn = compiled.functions[Int(exported.idx) - nimports + 1]
+        ft = compiled.types[Int(fn.type_idx) + 1]
+        @test isempty(ft.params)
+        @test isempty(ft.results)
+
+        partial = MBV.RootBindings(captured_globals=Dict([first(captured)]),
+                                   elide_closure_context=true)
+        @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "bad")];
+            root_bindings=Dict("bad" => partial))
+        missing_global = MBV.RootBindings(
+            captured_globals=Dict(k => (v[1], UInt32(99)) for (k, v) in captured),
+            elide_closure_context=true)
+        @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "bad_global")];
+            root_bindings=Dict("bad_global" => missing_global))
+        @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "known")];
+            root_bindings=Dict("unknown" => bindings))
     end
 
     @testset "symbolic control labels" begin

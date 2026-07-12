@@ -2,6 +2,26 @@
 # Main Compilation Entry Point
 # ============================================================================
 
+"""Declarative, typed substitutions for one closed-world compilation root."""
+struct RootBindings
+    captured_globals::Dict{Symbol,Tuple{Bool,UInt32}}
+    dom_bindings::Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}
+    skip_stmts::Set{Int}
+    invoke_imports::Dict{Int,UInt32}
+    elide_closure_context::Bool
+    void_return::Bool
+end
+
+function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
+                      dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
+                      skip_stmts=Set{Int}(), invoke_imports=Dict{Int,UInt32}(),
+                      elide_closure_context::Bool=false, void_return::Bool=false)
+    RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
+                 Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
+                 Set{Int}(skip_stmts), Dict{Int,UInt32}(invoke_imports),
+                 elide_closure_context, void_return)
+end
+
 """The one Julia-signature → physical Wasm-signature derivation."""
 function function_wasm_signature(arg_types, return_type, global_args,
                                  mod::WasmModule, type_registry::TypeRegistry)
@@ -507,6 +527,7 @@ Functions can call each other within the module.
 function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
+                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false
@@ -576,6 +597,30 @@ function _compile_closed_world_plan(functions::Vector;
             push!(normalized, (f, arg_types, name))
         else
             push!(normalized, entry)
+        end
+    end
+
+    requested_names = Set(String(entry[3]) for entry in normalized)
+    unknown_bindings = setdiff(Set(keys(root_bindings)), requested_names)
+    isempty(unknown_bindings) || throw(ArgumentError(
+        "root bindings do not match compilation roots: $(sort!(collect(unknown_bindings)))"))
+    n_imported_functions = num_imported_funcs(mod)
+    for (root_name, bindings) in root_bindings
+        for (_, (_, global_idx)) in bindings.captured_globals
+            Int(global_idx) < length(mod.globals) || throw(ArgumentError(
+                "root $root_name references missing global index $global_idx"))
+        end
+        for (global_idx, updates) in bindings.dom_bindings
+            Int(global_idx) < length(mod.globals) || throw(ArgumentError(
+                "root $root_name DOM binding references missing global index $global_idx"))
+            for (import_idx, _) in updates
+                Int(import_idx) < n_imported_functions || throw(ArgumentError(
+                    "root $root_name DOM binding references missing function import $import_idx"))
+            end
+        end
+        for import_idx in values(bindings.invoke_imports)
+            Int(import_idx) < n_imported_functions || throw(ArgumentError(
+                "root $root_name invoke binding references missing function import $import_idx"))
         end
     end
 
@@ -651,7 +696,19 @@ function _compile_closed_world_plan(functions::Vector;
         # cached their pair under (T, arg_types); a miss errors loudly.)
         code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
 
-        if is_closure
+        bindings = get(root_bindings, name, nothing)
+        elide_closure_context = bindings !== nothing && bindings.elide_closure_context
+        if elide_closure_context
+            is_closure || throw(ArgumentError(
+                "root $name requests closure-context elision but is not a closure"))
+            missing_fields = Symbol[field for field in fieldnames(closure_type)
+                                    if !haskey(bindings.captured_globals, field)]
+            isempty(missing_fields) || throw(ArgumentError(
+                "root $name cannot elide closure context; unsubstituted fields: $(missing_fields)"))
+        end
+        bindings !== nothing && bindings.void_return && (return_type = Nothing)
+
+        if is_closure && !elide_closure_context
             # Prepend the closure type to arg_types for type registration and WASM codegen
             arg_types = (closure_type, arg_types...)
         end
@@ -938,9 +995,19 @@ function _compile_closed_world_plan(functions::Vector;
             end
         else
             # Generate function body from Julia IR
+            bindings = get(root_bindings, name, nothing)
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                    global_args=global_args, is_compiled_closure=is_closure)
+                                    global_args=global_args,
+                                    is_compiled_closure=is_closure &&
+                                        !(bindings !== nothing && bindings.elide_closure_context),
+                                    captured_signal_fields=bindings === nothing ?
+                                        Dict{Symbol,Tuple{Bool,UInt32}}() : bindings.captured_globals,
+                                    dom_bindings=bindings === nothing ?
+                                        Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}() : bindings.dom_bindings,
+                                    skip_stmts=bindings === nothing ? Set{Int}() : bindings.skip_stmts,
+                                    invoke_imports=bindings === nothing ?
+                                        Dict{Int,UInt32}() : bindings.invoke_imports)
             body = generate_body(ctx)
             locals = ctx.locals
         end
@@ -1590,6 +1657,7 @@ end
 function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
+                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
@@ -1598,7 +1666,7 @@ function compile_module(functions::Vector;
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        optimize_ir, register_ir_types)
+        root_bindings, optimize_ir, register_ir_types)
 end
 
 """
