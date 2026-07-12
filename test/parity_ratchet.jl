@@ -141,11 +141,17 @@ const LOCKS = [
     "L66_no_fabricated_string_results" => ("specialized string lowering either proves every input representation or rejects it; mixed arguments can never become an empty string",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
-            forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)"]
+            strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)",
+                         "For now, just do first two", "Multi-string concat: concat pairwise"]
             required = ["specialized multi-argument string lowering requires every argument to be String or Symbol",
-                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value"]
-            count(p -> occursin(p, invoke_src), forbidden) +
-                count(p -> !occursin(p, invoke_src), required)
+                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value",
+                        "function compile_string_concat_many_b", "for loc in str_locals",
+                        "_wt_many_string_length"]
+            all_src = invoke_src * strings_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
         end),
     "L67_one_exception_and_block_owner" => ("the stackifier alone owns block and try-region structure; no dead block-emission adapter or statement-level EnterNode implementation may coexist",
         () -> begin

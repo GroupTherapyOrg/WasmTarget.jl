@@ -81,6 +81,6 @@ R16_external_convert_ladders = 0
 R17_unwrapped_value_emissions = 29
 R18_anyref_dispatch_sigs = 0
 R2_emit_raw_bridges = 0
-R3_infer_value_type = 136
+R3_infer_value_type = 135
 R5_julia_type_reguess = 83
 R7_raw_coercion_ops = 114

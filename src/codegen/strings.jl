@@ -444,6 +444,45 @@ function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::I
     return b
 end
 
+_all_string_args(args, ctx::AbstractCompilationContext) =
+    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
+
+"""Concatenate every proven String/Symbol argument through one N-way builder."""
+function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("N-way string concatenation requires at least one argument")
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    strref = ConcreteRef(str_type_idx, true)
+    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
+    offset_local = allocate_local!(ctx, I32)
+    total_len_local = allocate_local!(ctx, I32)
+    result_local = allocate_local!(ctx, strref)
+    b = _ctx_builder(ctx, "compile_string_concat_many")
+
+    for i in eachindex(args)
+        emit_value!(b, args[i], ctx, strref)
+        local_set!(b, str_locals[i])
+    end
+    i32_const!(b, 0)
+    for loc in str_locals
+        local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
+    end
+    local_set!(b, total_len_local)
+    local_get!(b, total_len_local); array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
+    i32_const!(b, 0); local_set!(b, offset_local)
+
+    for loc in str_locals
+        local_get!(b, result_local); local_get!(b, offset_local)
+        local_get!(b, loc); i32_const!(b, 0)
+        local_get!(b, loc); array_len!(b)
+        array_copy!(b, str_type_idx, str_type_idx)
+        local_get!(b, offset_local); local_get!(b, loc); array_len!(b)
+        num!(b, Opcode.I32_ADD); local_set!(b, offset_local)
+    end
+    local_get!(b, result_local)
+    return b
+end
+
 """
 Compile string equality comparison (str1 == str2).
 Returns i32 (0 or 1).

@@ -2592,21 +2592,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # Julia compiles string concatenation to Base._string
             # Also handle String, Symbol for error message construction
             elseif (name === :* || name === :_string) && length(args) >= 2 &&
-                   (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
-                   (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
-                # String concatenation using WasmGC array operations
-                # For now, handle 2-string concat (most common case)
-                if length(args) == 2
-                    fb = compile_string_concat_b(args[1], args[2], ctx)
-                else
-                    # Multi-string concat: concat pairwise
-                    fb = compile_string_concat_b(args[1], args[2], ctx)
-                    for i in 3:length(args)
-                        # Store intermediate result and concat next string
-                        # This is simplified - for full support we'd need proper temp locals
-                        # For now, just do first two
-                    end
-                end
+                   _all_string_args(args, ctx)
+                fb = compile_string_concat_many_b(args, ctx)
 
             # PURE-325: isascii(s) — check all bytes < 0x80
             # Called from normalize_identifier via isascii(codeunits(s)).
@@ -3136,65 +3123,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             elseif (name === :string || name === :_string) && length(args) > 1
                 bms = _ctx_builder(ctx, "compile_invoke")  # Clear pre-compiled args
 
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                str_arr_type = ConcreteRef(str_type_idx, true)
-                n = length(args)
-
                 # Check arg types — for now handle all-String args
                 arg_types = [infer_value_type(a, ctx) for a in args]
                 all_strings = all(t -> t === String || t === Symbol, arg_types)
 
                 if all_strings
-                    # Allocate locals: one per string arg + offset + total_len + result
-                    str_locals = [allocate_local!(ctx, str_arr_type) for _ in 1:n]
-                    offset_local = allocate_local!(ctx, I32)
-                    total_len_local = allocate_local!(ctx, I32)
-                    result_local = allocate_local!(ctx, str_arr_type)
-
-                    # Step 1: Compile each arg and store in locals
-                    for i in 1:n
-                        emit_value!(bms, args[i], ctx, str_arr_type)   # parity(M9): funnel → DATA array
-                        local_set!(bms, str_locals[i])
-                    end
-
-                    # Step 2: Compute total length = sum(array.len(si))
-                    i32_const!(bms, 0)
-                    for i in 1:n
-                        local_get!(bms, str_locals[i])
-                        array_len!(bms)
-                        num!(bms, Opcode.I32_ADD)
-                    end
-                    local_set!(bms, total_len_local)
-
-                    # Step 3: result = array.new_default(total_len)
-                    local_get!(bms, total_len_local)
-                    array_new_default!(bms, str_type_idx)
-                    local_set!(bms, result_local)
-
-                    # Step 4: offset = 0; copy each string into result
-                    i32_const!(bms, 0)
-                    local_set!(bms, offset_local)
-
-                    for i in 1:n
-                        # array.copy(result, offset, si, 0, len(si))
-                        local_get!(bms, result_local)  # dst
-                        local_get!(bms, offset_local)  # dst_offset
-                        local_get!(bms, str_locals[i])  # src
-                        i32_const!(bms, 0)  # src_offset
-                        local_get!(bms, str_locals[i])
-                        array_len!(bms)  # len
-                        array_copy!(bms, str_type_idx, str_type_idx)
-
-                        # offset += len(si)
-                        local_get!(bms, offset_local)
-                        local_get!(bms, str_locals[i])
-                        array_len!(bms)
-                        num!(bms, Opcode.I32_ADD)
-                        local_set!(bms, offset_local)
-                    end
-
-                    # Step 5: push result
-                    local_get!(bms, result_local)
+                    bms = compile_string_concat_many_b(args, ctx)
                 else
                     # A result-producing invoke may never substitute a valid but
                     # unrelated String.  Normal Julia string conversion is handled
@@ -3723,7 +3657,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         local _field_idx = _fi + Int(_ctor_sinfo.field_offset)
                         local _expected = (_ctor_def isa StructType && _field_idx <= length(_ctor_def.fields)) ?
                             _ctor_def.fields[_field_idx].valtype : nothing
-                        _expected === nothing && error("constructor field lacks a physical Wasm type")
+                        _expected === nothing && error(
+                            "constructor field lacks a physical Wasm type: target=$_ctor_target field=$_fi " *
+                            "offset=$(_ctor_sinfo.field_offset) registered_fields=$(length(_ctor_sinfo.field_types)) " *
+                            "physical_fields=$(_ctor_def isa StructType ? length(_ctor_def.fields) : -1)")
                         emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
                     end
                     if _vararg_direct
