@@ -1158,8 +1158,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # march4 Phase C: THE statement visitor emits directly; the drop
                 # logic reads the emission's node window (byte sniffs are gone).
                 local _stmt_i0 = length(bb.instrs)
+                local _stmt_stack0 = length(bb.v.stack)
                 compile_statement!(bb, stmt, i, ctx)
                 local _stmt_emitted = length(bb.instrs) > _stmt_i0
+                local _stmt_pushed_value = length(bb.v.stack) > _stmt_stack0
 
                 # DEBUG: trace DROP emissions (node count)
                 _dbg_fn = try string(ctx.func_name) catch; "" end
@@ -1185,7 +1187,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
-                        if !already_dropped && _stmt_emitted && statement_produces_wasm_value(stmt, i, ctx)
+                        if !already_dropped && _stmt_emitted && _stmt_pushed_value
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0

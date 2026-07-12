@@ -2386,7 +2386,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             unreachable!(bcc)  # structural trap (dart-legit dead path)
                         end
                         # PURE-220: Unused cross-call return values are dropped by
-                        # the stackifier (statement_produces_wasm_value + use_count==0).
+                        # the stackifier (builder stack delta + use_count==0).
                         # Do NOT emit DROP here — the stackifier's already_dropped heuristic
                         # has false positives when the LEB128 function index byte coincides
                         # with Opcode.CALL (0x10), causing double DROP and stack underflow.
@@ -3449,8 +3449,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     append_builder!(fb, bgr)
 
                     # 8. Growth code is side-effect only — no wasm value produced.
-                    #    Mark the SSA type as Nothing so statement_produces_wasm_value
-                    #    returns false and flow generators don't emit DROP.
+                    #    Its builder stack delta is zero, so the stackifier emits no DROP.
                     ctx.ssa_types[idx] = Nothing
                     # Also remove the SSA local to prevent compile_statement's
                     # safety check from replacing the growth code with ref.null.

@@ -244,6 +244,18 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L74_builder_owns_statement_arity" => ("post-emission drop decisions use the builder's actual stack delta; no Julia-type/registry heuristic may re-guess whether a call produced a value",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["function statement_produces_wasm_value", "assume no value produced"]
+            required = ["_stmt_stack0 = length(bb.v.stack)",
+                        "_stmt_pushed_value = length(bb.v.stack) > _stmt_stack0",
+                        "_stmt_emitted && _stmt_pushed_value"]
+            all_src = context_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
