@@ -309,6 +309,19 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L79_partial_new_requires_definite_initialization" => ("Wasm physical defaults for missing primitive fields are emitted only when a closed-world CFG must-analysis proves every field is written before read or escape",
+        () -> begin
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["struct_type === Random.Xoshiro", "nameof(struct_type)",
+                         "primitive_init_proven = true", "allow_uninitialized"]
+            required = ["function _definitely_initializes_in_ir", "intersect(incoming[dest], assigned)",
+                        "_partial_new_is_definitely_initialized", "primitive_init_proven",
+                        "_wt_make_undefined_field", "_wt_use_definitely_initialized_fields"]
+            all_src = stmts_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

@@ -6,6 +6,20 @@ mutable struct _WTUndefinedField
 end
 
 _wt_make_undefined_field() = _WTUndefinedField()
+mutable struct _WTDefinitelyInitializedFields
+    x::Int64
+    y::Int64
+    function _WTDefinitelyInitializedFields(x::Int64)
+        value = new()
+        value.x = x
+        value.y = x + 1
+        return value
+    end
+end
+_wt_use_definitely_initialized_fields(x::Int64)::Int64 = begin
+    value = _WTDefinitelyInitializedFields(x)
+    value.x * 10 + value.y
+end
 _wt_many_string_length()::Int64 = Int64(ncodeunits(Base._string("aa", "bbb", "cccc")))
 function _wt_vector_mutation_semantics()::Int64
     v = Int64[]
@@ -24,6 +38,7 @@ _wt_unsupported_show() = (show(_WTUnsupportedShow(1)); Int64(1))
 
 @testset "codegen never fabricates missing values" begin
     @test_throws WasmTarget.WasmCompileError WasmTarget.compile(_wt_make_undefined_field, ())
+    @test compare_julia_wasm(_wt_use_definitely_initialized_fields, Int64(4)).pass
     @test compare_julia_wasm(_wt_many_string_length).pass
     @test compare_julia_wasm(_wt_vector_mutation_semantics).pass
     @test compare_julia_wasm(_wt_pure_power_semantics, Int64(3)).pass

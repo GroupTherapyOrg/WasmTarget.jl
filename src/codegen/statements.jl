@@ -637,6 +637,136 @@ Compile a struct construction expression (%new).
 """
 # P2-batch17: type-correct default for an exception field whose value can't be
 # represented (see the Exception branch of compile_new).
+function _references_argument(@nospecialize(x), n::Int)::Bool
+    x == Core.Argument(n) && return true
+    if x isa Expr
+        return any(a -> _references_argument(a, n), x.args)
+    elseif x isa Core.ReturnNode
+        return isdefined(x, :val) && _references_argument(x.val, n)
+    elseif x isa Core.GotoIfNot
+        return _references_argument(x.cond, n)
+    elseif x isa Core.PiNode
+        return _references_argument(x.val, n)
+    elseif x isa Core.PhiNode
+        return any(v -> isassigned(x.values, v) && _references_argument(x.values[v], n),
+                   eachindex(x.values))
+    end
+    return false
+end
+
+function _setfield_of_value(@nospecialize(stmt), @nospecialize(subject), T::DataType)
+    stmt isa Expr && stmt.head in (:call, :invoke) || return nothing
+    first_arg = stmt.head === :invoke ? 2 : 1
+    length(stmt.args) >= first_arg + 3 || return nothing
+    callee = stmt.args[first_arg]
+    is_func(callee, :setfield!) || return nothing
+    stmt.args[first_arg + 1] == subject || return nothing
+    field = stmt.args[first_arg + 2]
+    field isa QuoteNode && (field = field.value)
+    field isa Symbol || return nothing
+    return findfirst(==(field), fieldnames(T))
+end
+
+_references_subject(@nospecialize(stmt), subject::Core.SSAValue) = references_ssa(stmt, subject.id)
+_references_subject(@nospecialize(stmt), subject::Core.Argument) =
+    _references_argument(stmt, subject.n)
+
+function _definitely_initializes_in_ir(code, start_pc::Int, subject,
+                                       T::DataType, missing::Set{Int})::Bool
+    1 <= start_pc <= length(code) || return false
+    incoming = Dict{Int,Set{Int}}(start_pc => Set{Int}())
+    queue = Int[start_pc]
+    while !isempty(queue)
+        pc = popfirst!(queue)
+        assigned = copy(incoming[pc])
+        stmt = code[pc]
+        written = _setfield_of_value(stmt, subject, T)
+        if written !== nothing && written in missing
+            push!(assigned, written)
+        elseif _references_subject(stmt, subject) && !issubset(missing, assigned)
+            return false
+        end
+
+        successors = if stmt isa Core.ReturnNode ||
+                        (stmt isa Expr && stmt.head === :unreachable)
+            Int[]
+        elseif stmt isa Core.GotoNode
+            Int[stmt.label]
+        elseif stmt isa Core.GotoIfNot
+            pc < length(code) ? Int[pc + 1, stmt.dest] : Int[stmt.dest]
+        elseif pc < length(code)
+            Int[pc + 1]
+        else
+            Int[]
+        end
+        for dest in successors
+            start_pc <= dest <= length(code) || return false
+            next_state = haskey(incoming, dest) ? intersect(incoming[dest], assigned) : copy(assigned)
+            if !haskey(incoming, dest) || next_state != incoming[dest]
+                incoming[dest] = next_state
+                push!(queue, dest)
+            end
+        end
+    end
+    return true
+end
+
+function _cached_invoke_ir(use::Expr)
+    use.head === :invoke || return nothing
+    length(use.args) >= 2 || return nothing
+    mi = use.args[1]
+    mi isa Core.CodeInstance && (mi = mi.def)
+    mi isa Core.MethodInstance || return nothing
+    fref = use.args[2]
+    f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
+        getfield(fref.mod, fref.name) : fref
+    f isa Function || return nothing
+    sig = mi.specTypes
+    sig isa DataType && sig <: Tuple || return nothing
+    arg_types = Tuple(sig.parameters[2:end])
+    cache = TRIM_IR_CACHE[]
+    cache === nothing && return nothing
+    for (key, value) in cache
+        key isa Tuple && length(key) == 2 || continue
+        key[1] === f && key[2] == arg_types && return value[1]
+    end
+    return nothing
+end
+
+"""Prove that every missing primitive field is assigned before the object is observed.
+
+The proof is deliberately interprocedural but closed-world: the fresh allocation must
+have exactly one caller use, as one argument of an explicit invoke whose collected IR
+is available. A forward must-analysis follows every CFG edge. Reads, calls, returns,
+or escapes of the object are accepted only after all missing fields are definitely set;
+throwing/unreachable paths may terminate before initialization.
+"""
+function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
+                                                 missing::Set{Int},
+                                                 ctx::AbstractCompilationContext)::Bool
+    ismutabletype(T) || return false
+    caller_code = ctx.code_info.code
+    idx < length(caller_code) &&
+        _definitely_initializes_in_ir(caller_code, idx + 1, Core.SSAValue(idx), T, missing) &&
+        return true
+    uses = Tuple{Expr,Int}[]
+    for stmt in caller_code
+        references_ssa(stmt, idx) || continue
+        stmt isa Expr && stmt.head === :invoke || return false
+        operands = stmt.args[3:end]
+        positions = findall(==(Core.SSAValue(idx)), operands)
+        length(positions) == 1 || return false
+        push!(uses, (stmt, positions[1]))
+    end
+    length(uses) == 1 || return false
+    use, explicit_pos = only(uses)
+    callee_ir = _cached_invoke_ir(use)
+    callee_ir isa Core.CodeInfo || return false
+    arg_n = explicit_pos + 1 # Core.Argument(1) is the callable/self slot
+    return _definitely_initializes_in_ir(
+        callee_ir.code, 1, Core.Argument(arg_n), T, missing)
+end
+
 """dart visitConstructorInvocation shape (march4): emits the struct construction
 INTO the caller's builder and returns it — THE implementation."""
 function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
@@ -1077,13 +1207,16 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     end
 
     # WasmGC fields are always physically initialized, while Julia `%new` may leave
-    # fields undefined. Until definedness is represented explicitly, accepting that
-    # shape would fabricate observable null/zero values.
+    # fields undefined. Primitive defaults are legal only under a closed-world
+    # definite-initialization proof that makes the physical bits unobservable.
     struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
     if struct_type_def isa StructType
         n_provided = length(field_values)
         n_required = length(struct_type_def.fields)
         n_wasm_provided = n_provided + Int(info.field_offset)
+        missing_julia = Set((n_provided + 1):fieldcount(struct_type))
+        primitive_init_proven = isempty(missing_julia) ||
+            _partial_new_is_definitely_initialized(idx, struct_type, missing_julia, ctx)
         for fi in (n_wasm_provided + 1):n_required
             missing_type = struct_type_def.fields[fi].valtype
             if missing_type isa ConcreteRef
@@ -1093,6 +1226,14 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                 # Null is the explicit Wasm representation of Julia's undefined
                 # reference slot; isdefined/getfield already interpret that sentinel.
                 ref_null!(b, missing_type)
+            elseif primitive_init_proven && missing_type === I32
+                i32_const!(b, 0)
+            elseif primitive_init_proven && missing_type === I64
+                i64_const!(b, 0)
+            elseif primitive_init_proven && missing_type === F32
+                f32_const!(b, 0.0)
+            elseif primitive_init_proven && missing_type === F64
+                f64_const!(b, 0.0)
             else
                 record_unsupported!(ctx, :value_stub,
                     "struct construction leaves a non-reference Julia field undefined " *

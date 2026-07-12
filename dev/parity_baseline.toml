@@ -76,6 +76,7 @@ L75_globalref_absence_is_explicit = 0
 L76_no_silent_invoke_or_io_substitution = 0
 L77_call_reflection_is_structural = 0
 L78_closed_world_reaches_a_real_fixpoint = 0
+L79_partial_new_requires_definite_initialization = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0
