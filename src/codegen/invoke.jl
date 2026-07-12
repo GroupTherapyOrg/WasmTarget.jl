@@ -1533,11 +1533,8 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 elseif elem_type === Bool
                     call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                 else
-                    # Unsupported element type — just write "?"
-                    drop!(b)
-                    emit_value!(b, "?", ctx, _pr_str_arr)
-                    emit_jl_string_to_js!(b, io.decode_idx)
-                    call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
+                    record_unsupported!(ctx, :unsupported_type,
+                        "println/print has no IO bridge representation for Vector{$elem_type}")
                 end
 
                 # i += 1
@@ -1602,10 +1599,8 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                         elseif et === Bool
                             call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
                         else
-                            drop!(b)
-                            emit_value!(b, "?", ctx, _pr_str_arr)
-                            emit_jl_string_to_js!(b, io.decode_idx)
-                            call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
+                            record_unsupported!(ctx, :unsupported_type,
+                                "println/print has no IO bridge representation for tuple field $et")
                         end
                     end
 
@@ -1621,11 +1616,12 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                     emit_jl_string_to_js!(b, io.decode_idx)
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
-                    @debug "println/print: unsupported Tuple type $arg_type, skipping"
+                    record_unsupported!(ctx, :unsupported_type,
+                        "println/print cannot register tuple representation $arg_type")
                 end
             else
-                # Unknown type — skip (stub)
-                @debug "println/print: unsupported argument type $arg_type, skipping"
+                record_unsupported!(ctx, :unsupported_type,
+                    "println/print has no IO bridge representation for argument type $arg_type")
             end
         end
         if name === :println
@@ -1633,8 +1629,8 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
         end
         return b
     else
-        # No IO imports — stub as no-op (empty builder)
-        return _ctx_builder(ctx, "_compile_invoke_print")
+        record_unsupported!(ctx, :unsupported_method,
+            "println/print requires an explicitly configured IO bridge")
     end
 end
 
@@ -1675,6 +1671,10 @@ end
 
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext) =
     arg isa Type ? Core.Typeof(arg) : infer_value_type(arg, ctx)
+
+"""Return the unique singleton represented by `T`, or `nothing` when none exists."""
+_invoke_singleton_instance(@nospecialize(T)) =
+    T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
 """
 Compile an invoke expression (method invocation) — dart visitor shape (march4):
@@ -1792,16 +1792,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             if pi_ssa_stmt isa GlobalRef
                 actual_func_ref_early = pi_ssa_stmt
             end
-        elseif ssa_stmt isa Expr && ssa_stmt.head === :invoke
-            # Nested invoke — try to get the function from the method instance
-            nested_mi = ssa_stmt.args[1]
-            if nested_mi isa Core.MethodInstance
-                # Can't easily get GlobalRef from MI, but we can try to use the function name
-                if hasfield(typeof(nested_mi.def), :name) && nested_mi.def isa Method
-                    # Create a synthetic GlobalRef for lookup
-                    # This is a workaround; the proper way would be to use mi directly
-                end
-            end
         end
     elseif func_ref_early isa Core.PiNode && func_ref_early.val isa GlobalRef
         actual_func_ref_early = func_ref_early.val
@@ -1816,17 +1806,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             spec = mi.specTypes
             if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
                 func_type = spec.parameters[1]
-                if func_type isa DataType
-                    try
-                        actual_func_ref_early = func_type.instance
-                    catch; end
-                end
+                singleton = _invoke_singleton_instance(func_type)
+                singleton === nothing || (actual_func_ref_early = singleton)
             end
         end
     end
     is_self_call_early = false
-    if ctx.func_ref !== nothing && actual_func_ref_early isa GlobalRef
-        try
+    if ctx.func_ref !== nothing && actual_func_ref_early isa GlobalRef &&
+       isdefined(actual_func_ref_early.mod, actual_func_ref_early.name)
             called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
             if called_func === ctx.func_ref
                 # PURE-220: Also check arity — overloaded methods share the same function
@@ -1852,9 +1839,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     is_self_call_early = true
                 end
             end
-        catch
-            is_self_call_early = false
-        end
     end
 
     # Get parameter types - for self-calls, use ctx.arg_types (the function's compiled signature)
@@ -2039,7 +2023,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # lpad/rpad bodies (now trim-compiled). Char is UTF-8 left-packed
                 # in UInt32 (' ' = 0x20000000): byte = char >> 24, then a
                 # byte-filled array.new (same single-byte assumption as str_lpad).
-                local _rep_at = try infer_value_type(args[1], ctx) catch; nothing end
+                local _rep_at = infer_value_type(args[1], ctx)
                 if _rep_at === Char
                     br = _ctx_builder(ctx, "compile_invoke")
                     str_t = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -2138,7 +2122,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # discovery skipped such functions entirely, so this never fired before).
             # Push ref.null of the param's wasm type to keep the call aligned.
             if isempty(_ab.instrs) && param_types !== nothing && arg_idx <= length(param_types)
-                local _sp_jt = try infer_value_type(arg, ctx) catch; nothing end
+                local _sp_jt = infer_value_type(arg, ctx)
                 if _sp_jt isa DataType && Base.issingletontype(_sp_jt)
                     local _sp_pt = param_types[arg_idx]
                     local _sp_w = get_concrete_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
@@ -2229,19 +2213,16 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
                         func_type = spec.parameters[1]
-                        if func_type isa DataType
-                            try
-                                actual_func_ref = func_type.instance
-                            catch; end
-                        end
+                        singleton = _invoke_singleton_instance(func_type)
+                        singleton === nothing || (actual_func_ref = singleton)
                     end
                 end
             end
 
             is_self_call = false
-            if ctx.func_ref !== nothing && actual_func_ref isa GlobalRef
+            if ctx.func_ref !== nothing && actual_func_ref isa GlobalRef &&
+               isdefined(actual_func_ref.mod, actual_func_ref.name)
                 # Check if this GlobalRef refers to the same function
-                try
                     called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
                     if called_func === ctx.func_ref
                         # PURE-220/047: Check arity AND types for overloaded methods
@@ -2260,9 +2241,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             is_self_call = true
                         end
                     end
-                catch
-                    is_self_call = false
-                end
             elseif ctx.func_ref !== nothing && actual_func_ref isa Function
                 # PURE-209a: Function object direct comparison
                 if actual_func_ref === ctx.func_ref
@@ -2311,11 +2289,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
                         func_type = spec.parameters[1]
-                        if func_type isa DataType
-                            try
-                                called_func = func_type.instance
-                            catch; end
-                        end
+                        called_func = _invoke_singleton_instance(func_type)
                     end
                 end
 
@@ -3093,13 +3067,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     bis1 = _ctx_builder(ctx, "compile_invoke")
 
                     int_to_string_info = nothing
-                    if ctx.func_registry !== nothing
-                        try
-                            int_to_string_func = getfield(WasmTarget, :int_to_string)
-                            int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
-                        catch
-                            # Function not found
-                        end
+                    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
+                        int_to_string_func = getfield(WasmTarget, :int_to_string)
+                        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
                     end
 
                     if int_to_string_info !== nothing

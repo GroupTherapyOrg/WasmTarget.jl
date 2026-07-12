@@ -269,6 +269,19 @@ const LOCKS = [
                         "isdefined(func.mod, func.name)"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
         end),
+    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; unsupported IO cannot disappear or fabricate question-mark output",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            forbidden = ["func_type.instance\n                    catch", "try infer_value_type",
+                         "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
+                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup"]
+            required = ["function _compile_invoke_print_b", "_invoke_singleton_instance",
+                        "Base.issingletontype(T)",
+                        "println/print requires an explicitly configured IO bridge",
+                        "println/print has no IO bridge representation"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, invoke_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
