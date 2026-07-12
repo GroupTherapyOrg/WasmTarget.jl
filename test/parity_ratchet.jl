@@ -184,6 +184,23 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L69_one_vector_mutation_path" => ("push!, pop!, and resize! compile their collected pure-Julia overlays; name-routed mutation emitters and capacity assumptions are extinct",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            runtime_src = read(joinpath(SRC, "runtime", "arrayops.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
+                         "is_func(func, :resize!)", "assume capacity is sufficient",
+                         "function _resize!"]
+            required = ["function Base.push!(v::Vector{T}, x)",
+                        "function Base.pop!(v::Vector{T})",
+                        "function Base.resize!(v::Vector{T}, n::Integer)",
+                        "_wt_vector_mutation_semantics"]
+            all_src = calls_src * interp_src * runtime_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

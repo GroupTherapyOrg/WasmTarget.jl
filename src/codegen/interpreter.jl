@@ -1206,6 +1206,21 @@ end
     return v
 end
 
+@overlay WASM_METHOD_TABLE function Base.resize!(v::Vector{T}, n::Integer) where T
+    newlen = Int(n)
+    oldlen = length(v)
+    new_v = similar(v, newlen)
+    limit = min(oldlen, newlen)
+    i = 1
+    while i <= limit
+        new_v[i] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
 @overlay WASM_METHOD_TABLE function Base.pop!(v::Vector{T}) where T
     n = length(v)
     val = v[n]
