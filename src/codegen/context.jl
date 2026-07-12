@@ -1318,23 +1318,20 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 end
             end
 
-            # PURE-9063: typeof(x) now returns a DataType struct ref (if type lookup exists).
-            # Override the SSA type so the local is allocated as the correct WasmGC ref type.
+            # typeof(x) always returns the canonical DataType representation.
+            # The lookup table is created before any function body is emitted.
             if stmt isa Expr && stmt.head === :call
                 func = stmt.args[1]
                 _is_typeof_call = (func isa GlobalRef &&
                     (func.name === :typeof)) ||
                     (func isa Function && func === typeof)
                 if _is_typeof_call
-                    if ctx.type_registry.type_lookup_global !== nothing && haskey(ctx.type_registry.structs, DataType)
-                        # PURE-9063: typeof returns DataType struct ref
-                        ssa_type = DataType
-                        ctx.ssa_types[ssa_id] = DataType
-                    else
-                        # Fallback: i32 typeId
-                        ssa_type = Int32
-                        ctx.ssa_types[ssa_id] = Int32
-                    end
+                    ctx.type_registry.type_lookup_global === nothing &&
+                        error("typeof lowering requires the canonical type lookup table")
+                    haskey(ctx.type_registry.structs, DataType) ||
+                        error("typeof lowering requires the canonical DataType representation")
+                    ssa_type = DataType
+                    ctx.ssa_types[ssa_id] = DataType
                 end
             end
 

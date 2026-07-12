@@ -3961,57 +3961,28 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # PURE-9063: typeof(x) — returns a $JlDataType struct ref from the type lookup table
-    # If the type lookup table exists, returns (ref null $DataType) for full type object support.
-    # Falls back to i32 typeId if no lookup table.
+    # typeof(x) returns the one $JlDataType representation.  The closed-world
+    # planner materializes both the lookup table and every reachable static type
+    # global before function bodies are emitted.
     if is_func(func, :typeof) && length(args) >= 1
         arg = args[1]
         arg_type = infer_value_type(arg, ctx)
-        has_lookup = ctx.type_registry.type_lookup_global !== nothing
+        ctx.type_registry.type_lookup_global === nothing &&
+            error("typeof lowering requires the canonical type lookup table")
+        base_idx = ctx.type_registry.base_struct_idx
+        base_idx === nothing && error("typeof lowering requires the canonical object base")
 
         local _tofb = _ctx_builder(ctx, "compile_call")
-        if has_lookup
-            # PURE-9063: Return DataType struct ref from lookup table
-            if arg_type !== nothing && isconcretetype(arg_type)
-                # Statically known type — directly return its DataType global
-                if haskey(ctx.type_registry.type_constant_globals, arg_type)
-                    dt_global = ctx.type_registry.type_constant_globals[arg_type]
-                    global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-                else
-                    # Type not in globals — return null ref
-                    dt_type_idx = get_datatype_type_idx(ctx.type_registry)
-                    ref_null!(_tofb, Int64(dt_type_idx), ConcreteRef(UInt32(dt_type_idx), true))
-                end
-            else
-                # Polymorphic value — extract typeId, look up in type table
-                actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
-                actual_type === ExternRef && any_convert_extern!(_tofb)
-                base_idx = ctx.type_registry.base_struct_idx
-                if base_idx !== nothing
-                    # Need a scratch local for the typeId. Use a convention:
-                    # allocate one if needed, stored in ctx.
-                    temp_local = _ensure_typeof_scratch_local!(ctx)
-                    emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
-                else
-                    dt_type_idx = get_datatype_type_idx(ctx.type_registry)
-                    ref_null!(_tofb, Int64(dt_type_idx), ConcreteRef(UInt32(dt_type_idx), true))
-                end
-            end
+        if arg_type !== nothing && isconcretetype(arg_type)
+            haskey(ctx.type_registry.type_constant_globals, arg_type) ||
+                error("closed-world typeof is missing the static type global for $arg_type")
+            dt_global = ctx.type_registry.type_constant_globals[arg_type]
+            global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
         else
-            # Fallback: return i32 typeId (pre-PURE-9063 behavior)
-            if arg_type !== nothing && isconcretetype(arg_type)
-                type_id = get_type_id(ctx.type_registry, arg_type)
-                i32_const!(_tofb, Int64(type_id))
-            else
-                actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: fallback typeof consumes the actual representation
-                actual_type === ExternRef && any_convert_extern!(_tofb)
-                base_idx = ctx.type_registry.base_struct_idx
-                if base_idx !== nothing
-                    emit_typeof!(_tofb, base_idx)
-                else
-                    i32_const!(_tofb, 0)
-                end
-            end
+            actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
+            actual_type === ExternRef && any_convert_extern!(_tofb)
+            temp_local = _ensure_typeof_scratch_local!(ctx)
+            emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
         end
         append_builder!(fb, _tofb)
         return append_builder!(b, fb)
@@ -4107,47 +4078,25 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
         arg1_is_type_const = _resolve_type_const(args[1], ctx)
         arg2_is_type_const = _resolve_type_const(args[2], ctx)
-        has_lookup = ctx.type_registry.type_lookup_global !== nothing
-
         if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
            (arg2_is_typeof && arg1_is_type_const !== nothing)
+            ctx.type_registry.type_lookup_global === nothing &&
+                error("typeof identity comparison requires the canonical type lookup table")
             local _toeqb = _ctx_builder(ctx, "compile_call")
-            if has_lookup
-                # PURE-9063: Both sides become DataType struct refs, compared with ref.eq
-                if arg1_is_typeof
-                    emit_value!(_toeqb, args[1], ctx)  # R17-floor: dynamic egal classifies the actual operand
-                    # Push the DataType global for the type constant
-                    if haskey(ctx.type_registry.type_constant_globals, arg2_is_type_const)
-                        dt_global = ctx.type_registry.type_constant_globals[arg2_is_type_const]
-                        global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-                    else
-                        dt_type_idx = get_datatype_type_idx(ctx.type_registry)
-                        ref_null!(_toeqb, Int64(dt_type_idx), ConcreteRef(UInt32(dt_type_idx), true))
-                    end
-                else
-                    emit_value!(_toeqb, args[2], ctx)  # R17-floor: dynamic egal classifies the actual operand
-                    if haskey(ctx.type_registry.type_constant_globals, arg1_is_type_const)
-                        dt_global = ctx.type_registry.type_constant_globals[arg1_is_type_const]
-                        global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-                    else
-                        dt_type_idx = get_datatype_type_idx(ctx.type_registry)
-                        ref_null!(_toeqb, Int64(dt_type_idx), ConcreteRef(UInt32(dt_type_idx), true))
-                    end
-                end
-                num!(_toeqb, Opcode.REF_EQ)
+            if arg1_is_typeof
+                emit_value!(_toeqb, args[1], ctx)  # R17-floor: dynamic egal classifies the actual operand
+                haskey(ctx.type_registry.type_constant_globals, arg2_is_type_const) ||
+                    error("closed-world typeof identity is missing the type global for $arg2_is_type_const")
+                dt_global = ctx.type_registry.type_constant_globals[arg2_is_type_const]
+                global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
             else
-                # Fallback: i32 typeId comparison (pre-PURE-9063)
-                if arg1_is_typeof
-                    emit_value!(_toeqb, args[1], ctx)  # R17-floor: dynamic egal preserves operand representation
-                    type_id = get_type_id(ctx.type_registry, arg2_is_type_const)
-                    i32_const!(_toeqb, Int64(type_id))
-                else
-                    emit_value!(_toeqb, args[2], ctx)  # R17-floor: dynamic egal preserves operand representation
-                    type_id = get_type_id(ctx.type_registry, arg1_is_type_const)
-                    i32_const!(_toeqb, Int64(type_id))
-                end
-                num!(_toeqb, Opcode.I32_EQ)
+                emit_value!(_toeqb, args[2], ctx)  # R17-floor: dynamic egal classifies the actual operand
+                haskey(ctx.type_registry.type_constant_globals, arg1_is_type_const) ||
+                    error("closed-world typeof identity is missing the type global for $arg1_is_type_const")
+                dt_global = ctx.type_registry.type_constant_globals[arg1_is_type_const]
+                global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
             end
+            num!(_toeqb, Opcode.REF_EQ)
             if is_func(func, :(!==))
                 num!(_toeqb, Opcode.I32_EQZ)
             end

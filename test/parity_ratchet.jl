@@ -164,14 +164,19 @@ const LOCKS = [
     "L68_one_runtime_type_representation" => ("type constants, TypeNames, population, and lookup tables use only the canonical JlType hierarchy; the raw Julia DataType fallback is extinct",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
             forbidden = ["_populate_legacy_types!", "Legacy path: Populate Julia DataType",
-                         "else fall back to Julia DataType", "else Julia DataType struct"]
+                         "else fall back to Julia DataType", "else Julia DataType struct",
+                         "Fallback: return i32 typeId", "Type not in globals — return null ref",
+                         "Fallback: i32 typeId"]
             required = ["type constants require the canonical JlType hierarchy",
                         "TypeName constants require the canonical JlType hierarchy",
                         "type constant population requires the canonical JlType hierarchy",
                         "type lookup table requires the canonical JlType hierarchy"]
-            count(p -> occursin(p, types_src), forbidden) +
-                count(p -> !occursin(p, types_src), required)
+            all_src = types_src * calls_src * context_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
