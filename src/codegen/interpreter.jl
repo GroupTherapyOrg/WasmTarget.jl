@@ -1417,16 +1417,30 @@ end
 end
 
 # ─── unsigned Overlay ─────────────────────────────────────────────────────
-# Why: Base.unsigned(::Int64) produces 387 IR stmts with foreigncall(:jl_get_field_offset),
+# Why: Base.unsigned(::Signed) can enter reinterpret infrastructure containing
+#      foreigncall(:jl_get_field_offset),
 #      foreigncall(:memcpy), foreigncall(:jl_value_ptr), etc. — complex reinterpret infrastructure.
-#      The actual operation is a single bitcast (no-op in WASM since Int64/UInt64 are both i64).
-# Remove when: codegen handles reinterpret(UInt64, ::Int64) natively
+#      The actual operation is a same-width bitcast (a no-op for scalar Wasm
+#      integers; WT's two-i64 Int128 representation preserves the same bits).
+# Remove when: codegen handles same-width signed→unsigned reinterpret natively
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int8)
+    return Core.bitcast(UInt8, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int16)
+    return Core.bitcast(UInt16, x)
+end
+
 @overlay WASM_METHOD_TABLE function Base.unsigned(x::Int64)
     return Core.bitcast(UInt64, x)
 end
 
 @overlay WASM_METHOD_TABLE function Base.unsigned(x::Int32)
     return Core.bitcast(UInt32, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int128)
+    return Core.bitcast(UInt128, x)
 end
 
 # ─── copy(Vector) Overlay ─────────────────────────────────────────────────
