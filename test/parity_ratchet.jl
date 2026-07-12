@@ -147,6 +147,18 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src), forbidden) +
                 count(p -> !occursin(p, invoke_src), required)
         end),
+    "L67_one_exception_and_block_owner" => ("the stackifier alone owns block and try-region structure; no dead block-emission adapter or statement-level EnterNode implementation may coexist",
+        () -> begin
+            api_src = read(joinpath(SRC, "WasmTarget.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["codegen/conditionals.jl", "generate_block_code!",
+                         "For now, we just skip this - full implementation requires try_table"]
+            required = ["THE stackifier owns the", "try_open_at", "try_table!(b"]
+            all_src = api_src * stmt_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

@@ -430,10 +430,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # (WASM locals are default-initialized to null/zero)
 
     elseif stmt isa Core.EnterNode
-        # Exception handling: Enter try block
-        # For now, we just skip this - full implementation requires try_table
-        # The catch destination is in stmt.catch_dest
-        # TODO: Implement full try/catch with try_table instruction
+        # Deliberately emits no instruction here.  THE stackifier owns the
+        # control boundary: after this block it opens the typed try_table and
+        # catch landing for this EnterNode (stackified.jl: try_open_at).  Keeping
+        # region structure out of the scalar statement visitor gives exceptions
+        # one lowering route, mirroring dart2wasm's visitTryCatch ownership.
 
     elseif stmt isa GlobalRef
         # MIGRATED: straight-line global.get/local.set via typed methods on `b`; the
