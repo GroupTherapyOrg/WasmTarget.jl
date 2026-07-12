@@ -74,6 +74,7 @@ L73_capture_analysis_never_silently_disables = 0
 L74_builder_owns_statement_arity = 0
 L75_globalref_absence_is_explicit = 0
 L76_no_silent_invoke_or_io_substitution = 0
+L77_call_reflection_is_structural = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0

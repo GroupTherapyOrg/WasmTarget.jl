@@ -2807,7 +2807,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     # Dynamic tuple indexing - only supported for homogeneous tuples (NTuple)
                     # Check if all elements have the same type
                     # PURE-605: Guard against types without definite field count (e.g., Vararg tuples)
-                    elem_types = try fieldtypes(obj_type) catch; () end
+                    elem_types = obj_type isa DataType && isconcretetype(obj_type) ?
+                        fieldtypes(obj_type) : ()
                     if length(elem_types) > 0 && all(t -> t === elem_types[1], elem_types)
                         # Homogeneous tuple - we can treat it as an array
                         elem_type = elem_types[1]
@@ -4411,7 +4412,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     _skip_arg_prepush = is_expr_call
     if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
             !is_numeric_intrinsic && !is_equality_comparison
-        _called_func = try getfield(func.mod, func.name) catch; nothing end
+        _called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
         if _called_func !== nothing
             _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
             _target = get_function(ctx.func_registry, _called_func, _call_arg_types)
@@ -4438,14 +4439,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if arg isa Type
             # Directly a Type value (Julia already resolved it)
             is_type_arg = true
-        elseif arg isa GlobalRef
-            try
-                resolved = getfield(arg.mod, arg.name)
-                if resolved isa Type
-                    is_type_arg = true
-                end
-            catch
-            end
+        elseif arg isa GlobalRef && isdefined(arg.mod, arg.name)
+            is_type_arg = getfield(arg.mod, arg.name) isa Type
         end
         # Skip Type args for intrinsics (e.g., sext_int(Int64, x))
         # but NOT for equality comparisons (e.g., x === SomeType)
@@ -4813,13 +4808,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 Int128
             elseif target_type_ref.name === :UInt128
                 UInt128
+            elseif isdefined(target_type_ref.mod, target_type_ref.name)
+                getfield(target_type_ref.mod, target_type_ref.name)
             else
-                # Try to evaluate the GlobalRef
-                try
-                    getfield(target_type_ref.mod, target_type_ref.name)
-                catch
-                    Any
-                end
+                record_unsupported!(ctx, :unsupported_type,
+                    "reinterpret target GlobalRef is not defined"; idx=idx, detail=target_type_ref)
             end
         elseif target_type_ref isa DataType
             target_type_ref
@@ -5259,15 +5252,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # sext_int(TargetType, value) - first arg is target type
         target_type_ref = args[1]
         # Extract actual type from GlobalRef if needed
-        target_type = if target_type_ref isa GlobalRef
-            try
-                getfield(target_type_ref.mod, target_type_ref.name)
-            catch
-                target_type_ref
-            end
-        else
-            target_type_ref
-        end
+        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
+            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
+        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
+            "sext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
         local _sxb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the operand
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
@@ -5335,15 +5323,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # zext_int(TargetType, value) - first arg is target type
         target_type_ref = args[1]
         # Extract actual type from GlobalRef if needed
-        target_type = if target_type_ref isa GlobalRef
-            try
-                getfield(target_type_ref.mod, target_type_ref.name)
-            catch
-                target_type_ref
-            end
-        else
-            target_type_ref
-        end
+        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
+            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
+        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
+            "zext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
         # P3 gap da22976c7cd6: sub-32-bit values live in i32 locals that can
         # carry dirty high bits (e.g. `0x01 + 0xff` leaves 0x100 — add_int does
         # not re-narrow). zext_int takes the BITS of the source width, so mask
@@ -5408,15 +5391,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     elseif is_func(func, :trunc_int)  # Truncate to smaller type
         # trunc_int(TargetType, value)
         target_type_ref = args[1]
-        target_type = if target_type_ref isa GlobalRef
-            try
-                getfield(target_type_ref.mod, target_type_ref.name)
-            catch
-                target_type_ref
-            end
-        else
-            target_type_ref
-        end
+        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
+            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
+        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
+            "trunc_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
 
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
@@ -5729,7 +5707,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         target_is_vect = (target_func isa GlobalRef && target_func.name === :vect && target_func.mod === Base)
         target_is_typed_vect = (target_func isa GlobalRef && target_func.name === :getindex && target_func.mod === Base)
         target_value = target_func isa GlobalRef ?
-            (try getfield(target_func.mod, target_func.name) catch; nothing end) : target_func
+            (isdefined(target_func.mod, target_func.name) ? getfield(target_func.mod, target_func.name) : nothing) : target_func
         target_is_compose = target_value === (∘)
         prefix_values = length(args) == 4 ? _apply_iterate_svec_values(args[3], ctx) : nothing
         tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
@@ -5902,7 +5880,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
             local _gfc_fld = args[2] isa QuoteNode ? args[2].value : args[2]
             if _gfc_fld isa Symbol
-                local _gfc_val = try getfield(args[1].value, _gfc_fld) catch; nothing end
+                local _gfc_val = isdefined(args[1].value, _gfc_fld) ?
+                    getfield(args[1].value, _gfc_fld) : nothing
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
                     emit_value!(fb, _gfc_val, ctx, static_wasm_type(_gfc_val, ctx))
@@ -5915,7 +5894,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if !_gfc_done && func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
             local _gfc_fld2 = args[2] isa QuoteNode ? args[2].value : args[2]
             if _gfc_fld2 isa Symbol
-                local _gfc_v2 = try getfield(args[1].value, _gfc_fld2) catch; nothing end
+                local _gfc_v2 = isdefined(args[1].value, _gfc_fld2) ?
+                    getfield(args[1].value, _gfc_fld2) : nothing
                 if _gfc_v2 isa Core.SimpleVector
                     _emit_svec_values!(fb, collect(_gfc_v2), ctx)
                     _gfc_done = true
@@ -6906,11 +6886,11 @@ function _try_host_svec(arg, ctx::AbstractCompilationContext)
         nm = a1 isa GlobalRef ? a1.name : a1 isa Function ? nameof(a1) : nothing
         rest = st.head === :invoke ? st.args[3:end] : st.args[2:end]
         if nm === :padding && length(rest) == 2 && rest[1] isa Type && rest[2] isa Integer
-            return try Base.padding(rest[1], Int(rest[2])) catch; nothing end
+            return Base.padding(rest[1], Int(rest[2]))
         elseif nm === :getfield && length(rest) >= 2 && rest[1] isa QuoteNode
             fld = rest[2] isa QuoteNode ? rest[2].value : rest[2]
             if fld isa Symbol
-                v = try getfield(rest[1].value, fld) catch; nothing end
+                v = isdefined(rest[1].value, fld) ? getfield(rest[1].value, fld) : nothing
                 v isa Core.SimpleVector && return v
             end
         end
@@ -6936,7 +6916,8 @@ function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
             end
             fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
             (dt isa DataType && fld === :layout) || return nothing
-            lay = try getfield(dt, :layout) catch; return nothing end
+            isdefined(dt, :layout) || return nothing
+            lay = getfield(dt, :layout)
             lay == C_NULL && return nothing
             return unsafe_load(convert(Ptr{Base.DataTypeLayout}, lay))
         else

@@ -282,6 +282,20 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src), forbidden) +
                 count(p -> !occursin(p, invoke_src), required)
         end),
+    "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            forbidden = ["try getfield(func.mod, func.name) catch", "try infer_value_type",
+                         "try fieldtypes(obj_type) catch", "return try Base.padding",
+                         "try getfield(target_type_ref.mod", "try getfield(args[1].value"]
+            required = ["isdefined(func.mod, func.name)",
+                        "obj_type isa DataType && isconcretetype(obj_type)",
+                        "sext_int target is not a defined Julia type",
+                        "zext_int target is not a defined Julia type",
+                        "trunc_int target is not a defined Julia type"]
+            count(p -> occursin(p, calls_src), forbidden) +
+                count(p -> !occursin(p, calls_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
