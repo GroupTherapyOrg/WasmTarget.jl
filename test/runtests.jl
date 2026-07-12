@@ -60,7 +60,10 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
             lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
             if p.exitcode != 0
                 println("════ shard $i FAILED (exit $(p.exitcode)) ════")
-                println(join(last(lines, 35), '\n'))
+                # Preserve the actual exception/test failure, not only the tail
+                # of a large nested summary. Julia 1.13 failures routinely emit
+                # >35 lines of stacktrace before the shard footer.
+                println(join(last(lines, 200), '\n'))
             else
                 for ln in lines
                     occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln))
@@ -98,7 +101,7 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
         flines = isfile(flf) ? split(read(flf, String), '\n') : String[]
         if fp.exitcode != 0
             println("════ fuzz FAILED (exit $(fp.exitcode)) ════")
-            println(join(last(flines, 45), '\n'))
+            println(join(last(flines, 200), '\n'))
         else
             for ln in flines; occursin("Differential fuzz", ln) && println("  ", strip(ln)); end
         end
