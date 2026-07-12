@@ -1844,22 +1844,6 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
             ref_cast!(cb, Int64(to.type_idx), true)
         end
     end
-    push_default! = (cb, to) -> begin
-        if to isa ConcreteRef
-            ref_null!(cb, Int64(to.type_idx), ConcreteRef(UInt32(to.type_idx), true))
-        elseif to === AnyRef || to === StructRef || to === ArrayRef || to === ExternRef || to === EqRef
-            ref_null!(cb, to)
-        elseif to === I64
-            i64_const!(cb, 0)
-        elseif to === F64
-            f64_const!(cb, 0.0)
-        elseif to === F32
-            f32_const!(cb, 0.0f0)
-        else
-            i32_const!(cb, 0)
-        end
-    end
-
     bld = _ctx_builder(ctx, "_try_inline_typeid_dispatch")
     # Compile every arg into a local (reused across branches).
     arg_locals = Int[]
@@ -1896,7 +1880,8 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         if result_wasm === nothing
             rw !== nothing && drop!(eb)
         elseif rw === nothing
-            push_default!(eb, result_wasm)
+            rj === Union{} || error("value-producing dynamic dispatch selected a void target")
+            unreachable!(eb)  # structural trap: a bottom target never reaches the value merge
         else
             coerce!(eb, rw, result_wasm)
         end
@@ -5945,7 +5930,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _throw_T = typeof(_throw_raw)
                 local _throw_has_undef = any(!isdefined(_throw_raw, fn) for fn in fieldnames(_throw_T))
                 if _throw_has_undef
-                    record_unsupported!(ctx, :unsupported_value,
+                    record_unsupported!(ctx, :value_stub,
                         "constant exception contains undefined fields";
                         idx=idx, detail=_throw_T)
                     unreachable!(_thrb)  # structural trap after recorded unsupported

@@ -1075,38 +1075,31 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         end
     end
 
-    # If field_values provides fewer values than the struct's actual Wasm field count,
-    # emit default values for the missing fields. This happens when Julia's :new expression
-    # constructs a struct with uninitialized fields (e.g., RefValue{NTuple{50, UInt8}}).
+    # WasmGC fields are always physically initialized, while Julia `%new` may leave
+    # fields undefined. Until definedness is represented explicitly, accepting that
+    # shape would fabricate observable null/zero values.
     struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
     if struct_type_def isa StructType
         n_provided = length(field_values)
         n_required = length(struct_type_def.fields)
-        # PURE-9024: n_provided counts Julia fields. typeId (field 0) was already pushed above.
-        # Missing Wasm fields start after typeId offset + provided Julia fields.
         n_wasm_provided = n_provided + Int(info.field_offset)
         for fi in (n_wasm_provided + 1):n_required
-            missing_field_type = struct_type_def.fields[fi].valtype
-            if missing_field_type isa ConcreteRef
-                ref_null!(b, Int64(missing_field_type.type_idx), ConcreteRef(UInt32(missing_field_type.type_idx), true))
-            elseif missing_field_type === StructRef
-                ref_null!(b, StructRef)
-            elseif missing_field_type === ArrayRef
-                ref_null!(b, ArrayRef)
-            elseif missing_field_type === ExternRef
-                ref_null!(b, ExternRef)
-            elseif missing_field_type === AnyRef
-                ref_null!(b, AnyRef)
-            elseif missing_field_type === I64
-                i64_const!(b, 0)
-            elseif missing_field_type === I32
-                i32_const!(b, 0)
-            elseif missing_field_type === F64
-                f64_const!(b, 0.0)
-            elseif missing_field_type === F32
-                f32_const!(b, 0.0f0)
+            missing_type = struct_type_def.fields[fi].valtype
+            if missing_type isa ConcreteRef
+                ref_null!(b, Int64(missing_type.type_idx), missing_type)
+            elseif missing_type === StructRef || missing_type === ArrayRef ||
+                   missing_type === ExternRef || missing_type === AnyRef || missing_type === EqRef
+                # Null is the explicit Wasm representation of Julia's undefined
+                # reference slot; isdefined/getfield already interpret that sentinel.
+                ref_null!(b, missing_type)
             else
-                i32_const!(b, 0)
+                record_unsupported!(ctx, :value_stub,
+                    "struct construction leaves a non-reference Julia field undefined " *
+                    "($struct_type: field=$fi, physical=$missing_type)";
+                    idx=idx, detail=expr)
+                unreachable!(b)  # structural trap after recorded unsupported
+                ctx.last_stmt_was_stub = true
+                return b
             end
         end
     end
@@ -1201,7 +1194,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # so we refuse it (foreigncall args: [name,rt,argtypes,nreq,cc, ptr, value, size]).
             if length(expr.args) >= 7 && (expr.args[7] isa Number) && !iszero(expr.args[7])
                 record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
-                unreachable!(b)  # non-strict path: trap rather than mis-fill
+                unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
             end
@@ -1274,7 +1267,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 return b
             end
             record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
-            unreachable!(b)  # non-strict path: trap rather than return a fake hash
+            unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b
         elseif name === :jl_string_to_genericmemory

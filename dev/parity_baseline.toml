@@ -60,13 +60,14 @@ L5_no_tagged_union = 0
 L60_no_fabricated_exception_payloads = 0
 L61_one_pure_interpolation_path = 0
 L62_exact_primitive_reinterpret_layout = 0
+L63_no_control_or_allocation_defaults = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 477
+R11_patch_markers = 475
 R12_try_drivers = 0
 R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 11

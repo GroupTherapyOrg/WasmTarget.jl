@@ -135,6 +135,22 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["push_default! =", "drop!(b); i32_const!(b, 0)",
+                         "emit default values for the missing fields"]
+            required = ["value-producing dynamic dispatch selected a void target",
+                        "Bool condition has a non-boolean reference representation",
+                        "struct construction leaves a non-reference Julia field undefined",
+                        "_wt_make_undefined_field"]
+            count(p -> occursin(p, calls_src) || occursin(p, values_src) || occursin(p, stmts_src), forbidden) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, values_src) ||
+                             occursin(p, stmts_src) || occursin(p, test_src)), required)
+        end),
     "L62_exact_primitive_reinterpret_layout" => ("primitive ReinterpretArray construction folds exact bits/padding predicates, preserves runtime dimension errors, and bottom helpers never acquire a result representation",
         () -> begin
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)

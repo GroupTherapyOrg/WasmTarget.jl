@@ -815,21 +815,8 @@ function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilati
                     # Value is anyref/externref but should be i32 (Bool). Unbox via the one consumer.
                     local_type === ExternRef && any_convert_extern!(b)
                     emit_classid_unbox!(b, ctx, I32; nullable=true)
-                elseif local_type isa ConcreteRef
-                    # PURE-6025: tagged-union concrete ref → extract i32 tag from field 1.
-                    type_idx = local_type.type_idx
-                    if type_idx + 1 <= length(ctx.mod.types)
-                        mod_type = ctx.mod.types[type_idx + 1]
-                        if mod_type isa StructType && length(mod_type.fields) >= 3 && mod_type.fields[2].valtype === I32
-                            struct_get!(b, type_idx, 1, I32)  # field 1 (tag, after typeId at 0)
-                        else
-                            drop!(b); i32_const!(b, 0)        # not a tagged union — default
-                        end
-                    else
-                        drop!(b); i32_const!(b, 0)            # unknown type — default
-                    end
-                elseif local_type === StructRef || local_type === ArrayRef
-                    drop!(b); i32_const!(b, 0)                # abstract ref — default
+                elseif local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef
+                    error("Bool condition has a non-boolean reference representation: $local_type")
                 end
             end
         end
