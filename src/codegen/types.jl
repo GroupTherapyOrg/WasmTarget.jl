@@ -1462,9 +1462,8 @@ Each unique Julia Type (e.g., Int64, String, Number) gets a unique Wasm global
 holding a struct instance. This ensures that `ref.eq` correctly
 distinguishes different Type objects at runtime.
 
-When the JlType hierarchy is available (PURE-9063), globals use \$JlDataType
-struct type (kind, name, super, parameters, hash, abstract, dfs_low, dfs_high).
-Otherwise falls back to Julia's DataType struct type for backward compatibility.
+Globals use the one \$JlDataType representation established by
+`create_jl_type_hierarchy!` before closed-world type collection.
 """
 function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(type_val::Type))::UInt32
     # Return cached global if this Type was already seen
@@ -1472,13 +1471,8 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
         return registry.type_constant_globals[type_val]
     end
 
-    # PURE-9063: Use $JlDataType when hierarchy is available, else fall back to Julia DataType
-    if registry.jl_datatype_idx !== nothing
-        dt_type_idx = registry.jl_datatype_idx
-    else
-        info = register_struct_type!(mod, registry, DataType)
-        dt_type_idx = info.wasm_type_idx
-    end
+    dt_type_idx = registry.jl_datatype_idx
+    dt_type_idx === nothing && error("type constants require the canonical JlType hierarchy")
 
     # Create init expression: struct.new_default $dt_type_idx
     # Each struct.new_default creates a unique allocation with all fields zeroed.
@@ -1532,13 +1526,8 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
         return registry.typename_constant_globals[tn]
     end
 
-    # PURE-9063: Use $JlTypeName when hierarchy is available, else fall back to Julia TypeName
-    if registry.jl_typename_idx !== nothing
-        tn_type_idx = registry.jl_typename_idx
-    else
-        tn_info = register_struct_type!(mod, registry, Core.TypeName)
-        tn_type_idx = tn_info.wasm_type_idx
-    end
+    tn_type_idx = registry.jl_typename_idx
+    tn_type_idx === nothing && error("TypeName constants require the canonical JlType hierarchy")
 
     # Immutable classId must be established at allocation; mutable payload fields
     # begin null and are populated by the start function.
@@ -1587,20 +1576,14 @@ PURE-9063: When \$JlType hierarchy is available, populates \$JlDataType fields:
   kind=0, name→\$JlTypeName, super→\$JlType, parameters→\$JlSVec, hash, abstract, dfs_low, dfs_high
 And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
-Legacy path: populates Julia DataType/TypeName struct fields via wasm_field_idx.
 """
 function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)
     # TRUE-INT-002: Guard for Dict-free TypeRegistry (minimal constructor)
     (registry.type_constant_globals === nothing || isempty(registry.type_constant_globals)) && return
 
-    # PURE-9063: Use $JlDataType/$JlTypeName when hierarchy is available
-    use_jl_hierarchy = registry.jl_datatype_idx !== nothing
-
-    if use_jl_hierarchy
-        _populate_jl_hierarchy!(mod, registry)
-    else
-        _populate_legacy_types!(mod, registry)
-    end
+    registry.jl_datatype_idx === nothing &&
+        error("type constant population requires the canonical JlType hierarchy")
+    _populate_jl_hierarchy!(mod, registry)
 end
 
 """
@@ -1904,92 +1887,6 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     add_start_function!(mod, func_idx)
 end
 
-"""
-Legacy path: Populate Julia DataType/TypeName struct fields.
-Used when \$JlType hierarchy is not available.
-"""
-function _populate_legacy_types!(mod::WasmModule, registry::TypeRegistry)
-    dt_info = registry.structs[DataType]
-    dt_type_idx = dt_info.wasm_type_idx
-    tn_info = registry.structs[Core.TypeName]
-    tn_type_idx = tn_info.wasm_type_idx
-    svec_info = registry.structs[Core.SimpleVector]
-    svec_arr_idx = svec_info.wasm_type_idx
-
-    b = InstrBuilder(; func_name="_populate_legacy_types!")
-
-    for (type_val, dt_global_idx) in registry.type_constant_globals
-        type_val isa DataType || continue
-
-        # 1. Set DataType.name → TypeName ref
-        tn = type_val.name
-        if haskey(registry.typename_constant_globals, tn)
-            tn_global_idx = registry.typename_constant_globals[tn]
-            global_get!(b, dt_global_idx, AnyRef)
-            global_get!(b, tn_global_idx, AnyRef)
-            struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 1), ConcreteRef(tn_type_idx, true))
-        end
-
-        # 2. Set DataType.super → parent DataType ref
-        parent = type_val.super
-        if parent !== type_val
-            if haskey(registry.type_constant_globals, parent)
-                parent_global_idx = registry.type_constant_globals[parent]
-                global_get!(b, dt_global_idx, AnyRef)
-                global_get!(b, parent_global_idx, AnyRef)
-                struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 2), ConcreteRef(dt_type_idx, true))
-            end
-        else
-            global_get!(b, dt_global_idx, AnyRef)
-            global_get!(b, dt_global_idx, AnyRef)
-            struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 2), ConcreteRef(dt_type_idx, true))
-        end
-
-        # 3. Set DataType.parameters → SimpleVector (externref array)
-        params = type_val.parameters
-        nparams = length(params)
-        global_get!(b, dt_global_idx, AnyRef)
-        if nparams == 0
-            i32_const!(b, 0)
-            array_new_default!(b, svec_arr_idx)
-        else
-            for i in 1:nparams
-                p = params[i]
-                if p isa DataType && haskey(registry.type_constant_globals, p)
-                    p_global_idx = registry.type_constant_globals[p]
-                    global_get!(b, p_global_idx, AnyRef)
-                    extern_convert_any!(b)
-                else
-                    ref_null!(b, ExternRef)
-                end
-            end
-            array_new_fixed!(b, svec_arr_idx, UInt32(nparams), ExternRef)
-        end
-        struct_set!(b, dt_type_idx, wasm_field_idx(dt_info, 3), ConcreteRef(svec_arr_idx, true))
-    end
-
-    # Populate TypeName.wrapper field
-    for (tn, tn_global_idx) in registry.typename_constant_globals
-        wrapper = tn.wrapper
-        if wrapper isa DataType && haskey(registry.type_constant_globals, wrapper)
-            wrapper_global_idx = registry.type_constant_globals[wrapper]
-            global_get!(b, tn_global_idx, AnyRef)
-            global_get!(b, wrapper_global_idx, AnyRef)
-            struct_set!(b, tn_type_idx, wasm_field_idx(tn_info, 7), ConcreteRef(dt_type_idx, true))
-        end
-    end
-
-    # Populate the type lookup table (typeId → DataType struct ref)
-    populate_type_lookup_table!(b, registry)
-
-    isempty(builder_code(b)) && return
-
-    end_block!(b)  # function-terminating END
-    body = builder_code(b)
-    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
-    add_start_function!(mod, func_idx)
-end
-
 # ============================================================================
 # PURE-9063: Full $JlType Hierarchy — Type Lookup Table
 # ============================================================================
@@ -2031,14 +1928,8 @@ Must be called AFTER ensure_all_type_globals!.
 function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
     isempty(registry.type_constant_globals) && return
 
-    # PURE-9063: Use $JlDataType when hierarchy is available, else Julia DataType struct
-    if registry.jl_datatype_idx !== nothing
-        dt_type_idx = registry.jl_datatype_idx
-    elseif haskey(registry.structs, DataType)
-        dt_type_idx = registry.structs[DataType].wasm_type_idx
-    else
-        return  # No DataType struct registered
-    end
+    dt_type_idx = registry.jl_datatype_idx
+    dt_type_idx === nothing && error("type lookup table requires the canonical JlType hierarchy")
 
     # Create array type: (array (mut (ref null $DataType)))
     arr_type = ArrayType(FieldType(ConcreteRef(dt_type_idx, true), true))

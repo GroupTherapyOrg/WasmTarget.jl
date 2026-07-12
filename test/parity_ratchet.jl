@@ -151,13 +151,27 @@ const LOCKS = [
         () -> begin
             api_src = read(joinpath(SRC, "WasmTarget.jl"), String)
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             forbidden = ["codegen/conditionals.jl", "generate_block_code!",
                          "For now, we just skip this - full implementation requires try_table"]
-            required = ["THE stackifier owns the", "try_open_at", "try_table!(b"]
-            all_src = api_src * stmt_src * stack_src
+            required = ["THE stackifier owns the", "every CFG shape, including a single block",
+                        "try_open_at", "try_table!(b"]
+            all_src = api_src * stmt_src * flow_src * stack_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
+        end),
+    "L68_one_runtime_type_representation" => ("type constants, TypeNames, population, and lookup tables use only the canonical JlType hierarchy; the raw Julia DataType fallback is extinct",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            forbidden = ["_populate_legacy_types!", "Legacy path: Populate Julia DataType",
+                         "else fall back to Julia DataType", "else Julia DataType struct"]
+            required = ["type constants require the canonical JlType hierarchy",
+                        "TypeName constants require the canonical JlType hierarchy",
+                        "type constant population requires the canonical JlType hierarchy",
+                        "type lookup table requires the canonical JlType hierarchy"]
+            count(p -> occursin(p, types_src), forbidden) +
+                count(p -> !occursin(p, types_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin

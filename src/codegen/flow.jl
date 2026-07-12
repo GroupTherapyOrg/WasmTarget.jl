@@ -6,24 +6,14 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     b = _ctx_builder(ctx, "generate_structured")
     code = ctx.code_info.code
     # parity(M1) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
-    # choice): try/catch keeps its EH driver; a single block is plain statement emission;
-    # EVERYTHING else — conditionals, loops (with or without header phis), mixed shapes —
-    # goes through THE stackifier. Retired strategies this replaced: the nested-conditional
+    # choice): every CFG shape, including a single block and try/catch, goes through
+    # THE stackifier. Retired strategies this replaced: the nested-conditional
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
     # phi init, PURE-314), and generate_loop_code + generate_branched_loops (no-phi loops).
-    if has_try_catch(code)
-        # march6 slice C: try regions are FIRST-CLASS in the stackifier — THE ONE
-        # lowering (dart: one visitTryCatch). The 13-driver family + its 643-LOC
-        # shape selector are DELETED; handler blocks are plain CFG blocks and the
-        # phi machinery owns their edges.
-        generate_stackified_flow!(b, ctx, blocks, code;
-                                  try_regions=Vector{Any}(find_try_regions(code)))
-    elseif length(blocks) == 1
-        # Single block - just generate statements
-        generate_block_code!(b, ctx, blocks[1])
-    else
-        generate_stackified_flow!(b, ctx, blocks, code)
-    end
+    # Try regions are first-class stackifier metadata; handler blocks remain plain
+    # CFG blocks and the same phi machinery owns all of their edges.
+    regions = has_try_catch(code) ? Vector{Any}(find_try_regions(code)) : Any[]
+    generate_stackified_flow!(b, ctx, blocks, code; try_regions=regions)
 
     # Close exactly the seeded function frame. Any remaining block/loop is a
     # stackifier bug and must fail here, never serialize into malformed Wasm.
