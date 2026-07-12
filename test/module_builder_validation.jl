@@ -5,6 +5,9 @@ const MBV = WasmTarget
 
 @noinline _mbv_imported_measure() = Base.inferencebarrier(0.0)::Float64
 _mbv_import_caller() = _mbv_imported_measure()
+@noinline _mbv_imported_mix(x::Float64, n::Int64) =
+    Base.inferencebarrier(x + Float64(n))::Float64
+_mbv_import_mix_caller() = _mbv_imported_mix(2.5, Int64(4))
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -77,6 +80,16 @@ _mbv_import_caller() = _mbv_imported_measure()
             import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)],
             validate=false)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        mixed = MBV.WasmModule()
+        mixed_idx = MBV.add_import!(mixed, "host", "mix",
+            MBV.WasmValType[MBV.F64, MBV.I64], MBV.WasmValType[MBV.F64])
+        mixed_bytes = MBV.compile_multi(Any[(_mbv_import_mix_caller, (), "mix_caller")];
+            existing_module=mixed,
+            import_stubs=Any[(_mbv_imported_mix, "mix", (Float64, Int64),
+                              mixed_idx, Float64)],
+            validate=false)
+        @test mixed_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
     @testset "symbolic control labels" begin

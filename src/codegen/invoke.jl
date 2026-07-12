@@ -2320,17 +2320,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # Cross-function call - emit call instruction with target index
                         # fullstrict: the args sit on the PARENT builder — seed the real
                         # param count (readable from the pre-declared placeholder).
-                        local _cc_params = begin
-                            local _m = ctx.mod
-                            local _ni = count(imp -> imp.kind == 0x00, _m.imports)
-                            local _fi = Int(target_info.wasm_idx) - _ni
-                            local _ps = WasmValType[]
-                            if _fi >= 0 && _fi < length(_m.functions)
-                                local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
-                                _ft isa FuncType && (_ps = WasmValType[q for q in _ft.params])
-                            end
-                            _ps
-                        end
+                        # The module is authoritative for both imported and local
+                        # function signatures. Reuse the builder's sole resolver;
+                        # reconstructing only the local-function half here left
+                        # imported calls with an unseeded operand stack.
+                        local _cc_params, _ = _true_call_sig(
+                            fb, target_info.wasm_idx, WasmValType[], WasmValType[])
                         haskey(ENV, "WT_DBG_CC") && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
                         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
