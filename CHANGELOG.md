@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.12...v0.5.0) (2026-07-11)
+
+### Features
+
+* align the strict typed builder and code-generation architecture with the current dart2wasm oracle
+* replace public numeric-depth branching with identity-bearing symbolic control labels
+* collapse production compilation, structured flow, conversion, boxing, dispatch, and constant construction onto single machine-locked routes
+* integrate Binaryen_jll as the package-owned optimization backend
+
+### Correctness
+
+* require exact Julia classes for numeric boxes and constant fields
+* reject unsupported values and undefined captures instead of substituting null, zero, placeholder exceptions, or fabricated results
+* preserve exact exception payloads, bottom control flow, closed-world discovery, recursive layouts, and selector signatures
+* certify all parity invariants with fresh source audit, ten test shards, differential fuzzing, and downstream package matrices
+
 ## [0.4.12](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.11...v0.4.12) (2026-07-07)
 
 

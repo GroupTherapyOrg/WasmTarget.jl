@@ -1,73 +1,96 @@
 # WasmTarget.jl ↔ dart2wasm structural certification
 
-Status: **ACTIVE AUDIT — not yet a final parity certificate**
+Status: **GREEN — strict builder/codegen parity within the declared scope**
 
-Audit date: 2026-07-10
+Audit date: 2026-07-11
 
-WasmTarget commit audited: `8d3550d`
+WasmTarget implementation commit audited: `e6114f8d4d5156ddbe8df762d6494758bdb36307`
+
 Dart architectural oracle: dart-lang/sdk `upstream/main` at
-`6f00c0695c7c2cdddf16776b9a1c272bba70045a`
+`594947b79dc1af3df7e80546ad2e6a37dec7a727`
 
-This document was rebuilt from the current sources. It deliberately does not inherit
-green claims from the previous certification. A row is green only when current source,
-a machine lock, and current execution evidence all support it.
+This is a fresh source audit of the revisions above. It does not inherit claims from an
+older certificate. A green row requires all three of: current source correspondence, a
+machine-enforced parity lock, and current executable evidence.
 
-## Scope
+## Certified scope
 
-Builder and code-generation structure are in scope. Async, FFI, threads, deferred/JS
-glue, and host integration remain explicitly excluded. Exclusion does not permit a fake
-value: unsupported reachable constructs must reject, and sound dead branches may emit a
-diagnosed validating trap.
+The typed Wasm builder, closed-world planner, runtime representation, structured control
+flow, conversion/boxing channel, dispatch table, constant construction, exception flow,
+and production code-generation route are in scope.
 
-## Current source-to-source audit
+Async, FFI, threads, deferred loading, and JS glue remain explicitly out of scope. An
+exclusion never permits fake compilation: a reachable unsupported construct must reject
+with a diagnostic. No silent fallback, fabricated value, validator opt-out, or post-build
+repair is certified or permitted.
 
-| Invariant | Current dart2wasm oracle | Current WasmTarget implementation | Evidence | Result |
+## Fresh source-to-source audit
+
+| Invariant | Current dart2wasm oracle | Current WasmTarget implementation | Machine evidence | Result |
 |---|---|---|---|---|
-| Typed validating instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart:172,474-554`; `_verifyTypes` is called by instruction methods | `src/builder/instr_builder.jl:51,117`; every emission updates and checks the abstract operand stack | Locks L6, L13; clean `Pkg.test()` | ✅ |
-| Typed expression channel | `pkg/dart2wasm/lib/code_generator.dart:28,60,677`; `CodeGenerator`/`AstCodeGenerator` carry expected and produced value types | `src/codegen/values.jl:857-905`; `emit_value!` derives the actual type from emission and owns expected-type wrapping; all 35 no-expectedType sites are actual-type consumers or multi-value producers with a machine-checked `R17-floor` classification | Locks L4, L9, L35; R17 = 35 | ✅ at classified architectural floor |
-| One conversion funnel | `pkg/dart2wasm/lib/translator.dart:1597-1655`; `convertType` owns drop, unreachable, null-check, cast, box, and unbox | `src/codegen/values.jl:400+`; `convert_type!` is the sole conversion implementation; external producers request a target through `emit_value!(…, expected)` or builder-tracked `coerce_stack_top!` | Locks L1, L2, L5; R7/R16 ratchets (R16 = 0) | ✅, intrinsic-local numeric ops remain tracked debt |
-| One production compilation route | dart compilation constructs one translator/module strategy and all bodies use the `CodeGenerator` interface | `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → exactly one production `generate_body(ctx)` call | Lock L17; legacy/self-host/byte-shell compilers deleted | ✅ |
-| One structured control-flow lowering | current code generator emits structured Wasm through one visitor family | `generate_body` → `generate_structured` → stackifier; eight legacy flow generators are absent | Lock L3 | ✅ |
-| Class IDs and range tests | `class_info.dart:27,667-724,872-1055`; field 0 is classId and numbering/ranges drive tests | DFS type IDs, classId field 0, `emit_classid_range_check!` at `values.jl:684` | Locks L5/L10; class/dispatch tests | ✅ for certified representations |
-| Top/Object identity layout | `class_info.dart:27,29,540-580`; Top owns immutable classId, Object adds mutable identityHash; primitive boxes remain below Top | separate Top/Object types; ordinary structs, tuples, and Array wrappers inherit `{classId, identityHash}` at registration; value boxes remain Top-only; closure contexts remain internal; `jl_object_id` reads/writes field 1 | Locks L20/L28; mutable-object identity differential; focused shards and external validation | ✅ for current representations; final clean whole-suite rerun remains required |
-| Recursive type groups | wasm_builder `builder/types.dart:45-70`, `serialize/sections.dart:45-66`; definitions may reference only the same or earlier contiguous recursion group | self-recursive structs reserve their final index after supertypes/dependencies, group the contiguous struct/array/wrapper interval, then fill the reserved definition; serializer rejects unordered/noncontiguous groups | Lock L29; direct-recursive and `Vector{Self}` execution plus external validation | ✅ for Julia-realizable recursive layouts |
-| Runtime spread/apply | dart codegen flattens spread operands through typed container representations; no empty-value substitution | runtime Julia Vararg tuples use an Object/data/size wrapper with arity-aware `Tuple{}` tests and indexed access; homogeneous multi-Vector `+`/`*` traverse every container through one reduction generator; all-empty calls throw `MethodError(f, (), world)` through the typed exception tag | Locks L30-L32; empty/nonempty tuple, multi-container, exception-type, and exception-payload differential tests | ✅ for the supported homogeneous Vector spread surface |
-| Dynamic dispatch table | current `dispatch_table.dart:17-205,208+` at Dart `upstream/main` `6f00c069`; per-slot representation LUB, classId/selector ranges, one packed table | one selector table, per-slot primitive/struct LUB, classId + offset + indirect call; FNV fields and duplicate pointer routes deleted; void targets can never synthesize numeric selector results | Locks L10/L34/L36; R18 = 0; dispatch suites | ✅ for current supported call surface; Dart checked/unchecked entry points and static-dispatch pragmas have no Julia analogue |
-| Constant construction | current `constants.dart:24-160,250+` at Dart `upstream/main` `6f00c069`; one deduplicating constant map, child-before-parent globals, eager/lazy initialization | one `ensure_constant_global!` funnel for immutable constants plus dedicated string/type registries; inline fallbacks emit the registered prefix and every field through its physical type; undefined fields diagnose instead of receiving null/zero | Lock L37; R14/R15 ratchets; identity and constant tests | ✅ for supported constant kinds; mutable values retain per-object identity |
-| Module strategy | `modules.dart:182,219`; default and deferred strategies are explicit | one monolithic closed-world Wasm module | Deferred loading is excluded | ✅ within declared monolithic scope |
-| Loud unsupported behavior | dart `unimplemented` paths diagnose and trap; `convertType` has no guess-and-continue arm | `record_unsupported!`/`emit_unsupported_stub!` distinguish fatal wrong-value replacements from diagnosed traps | Locks L8, L14-L19; soundness tests | ✅ |
-| No validator-as-repair loop | dart relies on its builder; external validation is not a repair phase | builder validity is unconditional; `wasm-tools` is an independent opt-in cross-check and never rewrites bodies | Locks L6/L7/L14 | ✅ |
+| Typed instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart`: `InstructionsBuilder`, `_verifyTypes`, `_stackTypes` | `src/builder/instr_builder.jl` and `validator.jl`: every typed emission updates and checks the operand stack | L6, L13, module-builder tests | ✅ |
+| Symbolic control labels | dart `Label`, `Block`, `Loop`, `_labelIndex`; branch APIs accept `Label` | `ControlLabel` identity is returned by block/loop/if/try-table; codegen retains it; `_label_depth` exists only at serialization | L87; stale/numeric-label rejection and catch-target tests | ✅ |
+| Definite local/control validation | dart tracks label base heights, reachability, target types, and local initialization | validator tracks entry height, input/output types, reachability, branch/catch arity and subtyping; partial primitive initialization requires CFG must-proof | L6, L74, L79, L87 | ✅ |
+| Typed expression channel | dart wraps expressions against an expected representation and retains produced types | `emit_value!` uses the builder-tracked produced type and the sink's physical expected type | L4, L9, L18, L35; R17=29 | ✅ |
+| One conversion and boxing funnel | dart `translator.dart` `convertType` owns casts, null checks, boxing, and unboxing using the exact Dart class | `convert_type!`, `coerce_stack_top!`, and sole `emit_classid_box!`; numeric boxing requires a concrete Julia source class | L1, L2, L5, L84; R16=0 | ✅ |
+| No fabricated values | dart rejects unimplemented conversions instead of substituting an unrelated valid value | constructor, phi, call, invoke, return, exception, constant, string, and allocation paths preserve exact values or reject | L14–L19, L37–L39, L56–L66, L71–L86, L88 | ✅ |
+| One production compilation route | dart uses one translator/module strategy and one code-generator family | public APIs enter `compile_module` → `_compile_module_trim` → `_compile_closed_world_plan` → `generate_body` | L17; legacy compilers and mode routers absent | ✅ |
+| One structured-flow lowering | dart emits structured Wasm through one code generator and symbolic labels | `generate_body` → `generate_structured` → the sole stackifier; legacy flow families deleted | L3, L67, L87 | ✅ |
+| Closed-world fixpoint | dart completes class/member discovery before final layout and dispatch | callable, invoke, dependency, and selector discovery iterate to a real fixpoint without cliffs, round caps, or opt-outs | L26, L40, L75–L80 | ✅ |
+| Runtime class layout | dart `class_info.dart`: Top owns classId; Object adds mutable identityHash; class ranges support tests | distinct Top/Object layouts, exact class IDs, ordinary Object inheritance, mutable identity hash, exact range checks | L20, L28, L43–L46, L50 | ✅ |
+| Recursive type groups | wasm_builder defines ordered contiguous recursion groups | dependencies/supertypes precede reserved recursive definitions; serializer rejects invalid groups | L29 and recursive-layout execution tests | ✅ |
+| Selector dispatch table | dart `dispatch_table.dart`: selector-scoped signatures/rows, classId + offset, indirect call | one selector table with per-slot LUB signatures and classId offsets; FNV dispatch family deleted | L10, L18, L34, L36, L49–L50; R18=0 | ✅ |
+| Constants | dart `constants.dart`: one deduplicating constant map with eager/lazy initialization | one constant-global funnel plus exact string/type registries; every known field uses its physical sink and concrete runtime Julia class | L37, L44, L48, L55, L66, L88; R14/R15 | ✅ |
+| Exceptions and bottom flow | dart typed exception tag carries exception/stack trace; bottom paths remain unreachable | exact Julia exception objects and payloads travel through the typed tag; bottom bodies compile their real throwing flow | L56–L60, L67, L76, L81–L82 | ✅ |
+| Module strategy | dart module strategies are explicit | one monolithic closed-world module | Deferred loading excluded | ✅ |
+| No validator repair loop | dart relies on its builder rather than repairing binaries | strict builder validity is unconditional; Binaryen is optimization only; wasm-tools is an optional independent cross-check | L6, L7, L14, L22, L27 | ✅ |
 
-## Current execution evidence
+## Machine-enforced locks
 
-Clean worktree command:
+`test/parity_ratchet.jl` and `dev/parity_baseline.toml` lock every certified invariant.
+At the audited commit every committed lock (L1–L32 and L34–L88; L33 is unused) is zero.
+Key final locks added by the fresh audit:
+
+- L84: numeric boxing requires an exact concrete Julia class;
+- L85: constructors never discard supplied values or repair them with null;
+- L86: SSA/Pi aliases of Julia `nothing` retain null semantics before conversion;
+- L87: all builder/codegen branches and try-table catches retain symbolic label identity;
+- L88: constant fields retain their exact runtime Julia classes and undefined captures reject.
+
+The ratchets also hold at R2=0 raw byte bridges, R16=0 external conversion ladders,
+R18=0 all-Any dispatch signatures, R3=127 pre-emission static-type queries, R5=82
+concrete representation queries, R7=109 intrinsic-local numeric operations, and R17=29
+classified actual-type emission sites.
+
+## Final executable evidence
+
+The worktree was clean at implementation commit `e6114f8`. The final command was:
 
 ```sh
-WT_TEST_CONCURRENCY=2 julia --project=. -e 'using Pkg; Pkg.test()'
+WT_TEST_CONCURRENCY=3 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Result on 2026-07-10:
+Result on 2026-07-11:
 
-- all ten shards green: 347 + 169 + 199 + 257 + 179 + 153 + 306 + 495 + 198 + 261;
+- all ten shards green: 347 + 178 + 208 + 258 + 179 + 153 + 306 + 511 + 198 + 263;
 - bounded differential fuzz: 3/3;
-- LinearAlgebra 81/81, Dates 59/59, Random 19/19, Statistics 5/5;
-- SparseArrays 39/39, ForwardDiff 27/27, StaticArrays 20/20,
-  SimpleDiffEq 40/40;
+- LinearAlgebra 81/81;
+- Dates 59/59;
+- Random 19/19;
+- Statistics 5/5;
+- SparseArrays 39/39;
+- ForwardDiff 27/27;
+- StaticArrays 20/20;
+- SimpleDiffEq 40/40;
 - package result: `WasmTarget tests passed`.
 
-This proves the tested executable surface. It does not by itself prove structural parity;
-the source rows and locks above are independently required.
+This execution evidence proves the tested surface; it is not used as a substitute for
+the independent source correspondence and locks above.
 
-## Remaining blockers to a final green certificate
+## Certification conclusion
 
-1. Close current builder/codegen gaps that are not excluded. Runtime-length composition,
-   runtime Vararg tuples, homogeneous multi-container `_apply_iterate` (including exact
-   empty-call MethodError payloads), and packed i8/i16 arrays are executable and locked.
-2. Re-audit dynamic/static dispatch and constant construction against current files
-   (`dynamic_dispatch_table.dart`, `static_dispatch_table.dart`, `constants.dart`) after
-   the Object migration, then add exact locks for the final invariants.
-3. Run the clean full suite, differential matrix, external validators, and this audit
-   again at the final candidate commit.
-
-Until all three blockers are closed, this file is an evidence-backed progress audit—not a
-claim of strict 1:1 parity.
+For the declared scope, the current WasmTarget builder and code-generation architecture
+are certified structurally aligned with the current dart2wasm oracle. Unsupported
+excluded features remain explicit gaps, not hidden compatibility paths. Any future change
+that reintroduces multiple compilation routes, numeric-depth branch APIs, value repair,
+typeless boxing, silent fallback, or validation bypass must break a committed lock.
