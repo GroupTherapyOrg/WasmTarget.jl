@@ -223,6 +223,12 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L72_no_fabricated_string_encoder" => ("the JS string boundary exposes only implemented imports; no unused encoder API may alias the decoder as a placeholder",
+        () -> begin
+            strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
+            count(p -> occursin(p, strings_src), forbidden)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

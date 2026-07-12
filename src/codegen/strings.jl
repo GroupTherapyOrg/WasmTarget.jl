@@ -24,37 +24,9 @@ function get_char_array_type!(mod::WasmModule)::UInt32
 end
 
 """
-    add_string_io_imports!(mod, type_registry) -> (decode_idx, encode_idx)
-
-Add `wasm:js-string.fromCharCodeArray` and `wasm:js-string.intoCharCodeArray`
-imports. These are standardized JS String Builtins auto-provided by engines
-when compiled with `builtins: ["js-string"]` (Chrome 131+, Node 23+).
-
-Returns a named tuple `(decode_idx, encode_idx)` with the import function indices.
-"""
-function add_string_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
-    char_arr_type_idx = get_char_array_type!(mod)
-    char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)   # (ref null $i16arr)
-
-    str_arr_type_idx = get_string_array_type!(mod, type_registry)
-    str_arr_ref_nonnull = ConcreteRef(str_arr_type_idx, false)     # (ref $str_arr)
-
-    # fromCharCodeArray: (ref null (array (mut i16)), i32, i32) → (ref extern)
-    decode_idx = add_import!(mod, "wasm:js-string", "fromCharCodeArray",
-        WasmValType[char_arr_ref_nullable, I32, I32],
-        WasmValType[NonNullExternRef])
-
-    # intoCharCodeArray: (externref, ref null (array (mut i16)), i32) → i32
-    # For encode, we keep the old approach as a stub — not yet used at IO boundary
-    encode_idx = decode_idx  # placeholder — encode not used in println path
-
-    return (decode_idx=decode_idx, encode_idx=encode_idx)
-end
-
-"""
 Module-level storage for the utf8_to_js helper function index.
 This helper converts an i8 UTF-8 array to a JS string via fromCharCodeArray.
-Created once per module in add_string_io_imports! or add_io_imports!.
+Created once per module in add_io_imports!.
 """
 const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
 
