@@ -2202,7 +2202,7 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
                 return typeof(actual_val)
             end
         catch
-            # If we can't evaluate, default to Int64
+            # An unresolved global has no numeric type evidence; fall through to Any.
         end
     elseif val isa QuoteNode
         # QuoteNode wraps a value - return the type of the wrapped value
@@ -2221,7 +2221,7 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         # Struct constant - return actual type
         return typeof(val)
     end
-    return Int64
+    return Any
 end
 
 """

@@ -135,6 +135,14 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            forbidden = ["If we can't evaluate, default to Int64"]
+            required = ["An unresolved global has no numeric type evidence", "end\n    return Any\nend"]
+            count(p -> occursin(p, context_src), forbidden) +
+                count(p -> !occursin(p, context_src), required)
+        end),
     "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
