@@ -63,6 +63,7 @@ L62_exact_primitive_reinterpret_layout = 0
 L63_no_control_or_allocation_defaults = 0
 L64_no_unknown_numeric_type_guess = 0
 L65_no_codegen_byte_shells = 0
+L66_no_fabricated_string_results = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0

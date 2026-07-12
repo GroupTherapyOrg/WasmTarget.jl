@@ -138,6 +138,15 @@ const LOCKS = [
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
         () -> count_sites(r"bytes shell|\(bytes::Vector\{UInt8\}|target_bytes::Vector\{UInt8\}";
                           roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
+    "L66_no_fabricated_string_results" => ("specialized string lowering either proves every input representation or rejects it; mixed arguments can never become an empty string",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)"]
+            required = ["specialized multi-argument string lowering requires every argument to be String or Symbol",
+                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, invoke_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
@@ -744,14 +753,16 @@ const LOCKS = [
             n = 0
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
-                prev = ""
+                recent = String[]
                 for line in eachline(joinpath(dir, f))
                     if occursin(r"unreachable!\(", line) && !occursin("function unreachable!", line) &&
                        !startswith(lstrip(line), "#") &&
-                       !occursin("structural trap", line) && !occursin("record_unsupported!", prev)
+                       !occursin("structural trap", line) &&
+                       !any(prev -> occursin("record_unsupported!", prev), recent)
                         n += 1
                     end
-                    prev = line
+                    push!(recent, line)
+                    length(recent) > 5 && popfirst!(recent)
                 end
             end
             n

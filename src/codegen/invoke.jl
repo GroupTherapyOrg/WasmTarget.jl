@@ -3196,9 +3196,16 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # Step 5: push result
                     local_get!(bms, result_local)
                 else
-                    # Mixed types — not yet supported for multi-arg string()
-                    # Fall back to empty string for now
-                    array_new_fixed!(bms, str_type_idx, 0, I32)
+                    # A result-producing invoke may never substitute a valid but
+                    # unrelated String.  Normal Julia string conversion is handled
+                    # by the collected print_to_string body; if this specialized arm
+                    # is nevertheless selected without an all-string proof, reject
+                    # the unsupported lowering explicitly.
+                    record_unsupported!(ctx, :unsupported_method,
+                        "specialized multi-argument string lowering requires every argument to be String or Symbol";
+                        idx=idx, detail=arg_types)
+                    unreachable!(bms)  # polymorphic bottom; no fabricated String value
+                    ctx.last_stmt_was_stub = true
                 end
                 return append_builder!(b, bms)
 
