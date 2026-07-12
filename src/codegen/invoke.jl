@@ -2515,63 +2515,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 bmul = _ctx_builder(ctx, "compile_invoke")
                 num!(bmul, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
                 append_builder!(fb, bmul)
-            # Power operator: x ^ y for floats
-            # WASM doesn't have a native pow instruction, so we need to handle this
-            # For now, we require the pow import to be available
-            elseif name === :^ && length(args) == 2
-                arg1_type = infer_value_type(args[1], ctx)
-                arg2_type = infer_value_type(args[2], ctx)
-
-                if (arg1_type === Float64 || arg1_type === Float32) &&
-                   (arg2_type === Float64 || arg2_type === Float32)
-                    # Float power - need Math.pow import
-                    # Check if we have a pow import
-                    pow_import_idx = nothing
-                    for (i, imp) in enumerate(ctx.mod.imports)
-                        if imp.kind == 0x00 && imp.field_name == "pow"  # function import
-                            pow_import_idx = UInt32(i - 1)
-                            break
-                        end
-                    end
-
-                    if pow_import_idx !== nothing
-                        # Args already compiled, call pow import
-                        # Convert to f64 if needed (Math.pow expects f64, f64 -> f64)
-                        if arg1_type === Float32
-                            # First arg is f32, need to insert promotion before second arg
-                            # This is tricky with stack order. For now, just promote both
-                            bpow = _ctx_builder(ctx, "compile_invoke")  # Reset
-                            emit_value!(bpow, args[1], ctx, F32)   # step4: the promote follows
-                            num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
-                            emit_value!(bpow, args[2], ctx, arg2_type === Float32 ? F32 : F64)
-                            if arg2_type === Float32
-                                num!(bpow, Opcode.F64_PROMOTE_F32)  # f64.promote_f32 (0xBB)
-                            end
-                            fb = bpow   # discard-and-replace (march4)
-                        end
-                        bpow2 = _ctx_builder(ctx, "compile_invoke")
-                        call!(bpow2, pow_import_idx, WasmValType[], WasmValType[])
-                        # Convert back to f32 if needed
-                        if arg1_type === Float32
-                            num!(bpow2, Opcode.F32_DEMOTE_F64)  # f32.demote_f64 (0xB6)
-                        end
-                        append_builder!(fb, bpow2)
-                    else
-                        # No pow import - emit approximation using exp(y * log(x))
-                        # This is hacky but works for basic cases
-                        # For now, error out requesting the import
-                        error("Float power (^) requires 'pow' import from Math module. " *
-                              "Add (\"Math\", \"pow\", [F64, F64], [F64]) to imports.")
-                    end
-                elseif (arg1_type === Int32 || arg1_type === Int64) &&
-                       (arg2_type === Int32 || arg2_type === Int64)
-                    # Integer power - can implement with loop
-                    # For simplicity, error out for now
-                    error("Integer power (^) not yet implemented. Use float power instead.")
-                else
-                    error("Unsupported power types: $(arg1_type) ^ $(arg2_type)")
-                end
-
             elseif name === :length && (arg_type === String || arg_type === Any || arg_type === Union{})
                 # String/Any length - argument already pushed, emit array.len
                 # Only for types that are actually WasmGC arrays (String, Any)

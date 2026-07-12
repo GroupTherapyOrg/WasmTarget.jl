@@ -201,6 +201,15 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L70_no_host_power_fallback" => ("power compiles through the collected Julia body; unresolved invokes cannot switch to a Math.pow host import or approximation",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["pow_import_idx", "requires 'pow' import", "approximation using exp"]
+            required = ["_wt_pure_power_semantics"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
