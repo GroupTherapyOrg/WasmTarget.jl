@@ -366,6 +366,46 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src * linalg_src), required)
         end),
+    "L84_boxing_requires_exact_julia_class" => ("the sole numeric boxer always stamps a proven concrete Julia classId; width-default class substitution and typeless boxing calls are extinct",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            all_codegen = join((read(joinpath(dir, f), String)
+                                for (dir, _, files) in walkdir(CODEGEN)
+                                for f in files if endswith(f, ".jl")), "\n")
+            forbidden = ["wasm-rep-id fallback", "width-default type",
+                         "wasm_type === I32 ? Int32", "emit_classid_box!(b, ctx, src_type, nothing)",
+                         "emit_classid_box!(_xcb, ctx, ret_wasm, nothing)"]
+            required = ["julia_type::Type", "isconcretetype(julia_type)",
+                        "emit_type_id!(b, ctx.type_registry, julia_type)",
+                        "There is no width-based fallback"]
+            count(p -> occursin(p, all_codegen), forbidden) +
+            count(p -> !occursin(p, values_src), required)
+        end),
+    "L85_constructors_never_drop_real_values" => ("constructor lowering represents every supplied value exactly or rejects loudly; vector and Union fields may never be repaired with null",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            forbidden = ["Non-Array AbstractVector (UnitRange, StepRange) — use ref.null",
+                         "keep the type-correct null so the module validates",
+                         "ref_null!(b, Int64(size_info_inner.wasm_type_idx)"]
+            required = ["vector construction requires a concrete backing array; refusing to substitute null",
+                        "emit_struct_prefix!(b, ctx.type_registry, size_tuple_type_inner, size_info_inner)",
+                        "coerce_stack_top!(b, I64, ctx;",
+                        "registered union field \$i has no physical Wasm type",
+                        "emit_value!(b, val, ctx, _cn_expected;"]
+            count(p -> occursin(p, statements_src), forbidden) +
+            count(p -> !occursin(p, statements_src), required)
+        end),
+    "L86_phi_null_is_semantic_not_numeric" => ("phi lowering recognizes exact SSA/Pi aliases of Julia nothing before numeric conversion, so null can never become a fabricated classId box",
+        () -> begin
+            unions_src = read(joinpath(CODEGEN, "unions.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            required = ["stmt isa GlobalRef && stmt.name === :nothing",
+                        "stmt.typ === Nothing && return true",
+                        "return is_nothing_value(stmt.val, ctx)",
+                        "if is_nothing_value(val, ctx)",
+                        "before compiling SSA aliases"]
+            count(p -> !occursin(p, unions_src * stack_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

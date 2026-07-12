@@ -2399,7 +2399,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local _doff = _dl - ctx.n_params
                 (_doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef) || return
                 local _rbx = _ctx_builder(ctx, "compile_invoke")
-                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, nothing)
+                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
+                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
+                    record_unsupported!(ctx, :unsupported_type,
+                        "boxed invoke result lacks a concrete Julia source type";
+                        idx=idx, detail=expr)
+                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
                 append_builder!(fb, _rbx)
             end
             if is_self_call

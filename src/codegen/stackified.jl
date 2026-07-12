@@ -33,12 +33,14 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 # or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
 # decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 function _value_julia_type(val, ctx::AbstractCompilationContext)
-    if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-        return ctx.ssa_types[val.id]
-    elseif val isa Bool
-        return Bool
-    elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-        return ctx.arg_types[val.n]
+    if val isa Core.SSAValue
+        return get(ctx.ssa_types, val.id, nothing)
+    elseif val isa Core.Argument
+        return source_slot_type(ctx, val.n)
+    elseif val isa QuoteNode
+        return typeof(val.value)
+    elseif val isa Union{Bool, Signed, Unsigned, AbstractFloat, Char}
+        return typeof(val)
     end
     return nothing
 end
@@ -57,7 +59,9 @@ function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType,
     # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_value!(b, val, ctx, val_wasm;
                 from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
-    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
+        "numeric-to-extern boxing lacks a concrete Julia source type: $_jl_type")
+    emit_classid_box!(b, ctx, val_wasm, _jl_type)
     extern_convert_any!(b)
     return b
 end
@@ -81,7 +85,9 @@ function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ct
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
     emit_value!(b, val, ctx, val_wasm;
                 from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
-    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
+        "numeric-to-anyref boxing lacks a concrete Julia source type: $_jl_type")
+    emit_classid_box!(b, ctx, val_wasm, _jl_type)
     return b  # No extern_convert_any — struct ref is already anyref
 end
 
@@ -582,7 +588,33 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
              isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
              length(pvb.v.stack))
         end
-        if val isa Core.SSAValue
+        if is_nothing_value(val, ctx)
+            # `nothing` is the null member of a reference-represented phi and the
+            # zero-width semantic member of a numeric nullable phi. Resolve it
+            # before compiling SSA aliases, which otherwise look like i32.const 0
+            # and could be mistaken for a numeric value requiring a classId box.
+            if haskey(ctx.phi_locals, phi_idx)
+                local_idx = ctx.phi_locals[phi_idx]
+                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
+                if local_wasm_type isa ConcreteRef
+                    ref_null!(pvb, Int64(local_wasm_type.type_idx), local_wasm_type)
+                elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
+                       local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
+                       local_wasm_type === EqRef
+                    ref_null!(pvb, local_wasm_type)
+                elseif local_wasm_type === I64
+                    i64_const!(pvb, 0)
+                elseif local_wasm_type === F32
+                    f32_const!(pvb, 0.0f0)
+                elseif local_wasm_type === F64
+                    f64_const!(pvb, 0.0)
+                else
+                    i32_const!(pvb, 0)
+                end
+            else
+                emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
+            end
+        elseif val isa Core.SSAValue
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
             if haskey(ctx.phi_locals, phi_idx)
@@ -607,7 +639,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _srcb = _ctx_builder(ctx, "phi_edge_src")
                         _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
-                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, _srcb)
+                        local _src_julia = _value_julia_type(val, ctx)
+                        _src_julia isa Type || (_src_julia = Any)
+                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                    ssa_local_type, _srcb, _src_julia)
                             emit_phi_failure!(pvb, "phi edge has no valid coercion"; idx=phi_idx)
                         end
                     end
@@ -633,7 +668,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _srcb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, _srcb)
+                    local _src_julia = _value_julia_type(val, ctx)
+                    _src_julia isa Type || (_src_julia = Any)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                src_local_type, _srcb, _src_julia)
                         emit_phi_failure!(pvb, "phi-to-phi edge has no valid coercion"; idx=phi_idx)
                     end
                 else
@@ -656,7 +694,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _sb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_sb, ctx)
                     emit_value!(_sb, val, ctx)  # R17-floor: phi converter consumes the actual recomputed type
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
+                    local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                ssa_wasm_type, _sb, _src_julia)
                         emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
@@ -671,36 +711,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     emit_value!(pvb, val, ctx)  # R17-floor: i32 phi widening is selected after actual emission
                 end
             end
-        elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
-            # Value is `nothing` (can be Core.nothing or Main.nothing in IR)
-            # Emit the appropriate null/zero for the phi local's ACTUAL wasm type
-            # (which may differ from the Julia type due to phi type resolution)
-            if haskey(ctx.phi_locals, phi_idx)
-                local_idx = ctx.phi_locals[phi_idx]
-                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
-                if local_wasm_type isa ConcreteRef
-                    ref_null!(pvb, Int64(local_wasm_type.type_idx), ConcreteRef(UInt32(local_wasm_type.type_idx), true))
-                elseif local_wasm_type === ExternRef
-                    ref_null!(pvb, ExternRef)
-                elseif local_wasm_type === StructRef
-                    ref_null!(pvb, StructRef)
-                elseif local_wasm_type === ArrayRef
-                    ref_null!(pvb, ArrayRef)
-                elseif local_wasm_type === AnyRef
-                    ref_null!(pvb, AnyRef)
-                elseif local_wasm_type === I64
-                    i64_const!(pvb, 0)
-                elseif local_wasm_type === F32
-                    f32_const!(pvb, 0.0f0)
-                elseif local_wasm_type === F64
-                    f64_const!(pvb, 0.0)
-                else
-                    # I32 default
-                    i32_const!(pvb, 0)
-                end
-            else
-                emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
-            end
         else
             # Not an SSA and not nothing - just compile directly
             # Check type compatibility for non-SSA values (QuoteNode, literals, etc.)
@@ -712,8 +722,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
                     local _ne_b = _compile_value_b(val, ctx)
                     local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
+                    local _ne_jt = _value_julia_type(val, ctx)
+                    _ne_jt isa Type || (_ne_jt = typeof(val))
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
-                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b)
+                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b,
+                                                _ne_jt)
                         emit_phi_failure!(pvb, "literal phi edge has no valid coercion"; idx=phi_idx)
                     end
                     return _cpv_ret()
@@ -933,7 +946,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
-                                        coerce_stack_top!(b, phi_local_type, ctx)
+                                        local _edge_julia = _value_julia_type(val, ctx)
+                                        coerce_stack_top!(b, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
                                     end
                                     # parity(M11.4): ALWAYS store — the `ty===nothing`
                                     # skip orphaned the emitted value on the stack (the
@@ -1134,7 +1150,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 elseif !isempty(pv_b2.instrs)
                                     append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
-                                        coerce_stack_top!(bb, phi_local_type, ctx)
+                                        local _edge_julia = _value_julia_type(val, ctx)
+                                        coerce_stack_top!(bb, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
                                     end
                                     # parity(M11.4): ALWAYS store — an unknown-typed value
                                     # left on the stack (the old `ty===nothing` skip)

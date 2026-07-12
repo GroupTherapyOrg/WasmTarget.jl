@@ -606,9 +606,8 @@ function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T)
     return b
 end
 
-# census F5 (march5): emit_box_type_id! DELETED — zero callers (the docstring's
-# "sole caller is emit_classid_box!'s fallback" was stale: that fallback inlines
-# emit_type_id! with the width-default type directly, values.jl:513).
+# census F5: emit_box_type_id! is deleted. The sole classId boxer calls
+# emit_type_id! with the proven concrete Julia source type.
 
 # (B4: the i31 boxing helpers emit_box_i31! / emit_unbox_i31_s! / emit_unbox_i31_u! /
 # should_use_i31 were DELETED — dart2wasm uses no i31, and B4 routed every former i31 site

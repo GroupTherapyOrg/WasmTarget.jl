@@ -75,10 +75,20 @@ function is_nothing_value(val, ctx)::Bool
     if val isa GlobalRef && val.name === :nothing
         return true
     end
-    # SSA that has Nothing type
+    # SSA that has Nothing type or is an exact alias of the `nothing` binding.
+    # Inference may retain a surrounding Union at a phi edge, so the statement
+    # itself is authoritative evidence that this particular edge is null.
     if val isa Core.SSAValue
         ssa_type = get(ctx.ssa_types, val.id, Any)
-        return ssa_type === Nothing
+        ssa_type === Nothing && return true
+        if 1 <= val.id <= length(ctx.code_info.code)
+            stmt = ctx.code_info.code[val.id]
+            (stmt isa GlobalRef && stmt.name === :nothing) && return true
+            if stmt isa Core.PiNode
+                stmt.typ === Nothing && return true
+                return is_nothing_value(stmt.val, ctx)
+            end
+        end
     end
     return false
 end

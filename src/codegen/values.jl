@@ -403,6 +403,8 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
         # canonical {classId,value} struct (real classId when from_julia is known), then upcast
         # the box ref to `to` (the box subtypes $JlBase, so any/eq/struct targets are free).
+        (from_julia isa Type && isconcretetype(from_julia)) || error(
+            "numeric-to-reference conversion lacks a concrete Julia source type")
         box_idx = emit_classid_box!(b, ctx, from, from_julia)
         convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx)
         return b
@@ -578,24 +580,19 @@ convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationCo
 
 Box the numeric value on the stack into a `{classId:i32, value:wasm_type}` struct (the
 canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type classId when
-`julia_type` is given; otherwise the inline wasm-rep-id fallback (width-default type) for sites
-that don't yet carry the Julia type — those distinguish only by width until they migrate.
+`julia_type` is the proven concrete Julia source type; it supplies the exact classId.
+There is no width-based fallback because distinct Julia types share Wasm representations.
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
 """
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                           wasm_type::WasmValType, julia_type::Union{Type,Nothing})
+                           wasm_type::WasmValType, julia_type::Type)
+    isconcretetype(julia_type) || error(
+        "numeric boxing requires a concrete Julia source type, got $julia_type")
     box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
     sc = boxing_scratch_local!(ctx, wasm_type)
     builder_set_local_type!(b, sc, wasm_type)
     local_set!(b, sc)                       # save the value
-    if julia_type === nothing
-        # fallback: wasm-rep id (the width's default Julia type)
-        emit_type_id!(b, ctx.type_registry,
-                      wasm_type === I32 ? Int32 : wasm_type === I64 ? Int64 :
-                      wasm_type === F32 ? Float32 : wasm_type === F64 ? Float64 : Any)
-    else
-        emit_type_id!(b, ctx.type_registry, julia_type)            # REAL classId
-    end
+    emit_type_id!(b, ctx.type_registry, julia_type)
     local_get!(b, sc)                       # reload the value (field 1)
     # Declare the REAL stack effect ([classId:i32, value] → box ref) — an empty field list
     # left the operands undeclared, so typed callers saw a phantom 3-value stack and the
@@ -776,7 +773,11 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         # dead/unsatisfiable path (unresolvable value or dead Union arm) — trap.
         unreachable!(b)  # structural trap (dart-legit dead path)
     else
-        ty === func_ret_wasm || convert_type!(b, ty, func_ret_wasm, ctx)
+        if ty !== func_ret_wasm
+            source_julia = _value_julia_type(val, ctx)
+            convert_type!(b, ty, func_ret_wasm, ctx;
+                          from_julia=(source_julia isa Type && isconcretetype(source_julia)) ? source_julia : nothing)
+        end
         return_!(b)
     end
     return b
@@ -894,10 +895,17 @@ shape stays consistent, matching dart's posture that unreachable code still vali
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
                      expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
-    # march8 note: a decide-before-emit Nothing arm lived here briefly and was
-    # REVERTED (gate-caught, Dates corpus): its SSA-shape detection misfired across
-    # contexts, swallowing live values. Rebuild it WITH the weave folds it serves,
-    # keyed on ctx.ssa_types (the typed slot), not statement sniffing.
+    # A literal `nothing` has an exact null representation at a reference sink.
+    # This is deliberately literal-only; SSA/Union shape guesses once swallowed
+    # live values here. Dynamic Nothing is handled by its typed producer.
+    if val === nothing && _wt_is_ref(expected)
+        if expected isa ConcreteRef
+            ref_null!(b, Int64(expected.type_idx), expected)
+        else
+            ref_null!(b, expected)
+        end
+        return expected
+    end
     ty = emit_value!(b, val, ctx)  # R17-floor: this wrapper consumes the actual emission type
     ty === nothing && return expected
     if ty !== expected

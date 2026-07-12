@@ -949,9 +949,10 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                 end
             end
             if !recompiled
-                # Non-Array AbstractVector (UnitRange, StepRange) — use ref.null
-                data_array_idx = get_array_type!(ctx.mod, ctx.type_registry, eltype(struct_type))
-                ref_null!(b, Int64(data_array_idx), ConcreteRef(UInt32(data_array_idx), true))
+                emit_unsupported_stub!(ctx, b, :unsupported_type,
+                    "vector construction requires a concrete backing array; refusing to substitute null";
+                    idx=idx, detail=field_values[1])
+                return b
             end
         else
             append_builder!(b, _f0_b)   # typed merge
@@ -959,8 +960,9 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
 
         # Compile field 2: the size tuple (field 0=typeId, field 1=array_ref, field 2=size_tuple)
         if length(field_values) >= 2
-            # march3 (typed): numeric-typed source where the size TUPLE ref belongs
-            # → ref.null of the tuple type (the LOCAL_GET LEB decode is gone)
+            # Julia's Vector lowering may expose its scalar length where the Wasm
+            # representation stores Tuple{Int64}. Build that exact tuple; never
+            # discard the length and substitute a nullable reference.
             local _f1_b = _compile_value_b(field_values[2], ctx)
             local _f1_ty = isempty(_f1_b.v.stack) ? nothing : _f1_b.v.stack[end]
             if _f1_ty === I64 || _f1_ty === I32
@@ -969,8 +971,11 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                     register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type_inner)
                 end
                 size_info_inner = ctx.type_registry.structs[size_tuple_type_inner]
-                ref_null!(b, Int64(size_info_inner.wasm_type_idx),
-                          ConcreteRef(UInt32(size_info_inner.wasm_type_idx), true))
+                emit_struct_prefix!(b, ctx.type_registry, size_tuple_type_inner, size_info_inner)
+                append_builder!(b, _f1_b)
+                coerce_stack_top!(b, I64, ctx;
+                    from_julia=_value_julia_type(field_values[2], ctx))
+                struct_new!(b, size_info_inner.wasm_type_idx)
             else
                 append_builder!(b, _f1_b)   # typed merge
             end
@@ -1107,30 +1112,20 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                     ref_null!(b, StructRef)
                 end
             else
-                # Non-null value — typed channel: the emission's own type replaces the pure-
-                # local.get LEB scan + infer_value_wasm_type re-guess. A NUMERIC value into a
-                # ref-typed Union field is an ill-typed store (bad upstream inference); keep
-                # the type-correct null so the module validates (M5 turns this loud).
-                local _cn_vb = _compile_value_b(val, ctx)
-                local _cn_vty = isempty(_cn_vb.v.stack) ? nothing : _cn_vb.v.stack[end]
-                if inner_type !== nothing &&
-                   (_cn_vty === I32 || _cn_vty === I64 || _cn_vty === F32 || _cn_vty === F64)
-                    if inner_type === String || inner_type === Symbol
-                        str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                        ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
-                    elseif inner_type <: AbstractVector
-                        elem_type = eltype(inner_type)
-                        arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-                        ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
-                    elseif haskey(ctx.type_registry.structs, inner_type)
-                        inner_info = ctx.type_registry.structs[inner_type]
-                        ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
-                    else
-                        ref_null!(b, StructRef)
-                    end
-                else
-                    append_builder!(b, _cn_vb)   # typed merge
-                end
+                # The registered physical field is the sole sink contract. Route
+                # every non-null value through the same exact conversion funnel as
+                # calls, returns, tuple fields, and SSA stores. Numeric union members
+                # are boxed with their proven Julia class ID; an unprovable conversion
+                # rejects instead of fabricating a validating null.
+                local _cn_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
+                local _cn_wasm_fi = i + Int(info.field_offset)
+                (_cn_struct_def isa StructType &&
+                 _cn_wasm_fi <= length(_cn_struct_def.fields)) ||
+                    error("registered union field $i has no physical Wasm type")
+                local _cn_expected = _cn_struct_def.fields[_cn_wasm_fi].valtype
+                local _cn_julia = _value_julia_type(val, ctx)
+                emit_value!(b, val, ctx, _cn_expected;
+                    from_julia=(_cn_julia isa Type ? _cn_julia : nothing))
             end
         elseif field_type === Any
             # PURE-9064: Determine actual Wasm field type (AnyRef when JlType hierarchy active,

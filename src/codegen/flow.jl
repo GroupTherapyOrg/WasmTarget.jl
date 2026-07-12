@@ -163,52 +163,17 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
     return true
 end
 
-"""
-    _emit_phi_edge_convert!(b, ctx, phi_local_type, src_type, src::InstrBuilder) -> Bool
-
-THE single-source phi-edge value conversion (Loop C flow/phi dedup). `src` is a fragment
-builder that pushes the source value (already typed `src_type`); this merges it (typed,
-via append_builder!) and emits the box / cast / UNBOX needed to land it in a phi local of
-`phi_local_type`, leaving the converted value on `b`'s stack (the caller does the
-local.set). Returns true if an arm applied, false if none did (caller emits a type-safe
-default — and `src` was NOT merged).
-
-This is the ONE place that knows how a numeric value boxes into a ref phi local — and, the arm
-that was missing at every copy of this logic, how a classId box UNBOXES into a numeric phi local
-(`v[i]::Any` narrowed to Int64 via an isa-split phi). Without the unbox arm those edges fell to
-the default → `i64.const 0`, a silent miscompile (`Any[1,2,3][i]` → 0).
-"""
+"""Convert one already-emitted literal phi edge using its proven Julia type."""
 function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                                 phi_local_type, src_type, src::InstrBuilder)::Bool
+                                 phi_local_type, src_type, src::InstrBuilder,
+                                 src_julia::Type)::Bool
     isempty(src.instrs) && return false
-    _num(t) = (t === I32 || t === I64 || t === F32 || t === F64)
-    _ref(t) = (t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === ExternRef || t isa ConcreteRef)
-    if phi_local_type === ExternRef && _num(src_type)
-        # numeric → ExternRef: classId box (via THE single emitter), then to externref
-        append_builder!(b, src)
-        emit_classid_box!(b, ctx, src_type, nothing)
-        extern_convert_any!(b)
-        return true
-    elseif phi_local_type === AnyRef && _num(src_type)
-        # numeric → AnyRef: classId box (a struct ref is already an anyref subtype)
-        append_builder!(b, src)
-        emit_classid_box!(b, ctx, src_type, nothing)
-        return true
-    elseif phi_local_type === ExternRef && _ref(src_type)
-        # internal ref → ExternRef
-        append_builder!(b, src)
-        extern_convert_any!(b)
-        return true
-    elseif _num(phi_local_type) && _ref(src_type)
-        # THE missing arm — UNBOX a classId box into a numeric phi local (inverse of the
-        # numeric→AnyRef box arm above). Well-typed numeric phi ⟹ the edge is a numeric box,
-        # so the ref.cast inside emit_classid_unbox! succeeds; a genuine mistype traps (loud).
-        append_builder!(b, src)
-        src_type === ExternRef && any_convert_extern!(b)
-        emit_classid_unbox!(b, ctx, phi_local_type)
-        return true
-    end
-    return false
+    (!_wt_is_ref(src_type) && _wt_is_ref(phi_local_type) && !isconcretetype(src_julia)) &&
+        return false
+    append_builder!(b, src)
+    coerce_stack_top!(b, phi_local_type, ctx;
+                      from_julia=isconcretetype(src_julia) ? src_julia : nothing)
+    return true
 end
 
 """

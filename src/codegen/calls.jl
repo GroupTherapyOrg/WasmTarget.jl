@@ -1819,13 +1819,13 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         get_concrete_wasm_type(result_julia, ctx.mod, ctx.type_registry) : nothing
 
     # value-coercion helper: from-wasm on stack → to-wasm. (Emits into InstrBuilder cb.)
-    coerce! = (cb, from, to) -> begin
+    coerce! = (cb, from, to, from_julia) -> begin
         from === to && return
         if to === AnyRef || to === EqRef
             if from === I32 || from === I64 || from === F32 || from === F64
                 # Box numerics into the canonical {classId, value} box via THE single emitter —
                 # the Any-int/float rep WT consumers unbox via `ref.cast (ref $box); struct.get 1`.
-                emit_classid_box!(cb, ctx, from, nothing)
+                emit_classid_box!(cb, ctx, from, from_julia)
             elseif from === ExternRef
                 any_convert_extern!(cb)
             end  # ConcreteRef/StructRef already anyref-compatible
@@ -1872,7 +1872,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
             rj === Union{} || error("value-producing dynamic dispatch selected a void target")
             unreachable!(eb)  # structural trap: a bottom target never reaches the value merge
         else
-            coerce!(eb, rw, result_wasm)
+            coerce!(eb, rw, result_wasm, rj)
         end
     end
     # Guarded if-chain over all branches; final else = unreachable (no method).
@@ -3466,8 +3466,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # ir/-level kind test (dart looks at node kinds, never at bytes).
                 local _ab = _compile_value_b(arg, ctx)
                 local arg_ty = isempty(_ab.v.stack) ? nothing : _ab.v.stack[end]
-                local _ab_numeric = arg_ty === I32 || arg_ty === I64 || arg_ty === F32 || arg_ty === F64
-                local _ab_is_local = length(_ab.instrs) == 1 && _ab.instrs[1] isa InstrIR.LocalGet
                 expected_wasm = nothing
                 # Account for typeId at field 0: struct_type_def.fields is 1-indexed,
                 # wasm field for Julia field fi is at position fi + field_offset
@@ -3475,30 +3473,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 if struct_type_def isa StructType && wasm_fi <= length(struct_type_def.fields)
                     expected_wasm = struct_type_def.fields[wasm_fi].valtype
                 end
-                if expected_wasm === ExternRef
-                    if _ab_numeric
-                        ref_null!(_tupb, ExternRef)
-                    else
-                        append_builder!(_tupb, _ab)
-                        # already-externref values pass through (tracked type, any source)
-                        arg_ty === ExternRef || extern_convert_any!(_tupb)
-                    end
-                elseif expected_wasm isa ConcreteRef || expected_wasm === StructRef || expected_wasm === ArrayRef || expected_wasm === AnyRef
-                    if _ab_numeric
-                        if _ab_is_local && expected_wasm === AnyRef
-                            # TRUE-PARSE-002: Box numeric local for anyref tuple field via THE single box emitter.
-                            append_builder!(_tupb, _ab)
-                            emit_classid_box!(_tupb, ctx, arg_ty, nothing)
-                        elseif expected_wasm isa ConcreteRef
-                            ref_null!(_tupb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
-                        else
-                            ref_null!(_tupb, expected_wasm isa UInt8 ? RefType(expected_wasm) : StructRef)
-                        end
-                    else
-                        append_builder!(_tupb, _ab)
-                    end
-                else
-                    append_builder!(_tupb, _ab)
+                expected_wasm isa WasmValType || error("tuple field $fi has no physical Wasm type")
+                append_builder!(_tupb, _ab)
+                if arg_ty !== nothing && arg_ty !== expected_wasm
+                    local _tuple_jt = _value_julia_type(arg, ctx)
+                    coerce_stack_top!(_tupb, expected_wasm, ctx;
+                                      from_julia=(_tuple_jt isa Type && isconcretetype(_tuple_jt)) ? _tuple_jt : nothing)
                 end
             end
 
@@ -4556,8 +4536,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _rbx_off = _rbx_li - ctx.n_params
                 if _rbx_off >= 0 && _rbx_off < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off + 1]) &&
                    _it_e.result in (I32, I64, F32, F64)
-                    emit_classid_box!(fb, ctx, _it_e.result,
-                                      arg_type isa Type && isconcretetype(arg_type) ? arg_type : nothing)
+                    (arg_type isa Type && isconcretetype(arg_type)) ||
+                        record_unsupported!(ctx, :unsupported_type,
+                            "intrinsic result boxing lacks a concrete Julia source type";
+                            idx=idx, detail=expr)
+                    emit_classid_box!(fb, ctx, _it_e.result, arg_type)
                 end
             end
             return append_builder!(b, fb)
@@ -6189,7 +6172,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             # Vector resolving to an i32-returning overload) — box the RESULT
                             # (on the stack) exactly like the PURE-9022 arg path via the one emitter.
                             # The box struct is already a structref subtype — no cast needed for StructRef.
-                            emit_classid_box!(_xcb, ctx, ret_wasm, nothing)
+                            local _ret_jt = target_info.return_type
+                            (_ret_jt isa Type && isconcretetype(_ret_jt)) ||
+                                record_unsupported!(ctx, :unsupported_type,
+                                    "cross-call result boxing lacks a concrete Julia source type";
+                                    idx=idx, detail=expr)
+                            emit_classid_box!(_xcb, ctx, ret_wasm, _ret_jt)
                         end
                     end
                 end
@@ -6502,7 +6490,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if _dl !== nothing
             local _doff = _dl - ctx.n_params
             if _doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef
-                emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, nothing)
+                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
+                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
+                    record_unsupported!(ctx, :unsupported_type,
+                        "boxed arithmetic result lacks a concrete Julia source type";
+                        idx=idx, detail=expr)
+                emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
             end
         end
     end
