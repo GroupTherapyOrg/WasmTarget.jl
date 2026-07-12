@@ -353,6 +353,19 @@ const LOCKS = [
                         "_wt_exact_inexact_exception"]
             count(p -> !occursin(p, invoke_src * test_src), required)
         end),
+    "L83_fieldwise_constructors_are_structural" => ("concrete exact-field constructors route through the sole %new implementation before dynamic dispatch, even when inference erased a field expression",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            linalg_src = read(joinpath(ROOT, "test", "fuzz", "linalg_diff.jl"), String)
+            forbidden = ["called_func === DimensionMismatch", "nameof(called_func)",
+                         "constructor_allowlist"]
+            required = ["A concrete field-wise constructor is structural, not dynamic",
+                        "called_func === _ctor_result && length(args) == fieldcount(_ctor_result)",
+                        "return compile_new!(b, Expr(:new, _ctor_result, args...)",
+                        "_la_solve", "_la_lusolve"]
+            count(p -> occursin(p, calls_src), forbidden) +
+                count(p -> !occursin(p, calls_src * linalg_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

@@ -6256,6 +6256,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     _dyneq_ok = true
                 end
                 if !_dyneq_ok
+                # A concrete field-wise constructor is structural, not dynamic
+                # dispatch. The closed-world result type and exact field count
+                # prove the allocation even when inference erased a field value
+                # to Any (for example DimensionMismatch(message_phi)). Route it
+                # through THE %new implementation and its physical field contract.
+                local _ctor_result = get(ctx.ssa_types, idx, Any)
+                if (called_func isa DataType || called_func isa UnionAll) &&
+                   _ctor_result isa DataType && isconcretetype(_ctor_result) &&
+                   isstructtype(_ctor_result) && !isprimitivetype(_ctor_result) &&
+                   called_func === _ctor_result && length(args) == fieldcount(_ctor_result)
+                    return compile_new!(b, Expr(:new, _ctor_result, args...), idx, ctx)
+                end
                 # WASMTARGET dynamic dispatch: before giving up, try an inline typeId
                 # switch over the compiled specializations (the dynamic call dispatches
                 # on a concrete-struct arg at runtime). Unblocks Markdown.plain/show
