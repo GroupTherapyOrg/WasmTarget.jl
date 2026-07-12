@@ -158,15 +158,15 @@ _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
 _wt_shard0() && include("sort_comparator_backfills.jl")
-# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference (dormant analysis, byte-identical).
+# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference.
 _wt_shard0() && include("f3_box_capture_l0.jl")
-# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry (dormant).
+# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry.
 _wt_shard0() && include("f3_box_capture_l1.jl")
-# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass (dormant).
+# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass.
 _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
-# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure (dormant).
+# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure.
 _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
-# Loop C value channel: general numeric value-type propagation (Any-but-really-i64) (dormant).
+# Loop C value channel: general numeric value-type propagation (Any-but-really-i64).
 _wt_shard0() && include("value_channel_propagate.jl")
 # parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
 _wt_shard0() && include("m1_void_backfills.jl")

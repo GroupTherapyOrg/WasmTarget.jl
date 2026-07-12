@@ -7,7 +7,8 @@
 # nothing reads it yet (byte-identical). Only box-DERIVED SSAs are typed — no false positives on
 # unrelated concrete-result calls.
 
-@testset "F3 L2b: f3_box_value_types value-type propagation (dormant)" begin
+@testset "F3 L2b: f3_box_value_types value-type propagation" begin
+    @test isempty(WasmTarget.f3_self_box_joins(Any[], Any[], Tuple{Vararg{Int64}}))
     # counter: `s` mutated capture → Core.Box{Int64}; getfield(box,:contents)::Any must propagate Int64.
     fcounter(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     ci = code_typed(fcounter, (Int64,); optimize = true)[1].first

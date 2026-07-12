@@ -370,7 +370,7 @@ operands in arithmetic that consumes the box's `:contents` reads (e.g. `contents
 function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
     out = Dict{Int,Type}()
 
-    boxfields = (selfT isa DataType && isstructtype(selfT)) ?
+    boxfields = (selfT isa DataType && isconcretetype(selfT) && isstructtype(selfT)) ?
         Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT)
                     if fieldtype(selfT, i) === Core.Box) : Set{Symbol}()
     _wc(t) = t isa Type ? _F3_CC.widenconst(t) : (t === nothing ? Any : try _F3_CC.widenconst(t) catch; Any end)
@@ -388,7 +388,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
     # closure compiling its own body) OR any local value whose type has Core.Box
     # fields (parity M10b: a closure RETURNED by a callee and used here — the box
     # was born in the callee; the inlined body reads it through the closure value).
-    _has_box_fields(T) = T isa DataType && isstructtype(T) &&
+    _has_box_fields(T) = T isa DataType && isconcretetype(T) && isstructtype(T) &&
         any(i -> fieldtype(T, i) === Core.Box, 1:fieldcount(T))
     _saw_ssa_carrier = false
     _saw_write = false

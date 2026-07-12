@@ -7,7 +7,7 @@
 # dart2wasm's `translateTypeOfLocalVariable` — reconstructing what Julia erased, not a heuristic.
 # Pure analysis, not wired into codegen yet (byte-identical).
 
-@testset "F3 L0: pure box_contents_type inference (dart2wasm-aligned, dormant)" begin
+@testset "F3 L0: pure box_contents_type inference (dart2wasm-aligned)" begin
     _btype(fn) = begin
         ci = code_typed(fn, (Int64,); optimize=true)[1].first
         bs = WasmTarget.find_box_news(ci.code)

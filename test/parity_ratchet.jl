@@ -232,18 +232,26 @@ const LOCKS = [
     "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            capture_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            capture_test = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             forbidden = ["catch\n        Dict{Int,Type}()", "capture analysis fallback"]
             required = ["_numeric_joins = try", "catch\n        rethrow()",
                         "propagate_numeric_value_types",
-                        "f3_self_box_joins", "f3_closure_box_seeds"]
-            count(p -> occursin(p, context_src), forbidden) +
-                count(p -> !occursin(p, context_src), required)
+                        "f3_self_box_joins", "f3_closure_box_seeds",
+                        "isconcretetype(T) && isstructtype(T)",
+                        "Tuple{Vararg{Int64}}"]
+            all_src = context_src * capture_src * capture_test
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
-            forbidden = ["If we can't evaluate, default to Int64"]
-            required = ["An unresolved global has no numeric type evidence", "end\n    return Any\nend"]
+            forbidden = ["If we can't evaluate, default to Int64",
+                         "phi_julia_type = Int64", "phic_julia_type = Int64",
+                         "phi_wasm_type = I64  # Default for Any/Union"]
+            required = ["An unresolved global has no numeric type evidence",
+                        "Preserve missing type evidence as Any", "end\n    return Any\nend"]
             count(p -> occursin(p, context_src), forbidden) +
                 count(p -> !occursin(p, context_src), required)
         end),

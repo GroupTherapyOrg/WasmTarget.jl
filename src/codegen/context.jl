@@ -751,7 +751,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
         if stmt isa Core.PhiNode
-            # PURE-048: Use ssavaluetypes as fallback instead of Int64.
+            # Preserve missing type evidence as Any; never guess a numeric phi.
             # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
             # must map to ExternRef, not I64. Fall back to ssavaluetypes[i] first.
             phi_julia_type = get(ctx.ssa_types, i, nothing)
@@ -760,7 +760,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                 if ssatypes isa Vector && i <= length(ssatypes)
                     phi_julia_type = ssatypes[i]
                 else
-                    phi_julia_type = Int64
+                    phi_julia_type = Any
                 end
             end
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
@@ -875,8 +875,6 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                                                 phi_wasm_type = I64
                                             elseif inferred === I32
                                                 phi_wasm_type = I32
-                                            else
-                                                phi_wasm_type = I64  # Default for Any/Union
                                             end
                                         else
                                             phi_wasm_type = I32  # Boolean ops
@@ -919,7 +917,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                 if ssatypes isa Vector && i <= length(ssatypes)
                     phic_julia_type = ssatypes[i]
                 else
-                    phic_julia_type = Int64
+                    phic_julia_type = Any
                 end
             end
             phic_wasm_type = julia_to_wasm_type_concrete(phic_julia_type, ctx)
