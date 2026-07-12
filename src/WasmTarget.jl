@@ -136,18 +136,26 @@ wasm_bytes = compile_multi([
 ```
 
 Functions can call each other within the module.
+
+Hosts that provide typed WebAssembly imports may pass an `existing_module`
+containing those declarations together with `import_stubs`. Imported Julia stub
+calls then participate in the same closed-world collection, typed builder,
+serialization, optimization, and validation pipeline as every other root.
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
                        discovery::Symbol=:trim,
+                       existing_module::Union{WasmModule,Nothing}=nothing,
+                       import_stubs::Vector=Any[],
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
         compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types,
-                       discovery=discovery)
+                       discovery=discovery, existing_module=existing_module,
+                       import_stubs=import_stubs)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end

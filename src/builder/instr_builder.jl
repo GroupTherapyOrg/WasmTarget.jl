@@ -327,13 +327,20 @@ end
 return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
 # fullstrict: the module KNOWS every function's signature — derive it there; the
-# caller's claim is the fallback (imports + not-yet-pushed bodies resolve by index math).
+# caller's claim is only a fallback for a genuinely unresolved index.
 @inline function _true_call_sig(b::InstrBuilder, func_idx::Integer, params, results)
     local m = b.v.mod
     m === nothing && return (params, results)
-    local n_imp = 0
+    local function_imports = WasmImport[]
     for imp in m.imports
-        imp.kind == 0x00 && (n_imp += 1)
+        imp.kind == 0x00 && push!(function_imports, imp)
+    end
+    local n_imp = length(function_imports)
+    if 0 <= func_idx < n_imp
+        local imp = function_imports[Int(func_idx) + 1]
+        local ft = m.types[Int(imp.type_idx) + 1]
+        ft isa FuncType || return (params, results)
+        return (ft.params, ft.results)
     end
     local fi = Int(func_idx) - n_imp
     (fi >= 0 && fi < length(m.functions)) || return (params, results)

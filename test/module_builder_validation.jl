@@ -3,6 +3,9 @@ using WasmTarget
 
 const MBV = WasmTarget
 
+@noinline _mbv_imported_measure() = Base.inferencebarrier(0.0)::Float64
+_mbv_import_caller() = _mbv_imported_measure()
+
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
         m = MBV.WasmModule()
@@ -53,6 +56,27 @@ const MBV = WasmTarget
         sub = MBV.add_type!(m, MBV.StructType([
             MBV.FieldType(MBV.I32, false), MBV.FieldType(MBV.I64, true)], base))
         @test sub == 1
+    end
+
+    @testset "calls derive imported signatures from the module" begin
+        m = MBV.WasmModule()
+        imported = MBV.add_import!(m, "host", "measure", MBV.WasmValType[],
+                                   MBV.WasmValType[MBV.F64])
+        b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.F64]; mod=m)
+        # A call site cannot erase or misstate an import result: the module's
+        # declared function type is the sole stack contract.
+        MBV.call!(b, imported, MBV.WasmValType[], MBV.WasmValType[])
+        MBV.finish_function!(b)
+        @test MBV.builder_code(b) == UInt8[MBV.Opcode.CALL, 0x00, MBV.Opcode.END]
+
+        host = MBV.WasmModule()
+        host_idx = MBV.add_import!(host, "host", "measure", MBV.WasmValType[],
+                                   MBV.WasmValType[MBV.F64])
+        bytes = MBV.compile_multi(Any[(_mbv_import_caller, (), "caller")];
+            existing_module=host,
+            import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)],
+            validate=false)
+        @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
     @testset "symbolic control labels" begin
