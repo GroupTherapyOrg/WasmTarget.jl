@@ -42,6 +42,12 @@ function _wt_vector_mutation_semantics()::Int64
     push!(v, 99)
     return sum(v) * 10 + length(v)
 end
+function _wt_resize_broadcast_fill(a::Int32, b::Int32)::Int32
+    values = zeros(10)
+    resize!(values, 100)
+    values .= 1
+    return sum(values)
+end
 _wt_pure_power_semantics(x::Int64)::Int64 = x^3 + Int64(floor(Float64(x)^2.0))
 struct _WTUnsupportedShow
     x::Int64
@@ -55,6 +61,8 @@ _wt_unsupported_show() = (show(_WTUnsupportedShow(1)); Int64(1))
     @test compare_julia_wasm(_wt_exact_inexact_exception).pass
     @test compare_julia_wasm(_wt_many_string_length).pass
     @test compare_julia_wasm(_wt_vector_mutation_semantics).pass
+    @test compare_julia_wasm(_wt_resize_broadcast_fill, Int32(5), Int32(3)).pass
+    @test compare_julia_wasm(_wt_resize_broadcast_fill, Int32(5), Int32(3); optimize=true).pass
     @test compare_julia_wasm(_wt_pure_power_semantics, Int64(3)).pass
     @test_throws WasmTarget.WasmCompileError WasmTarget.compile(_wt_unsupported_show, ())
 end
