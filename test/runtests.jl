@@ -161,6 +161,9 @@ _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
 _wt_shard0() && include("sort_comparator_backfills.jl")
+# CFG normalization: shared non-returning bounds-error tails may cross natural
+# loop regions and must be duplicated through the canonical statement compiler.
+_wt_shard0() && include("crossing_terminal_taildup.jl")
 # F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference.
 _wt_shard0() && include("f3_box_capture_l0.jl")
 # F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry.
@@ -9967,6 +9970,9 @@ console.log(JSON.stringify({
     # jl_value_ptr/jl_stored_inline folds; quantile via the :sort! whitelist.
     _stats_mean_f(v::Vector{Float64})::Float64 = Statistics.mean(v)
     _stats_mean_i(v::Vector{Int64})::Float64 = Statistics.mean(v)
+    # Julia 1.13 lowers this through mapreduce_impl's @simd loop. Its erased
+    # @inbounds blocks must forward their CFG edges before dominator analysis.
+    _stats_mean_literal(x::Float64)::Float64 = Statistics.mean([x, x, x])
     _stats_var(v::Vector{Float64})::Float64 = Statistics.var(v)
     _stats_std(v::Vector{Float64})::Float64 = Statistics.std(v)
     _stats_median(v::Vector{Float64})::Float64 = Statistics.median(v)
@@ -9976,6 +9982,7 @@ console.log(JSON.stringify({
     @pphase "Statistics stdlib" begin
         @test compare_julia_wasm_vec(_stats_mean_f, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_mean_i, Int64[1, 2, 4]).pass
+        @test compare_julia_wasm(_stats_mean_literal, (Float64,), (2.75,)).pass
         @test compare_julia_wasm_vec(_stats_var, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_std, Float64[3.0, 1.5, 2.5, 4.0]).pass
         # median/quantile: native shapes on 1.12; on 1.13 the

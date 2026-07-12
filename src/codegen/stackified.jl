@@ -191,6 +191,28 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # Normalize edges through blocks erased by an explicit `@inbounds`
+    # boundscheck. Those blocks still carry the Julia CFG's control transfer;
+    # dropping the nodes without forwarding their edges disconnects the graph
+    # and invalidates dominators/loop ownership.
+    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
+        visited = Set{Int}()
+        current = dest_block
+        while current !== nothing && current in dead_blocks && !(current in visited)
+            push!(visited, current)
+            blk = blocks[current]
+            t = blk.terminator
+            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
+                current = get(stmt_to_block, t.dest, nothing)
+            elseif t isa Core.GotoNode
+                current = get(stmt_to_block, t.label, nothing)
+            else
+                return nothing
+            end
+        end
+        return current !== nothing && !(current in dead_blocks) ? current : nothing
+    end
+
     # (successor edges for regions are added after the terminator walk below)
     # march6 slice B: region → block-event maps. A region OPENS at the end of the
     # block containing its EnterNode and CLOSES at the start of its handler block.
@@ -227,6 +249,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This GotoIfNot ALWAYS jumps (boundscheck is 0, NOT 0 = TRUE)
                 # Only add the jump target as successor, NOT the fall-through
                 dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
                 if dest_block !== nothing && !(dest_block in dead_blocks)
                     push!(successors[block_idx], dest_block)
                     push!(predecessors[dest_block], block_idx)
@@ -235,6 +260,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Real conditional: two successors
                 dest_block = get(stmt_to_block, term.dest, nothing)
                 fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
+
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
+                if fall_through_block !== nothing && fall_through_block in dead_blocks
+                    fall_through_block = resolve_through_dead_boundscheck(fall_through_block)
+                end
 
                 if fall_through_block !== nothing && fall_through_block <= length(blocks) && !(fall_through_block in dead_blocks)
                     push!(successors[block_idx], fall_through_block)
@@ -247,6 +279,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
+            if dest_block !== nothing && dest_block in dead_blocks
+                dest_block = resolve_through_dead_boundscheck(dest_block)
+            end
             if dest_block !== nothing
                 push!(successors[block_idx], dest_block)
                 push!(predecessors[dest_block], block_idx)
@@ -256,8 +291,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         else
             # Fall through to next block
             if block_idx < length(blocks)
-                push!(successors[block_idx], block_idx + 1)
-                push!(predecessors[block_idx + 1], block_idx)
+                next_block = block_idx + 1
+                if next_block in dead_blocks
+                    next_block = resolve_through_dead_boundscheck(next_block)
+                end
+                if next_block !== nothing
+                    push!(successors[block_idx], next_block)
+                    push!(predecessors[next_block], block_idx)
+                end
             end
         end
     end
@@ -275,6 +316,40 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if eb < length(blocks) && !((eb + 1) in successors[eb])
             push!(successors[eb], eb + 1)
             push!(predecessors[eb + 1], eb)
+        end
+    end
+
+    # Compute block dominators from the real CFG. Numeric block intervals are
+    # not loop membership: Julia 1.13 may lay a loop-exit merge between the
+    # header and a late latch even though an outer branch reaches that merge
+    # without passing through the header. Such a target must not receive a
+    # label nested inside the loop.
+    live_blocks = Set(i for i in eachindex(blocks) if !(i in dead_blocks))
+    dominators = Dict{Int,Set{Int}}()
+    entry_block = isempty(live_blocks) ? nothing : minimum(live_blocks)
+    for block_idx in live_blocks
+        dominators[block_idx] = block_idx == entry_block ? Set([block_idx]) : copy(live_blocks)
+    end
+    changed = true
+    while changed
+        changed = false
+        for block_idx in sort!(collect(live_blocks))
+            block_idx == entry_block && continue
+            preds = Int[p for p in predecessors[block_idx] if p in live_blocks]
+            new_dom = if isempty(preds)
+                Set([block_idx])
+            else
+                common = copy(dominators[first(preds)])
+                for pred in Iterators.drop(preds, 1)
+                    intersect!(common, dominators[pred])
+                end
+                push!(common, block_idx)
+                common
+            end
+            if new_dom != dominators[block_idx]
+                dominators[block_idx] = new_dom
+                changed = true
+            end
         end
     end
 
@@ -356,31 +431,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Create a big block structure with all targets as labeled positions
 
     # Collect all unique forward jump targets (excluding immediate fall-through)
-    # Helper: resolve a dest_block through boundscheck chains to find the real non-dead target.
-    # When a GotoIfNot targets a dead boundscheck block, that block's terminator always jumps
-    # to another block. Follow the chain until we find a non-dead block.
-    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
-        visited = Set{Int}()
-        current = dest_block
-        while current !== nothing && current in dead_blocks && !(current in visited)
-            push!(visited, current)
-            blk = blocks[current]
-            t = blk.terminator
-            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
-                # Boundscheck always-jump: follow to its destination
-                current = get(stmt_to_block, t.dest, nothing)
-            elseif t isa Core.GotoNode
-                current = get(stmt_to_block, t.label, nothing)
-            else
-                return nothing
-            end
-        end
-        if current !== nothing && !(current in dead_blocks)
-            return current
-        end
-        return nothing
-    end
-
     # Also exclude dead blocks and treat boundscheck-based jumps correctly
     non_trivial_targets = Set{Int}()
     for (block_idx, block) in enumerate(blocks)
@@ -425,6 +475,35 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # Julia inference commonly shares a terminal throw block between checks in
+    # different loop regions. That gives the otherwise reducible loop body a
+    # crossing interval: one copy of a Wasm `block` label cannot be both outside
+    # the loop (for the outer predecessor) and inside it (for the inner one).
+    # Normalize this standard CFG shape by tail-duplicating terminal, phi-free,
+    # non-fallthrough blocks at each explicit incoming edge. The cloned tail is
+    # still ordinary Julia IR compiled by the one statement visitor; no value or
+    # alternate compiler path is introduced.
+    duplicated_terminal_targets = Set{Int}()
+    if isempty(try_regions)
+        for target in copy(non_trivial_targets)
+            block = blocks[target]
+            term = block.terminator
+            terminal = term isa Core.ReturnNode && !isdefined(term, :val)
+            phi_free = all(i -> !(code[i] isa Core.PhiNode),
+                           block.start_idx:block.end_idx)
+            prev_can_fallthrough = if target == 1
+                true
+            else
+                prev = blocks[target - 1].terminator
+                !(prev isa Core.GotoNode || prev isa Core.ReturnNode)
+            end
+            if terminal && phi_free && !prev_can_fallthrough
+                push!(duplicated_terminal_targets, target)
+                delete!(non_trivial_targets, target)
+            end
+        end
+    end
+
     # ========================================================================
     # Determine which targets are inside loops vs outside
     # ========================================================================
@@ -446,7 +525,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     target_loop = Dict{Int, Int}()
     for target in non_trivial_targets
         for (header, latch) in loop_latches
-            if target > header && target <= latch
+            if target > header && target <= latch &&
+               header in get(dominators, target, Set{Int}())
                 # Target is inside this loop
                 # If nested, pick the innermost loop (largest header)
                 if !haskey(target_loop, target) || header > target_loop[target]
@@ -969,7 +1049,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
         (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
     if _debug_stackified
-        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
+        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
+    end
+
+    function emit_duplicated_terminal!(tb::InstrBuilder, target::Int)
+        target in duplicated_terminal_targets || error(
+            "block $target is not an admitted duplicated terminal")
+        block = blocks[target]
+        for i in block.start_idx:block.end_idx
+            stmt = code[i]
+            stmt isa Core.ReturnNode && continue
+            compile_statement!(tb, stmt, i, ctx)
+            (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
+        end
+        if isempty(tb.instrs) || !(tb.instrs[end] isa InstrIR.Unreachable)
+            unreachable!(tb)  # structural trap: duplicated tail is proven non-returning
+        end
+        ctx.last_stmt_was_stub = true
+        return tb
     end
 
     # P2-batch23 (gaps 4be58371947f / 203da15d789c): when compiling a SUBSET of
@@ -1030,8 +1127,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # (slice-A exact-semantics note: the old code keyed on the LAST *block*
         # entry regardless of loops above it; replicated via findlast-:block)
         while true
-            local _lb = findlast(e -> e[1] === :block, label_stack)
-            (_lb !== nothing && label_stack[_lb][2] == block_idx) || break
+            local _lb = findlast(e -> e[1] === :block && e[2] == block_idx,
+                                 label_stack)
+            _lb === nothing && break
+            _lb == length(label_stack) || error(
+                "crossing control regions at block $block_idx: forward label is not " *
+                "the innermost open control label (open=$(label_stack))")
             deleteat!(label_stack, _lb)
             end_block!(b)  # End the block for this target
             if _debug_stackified
@@ -1044,6 +1145,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if _debug_stackified
                 @warn "  SKIP dead block $block_idx"
             end
+            continue
+        end
+        if block_idx in duplicated_terminal_targets
+            _debug_stackified && @warn "  SKIP duplicated terminal block $block_idx"
             continue
         end
 
@@ -1226,7 +1331,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if terminator_idx in boundscheck_jumps && term isa Core.GotoIfNot
             # This is an always-jump - emit unconditional br to the target
             dest_block = get(stmt_to_block, term.dest, nothing)
-            if dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
                 br!(b, get_forward_label(dest_block))
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
@@ -1268,7 +1375,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
 
-            if dest_block !== nothing && dest_block > block_idx
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                # GotoIfNot: true falls through, false executes the cloned
+                # non-returning tail. The `if` merge remains reachable only from
+                # the true arm because the false arm ends polymorphically.
+                if_!(b)
+                else_!(b)
+                emit_duplicated_terminal!(b, dest_block)
+                end_block!(b)
+                ctx.last_stmt_was_stub = false
+            elseif dest_block !== nothing && dest_block > block_idx
                 # Forward jump when condition is false
                 if dest_block in non_trivial_targets
                     if has_phi
@@ -1348,10 +1464,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing
-                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
+                if !(dest_block in duplicated_terminal_targets)
+                    set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
+                end
             end
 
-            if dest_block !== nothing && dest_block > block_idx
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx
                 # Forward jump
                 if dest_block in non_trivial_targets
                     local target_label = get_forward_label(dest_block)
@@ -1473,6 +1593,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     for target in loop_inner_targets[dst]
                         local _it = findlast(e -> e[1] === :block && e[2] == target, label_stack)
                         if _it !== nothing
+                            _it == length(label_stack) || error(
+                                "crossing control regions while closing loop $dst at block " *
+                                "$block_idx: target $target is not innermost " *
+                                "(open=$(label_stack))")
                             deleteat!(label_stack, _it)
                             end_block!(b)  # End inner target block
                         end
@@ -1481,7 +1605,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 _debug_stackified && @warn "  END-OF-LOOP fires at block=$block_idx src=$src dst=$dst stack=$label_stack labels=$(length(b.v.labels))"
                 end_block!(b)  # End of loop
                 local _lp = findlast(e -> e[1] === :loop && e[2] == dst, label_stack)
-                _lp !== nothing && deleteat!(label_stack, _lp)
+                if _lp !== nothing
+                    _lp == length(label_stack) || error(
+                        "crossing control regions while closing loop $dst at block " *
+                        "$block_idx: loop is not innermost (open=$(label_stack))")
+                    deleteat!(label_stack, _lp)
+                end
             end
         end
     end
@@ -1490,6 +1619,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     while true
         local _rb = findlast(e -> e[1] === :block, label_stack)
         _rb === nothing && break
+        _rb == length(label_stack) || error(
+            "crossing control regions during final label closure: forward label is " *
+            "not innermost (open=$(label_stack))")
         _debug_stackified && @warn "  FINAL-SWEEP close $(label_stack[_rb]) labels=$(length(b.v.labels))"
         deleteat!(label_stack, _rb)
         end_block!(b)

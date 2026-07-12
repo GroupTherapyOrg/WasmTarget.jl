@@ -314,7 +314,11 @@ _br_if_depth!(b::InstrBuilder, depth::Int) =
     (validate_br_if!(b.v, depth); _emit!(b, InstrIR.BrIf(UInt32(depth))))
 function _label_depth(b::InstrBuilder, target::ControlLabel)::Int
     i = findlast(l -> l.handle === target, b.v.labels)
-    i === nothing && throw(ArgumentError("branch target is not an open label"))
+    if i === nothing
+        open_kinds = Symbol[l.handle.kind for l in b.v.labels]
+        throw(ArgumentError("branch target is not an open label: $(target.kind) " *
+                            "in $(b.func_name); open labels: $open_kinds"))
+    end
     return length(b.v.labels) - i
 end
 br!(b::InstrBuilder, target::ControlLabel) = _br_depth!(b, _label_depth(b, target))

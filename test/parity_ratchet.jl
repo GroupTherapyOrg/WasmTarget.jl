@@ -442,6 +442,31 @@ const LOCKS = [
             count(p -> occursin(p, values_src), forbidden) +
                 count(p -> !occursin(p, values_src), required)
         end),
+    "L89_erased_boundschecks_preserve_cfg_edges" => ("erasing explicit @inbounds checks forwards their control edges before dominator and loop ownership analysis",
+        () -> begin
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            resolver = findfirst("function resolve_through_dead_boundscheck", stack_src)
+            cfg = findfirst("# Build successor/predecessor maps", stack_src)
+            dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
+            ordering_fail = resolver === nothing || cfg === nothing || dominators === nothing ||
+                            first(resolver) > first(cfg) || first(resolver) > first(dominators)
+            required = ["dropping the nodes without forwarding their edges disconnects the graph",
+                        "dest_block = resolve_through_dead_boundscheck(dest_block)",
+                        "fall_through_block = resolve_through_dead_boundscheck(fall_through_block)",
+                        "next_block = resolve_through_dead_boundscheck(next_block)"]
+            Int(ordering_fail) + count(p -> !occursin(p, stack_src), required)
+        end),
+    "L90_crossing_regions_are_normalized_or_rejected" => ("shared terminal CFG tails are duplicated through the canonical visitor and every physical label closure is LIFO-checked",
+        () -> begin
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            required = ["duplicated_terminal_targets = Set{Int}()",
+                        "terminal && phi_free && !prev_can_fallthrough",
+                        "compile_statement!(tb, stmt, i, ctx)",
+                        "crossing control regions at block",
+                        "_lb == length(label_stack)",
+                        "_lp == length(label_stack)"]
+            count(p -> !occursin(p, stack_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

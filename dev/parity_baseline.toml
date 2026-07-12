@@ -88,6 +88,8 @@ L85_constructors_never_drop_real_values = 0
 L86_phi_null_is_semantic_not_numeric = 0
 L87_symbolic_control_labels = 0
 L88_constant_fields_keep_exact_classes = 0
+L89_erased_boundschecks_preserve_cfg_edges = 0
+L90_crossing_regions_are_normalized_or_rejected = 0
 L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
