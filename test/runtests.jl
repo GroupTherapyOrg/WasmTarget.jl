@@ -9982,7 +9982,7 @@ console.log(JSON.stringify({
     @pphase "Statistics stdlib" begin
         @test compare_julia_wasm_vec(_stats_mean_f, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_mean_i, Int64[1, 2, 4]).pass
-        @test compare_julia_wasm(_stats_mean_literal, (Float64,), (2.75,)).pass
+        @test compare_julia_wasm(_stats_mean_literal, 2.75).pass
         @test compare_julia_wasm_vec(_stats_var, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_std, Float64[3.0, 1.5, 2.5, 4.0]).pass
         # median/quantile: native shapes on 1.12; on 1.13 the

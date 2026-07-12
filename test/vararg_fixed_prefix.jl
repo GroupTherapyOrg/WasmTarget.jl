@@ -12,9 +12,14 @@ end
 @noinline _wt_prefixed_vararg_second(seed::Int64, xs::Vararg{Int64})::Int64 =
     seed + getfield(xs, 2, true)
 
+@noinline _wt_typed_dict_literal(::Int64)::Int64 =
+    length(Dict{Int64,Int64}(1 => 10, 2 => 20))
+
 @testset "fixed-prefix vararg ABI" begin
-    cases = [(_wt_prefixed_vararg_sum, (5, 1, 2, 3), 11),
-             (_wt_prefixed_vararg_second, (5, 10, 20, 30), 25)]
+    cases = [(_wt_prefixed_vararg_sum, (5,), 5),
+             (_wt_prefixed_vararg_sum, (5, 1, 2, 3), 11),
+             (_wt_prefixed_vararg_second, (5, 10, 20, 30), 25),
+             (_wt_typed_dict_literal, (0,), 2)]
     for (f, args, expected) in cases
         @test f(args...) == expected
         arg_types = Tuple(typeof.(args))

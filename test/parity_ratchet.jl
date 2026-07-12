@@ -655,7 +655,8 @@ const LOCKS = [
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            required = ["ir_arg_type = function", "Base._methods_by_ftype",
+            required = ["ir_arg_type = function", "CC.findall(ftype, lookup_table; limit=-1)",
+                        "f isa Function || f isa Type",
                         "param_types = first_explicit <= length(target_info_early.arg_types)",
                         "Push arguments through the resolved target signature",
                         "Base.ReinterpretArray{T,N,S,A,false}"]
@@ -711,6 +712,9 @@ const LOCKS = [
             flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
             helpers_src = read(joinpath(CODEGEN, "helpers.jl"), String)
             required = ["function source_slot_type", "source_type = source_slot_type(ctx, val.n)",
+                        "function packed_vararg_source_type",
+                        "packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)",
+                        "Reconstruct the one source-level vararg tuple",
                         "local _gft_fixed = args[1].n - 2",
                         "physical_offset + i - 1", "_gft_result_T isa Union ? AnyRef",
                         "function is_builtin_func"]

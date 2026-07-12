@@ -70,7 +70,12 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
                         getfield(fref.mod, fref.name) : fref
                     arg_types = Any[ir_arg_type(arg, src) for arg in stmt.args[3:end]]
-                    if f isa Function && all(T -> T isa Type && isconcretetype(T), arg_types)
+                    # Constructors are callable Type objects, not subtypes of
+                    # Function. They participate in exactly the same overlay
+                    # method-table lookup and concrete MethodInstance
+                    # specialization as ordinary functions.
+                    if (f isa Function || f isa Type) &&
+                       all(T -> T isa Type && isconcretetype(T), arg_types)
                         ftype = Tuple{Core.Typeof(f), arg_types...}
                         # Re-resolve with the same overlay table used by the
                         # closed-world compiler. An explicit invoke can retain
@@ -95,7 +100,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 target = stmt.args[3]
                 f = target isa GlobalRef && isdefined(target.mod, target.name) ?
                     getfield(target.mod, target.name) : target
-                f isa Function || continue
+                (f isa Function || f isa Type) || continue
                 arg_types = Any[]
                 valid = true
                 for arg in stmt.args[4:end]

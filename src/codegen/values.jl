@@ -81,7 +81,10 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         else
             arg_idx = val.n - 1
         end
-        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+        packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)
+        if packed_type !== nothing
+            return julia_to_wasm_type_concrete(packed_type, ctx)
+        elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
         end
         return I32
@@ -1146,9 +1149,38 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             arg_idx = val.n - 1
         end
 
+        packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)
+
+        # Reconstruct the one source-level vararg tuple from its flattened
+        # physical parameter tail. This is the sole source-ABI projection; every
+        # consumer then sees an ordinary, concrete Julia tuple value.
+        if packed_type !== nothing
+            any(i -> i in ctx.global_args, arg_idx:length(ctx.arg_types)) &&
+                error("a packed vararg tail cannot contain phantom WasmGlobal parameters")
+            tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, packed_type)
+            tuple_info === nothing && error("packed vararg tuple layout is unavailable")
+            emit_struct_prefix!(b, ctx.type_registry, packed_type, tuple_info)
+            tuple_def = ctx.mod.types[tuple_info.wasm_type_idx + 1]
+            for (field, physical_arg) in enumerate(arg_idx:length(ctx.arg_types))
+                field_idx = field + Int(tuple_info.field_offset)
+                expected = tuple_def isa StructType && field_idx <= length(tuple_def.fields) ?
+                    tuple_def.fields[field_idx].valtype : nothing
+                expected === nothing && error(
+                    "packed vararg tuple field lacks a physical Wasm type")
+                local_idx = count(i -> !(i in ctx.global_args), 1:physical_arg-1)
+                local_get!(b, local_idx)
+                actual = get_concrete_wasm_type(ctx.arg_types[physical_arg], ctx.mod,
+                                               ctx.type_registry)
+                if actual !== expected
+                    coerce_stack_top!(b, expected, ctx;
+                        from_julia=ctx.arg_types[physical_arg])
+                end
+            end
+            struct_new!(b, tuple_info.wasm_type_idx)
+
         # WasmGlobal arguments don't have locals - they're accessed via global.get/set
         # in the getfield/setfield handlers, so we skip emitting anything here
-        if arg_idx in ctx.global_args
+        elseif arg_idx in ctx.global_args
             # WasmGlobal arg - no local.get needed (handled by getfield/setfield)
             # Return empty bytes
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)

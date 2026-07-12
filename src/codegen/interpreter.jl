@@ -43,11 +43,16 @@ end
 #      simple struct) → emits invalid wasm (ref where i64 expected). Empty
 #      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
 # Remove when: codegen compiles the real Dict tuple-constructor body.
+@inline _wasm_dict_insert_pairs!(d::Dict, ::Tuple{}) = d
+@inline function _wasm_dict_insert_pairs!(d::Dict{K,V}, kv::Tuple) where {K,V}
+    p = first(kv)
+    d[p.first] = p.second
+    return _wasm_dict_insert_pairs!(d, Base.tail(kv))
+end
+
 @overlay WASM_METHOD_TABLE function (::Type{Dict{K,V}})(kv::Tuple) where {K,V}
     d = Dict{K,V}()
-    for p in kv
-        d[p.first] = p.second
-    end
+    _wasm_dict_insert_pairs!(d, kv)
     return d
 end
 

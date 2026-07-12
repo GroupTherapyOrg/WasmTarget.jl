@@ -1871,6 +1871,31 @@ function source_slot_type(ctx::AbstractCompilationContext, slot::Integer)::Union
     return widened isa Type ? widened : nothing
 end
 
+"""Return the source tuple type when one IR argument is a flattened vararg pack.
+
+`CodeInfo` exposes a vararg method's final source argument as `Tuple{...}`, while
+the Wasm function signature contains each concrete vararg as a separate physical
+parameter. An ordinary tuple argument has one matching physical tuple parameter
+and is deliberately not classified as a pack.
+"""
+function packed_vararg_source_type(ctx::AbstractCompilationContext,
+                                   source_slot::Integer,
+                                   physical_start::Integer)::Union{Type, Nothing}
+    T = source_slot_type(ctx, source_slot)
+    T isa DataType && T <: Tuple || return nothing
+    physical_start >= 1 || return nothing
+    tail = physical_start <= length(ctx.arg_types) ?
+        ctx.arg_types[physical_start:end] : ()
+    length(tail) == 1 && tail[1] === T && return nothing
+    params = T.parameters
+    length(params) == length(tail) || return nothing
+    for i in eachindex(params)
+        p = params[i]
+        p isa Type && tail[i] isa Type && p == tail[i] || return nothing
+    end
+    return T
+end
+
 function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
     if val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
@@ -2107,6 +2132,11 @@ end
 
 function infer_value_type(val, ctx::AbstractCompilationContext)
     if val isa Core.Argument
+        # Source IR semantics are authoritative. The physical signature can be
+        # flattened (notably a vararg tuple), so indexing ctx.arg_types first
+        # can turn one Tuple source argument into its first physical element.
+        source_type = source_slot_type(ctx, val.n)
+        source_type !== nothing && return source_type
         # For closures being compiled, _1 is the closure object (arg_types[1])
         # For regular functions, arguments start at _2 (arg_types[1])
         # Use is_compiled_closure flag to distinguish (not the type of first arg)
@@ -2129,6 +2159,8 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         # PURE-6024: SlotNumber is the unoptimized IR equivalent of Core.Argument.
         # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
         # For local variable slots (not params), use slottypes from CodeInfo.
+        source_type = source_slot_type(ctx, val.id)
+        source_type !== nothing && return source_type
         if ctx.is_compiled_closure
             idx = val.id
         else
@@ -2136,9 +2168,6 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         end
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
-        else
-            source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return source_type
         end
     elseif val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
