@@ -6972,16 +6972,8 @@ console.log(JSON.stringify({
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin
             # `dynamic` call over >4 methods: trim collection discovers the
             # concrete-struct specializations, call site emits a typeId switch.
-            # GATED: the discovery is off by default (perturbs base inference); enable
-            # it for this self-contained struct-only case (no string deps to perturb).
-            _prev_dd = get(ENV, "WT_DYNDISPATCH", nothing)
-            ENV["WT_DYNDISPATCH"] = "1"
-            try
-                @test compare_julia_wasm(_wt_dyndispatch, Int64(5)).pass   # 6+8+10 = 24
-                @test compare_julia_wasm(_wt_dyndispatch, Int64(0)).pass   # 1+3+5 = 9
-            finally
-                _prev_dd === nothing ? delete!(ENV, "WT_DYNDISPATCH") : (ENV["WT_DYNDISPATCH"] = _prev_dd)
-            end
+            @test compare_julia_wasm(_wt_dyndispatch, Int64(5)).pass   # 6+8+10 = 24
+            @test compare_julia_wasm(_wt_dyndispatch, Int64(0)).pass   # 1+3+5 = 9
         end
 
         @testset "Abstract ::Vector struct field (WASMTARGET-FUZZ)" begin

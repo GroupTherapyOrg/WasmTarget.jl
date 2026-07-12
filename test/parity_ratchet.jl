@@ -296,6 +296,19 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery are unconditional fixpoints with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
+                         "try CC.specialize_method", "try collect(methods", "try which(f, ats)"]
+            required = ["while true", "hasmethod(f, ats) ? which(f, ats) : nothing",
+                        "dynamic dispatch: discover every target admitted by the closed",
+                        "has no environment opt-out or arbitrary round/method ceiling"]
+            all_src = trim_src * tests_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

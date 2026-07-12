@@ -74,8 +74,8 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
             elseif stmt.head === :call && length(stmt.args) >= 3 &&
                    stmt.args[1] === Core.invoke_in_world
                 target = stmt.args[3]
-                f = target isa GlobalRef ?
-                    (try getfield(target.mod, target.name) catch; nothing end) : target
+                f = target isa GlobalRef && isdefined(target.mod, target.name) ?
+                    getfield(target.mod, target.name) : target
                 f isa Function || continue
                 arg_types = Any[]
                 valid = true
@@ -91,7 +91,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 end
                 if valid
                     ats = Tuple(arg_types)
-                    m = try which(f, ats) catch; nothing end
+                    m = hasmethod(f, ats) ? which(f, ats) : nothing
                     m === nothing || (mi = CC.specialize_method(
                         m, Tuple{Core.Typeof(f), arg_types...}, Core.svec()))
                 end
@@ -163,7 +163,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         for stmt0 in src0.code
             if stmt0 isa Expr && stmt0.head === :new && !isempty(stmt0.args)
                 local nt = stmt0.args[1]
-                local T = nt isa GlobalRef ? (try getfield(nt.mod, nt.name) catch; nothing end) : nt
+                local T = nt isa GlobalRef && isdefined(nt.mod, nt.name) ?
+                          getfield(nt.mod, nt.name) : nt
                 observe_type!(T)
             end
         end
@@ -222,7 +223,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             # anyref and the body's funnel machinery narrows internally).
             if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
                 local _nt = stmt.args[1]
-                local _T = _nt isa GlobalRef ? (try getfield(_nt.mod, _nt.name) catch; nothing end) :
+                local _T = _nt isa GlobalRef && isdefined(_nt.mod, _nt.name) ? getfield(_nt.mod, _nt.name) :
                            _nt isa DataType ? _nt : nothing
                 # scope: USERLAND closures only — Base/stdlib-internal closures are
                 # statically called (never through the vtable); enrolling them all
@@ -251,7 +252,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
             cref isa GlobalRef || continue
-            g = try getfield(cref.mod, cref.name) catch; continue end
+            isdefined(cref.mod, cref.name) || continue
+            g = getfield(cref.mod, cref.name)
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             # Resolve arg types from the optimized IR.
             cargs = stmt.args[2:end]
@@ -262,8 +264,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     (ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any
                 elseif a isa Core.Argument
                     (a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any
+                elseif a isa GlobalRef && isdefined(a.mod, a.name)
+                    Core.Typeof(getfield(a.mod, a.name))
                 elseif a isa GlobalRef
-                    try Core.Typeof(getfield(a.mod, a.name)) catch; Any end
+                    Any
                 else
                     Core.Typeof(a)
                 end
@@ -275,7 +279,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             absp = Int[j for j in 1:length(atypes) if !(atypes[j] isa DataType && isconcretetype(atypes[j]))]
             length(absp) == 1 || continue
             p = absp[1]
-            ms = try collect(methods(g, Tuple{atypes...})) catch; Method[] end
+            ms = collect(methods(g, Tuple{atypes...}))
             # march13 (dart: ALL targetCount>1 dispatch through the table,
             # dispatch_table.dart:401-403): the old ≤8 cap CIRCULARLY ABANDONED
             # ≥9-method dynamic sites — it "left them to the dispatch table", but the
@@ -283,10 +287,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             # through THIS discovery → nothing registered, no table, unreachable stub
             # (the pinned two-arg megamorphic bug). Discovery now feeds BOTH mechanisms;
             # the inline-vs-table split happens downstream by count (threshold=9).
-            # 64 = an explosion sanity guard, not a mechanism cliff.
-            (0 < length(ms) <= 64) || continue
+            isempty(ms) && continue
             for m in ms
-                msig = try collect(Base.unwrap_unionall(m.sig).parameters) catch; continue end
+                unwrapped_sig = Base.unwrap_unionall(m.sig)
+                unwrapped_sig isa DataType || continue
+                msig = collect(unwrapped_sig.parameters)
                 isempty(msig) && continue
                 last_param = msig[end]
                 is_vararg = last_param isa Core.TypeofVararg
@@ -318,9 +323,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 end
                 for target_type in candidates
                     spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
-                    ssig = try Tuple{Core.Typeof(g), spec...} catch; continue end
+                    ssig = Tuple{Core.Typeof(g), spec...}
                     ssig <: m.sig || continue
-                    cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                    cmi = CC.specialize_method(m, ssig, Core.svec())
                     cmi in seen && continue
                     push!(seen, cmi)
                     push!(out, cmi)
@@ -334,22 +339,21 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     # signature of matching arity → a TYPED body specialization (the vtable's
     # typed entry; inference compiles the body for real)
     for _T in callable_types
-        local _mms2 = try
-            Base._methods_by_ftype(Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
-        catch; nothing end
+        local _mms2 = Base._methods_by_ftype(
+            Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
             local m = mm.method
-            local msig = try Base.unwrap_unionall(m.sig) catch; nothing end
+            local msig = Base.unwrap_unionall(m.sig)
             msig isa DataType || continue
             local mps = collect(msig.parameters)
             (length(mps) >= 1 && _T <: mps[1]) || continue
             local marity = length(mps) - 1
             for ds in dyn_sigs
                 length(ds) == marity || continue
-                local ssig = try Tuple{_T, ds...} catch; continue end
+                local ssig = Tuple{_T, ds...}
                 # the observed args must be admissible for the method
                 (ssig <: m.sig) || continue
-                local cmi = try CC.specialize_method(m, ssig, Core.svec()) catch; continue end
+                local cmi = CC.specialize_method(m, ssig, Core.svec())
                 cmi === nothing && continue
                 cmi in seen && continue
                 push!(seen, cmi)
@@ -389,7 +393,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
     end
     invoke_seen = copy(base_mis)
-    for _round in 1:8
+    while true
         extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen)
         isempty(extra_invokes) && break
         invoke_interp = WasmInterpreter(Base.RefValue(0))
@@ -410,7 +414,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
         end
         added || break
     end
-    # WASMTARGET dynamic dispatch — GATED OFF BY DEFAULT (set WT_DYNDISPATCH=1 to enable).
+    # WASMTARGET dynamic dispatch: discover every target admitted by the closed
+    # component, to a real fixpoint. This is part of compilation correctness and
+    # therefore has no environment opt-out or arbitrary round/method ceiling.
     # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
     # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
     # hash/isequal, …) are collected in a SEPARATE interpreter + collection, then only the
@@ -423,11 +429,10 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     # isolation — so candidates don't perturb base get_function cross-call resolution — is
     # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
     # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
-    # whether or not discovery runs — so dynamic dispatch is ON BY DEFAULT (WT_DYNDISPATCH=0
-    # to disable).
-    if get(ENV, "WT_DYNDISPATCH", "1") != "0"
+    # whether or not discovery runs.
+    let
         seen_disp = Set{Any}()   # dedup candidate MIs across fixpoint rounds
-        for _round in 1:8
+        while true
             extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
             extra = Any[mi for mi in extra if !(mi in base_mis)]
             union!(_DYNAMIC_ROOT_MIS[], extra)
