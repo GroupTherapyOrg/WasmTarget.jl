@@ -2195,6 +2195,16 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         # identity operation widened to the foreigncall's `Any` result.
         emit_value!(b, expr.args[6], ctx, AnyRef)
         return b
+    elseif _fc_sym === :jl_type_unionall && length(expr.args) >= 6
+        # Julia 1.13 lowers `x isa UnionAll` to this runtime predicate on
+        # platforms where inference cannot prove x. The target already has one
+        # canonical $JlUnionAll subtype in the JlType hierarchy, so the exact
+        # operation is a nominal ref.test—not a host call or name-based guess.
+        unionall_idx = ctx.type_registry.jl_unionall_idx
+        unionall_idx === nothing && error("JlUnionAll hierarchy type is unavailable")
+        emit_value!(b, expr.args[6], ctx, AnyRef)
+        ref_test!(b, Int64(unionall_idx), false)
+        return b
     elseif _fc_sym === :utf8proc_charwidth && length(expr.args) >= 6
         emit_value!(b, expr.args[6], ctx, I32)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)

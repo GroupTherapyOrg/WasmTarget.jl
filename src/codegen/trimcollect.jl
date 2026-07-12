@@ -24,7 +24,7 @@
 
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                      superseded::Set{Any})
+                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}())
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
@@ -83,7 +83,14 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                         # call must dispatch to a Wasm overlay specialization.
                         matches = CC.findall(ftype, lookup_table; limit=-1)
                         if matches !== nothing && !isempty(matches)
-                            mi = CC.specialize_method(matches[1])
+                            match = matches[1]
+                            # Re-specialization must be idempotent: Compiler may
+                            # return a fresh MethodInstance object for the same
+                            # overlay method/signature, which would make the joint
+                            # reachability worklist manufacture work forever.
+                            if mi.specTypes != ftype || mi.def !== match.method
+                                mi = CC.specialize_method(match)
+                            end
                         end
                     end
                 end
@@ -93,7 +100,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     # with the Wasm overlay dispatch selected for the concrete call.
                     # The superseded abstract/native subtree is pruned below.
                     stmt.args[1] = mi
-                    push!(superseded, original_mi)
+                    original_mi in protected || push!(superseded, original_mi)
                 end
             elseif stmt.head === :call && length(stmt.args) >= 3 &&
                    stmt.args[1] === Core.invoke_in_world
@@ -469,39 +476,71 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     end
     invoke_seen = union(copy(base_mis), external_leaves)
     superseded_invokes = Set{Any}()
-    while true
-        extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen,
-                                                       superseded_invokes)
-        isempty(extra_invokes) && break
-        invoke_interp = WasmInterpreter(Base.RefValue(0))
-        invoke_ci = Any[]
-        invoke_wq = CC.CompilationQueue(; interp=invoke_interp)
-        invoke_ilq = CC.CompilationQueue(; interp=invoke_interp)
-        append!(invoke_wq, extra_invokes)
-        CC.compile!(invoke_ci, invoke_wq; invokelatest_queue=invoke_ilq)
-        CC.compile!(invoke_ci, invoke_ilq; invokelatest_queue=invoke_ilq)
+    pruned_superseded = 0
+    seen_disp = Set{Any}()
+
+    # Explicit invokes and dynamic-dispatch candidates form ONE reachability
+    # problem. Either class can add IR containing edges of the other class, so
+    # sequential fixpoints are insufficient. Iterate both collectors together
+    # until neither can add a MethodInstance; every collection uses a fresh
+    # interpreter/cache partition and only new pairs are merged.
+    function collect_new_pairs!(mis)
+        isempty(mis) && return false
+        fresh_interp = WasmInterpreter(Base.RefValue(0))
+        fresh_ci = Any[]
+        fresh_wq = CC.CompilationQueue(; interp=fresh_interp)
+        fresh_ilq = CC.CompilationQueue(; interp=fresh_interp)
+        append!(fresh_wq, mis)
+        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq)
+        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq)
         added = false
-        for k in 1:2:length(invoke_ci)
-            (invoke_ci[k] isa Core.CodeInstance && invoke_ci[k + 1] isa Core.CodeInfo) || continue
-            mi = invoke_ci[k].def
+        for k in 1:2:length(fresh_ci)
+            (fresh_ci[k] isa Core.CodeInstance && fresh_ci[k + 1] isa Core.CodeInfo) || continue
+            mi = fresh_ci[k].def
             mi in base_mis && continue
             push!(base_mis, mi)
-            push!(codeinfos, invoke_ci[k], invoke_ci[k + 1])
+            push!(codeinfos, fresh_ci[k], fresh_ci[k + 1])
             added = true
         end
-        added || break
+        return added
     end
-    if !isempty(superseded_invokes)
-        codeinfos = _prune_external_leaf_subgraphs(
-            codeinfos, entries, union(external_leaves, superseded_invokes))
-        empty!(base_mis)
-        for k in 1:2:length(codeinfos)
-            codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+
+    while true
+        changed = collect_new_pairs!(_missing_explicit_invoke_mis(
+            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries)))
+
+        if length(superseded_invokes) != pruned_superseded
+            # Selector candidates are genuine runtime roots even though their
+            # incoming edges are dynamic calls rather than explicit invokes.
+            # Preserve them—and their newly specialized invoke subgraphs—when
+            # pruning superseded abstract/native invoke trees.
+            prune_roots = Any[entries...]
+            append!(prune_roots, _DYNAMIC_ROOT_MIS[])
+            codeinfos = _prune_external_leaf_subgraphs(
+                codeinfos, prune_roots, union(external_leaves, superseded_invokes))
+            empty!(base_mis)
+            for k in 1:2:length(codeinfos)
+                codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+            end
+            pruned_superseded = length(superseded_invokes)
         end
+
+        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
+        extra = Any[mi for mi in extra if !(mi in base_mis)]
+        union!(_DYNAMIC_ROOT_MIS[], extra)
+        for mi in extra
+            local st = mi.specTypes
+            if st isa DataType && st <: Tuple && length(st.parameters) >= 1
+                local ft = st.parameters[1]
+                ft isa DataType && ft <: Function && push!(_ENROLLED_CALLABLE_TYPES[], ft)
+            end
+        end
+        changed |= collect_new_pairs!(extra)
+        changed || break
     end
-    # WASMTARGET dynamic dispatch: discover every target admitted by the closed
-    # component, to a real fixpoint. This is part of compilation correctness and
-    # therefore has no environment opt-out or arbitrary round/method ceiling.
+
+    # WASMTARGET dynamic dispatch: discover every target admitted by the closed component.
+    # It is compilation correctness and has no environment opt-out or arbitrary round/method ceiling.
     # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
     # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
     # hash/isequal, …) are collected in a SEPARATE interpreter + collection, then only the
@@ -515,44 +554,6 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
     # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
     # whether or not discovery runs.
-    let
-        seen_disp = Set{Any}()   # dedup candidate MIs across fixpoint rounds
-        while true
-            extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
-            extra = Any[mi for mi in extra if !(mi in base_mis)]
-            union!(_DYNAMIC_ROOT_MIS[], extra)
-            # march16: remember WHICH callable types were enrolled — the conversion
-            # arm converts ONLY these (converting every userland closure pair changed
-            # unrelated compiles: the randsubseq suite regression, bisect-certified).
-            for mi in extra
-                local st = mi.specTypes
-                if st isa DataType && st <: Tuple && length(st.parameters) >= 1
-                    local ft = st.parameters[1]
-                    ft isa DataType && ft <: Function && push!(_ENROLLED_CALLABLE_TYPES[], ft)
-                end
-            end
-            isempty(extra) && break
-            # Fresh interpreter (its own cache_owner) — never touches the base partition.
-            cand_interp = WasmInterpreter(Base.RefValue(0))
-            cand_ci = Any[]
-            cand_wq = CC.CompilationQueue(; interp = cand_interp)
-            cand_ilq = CC.CompilationQueue(; interp = cand_interp)
-            append!(cand_wq, extra)
-            CC.compile!(cand_ci, cand_wq; invokelatest_queue = cand_ilq)
-            CC.compile!(cand_ci, cand_ilq; invokelatest_queue = cand_ilq)
-            # Merge only NEW pairs (dedup by MI) so base pairs are never duplicated.
-            added = false
-            for k in 1:2:length(cand_ci)
-                (cand_ci[k] isa Core.CodeInstance && cand_ci[k + 1] isa Core.CodeInfo) || continue
-                mi = cand_ci[k].def
-                mi in base_mis && continue
-                push!(base_mis, mi)
-                push!(codeinfos, cand_ci[k], cand_ci[k + 1])
-                added = true
-            end
-            added || break
-        end
-    end
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end

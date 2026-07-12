@@ -83,7 +83,9 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         end
         packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)
         if packed_type !== nothing
-            return julia_to_wasm_type_concrete(packed_type, ctx)
+            tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, packed_type)
+            tuple_info === nothing && error("packed vararg tuple layout is unavailable")
+            return ConcreteRef(UInt32(tuple_info.wasm_type_idx), true)
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
         end
@@ -1169,14 +1171,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     "packed vararg tuple field lacks a physical Wasm type")
                 local_idx = count(i -> !(i in ctx.global_args), 1:physical_arg-1)
                 local_get!(b, local_idx)
-                actual = get_concrete_wasm_type(ctx.arg_types[physical_arg], ctx.mod,
-                                               ctx.type_registry)
+                actual = _local_type(b, local_idx)
                 if actual !== expected
                     coerce_stack_top!(b, expected, ctx;
                         from_julia=ctx.arg_types[physical_arg])
                 end
             end
-            struct_new!(b, tuple_info.wasm_type_idx)
+            packed_source_tuple_new!(b, tuple_info.wasm_type_idx)
 
         # WasmGlobal arguments don't have locals - they're accessed via global.get/set
         # in the getfield/setfield handlers, so we skip emitting anything here

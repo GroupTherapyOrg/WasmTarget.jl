@@ -296,13 +296,16 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
-    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery are unconditional fixpoints with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
             forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
                          "try CC.specialize_method", "try collect(methods", "try which(f, ats)"]
             required = ["while true", "hasmethod(f, ats) ? which(f, ats) : nothing",
+                        "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
+                        "collect_new_pairs!", "original_mi in protected ||",
+                        "append!(prune_roots, _DYNAMIC_ROOT_MIS[])",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
@@ -466,6 +469,38 @@ const LOCKS = [
                         "_lb == length(label_stack)",
                         "_lp == length(label_stack)"]
             count(p -> !occursin(p, stack_src), required)
+        end),
+    "L91_framework_roots_are_declarative" => ("framework closure globals, exact constants, and root-to-root calls are declarative inputs to the one closed-world compilation route",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
+            required = ["captured_constants::Dict{Symbol,Any}",
+                        "invoke_roots::Dict{Int,String}",
+                        "root \$name binds closure fields twice",
+                        "invokes unknown compilation roots",
+                        "static_wasm_type(_captured_value, ctx)",
+                        "Declaratively bound invoke", "params, _ = _true_call_sig",
+                        "emit_value!(bii, arg, ctx, expected",
+                        "constant_root", "root-link fixture", "unknown_link"]
+            count(p -> !occursin(p, compile_src * calls_src * invoke_src * test_src), required)
+        end),
+    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["jl_type_unionall` (no lowering)",
+                         "get_concrete_wasm_type(Union{}"]
+            required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
+                        "elseif _fc_sym === :jl_type_unionall",
+                        "ref_test!(b, Int64(unionall_idx), false)",
+                        "A bottom producer has no runtime value to classify or coerce",
+                        "bottom phi source has no terminating statement"]
+            all_src = context_src * stmts_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
@@ -780,11 +815,12 @@ const LOCKS = [
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled before selector discovery; unspecialized Vararg signatures never become physical Wasm entries",
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; unspecialized Vararg signatures never become physical Wasm entries",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["function _missing_explicit_invoke_mis",
-                        "extra_invokes = _missing_explicit_invoke_mis",
+                        "changed = collect_new_pairs!(_missing_explicit_invoke_mis(",
+                        "original_mi in protected || push!(superseded, original_mi)",
                         "any(T -> T isa Core.TypeofVararg, arg_types) && continue"]
             count(p -> !occursin(p, trim_src), required)
         end),

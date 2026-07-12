@@ -1685,6 +1685,7 @@ same discard semantics: arms that replace it re-init; exits merge typed).
 function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_invoke.frag")
     _seed_builder_locals!(fb, ctx)
+    args = expr.args[3:end]
 
     # Early skip check — before compiling arguments.
     # Skipped statements emit nothing (NOP). This prevents argument values
@@ -1693,16 +1694,23 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         return append_builder!(b, fb)
     end
 
-    # Invoke import check — emit CALL to a WASM import function.
-    # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
+    # Declaratively bound invoke — target may be an import or another root.
+    # Its already-declared module signature is authoritative, and arguments go
+    # through the same typed emission/coercion channel as ordinary invokes.
     if haskey(ctx.invoke_imports, idx)
-        import_idx = ctx.invoke_imports[idx]
+        target_idx = ctx.invoke_imports[idx]
         bii = _ctx_builder(ctx, "compile_invoke")
-        call!(bii, import_idx, WasmValType[], WasmValType[])
+        params, _ = _true_call_sig(bii, target_idx, WasmValType[], WasmValType[])
+        length(args) == length(params) || throw(ArgumentError(
+            "bound invoke $idx supplies $(length(args)) arguments to a $(length(params))-parameter target"))
+        for (arg, expected) in zip(args, params)
+            jt = _invoke_arg_static_type(arg, ctx)
+            emit_value!(bii, arg, ctx, expected;
+                        from_julia=(jt isa Type && isconcretetype(jt)) ? jt : nothing)
+        end
+        call!(bii, target_idx, WasmValType[], WasmValType[])
         return append_builder!(b, bii)
     end
-
-    args = expr.args[3:end]
 
 
     # Check for signal substitution (Therapy.jl closures)

@@ -23,6 +23,12 @@ function _mbv_signal_closures()
     handler = () -> setter(getter() + Int64(1))
     return getter, setter, handler
 end
+function _mbv_constant_closure()
+    offset = Int64(7)
+    return (x::Int64) -> x + offset
+end
+Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
+_mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -163,6 +169,44 @@ end
             root_bindings=Dict("bad_global" => missing_global))
         @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "known")];
             root_bindings=Dict("unknown" => bindings))
+
+        constant_root = _mbv_constant_closure()
+        constant_bindings = MBV.RootBindings(
+            captured_constants=Dict(:offset => Int64(7)),
+            elide_closure_context=true)
+        constant_bytes = MBV.compile_multi(
+            Any[(constant_root, (Int64,), "constant_root")];
+            root_bindings=Dict("constant_root" => constant_bindings))
+        @test constant_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        duplicate = MBV.RootBindings(
+            captured_globals=Dict(:offset => (true, UInt32(0))),
+            captured_constants=Dict(:offset => Int64(7)),
+            elide_closure_context=true)
+        @test_throws ArgumentError MBV.compile_module(
+            Any[(constant_root, (Int64,), "duplicate")];
+            existing_module=m, root_bindings=Dict("duplicate" => duplicate))
+
+        leaf, caller = _mbv_root_link_leaf, _mbv_root_link_caller
+        ci = only(Base.code_typed(caller, (Int64,)))[1]
+        invoke_site = findfirst(stmt -> stmt isa Expr && stmt.head === :invoke &&
+            ((stmt.args[1] isa Core.MethodInstance &&
+              stmt.args[1].def.name === :_mbv_root_link_leaf) ||
+             (stmt.args[1] isa Core.CodeInstance &&
+              stmt.args[1].def.def.name === :_mbv_root_link_leaf)), ci.code)
+        invoke_site === nothing && error("root-link fixture lost its linked invoke")
+        linked = MBV.RootBindings(
+            invoke_roots=Dict(invoke_site => "leaf"),
+        )
+        linked_bytes = MBV.compile_multi(Any[
+            (leaf, (Int64,), "leaf"), (caller, (Int64,), "caller")];
+            root_bindings=Dict("caller" => linked))
+        @test linked_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        unknown_link = MBV.RootBindings(invoke_roots=Dict(invoke_site => "missing"))
+        @test_throws ArgumentError MBV.compile_module(
+            Any[(caller, (Int64,), "caller")];
+            root_bindings=Dict("caller" => unknown_link))
     end
 
     @testset "symbolic control labels" begin

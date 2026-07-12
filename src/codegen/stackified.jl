@@ -762,6 +762,17 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Type compatibility for recomputed SSA values (the M10a fix lives in the
                 # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
+                if ssa_julia_type === Union{}
+                    # A bottom producer has no runtime value to classify or coerce.
+                    # Revisit its real statement so the throw/unreachable terminator is
+                    # preserved; the enclosing edge is then stack-polymorphic by Wasm
+                    # validation, exactly as in dart's unreachable expression handling.
+                    stmt !== nothing && !(stmt isa Core.PhiNode) ?
+                        compile_statement!(pvb, stmt, val.id, ctx) :
+                        emit_phi_failure!(pvb, "bottom phi source has no terminating statement";
+                                          idx=phi_idx)
+                    return _cpv_ret()
+                end
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = _ctx_builder(ctx, "phi_edge_src")

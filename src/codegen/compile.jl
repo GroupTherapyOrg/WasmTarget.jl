@@ -5,20 +5,26 @@
 """Declarative, typed substitutions for one closed-world compilation root."""
 struct RootBindings
     captured_globals::Dict{Symbol,Tuple{Bool,UInt32}}
+    captured_constants::Dict{Symbol,Any}
     dom_bindings::Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}
     skip_stmts::Set{Int}
     invoke_imports::Dict{Int,UInt32}
+    invoke_roots::Dict{Int,String}
     elide_closure_context::Bool
     void_return::Bool
 end
 
 function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
+                      captured_constants=Dict{Symbol,Any}(),
                       dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
                       skip_stmts=Set{Int}(), invoke_imports=Dict{Int,UInt32}(),
+                      invoke_roots=Dict{Int,String}(),
                       elide_closure_context::Bool=false, void_return::Bool=false)
     RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
+                 Dict{Symbol,Any}(captured_constants),
                  Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
                  Set{Int}(skip_stmts), Dict{Int,UInt32}(invoke_imports),
+                 Dict{Int,String}(invoke_roots),
                  elide_closure_context, void_return)
 end
 
@@ -622,6 +628,13 @@ function _compile_closed_world_plan(functions::Vector;
             Int(import_idx) < n_imported_functions || throw(ArgumentError(
                 "root $root_name invoke binding references missing function import $import_idx"))
         end
+        unknown_targets = setdiff(Set(values(bindings.invoke_roots)), requested_names)
+        isempty(unknown_targets) || throw(ArgumentError(
+            "root $root_name invokes unknown compilation roots: $(sort!(collect(unknown_targets)))"))
+        overlap_sites = intersect(Set(keys(bindings.invoke_imports)),
+                                  Set(keys(bindings.invoke_roots)))
+        isempty(overlap_sites) || throw(ArgumentError(
+            "root $root_name binds invoke sites twice: $(sort!(collect(overlap_sites)))"))
     end
 
     # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
@@ -699,10 +712,13 @@ function _compile_closed_world_plan(functions::Vector;
         bindings = get(root_bindings, name, nothing)
         elide_closure_context = bindings !== nothing && bindings.elide_closure_context
         if elide_closure_context
-            is_closure || throw(ArgumentError(
-                "root $name requests closure-context elision but is not a closure"))
+            overlap = intersect(Set(keys(bindings.captured_globals)),
+                                Set(keys(bindings.captured_constants)))
+            isempty(overlap) || throw(ArgumentError(
+                "root $name binds closure fields twice: $(sort!(collect(overlap)))"))
             missing_fields = Symbol[field for field in fieldnames(closure_type)
-                                    if !haskey(bindings.captured_globals, field)]
+                                    if !haskey(bindings.captured_globals, field) &&
+                                       !haskey(bindings.captured_constants, field)]
             isempty(missing_fields) || throw(ArgumentError(
                 "root $name cannot elide closure context; unsubstituted fields: $(missing_fields)"))
         end
@@ -996,6 +1012,12 @@ function _compile_closed_world_plan(functions::Vector;
         else
             # Generate function body from Julia IR
             bindings = get(root_bindings, name, nothing)
+            local _root_invokes = bindings === nothing ? Dict{Int,UInt32}() :
+                Dict{Int,UInt32}(site => UInt32(n_imports + n_existing +
+                    findfirst(d -> d[3] == target, function_data) - 1)
+                    for (site, target) in bindings.invoke_roots)
+            local _bound_invokes = bindings === nothing ? Dict{Int,UInt32}() :
+                merge(bindings.invoke_imports, _root_invokes)
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args,
@@ -1003,11 +1025,12 @@ function _compile_closed_world_plan(functions::Vector;
                                         !(bindings !== nothing && bindings.elide_closure_context),
                                     captured_signal_fields=bindings === nothing ?
                                         Dict{Symbol,Tuple{Bool,UInt32}}() : bindings.captured_globals,
+                                    captured_constant_fields=bindings === nothing ?
+                                        Dict{Symbol,Any}() : bindings.captured_constants,
                                     dom_bindings=bindings === nothing ?
                                         Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}() : bindings.dom_bindings,
                                     skip_stmts=bindings === nothing ? Set{Int}() : bindings.skip_stmts,
-                                    invoke_imports=bindings === nothing ?
-                                        Dict{Int,UInt32}() : bindings.invoke_imports)
+                                    invoke_imports=_bound_invokes)
             body = generate_body(ctx)
             locals = ctx.locals
         end

@@ -2240,6 +2240,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if is_closure_self
             # This is accessing a field of the closure
             field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_name isa Symbol && haskey(ctx.captured_constant_fields, field_name)
+                local _captured_value = ctx.captured_constant_fields[field_name]
+                # The canonical pre-emission type query owns Julia→Wasm mapping;
+                # root substitutions do not introduce another conversion site.
+                local _captured_wasm = static_wasm_type(_captured_value, ctx)
+                emit_value!(fb, _captured_value, ctx, _captured_wasm;
+                            from_julia=typeof(_captured_value))
+                return append_builder!(b, fb)
+            end
             if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
                 # Skip - this produces a getter/setter function reference
                 return append_builder!(b, fb)

@@ -32,6 +32,7 @@ mutable struct CompilationContext <: AbstractCompilationContext
     signal_ssa_getters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
     signal_ssa_setters::Dict{Int, UInt32}   # SSA id (from getfield) -> Wasm global index
     captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}  # field_name -> (is_getter, global_idx)
+    captured_constant_fields::Dict{Symbol, Any} # exact closure values substituted at the root
     # DOM bindings for Therapy.jl - emit DOM update calls after signal writes
     # Maps global_idx -> [(import_idx, [hk_arg, ...]), ...]
     dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}
@@ -76,6 +77,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            global_args::Set{Int}=Set{Int}(),
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
+                           captured_constant_fields::Dict{Symbol, Any}=Dict{Symbol, Any}(),
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
@@ -102,6 +104,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, UInt32}(),    # signal_ssa_getters
         Dict{Int, UInt32}(),    # signal_ssa_setters
         captured_signal_fields, # captured signal field mappings
+        captured_constant_fields, # exact captured constant mappings
         dom_bindings,           # DOM bindings for Therapy.jl
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{WasmValType, Int}(), # boxing_scratch_locals
@@ -1954,6 +1957,13 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
     # This ensures the local is allocated as externref (matching what struct.get/array.get
     # actually produces), preventing type mismatches with local.set.
     for (i, stmt) in enumerate(ctx.code_info.code)
+        if stmt isa Expr && stmt.head === :foreigncall &&
+           extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall
+            # Julia 1.13 can erase the SSA annotation for its UnionAll
+            # predicate even though the C ABI and Julia operation both return
+            # Bool. Keep allocation and the nominal ref.test emitter aligned.
+            ctx.ssa_types[i] = Bool
+        end
         if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
             func = stmt.args[1]
             # Check getfield/getproperty on Any-typed struct field

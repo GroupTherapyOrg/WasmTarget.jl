@@ -143,8 +143,10 @@ containing those declarations together with `import_stubs`. Imported Julia stub
 calls then participate in the same closed-world collection, typed builder,
 serialization, optimization, and validation pipeline as every other root.
 Frameworks may attach a `RootBindings` value by export name to substitute
-captured signal fields with globals declared in that module. Context elision is
-fail-closed: every closure field must have an explicit substitution.
+captured fields with globals declared in that module or exact Julia constants.
+Constants go through the canonical value-materialization pipeline. Context
+elision is fail-closed: every closure field must have exactly one explicit
+substitution.
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,

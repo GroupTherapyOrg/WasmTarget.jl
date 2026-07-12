@@ -912,6 +912,10 @@ end
 FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type) =
     FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, false)
 
+"""Finish the canonical source-vararg tuple projection (a runtime ABI value, not a constant)."""
+packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer) =
+    struct_new!(builder, type_idx)
+
 """
 Registry for functions within a module, enabling cross-function calls.
 """
