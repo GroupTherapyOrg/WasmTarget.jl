@@ -204,10 +204,12 @@ const LOCKS = [
     "L70_no_host_power_fallback" => ("power compiles through the collected Julia body; unresolved invokes cannot switch to a Math.pow host import or approximation",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            forbidden = ["pow_import_idx", "requires 'pow' import", "approximation using exp"]
+            forbidden = ["pow_import_idx", "requires 'pow' import", "approximation using exp",
+                         "add_import!(mod, \"Math\", \"pow\"", "assume `Math.pow` sits at import index 0"]
             required = ["_wt_pure_power_semantics"]
-            count(p -> occursin(p, invoke_src), forbidden) +
+            count(p -> occursin(p, invoke_src * compile_src), forbidden) +
                 count(p -> !occursin(p, test_src), required)
         end),
     "L71_no_silent_io_argument_skip" => ("out-of-scope IO glue may reject an unrepresentable show argument but cannot silently omit it and report success",
