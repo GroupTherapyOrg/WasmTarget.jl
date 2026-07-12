@@ -1576,7 +1576,9 @@ function _compile_module_trim(functions::Vector; kwargs...)
             push!(normalized, entry)
         end
     end
-    plan, ir_cache = trim_compile_plan(normalized)
+    import_stubs = get(kwargs, :import_stubs, Any[])
+    external_entries = Any[(entry[1], Tuple(entry[3])) for entry in import_stubs]
+    plan, ir_cache = trim_compile_plan(normalized; external_entries)
     TRIM_IR_CACHE[] = ir_cache
     try
         return _compile_closed_world_plan(plan; kwargs...)

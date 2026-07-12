@@ -375,7 +375,50 @@ const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
 const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 
-function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
+"""Keep only code reachable from roots when declared imports are external leaves."""
+function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
+                                        external_leaves::Set{Any})
+    isempty(external_leaves) && return codeinfos
+    pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
+    for i in 1:2:length(codeinfos)
+        (i + 1 <= length(codeinfos) && codeinfos[i] isa Core.CodeInstance &&
+         codeinfos[i + 1] isa Core.CodeInfo) || continue
+        mi = codeinfos[i].def isa Core.MethodInstance ? codeinfos[i].def : codeinfos[i].def.def
+        pairs[mi] = (codeinfos[i], codeinfos[i + 1])
+    end
+    reachable = Set{Any}()
+    queue = Any[entries...]
+    while !isempty(queue)
+        mi = pop!(queue)
+        mi in reachable && continue
+        push!(reachable, mi)
+        mi in external_leaves && continue
+        pair = get(pairs, mi, nothing)
+        pair === nothing && continue
+        for stmt in pair[2].code
+            stmt isa Expr || continue
+            if stmt.head === :invoke && !isempty(stmt.args)
+                target = stmt.args[1]
+                target_mi = target isa Core.MethodInstance ? target :
+                            target isa Core.CodeInstance ? target.def : nothing
+                target_mi isa Core.MethodInstance && push!(queue, target_mi)
+            end
+        end
+    end
+    out = Any[]
+    for i in 1:2:length(codeinfos)
+        (i + 1 <= length(codeinfos) && codeinfos[i] isa Core.CodeInstance &&
+         codeinfos[i + 1] isa Core.CodeInfo) || continue
+        mi = codeinfos[i].def isa Core.MethodInstance ? codeinfos[i].def : codeinfos[i].def.def
+        mi in reachable || continue
+        mi in external_leaves && continue
+        push!(out, codeinfos[i], codeinfos[i + 1])
+    end
+    return out
+end
+
+function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
+                              external_leaves::Set{Any}=Set{Any}())
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
     _DYNAMIC_ROOT_MIS[] = Set{Any}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
@@ -386,6 +429,12 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     append!(workqueue, entries)
     CC.compile!(codeinfos, workqueue; invokelatest_queue)
     CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
+    # Imports are typed call-graph leaves. Julia inference may inspect their
+    # native fallback bodies, but those bodies and their dependencies do not
+    # belong to the Wasm component. Cut them before invoke completion and
+    # dynamic-dispatch discovery so external implementation details can never
+    # contaminate the closed world.
+    codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves)
     # Julia's queue may leave an explicit invoke with an abstract callable slot
     # as an IR edge without materializing its body (e.g. Base.with_output_color's
     # `Function` argument). A closed world cannot defer that edge to codegen.
@@ -394,7 +443,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false)
     for k in 1:2:length(codeinfos)
         codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
     end
-    invoke_seen = copy(base_mis)
+    invoke_seen = union(copy(base_mis), external_leaves)
     while true
         extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen)
         isempty(extra_invokes) && break
@@ -503,7 +552,7 @@ their call sites inline or carry the closure value; no module-level
 function entry to register) and Core/internal entries without a usable
 function object.
 """
-function trim_compile_plan(entries_named::Vector)
+function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     for (f, arg_types, name) in entries_named
@@ -511,7 +560,12 @@ function trim_compile_plan(entries_named::Vector)
         push!(entry_mis, mi)
         entry_keys[mi] = name
     end
-    codeinfos = collect_closed_world(entry_mis)
+    external_mis = Set{Any}()
+    for entry in external_entries
+        f, arg_types = entry[1], entry[2]
+        push!(external_mis, entry_method_instance(f, arg_types))
+    end
+    codeinfos = collect_closed_world(entry_mis; external_leaves=external_mis)
 
     functions = Any[]
     ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()

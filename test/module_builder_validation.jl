@@ -8,6 +8,13 @@ _mbv_import_caller() = _mbv_imported_measure()
 @noinline _mbv_imported_mix(x::Float64, n::Int64) =
     Base.inferencebarrier(x + Float64(n))::Float64
 _mbv_import_mix_caller() = _mbv_imported_mix(2.5, Int64(4))
+@noinline function _mbv_native_only_dependency(x::Int64)
+    native_offset = ccall(:jl_get_field_offset, Csize_t, (Any, Cint), Int, 0)
+    Base.donotdelete(native_offset)
+    return x
+end
+@noinline _mbv_external_leaf(x::Int64) = _mbv_native_only_dependency(x)
+_mbv_external_leaf_caller(x::Int64) = _mbv_external_leaf(x)
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -90,6 +97,17 @@ _mbv_import_mix_caller() = _mbv_imported_mix(2.5, Int64(4))
                               mixed_idx, Float64)],
             validate=false)
         @test mixed_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        leafmod = MBV.WasmModule()
+        leafidx = MBV.add_import!(leafmod, "host", "external_leaf",
+            MBV.WasmValType[MBV.I64], MBV.WasmValType[MBV.I64])
+        leafbytes = MBV.compile_multi(
+            Any[(_mbv_external_leaf_caller, (Int64,), "leaf_caller")];
+            existing_module=leafmod,
+            import_stubs=Any[(_mbv_external_leaf, "external_leaf", (Int64,),
+                              leafidx, Int64)],
+            validate=false)
+        @test leafbytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
     @testset "symbolic control labels" begin
