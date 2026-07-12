@@ -429,7 +429,18 @@ const LOCKS = [
                         "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
                         "get_forward_label(target_block::Int)::ControlLabel"]
             sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +
-                count(p -> !occursin(p, validator_src * builder_src * stack_src), required)
+            count(p -> !occursin(p, validator_src * builder_src * stack_src), required)
+        end),
+    "L88_constant_fields_keep_exact_classes" => ("constant materialization uses each known field value's concrete runtime Julia type, never an abstract declaration that would erase its classId",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            forbidden = ["from_julia=fieldtype(T, fi)", "from_julia=fieldtype(T, i)",
+                         "has_undefined\n            ref_null!"]
+            required = ["A materialized constant supplies stronger evidence than its declared",
+                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))",
+                        "closure constant of type \$T has undefined captures; WT never fabricates capture values"]
+            count(p -> occursin(p, values_src), forbidden) +
+                count(p -> !occursin(p, values_src), required)
         end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
@@ -784,7 +795,7 @@ const LOCKS = [
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             required = ["WT never fabricates field values",
                         "emit_struct_prefix!(b, ctx.type_registry, T, info)",
-                        "emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))"]
+                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))"]
             forbidden = ["emit ref.null for the field's expected type",
                          "type-correct defaults",
                          "mismatched concrete struct ref"]

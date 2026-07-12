@@ -417,9 +417,13 @@ it ends. Mirrors dart2wasm's `_pushLabel(Block(...))` / `_pushLabel(Loop(...))`.
 For loops, `br` targets the loop start (no values consumed/produced by br).
 For blocks, `br` targets the block end (must have result_types on stack).
 """
+validate_block_start!(v::WasmStackValidator, kind::Symbol,
+                      result_types::Vector{WasmValType}=WasmValType[]) =
+    validate_block_start!(v, kind, WasmValType[], result_types)
+
 function validate_block_start!(v::WasmStackValidator, kind::Symbol,
-                               input_types::Vector{WasmValType}=WasmValType[],
-                               result_types::Vector{WasmValType}=WasmValType[])
+                               input_types::Vector{WasmValType},
+                               result_types::Vector{WasmValType})
     for t in reverse(input_types); validate_pop!(v, t); end
     for t in input_types; validate_push!(v, t); end
     label = ValidatorLabel(kind, length(v.stack) - length(input_types),
@@ -559,9 +563,13 @@ end
 Validate an if instruction: pop i32 condition, push label for the then-branch.
 Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
 """
+validate_if_start!(v::WasmStackValidator,
+                   result_types::Vector{WasmValType}=WasmValType[]) =
+    validate_if_start!(v, WasmValType[], result_types)
+
 function validate_if_start!(v::WasmStackValidator,
-                            input_types::Vector{WasmValType}=WasmValType[],
-                            result_types::Vector{WasmValType}=WasmValType[])
+                            input_types::Vector{WasmValType},
+                            result_types::Vector{WasmValType})
     validate_pop!(v, I32)  # condition
     for t in reverse(input_types); validate_pop!(v, t); end
     for t in input_types; validate_push!(v, t); end

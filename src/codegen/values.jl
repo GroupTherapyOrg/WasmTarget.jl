@@ -1322,7 +1322,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             for (fi, field_name) in enumerate(fieldnames(T))
                 field_val = getfield(inner, field_name)
                 expected = physical_fields[Int(info.field_offset) + fi].valtype
-                emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))
+                emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
             end
             struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
         else
@@ -1398,7 +1398,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
                 error("tuple constant field lacks a physical Wasm type")
             local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
-            emit_value!(b, field_val, ctx, expected_wasm; from_julia=fieldtype(T, i))
+            emit_value!(b, field_val, ctx, expected_wasm; from_julia=typeof(field_val))
         end
 
         # Create the struct
@@ -1456,8 +1456,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
-            ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
-            return b
+            throw(WasmCompileError(WasmDiagnostic(
+                :unsupported_type, string(nameof(T)),
+                "closure constant of type $T has undefined captures; WT never fabricates capture values",
+                nothing, nothing)))
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -1465,7 +1467,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             local _fw = struct_type_def.fields[fi + Int(info.field_offset)].valtype
-            emit_value!(b, field_val, ctx, _fw; from_julia=fieldtype(T, fi))
+            emit_value!(b, field_val, ctx, _fw; from_julia=typeof(field_val))
         end
 
         struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
@@ -1682,7 +1684,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             wasm_fi <= length(struct_type_def.fields) ||
                 error("constant $T field $field_name has no physical Wasm slot")
             local expected = struct_type_def.fields[wasm_fi].valtype
-            emit_value!(b, field_val, ctx, expected; from_julia=fieldtype(T, fi))
+            # A materialized constant supplies stronger evidence than its declared
+            # field annotation (e.g. KeyError.key::Any holding Int64). Preserve the
+            # exact runtime Julia class so numeric boxing stamps the real classId.
+            emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
         end
 
         # Create the struct
