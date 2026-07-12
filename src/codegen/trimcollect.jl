@@ -172,11 +172,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
     # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
     # inference makes the body REAL instead of an any-erased stub).
-    dyn_sigs = Set{Tuple}()
-    callable_types = Set{DataType}()
+    callable_invocations = Set{Tuple{DataType,Tuple}}()
     i = 1
     _fn_callables = Set{DataType}()   # per-function staging (folded on co-occurrence)
-    _fn_has_dyn = false
+    _fn_dyn_sigs = Set{Tuple}()
     function observe_callable!(@nospecialize(T))
         if T isa Union
             foreach(observe_callable!, Base.uniontypes(T))
@@ -195,6 +194,14 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         end
         return
     end
+    function flush_callable_invocations!()
+        for T in _fn_callables, sig in _fn_dyn_sigs
+            push!(callable_invocations, (T, sig))
+        end
+        empty!(_fn_callables)
+        empty!(_fn_dyn_sigs)
+        return
+    end
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
@@ -203,10 +210,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         # if that function ALSO makes dynamic (SSA-callee) calls — enrolling every
         # userland closure perturbed modules with purely-static closures (the
         # randsubseq suite regression).
-        if _fn_has_dyn
-            union!(callable_types, _fn_callables)
-        end
-        empty!(_fn_callables); _fn_has_dyn = false
+        flush_callable_invocations!()
         host_mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
@@ -245,8 +249,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     push!(_dargs, t)
                 end
                 if _dok && !isempty(_dargs)
-                    push!(dyn_sigs, Tuple(_dargs))
-                    _fn_has_dyn = true
+                    push!(_fn_dyn_sigs, Tuple(_dargs))
                 end
             end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
@@ -334,11 +337,12 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         end
     end
 
-    _fn_has_dyn && union!(callable_types, _fn_callables)
-    # cross-product: each runtime callable type × each observed dynamic-call
-    # signature of matching arity → a TYPED body specialization (the vtable's
-    # typed entry; inference compiles the body for real)
-    for _T in callable_types
+    flush_callable_invocations!()
+    # Each function-local callable/signature pair becomes one typed body
+    # specialization. Never form a component-wide Cartesian product: dart's
+    # selector rows are call-site scoped, and unrelated same-arity signatures
+    # must not enroll new bodies.
+    for (_T, ds) in callable_invocations
         local _mms2 = Base._methods_by_ftype(
             Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
@@ -348,17 +352,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             local mps = collect(msig.parameters)
             (length(mps) >= 1 && _T <: mps[1]) || continue
             local marity = length(mps) - 1
-            for ds in dyn_sigs
-                length(ds) == marity || continue
-                local ssig = Tuple{_T, ds...}
-                # the observed args must be admissible for the method
-                (ssig <: m.sig) || continue
-                local cmi = CC.specialize_method(m, ssig, Core.svec())
-                cmi === nothing && continue
-                cmi in seen && continue
-                push!(seen, cmi)
-                push!(out, cmi)
-            end
+            length(ds) == marity || continue
+            local ssig = Tuple{_T, ds...}
+            # the observed args must be admissible for the method
+            (ssig <: m.sig) || continue
+            local cmi = CC.specialize_method(m, ssig, Core.svec())
+            cmi === nothing && continue
+            cmi in seen && continue
+            push!(seen, cmi)
+            push!(out, cmi)
         end
     end
     return out

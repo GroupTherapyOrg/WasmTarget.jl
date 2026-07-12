@@ -3617,6 +3617,84 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 i32_const!(bsub, Base.array_subpadding(args[1], args[2]) ? 1 : 0)
                 return append_builder!(b, bsub)
 
+            elseif name === :kwerr && length(args) == 2
+                # Base.kwerr(kw, f) always throws the exact closed-world
+                # MethodError(Core.kwcall, (kw, f), world). This is a real Julia
+                # exception payload, not a generic trap: catch-side isa/field
+                # inspection must observe the same object shape as native Julia.
+                bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
+                ensure_exception_tag!(ctx.mod)
+                exn_global = ensure_exception_global!(ctx.mod)
+                error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
+                arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
+                all(T -> T isa Type, arg_julia_types) ||
+                    record_unsupported!(ctx, :unsupported_type,
+                        "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
+                args_tuple_type = Tuple{arg_julia_types...}
+                args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
+                error_info === nothing && error("MethodError layout is unavailable")
+                args_info === nothing && error("kwerr argument tuple layout is unavailable")
+
+                emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
+                emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
+                emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
+                args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
+                args_layout isa StructType || error("kwerr argument tuple has no struct layout")
+                for (i, arg) in enumerate(args)
+                    ft = args_layout.fields[Int(wasm_field_idx(args_info, i)) + 1].valtype
+                    jt = arg_julia_types[i]
+                    emit_value!(bkw, arg, ctx, ft;
+                                from_julia=isconcretetype(jt) ? jt : nothing)
+                end
+                struct_new!(bkw, args_info.wasm_type_idx)
+                i64_const!(bkw, reinterpret(Int64, UInt64(Base.get_world_counter())))
+                struct_new!(bkw, error_info.wasm_type_idx)
+                global_set!(bkw, exn_global)
+                global_get!(bkw, exn_global, AnyRef)
+                ref_null!(bkw, ExternRef)
+                throw_!(bkw, 0; inputs=WasmValType[AnyRef, ExternRef])
+                return append_builder!(b, bkw)
+
+            elseif name === :throw_inexacterror && length(args) >= 3
+                # Core.throw_inexacterror(func, to, values...) is precisely
+                # throw(InexactError(func, (to, values...))). Preserve both
+                # fields so catch-side inspection agrees with Julia.
+                bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
+                ensure_exception_tag!(ctx.mod)
+                exn_global = ensure_exception_global!(ctx.mod)
+                error_info = register_struct_type!(ctx.mod, ctx.type_registry, InexactError)
+                payload = args[2:end]
+                payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
+                all(T -> T isa Type, payload_types) ||
+                    record_unsupported!(ctx, :unsupported_type,
+                        "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
+                payload_type = Tuple{payload_types...}
+                payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
+                error_info === nothing && error("InexactError layout is unavailable")
+                payload_info === nothing && error("InexactError argument tuple layout is unavailable")
+
+                emit_struct_prefix!(bie, ctx.type_registry, InexactError, error_info)
+                emit_value!(bie, args[1], ctx,
+                            ctx.mod.types[error_info.wasm_type_idx + 1].fields[
+                                Int(wasm_field_idx(error_info, 1)) + 1].valtype;
+                            from_julia=Symbol)
+                emit_struct_prefix!(bie, ctx.type_registry, payload_type, payload_info)
+                payload_layout = ctx.mod.types[payload_info.wasm_type_idx + 1]
+                payload_layout isa StructType || error("InexactError payload has no struct layout")
+                for (i, value) in enumerate(payload)
+                    ft = payload_layout.fields[Int(wasm_field_idx(payload_info, i)) + 1].valtype
+                    jt = payload_types[i]
+                    emit_value!(bie, value, ctx, ft;
+                                from_julia=isconcretetype(jt) ? jt : nothing)
+                end
+                struct_new!(bie, payload_info.wasm_type_idx)
+                struct_new!(bie, error_info.wasm_type_idx)
+                global_set!(bie, exn_global)
+                global_get!(bie, exn_global, AnyRef)
+                ref_null!(bie, ExternRef)
+                throw_!(bie, 0; inputs=WasmValType[AnyRef, ExternRef])
+                return append_builder!(b, bie)
+
             else
                 # Unknown method — codegen has no translation for this invoke target.
                 # This records a source-attributed diagnostic and emits dart's validating

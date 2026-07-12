@@ -322,6 +322,37 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
+    "L80_dynamic_callable_enrollment_is_function_scoped" => ("dynamic callable bodies are paired only with signatures observed in the same collected function; no component-wide arity Cartesian product may enroll unrelated functions",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            forbidden = ["    dyn_sigs = Set", "    callable_types = Set", "for _T in callable_types",
+                         "for ds in dyn_sigs"]
+            required = ["callable_invocations = Set{Tuple{DataType,Tuple}}()",
+                        "function flush_callable_invocations!",
+                        "for T in _fn_callables, sig in _fn_dyn_sigs",
+                        "Never form a component-wide Cartesian product"]
+            count(p -> occursin(p, trim_src), forbidden) +
+                count(p -> !occursin(p, trim_src), required)
+        end),
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and collection world instead of a generic trap",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
+                        "args_tuple_type = Tuple{arg_julia_types...}",
+                        "Base.get_world_counter()", "_wt_exact_kwerr_exception"]
+            count(p -> !occursin(p, invoke_src * test_src), required)
+        end),
+    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            required = ["name === :throw_inexacterror", "payload = args[2:end]",
+                        "payload_type = Tuple{payload_types...}",
+                        "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
+                        "_wt_exact_inexact_exception"]
+            count(p -> !occursin(p, invoke_src * test_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
