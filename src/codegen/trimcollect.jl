@@ -23,10 +23,18 @@
 # semantics — what this function does) works on both.
 
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
-function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
+function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
+                                      superseded::Set{Any})
     out = Any[]
+    numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
+    lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
     ir_arg_type = function(arg, src)
-        T = if arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
+        joins = get!(numeric_types, src) do
+            propagate_numeric_value_types(src.code, src.ssavaluetypes)
+        end
+        T = if arg isa Core.SSAValue && haskey(joins, arg.id)
+            joins[arg.id]
+        elseif arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
                1 <= arg.id <= length(src.ssavaluetypes)
             src.ssavaluetypes[arg.id]
         elseif arg isa Core.Argument && src.slottypes isa Vector &&
@@ -52,6 +60,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
                 target = stmt.args[1]
                 mi = target isa Core.MethodInstance ? target :
                      target isa Core.CodeInstance ? target.def : nothing
+                original_mi = mi
                 # Explicit invoke records the selected Method, but Julia may leave
                 # its MethodInstance abstract. WT's subset monomorphizes: rebuild
                 # the MI from the concrete call-site SSA types, exactly as the
@@ -63,13 +72,23 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any})
                     arg_types = Any[ir_arg_type(arg, src) for arg in stmt.args[3:end]]
                     if f isa Function && all(T -> T isa Type && isconcretetype(T), arg_types)
                         ftype = Tuple{Core.Typeof(f), arg_types...}
-                        matches = Base._methods_by_ftype(ftype, -1, Base.get_world_counter())
-                        if matches !== nothing
-                            target_method = mi.def
-                            match = findfirst(mm -> mm.method === target_method, matches)
-                            match === nothing || (mi = CC.specialize_method(matches[match]))
+                        # Re-resolve with the same overlay table used by the
+                        # closed-world compiler. An explicit invoke can retain
+                        # Base's abstract Vararg MI even though the concrete
+                        # call must dispatch to a Wasm overlay specialization.
+                        matches = CC.findall(ftype, lookup_table; limit=-1)
+                        if matches !== nothing && !isempty(matches)
+                            mi = CC.specialize_method(matches[1])
                         end
                     end
+                end
+                if mi isa Core.MethodInstance && original_mi isa Core.MethodInstance &&
+                   mi !== original_mi
+                    # Keep the optimized IR valid Julia while making its edge agree
+                    # with the Wasm overlay dispatch selected for the concrete call.
+                    # The superseded abstract/native subtree is pruned below.
+                    stmt.args[1] = mi
+                    push!(superseded, original_mi)
                 end
             elseif stmt.head === :call && length(stmt.args) >= 3 &&
                    stmt.args[1] === Core.invoke_in_world
@@ -444,8 +463,10 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
     end
     invoke_seen = union(copy(base_mis), external_leaves)
+    superseded_invokes = Set{Any}()
     while true
-        extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen)
+        extra_invokes = _missing_explicit_invoke_mis(codeinfos, invoke_seen,
+                                                       superseded_invokes)
         isempty(extra_invokes) && break
         invoke_interp = WasmInterpreter(Base.RefValue(0))
         invoke_ci = Any[]
@@ -464,6 +485,14 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             added = true
         end
         added || break
+    end
+    if !isempty(superseded_invokes)
+        codeinfos = _prune_external_leaf_subgraphs(
+            codeinfos, entries, union(external_leaves, superseded_invokes))
+        empty!(base_mis)
+        for k in 1:2:length(codeinfos)
+            codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+        end
     end
     # WASMTARGET dynamic dispatch: discover every target admitted by the closed
     # component, to a real fixpoint. This is part of compilation correctness and

@@ -164,12 +164,16 @@ end
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
 # Remove when: codegen handles IOBuffer-based string construction
 
+@inline _wasm_print_to_string_tuple(::Tuple{}) = ""
+@inline function _wasm_print_to_string_tuple(xs::Tuple)
+    return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
+end
+
 @noinline @overlay WASM_METHOD_TABLE function Base.print_to_string(xs...)
-    out = ""
-    for x in xs
-        out = out * string(x)
-    end
-    return out
+    # Tuple recursion preserves each fixed call site's concrete heterogeneous
+    # field types. Iterating `xs` widens the element to Any and enrolls the
+    # generic show/IO universe even for interpolation like (String, Int, String).
+    return _wasm_print_to_string_tuple(xs)
 end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String)
@@ -313,6 +317,13 @@ end
     push!(bytes, UInt8(']'))
     return String(bytes)
 end
+
+# Julia's ordinary one-line `repr(::AbstractVector)` is the same rendering as
+# `string(v)`. Keep that relationship as one container-level overlay; concrete
+# supported element types then select their exact pure-Julia `string` renderer,
+# while an unsupported element type continues into normal collection and fails
+# loudly rather than acquiring a hand-picked representation.
+@overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
 
 # Why: `string(::Vector{String})` (PI dither island shows its colour palette via
 #      `_plain_body(colorscheme)`) hits the same array-show trap.
