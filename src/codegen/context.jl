@@ -813,7 +813,11 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             # the phi local's type to match the function's return type.
             # This handles cases like Union{Int64, SomeStruct} phi where Julia type
             # inference produces a tagged union (ref), but the function actually returns i64.
-            func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+            # Bottom/Nothing functions have no physical Wasm result. They may still
+            # contain phis in their real throwing bodies, but there is no return
+            # representation against which those locals can be overridden.
+            func_ret_wasm = (ctx.return_type === Union{} || ctx.return_type === Nothing) ?
+                nothing : get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
             is_func_ret_numeric = func_ret_wasm === I32 || func_ret_wasm === I64 ||
                                   func_ret_wasm === F32 || func_ret_wasm === F64
             is_phi_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||

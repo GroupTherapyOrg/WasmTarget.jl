@@ -1638,6 +1638,44 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
     end
 end
 
+"""Prove that a concrete vararg constructor is only `%new(T, fixed..., varargs)`.
+
+This is deliberately shape-based, not name-based: the optimized Julia body must
+contain exactly one allocation and a return, and its fields must be the method's
+fixed slots followed by its one vararg-tuple slot.
+"""
+function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.MethodInstance,
+                                               arg_types::Tuple)::Bool
+    target isa DataType && isconcretetype(target) && isstructtype(target) || return false
+    mi.def isa Method && mi.def.isva || return false
+    fixed_count = mi.def.nargs - 2  # exclude #self# and the vararg tuple slot
+    fieldcount(target) == fixed_count + 1 || return false
+    typed = try
+        Base.code_typed(target, arg_types; optimize=true)
+    catch
+        return false
+    end
+    length(typed) == 1 || return false
+    ci = first(typed).first
+    ci isa Core.CodeInfo || return false
+    news = Expr[s for s in ci.code if s isa Expr && s.head === :new]
+    length(news) == 1 || return false
+    all(s -> s === nothing || s isa Core.ReturnNode ||
+             (s isa Expr && (s.head === :new || s.head === :meta)), ci.code) || return false
+    alloc = only(news)
+    length(alloc.args) == fieldcount(target) + 1 || return false
+    tref = alloc.args[1]
+    resolved = tref isa GlobalRef && isdefined(tref.mod, tref.name) ? getfield(tref.mod, tref.name) : tref
+    resolved === target || return false
+    for i in 1:fixed_count
+        alloc.args[i + 1] == Core.Argument(i + 1) || return false
+    end
+    return alloc.args[end] == Core.Argument(fixed_count + 2)
+end
+
+_invoke_arg_static_type(arg, ctx::AbstractCompilationContext) =
+    arg isa Type ? Core.Typeof(arg) : infer_value_type(arg, ctx)
+
 """
 Compile an invoke expression (method invocation) — dart visitor shape (march4):
 emits the invoke INTO the caller's builder.
@@ -3007,87 +3045,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 array_len!(blen3)
                 append_builder!(fb, blen3)
 
-            # Math domain error functions — throw catchably (tag 0), matching native
-            # semantics. These used to push NaN ("graceful degradation"), but the IR
-            # statement after a Union{} invoke is `unreachable`, so the NaN was never
-            # observed and the function trapped uncatchably (gap c6dae81c0ef4).
-            # ================================================================
-            # PURE-9032: Error constructors — create proper exception struct
-            # These are typically followed by throw(). The constructor produces
-            # the exception object, leaving the struct ref on the stack.
-            # ================================================================
-            elseif name === :BoundsError || name === :ArgumentError || name === :TypeError ||
-                   name === :DomainError || name === :OverflowError || name === :DivideError ||
-                   name === :InexactError || name === :ErrorException || name === :KeyError ||
-                   name === :MethodError || name === :AssertionError || name === :AssertionError ||
-                   name === :StackOverflowError || name === :OutOfMemoryError || name === :UndefVarError
-                bec = _ctx_builder(ctx, "compile_invoke")  # Clear pre-compiled args (we re-compile below for correct field order)
-                local _ctor_type = nothing
-                if name === :BoundsError; _ctor_type = BoundsError
-                elseif name === :ArgumentError; _ctor_type = ArgumentError
-                elseif name === :TypeError; _ctor_type = TypeError
-                elseif name === :DomainError; _ctor_type = DomainError
-                elseif name === :OverflowError; _ctor_type = OverflowError
-                elseif name === :DivideError; _ctor_type = DivideError
-                elseif name === :InexactError; _ctor_type = InexactError
-                elseif name === :ErrorException; _ctor_type = ErrorException
-                elseif name === :KeyError; _ctor_type = KeyError
-                elseif name === :MethodError; _ctor_type = MethodError
-                elseif name === :StackOverflowError; _ctor_type = StackOverflowError
-                elseif name === :OutOfMemoryError; _ctor_type = OutOfMemoryError
-                elseif name === :UndefVarError; _ctor_type = UndefVarError
-                end
-                local _ctor_info = _ctor_type !== nothing ? register_struct_type!(ctx.mod, ctx.type_registry, _ctor_type) : nothing
-                if _ctor_info !== nothing
-                    emit_struct_prefix!(bec, ctx.type_registry, _ctor_type, _ctor_info)
-                    # Push remaining fields: for msg-based exceptions, compile the msg arg as string array
-                    nfields = length(fieldnames(_ctor_type))
-                    # the ACTUAL wasm field types decide bridging/null heap types
-                    local _ctor_def = ctx.mod.types[_ctor_info.wasm_type_idx + 1]
-                    _ctor_field_wasm = fi_ -> begin
-                        _w = fi_ + Int(_ctor_info.field_offset)
-                        (_ctor_def isa StructType && _w <= length(_ctor_def.fields)) ?
-                            _ctor_def.fields[_w].valtype : nothing
-                    end
-                    for fi in 1:nfields
-                        if fi <= length(args)
-                            local _expected = _ctor_field_wasm(fi)
-                            _expected === nothing && error("exception constructor field lacks a physical Wasm type")
-                            emit_value!(bec, args[fi], ctx, _expected;
-                                        from_julia=fieldtype(_ctor_type, fi))
-                        else
-                            # Default: push null ref for ref fields, 0 for i32/i64 —
-                            # the NULL HEAP TYPE must match the wasm field type
-                            local _ft = fieldtype(_ctor_type, fi)
-                            local _fw = _ctor_field_wasm(fi)
-                            if _fw === I32
-                                i32_const!(bec, 0)
-                            elseif _fw === I64
-                                i64_const!(bec, 0)
-                            elseif _fw === ExternRef
-                                ref_null!(bec, ExternRef)
-                            elseif _fw isa ConcreteRef
-                                ref_null!(bec, Int64(_fw.type_idx), ConcreteRef(UInt32(_fw.type_idx), true))
-                            elseif _ft === Int32 || _ft === Bool
-                                i32_const!(bec, 0)
-                            elseif _ft === Int64 || _ft === UInt64
-                                i64_const!(bec, 0)
-                            else
-                                ref_null!(bec, AnyRef)
-                            end
-                        end
-                    end
-                    struct_new!(bec, _ctor_info.wasm_type_idx)   # mod-resolved fields (march3)
-                else
-                    record_unsupported!(ctx, :unsupported_type,
-                        "exception constructor type registration failed"; idx=idx, detail=expr)
-                    unreachable!(bec)  # structural trap after recorded unsupported
-                    ctx.last_stmt_was_stub = true
-                end
-                fb = bec   # discard-and-replace (march4)
-                # NOTE: Do NOT throw here and do NOT set last_stmt_was_stub.
-                # The IR has a separate throw() call that consumes this value.
-
             # ================================================================
             # PURE-322: SubString — create proper SubString struct
             # SubString(str, start, stop) does UTF-8 thisind validation that
@@ -3425,114 +3382,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 append_builder!(fb, bgic)
                 ctx.last_stmt_was_stub = true
 
-            # Handle print_to_string (used in string interpolation / error messages)
-            # PURE-9016: Convert each arg to string and concatenate
-            elseif name === :print_to_string
-                bpts = _ctx_builder(ctx, "compile_invoke")
-                str_type_idx_pt = get_string_array_type!(ctx.mod, ctx.type_registry)
-                str_arr_type_pt = ConcreteRef(str_type_idx_pt, true)
-                n_pt = length(args)
-
-                if n_pt == 0
-                    # No args — return empty string
-                    array_new_fixed!(bpts, str_type_idx_pt, 0, I32)
-                else
-                    # Convert each arg to string, store in locals
-                    str_locals_pt = UInt32[]
-                    for i in 1:n_pt
-                        local_idx = allocate_local!(ctx, str_arr_type_pt)
-                        push!(str_locals_pt, local_idx)
-
-                        arg_type = infer_value_type(args[i], ctx)
-                        if arg_type === String || arg_type === Symbol
-                            # Already a string — just compile it
-                            emit_value!(bpts, args[i], ctx, str_arr_type_pt)   # parity(M9): funnel → DATA array
-                        elseif arg_type === Int32 || arg_type === Int64 ||
-                               arg_type === UInt32 || arg_type === UInt64 ||
-                               arg_type === Int16 || arg_type === UInt16 ||
-                               arg_type === Int8 || arg_type === UInt8
-                            # Integer — convert via int_to_string
-                            int_to_string_info_pt = nothing
-                            if ctx.func_registry !== nothing
-                                try
-                                    int_to_string_func_pt = getfield(WasmTarget, :int_to_string)
-                                    int_to_string_info_pt = get_function(ctx.func_registry, int_to_string_func_pt, (Int32,))
-                                catch; end
-                            end
-                            if int_to_string_info_pt !== nothing
-                                emit_value!(bpts, args[i], ctx,
-                                            arg_type in (Int64, UInt64) ? I64 : I32)
-                                if arg_type === Int64 || arg_type === UInt64
-                                    num!(bpts, Opcode.I32_WRAP_I64)
-                                end
-                                call!(bpts, int_to_string_info_pt.wasm_idx, WasmValType[], WasmValType[])
-                            else
-                                record_unsupported!(ctx, :unsupported_method,
-                                    "string interpolation requires int_to_string"; idx=idx, detail=expr)
-                                unreachable!(bpts)  # structural trap after recorded unsupported
-                                ctx.last_stmt_was_stub = true
-                                return append_builder!(b, bpts)
-                            end
-                        else
-                            record_unsupported!(ctx, :unsupported_type,
-                                "unsupported string interpolation argument `$arg_type`";
-                                idx=idx, detail=expr)
-                            unreachable!(bpts)  # structural trap after recorded unsupported
-                            ctx.last_stmt_was_stub = true
-                            return append_builder!(b, bpts)
-                        end
-
-                        local_set!(bpts, local_idx)
-                    end
-
-                    if n_pt == 1
-                        # Single arg — just return it
-                        local_get!(bpts, str_locals_pt[1])
-                    else
-                        # N-way concatenation: same inline pattern as multi-arg string()
-                        offset_local_pt = allocate_local!(ctx, I32)
-                        total_len_local_pt = allocate_local!(ctx, I32)
-                        result_local_pt = allocate_local!(ctx, str_arr_type_pt)
-
-                        # Compute total length
-                        i32_const!(bpts, 0)
-                        for i in 1:n_pt
-                            local_get!(bpts, str_locals_pt[i])
-                            array_len!(bpts)
-                            num!(bpts, Opcode.I32_ADD)
-                        end
-                        local_set!(bpts, total_len_local_pt)
-
-                        # Allocate result
-                        local_get!(bpts, total_len_local_pt)
-                        array_new_default!(bpts, str_type_idx_pt)
-                        local_set!(bpts, result_local_pt)
-
-                        # Copy each string
-                        i32_const!(bpts, 0)
-                        local_set!(bpts, offset_local_pt)
-
-                        for i in 1:n_pt
-                            local_get!(bpts, result_local_pt)
-                            local_get!(bpts, offset_local_pt)
-                            local_get!(bpts, str_locals_pt[i])
-                            i32_const!(bpts, 0)
-                            local_get!(bpts, str_locals_pt[i])
-                            array_len!(bpts)
-                            array_copy!(bpts, str_type_idx_pt, str_type_idx_pt)
-
-                            local_get!(bpts, offset_local_pt)
-                            local_get!(bpts, str_locals_pt[i])
-                            array_len!(bpts)
-                            num!(bpts, Opcode.I32_ADD)
-                            local_set!(bpts, offset_local_pt)
-                        end
-
-                        local_get!(bpts, result_local_pt)
-                    end
-                end
-                return append_builder!(b, bpts)
-
             # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
             # PURE-9032: Create exception struct objects and stash in $current_exn
             # so that :the_exception + isa checks can identify the exception type.
@@ -3542,49 +3391,17 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 exn_global = ensure_exception_global!(ctx.mod)
                 # error("msg") → create ErrorException struct, stash, throw
                 local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
-                if _ee_info !== nothing
-                    emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
-                    # Field 1: msg (ArrayRef for AbstractString)
-                    if length(args) >= 1
-                        local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
-                        local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
-                        emit_value!(berr, args[1], ctx, _ee_msg_w; from_julia=String)
-                    else
-                        ref_null!(berr, ArrayRef)
-                    end
-                    struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
-                    global_set!(berr, exn_global)
-                end
+                _ee_info === nothing && error("ErrorException layout is unavailable")
+                length(args) <= 1 || error("unexpected error() lowering arity: $(length(args))")
+                emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
+                local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
+                local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
+                emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
+                struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
+                global_set!(berr, exn_global)
                 global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true
                 return append_builder!(b, berr)
-            elseif name === :throw || name === :throw_boundserror ||
-                   name === :ArgumentError || name === :AssertionError ||
-                   name === :KeyError || name === :ErrorException ||
-                   name === :BoundsError || name === :MethodError
-                bthr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                # Try to create a proper exception struct for known error types
-                local _exn_type = nothing
-                if name === :BoundsError; _exn_type = BoundsError
-                elseif name === :ErrorException; _exn_type = ErrorException
-                elseif name === :ArgumentError; _exn_type = ArgumentError
-                elseif name === :KeyError; _exn_type = KeyError
-                elseif name === :MethodError; _exn_type = MethodError
-                end
-                if _exn_type !== nothing
-                    local _exn_info = register_struct_type!(ctx.mod, ctx.type_registry, _exn_type)
-                    if _exn_info !== nothing
-                        # Create struct with default fields using struct.new_default
-                        struct_new_default!(bthr, _exn_info.wasm_type_idx)
-                        global_set!(bthr, exn_global)
-                    end
-                end
-                global_get!(bthr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr, ExternRef); throw_!(bthr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
-                return append_builder!(b, bthr)
-
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
             elseif name === :parse_float_literal
@@ -3863,10 +3680,15 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             # Pairs into 8 fields → "expected i64, found (ref …)"). Guard on
                             # arg-count == field-count so this branch fires ONLY when it can emit
                             # valid wasm; the rest loud-reject via the terminal :unsupported_method.
-                            _sc_ok = _sc_tt isa DataType && is_struct_type(_sc_tt) &&
-                                     (haskey(ctx.type_registry.structs, _sc_tt) ||
-                                      (isconcretetype(_sc_tt) && isstructtype(_sc_tt))) &&
-                                     isconcretetype(_sc_tt) && fieldcount(_sc_tt) == length(args)
+                            if _sc_tt isa DataType && is_struct_type(_sc_tt) &&
+                               (haskey(ctx.type_registry.structs, _sc_tt) ||
+                                (isconcretetype(_sc_tt) && isstructtype(_sc_tt))) &&
+                               isconcretetype(_sc_tt)
+                                local _sc_argtypes = tuple((_invoke_arg_static_type(arg, ctx)
+                                    for arg in args)...)
+                                _sc_ok = fieldcount(_sc_tt) == length(args) ||
+                                    _is_direct_vararg_struct_constructor(_sc_tt, mi, _sc_argtypes)
+                            end
                         end
                     end
                     _sc_ok
@@ -3881,10 +3703,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
                 local _ctor_sinfo = ctx.type_registry.structs[_ctor_target]
                 if _ctor_sinfo !== nothing
-                    # field 0: typeId (i32)
-                    emit_type_id!(fb, ctx.type_registry, _ctor_target)
-                    # Compile each constructor argument as a struct field value
-                    for _fi in 1:length(args)
+                    emit_struct_prefix!(fb, ctx.type_registry, _ctor_target, _ctor_sinfo)
+                    local _ctor_argtypes = tuple((_invoke_arg_static_type(arg, ctx)
+                        for arg in args)...)
+                    local _vararg_direct = _is_direct_vararg_struct_constructor(
+                        _ctor_target, mi, _ctor_argtypes)
+                    local _fixed_count = _vararg_direct ? mi.def.nargs - 2 : length(args)
+                    # Compile fixed constructor arguments as their exact struct fields.
+                    for _fi in 1:_fixed_count
                         local _ftype = _fi <= length(_ctor_sinfo.field_types) ? _ctor_sinfo.field_types[_fi] : Any
                         local _ctor_def = ctx.mod.types[_ctor_sinfo.wasm_type_idx + 1]
                         local _field_idx = _fi + Int(_ctor_sinfo.field_offset)
@@ -3893,10 +3719,26 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         _expected === nothing && error("constructor field lacks a physical Wasm type")
                         emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
                     end
-                    # struct.new
-                    bscn = _ctx_builder(ctx, "compile_invoke")
-                    struct_new!(bscn, _ctor_sinfo.wasm_type_idx)   # mod-resolved fields (march3)
-                    append_builder!(fb, bscn)
+                    if _vararg_direct
+                        local _varargs = args[(_fixed_count + 1):end]
+                        local _vararg_types = tuple((_invoke_arg_static_type(arg, ctx)
+                            for arg in _varargs)...)
+                        local _tuple_type = Tuple{_vararg_types...}
+                        local _tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, _tuple_type)
+                        _tuple_info === nothing && error("vararg tuple layout is unavailable")
+                        emit_struct_prefix!(fb, ctx.type_registry, _tuple_type, _tuple_info)
+                        local _tuple_def = ctx.mod.types[_tuple_info.wasm_type_idx + 1]
+                        for (_vi, _arg) in enumerate(_varargs)
+                            local _wf = _vi + Int(_tuple_info.field_offset)
+                            local _expected = (_tuple_def isa StructType && _wf <= length(_tuple_def.fields)) ?
+                                _tuple_def.fields[_wf].valtype : nothing
+                            _expected === nothing && error("vararg tuple field lacks a physical Wasm type")
+                            emit_value!(fb, _arg, ctx, _expected; from_julia=_vararg_types[_vi])
+                        end
+                        struct_new!(fb, _tuple_info.wasm_type_idx)
+                    end
+                    # Allocation consumes the fields on this same authoritative stack.
+                    struct_new!(fb, _ctor_sinfo.wasm_type_idx)
                 else
                     # Registration failed — codegen cannot lay out this struct type.
                     record_unsupported!(ctx, :unsupported_type,

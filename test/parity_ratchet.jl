@@ -135,6 +135,40 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L62_exact_primitive_reinterpret_layout" => ("primitive ReinterpretArray construction folds exact bits/padding predicates, preserves runtime dimension errors, and bottom helpers never acquire a result representation",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "reinterpret_array_semantics.jl"), String)
+            required = ["Base.isbitstype(", "{S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true",
+                        "ctx.return_type === Union{}", "ctx.return_type !== Union{}",
+                        "_reinterpret_invalid_dimension"]
+            count(p -> !(occursin(p, interp_src) || occursin(p, context_src) ||
+                         occursin(p, stack_src) || occursin(p, test_src)), required)
+        end),
+    "L61_one_pure_interpolation_path" => ("Base.print_to_string is one pure-Julia overlay route and no invoke arm may truncate Int64 interpolation through Int32",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["elseif name === :print_to_string", "string interpolation requires int_to_string"]
+            required = ["function Base.print_to_string(xs...)", "typemax(Int64)", "typemin(Int64)"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !(occursin(p, interp_src) || occursin(p, test_src)), required)
+        end),
+    "L60_no_fabricated_exception_payloads" => ("exception lowering either initializes every Julia field exactly or rejects it; no null/zero/default exception fabrication remains",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            forbidden = ["struct_new_default!(_thrb", "Default: push null ref for ref fields",
+                         "ref_null!(berr, ArrayRef)", "name === :throw || name === :throw_boundserror",
+                         "PURE-9032: Error constructors"]
+            required = ["constant exception contains undefined fields",
+                        "isempty(args) ? \"\" : args[1]"]
+            count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required)
+        end),
     "L59_real_base_exception_helpers" => ("Bounds/Inexact/Domain/Overflow helper bodies construct and throw their real Julia exceptions; no name-routed null-payload helper family remains",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)

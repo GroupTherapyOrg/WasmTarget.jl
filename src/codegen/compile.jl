@@ -37,7 +37,9 @@ function is_intrinsic_function(f)::Bool
         return false
     end
     fname = nameof(f)
-    return fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
+    return f === Base.rethrow ||
+           fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new,
+                     :str_setchar!, :str_concat, :str_substr]
 end
 
 """
@@ -59,6 +61,15 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
                         WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
     b = InstrBuilder(_ib_params, _ib_results; func_name="generate_intrinsic_body", mod=mod)
     extra_locals = WasmValType[]
+
+    if f === Base.rethrow
+        ensure_exception_tag!(mod)
+        global_get!(b, ensure_exception_global!(mod), AnyRef)
+        ref_null!(b, ExternRef)
+        throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+        end_block!(b)
+        return (builder_code(b), extra_locals)
+    end
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)

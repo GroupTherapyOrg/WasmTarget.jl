@@ -5938,33 +5938,27 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         exn_global = ensure_exception_global!(ctx.mod)
         local _thrb = _ctx_builder(ctx, "compile_call")
         if length(args) >= 1
-            # Check if the value is a QuoteNode containing a struct with undefined fields.
-            # compile_value produces ref.null for such structs, but we need a non-null
-            # struct instance for ref.test (isa checks) to work in catch blocks.
             local _throw_val = args[1]
             local _throw_raw = _throw_val isa QuoteNode ? _throw_val.value : _throw_val
-            local _throw_used_default = false
             if !(_throw_raw isa Core.SSAValue) && !(_throw_raw isa Core.Argument) &&
                isstructtype(typeof(_throw_raw)) && !isa(_throw_raw, Function) && !isa(_throw_raw, Module)
                 local _throw_T = typeof(_throw_raw)
                 local _throw_has_undef = any(!isdefined(_throw_raw, fn) for fn in fieldnames(_throw_T))
                 if _throw_has_undef
-                    # Create a struct with default fields instead of ref.null
-                    local _throw_info = register_struct_type!(ctx.mod, ctx.type_registry, _throw_T)
-                    if _throw_info !== nothing
-                        struct_new_default!(_thrb, _throw_info.wasm_type_idx)
-                        global_set!(_thrb, exn_global)
-                        _throw_used_default = true
-                    end
+                    record_unsupported!(ctx, :unsupported_value,
+                        "constant exception contains undefined fields";
+                        idx=idx, detail=_throw_T)
+                    unreachable!(_thrb)  # structural trap after recorded unsupported
+                    ctx.last_stmt_was_stub = true
+                    return append_builder!(fb, _thrb)
                 end
             end
-            if !_throw_used_default
-                # Compile the exception value normally
-                local _exn_b = _compile_value_b(_throw_val, ctx)
-                if !isempty(_exn_b.instrs)
-                    append_builder!(_thrb, _exn_b)   # typed merge
-                    global_set!(_thrb, exn_global)
-                end
+            # Compile the exception value normally. Constants with undefined fields
+            # were rejected above because WasmGC has no equivalent representation.
+            local _exn_b = _compile_value_b(_throw_val, ctx)
+            if !isempty(_exn_b.instrs)
+                append_builder!(_thrb, _exn_b)   # typed merge
+                global_set!(_thrb, exn_global)
             end
         end
         global_get!(_thrb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(_thrb, ExternRef); throw_!(_thrb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag

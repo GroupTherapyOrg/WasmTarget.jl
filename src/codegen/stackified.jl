@@ -1372,7 +1372,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # The phi locals were just set by set_phi_locals_for_edge!.
                     # Find the destination block's ReturnNode and its phi local.
                     exits_outermost = (label_depth + 1 >= length(label_stack))
-                    if exits_outermost && ctx.return_type !== Nothing
+                    if exits_outermost && ctx.return_type !== Nothing && ctx.return_type !== Union{}
                         func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                         # Find the return phi local: look at the destination block
                         # for a ReturnNode whose value is a phi with a phi_local.

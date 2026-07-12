@@ -26,6 +26,15 @@ function _reinterpret_store_both_directions()::UInt64
     return UInt64(words[1]) | (UInt64(words[2]) << 32)
 end
 
+function _reinterpret_invalid_dimension()::Int64
+    try
+        reinterpret(UInt64, UInt8[1])[1]
+        return 0
+    catch err
+        return err isa ArgumentError ? 1 : 2
+    end
+end
+
 @testset "primitive ReinterpretArray structural semantics" begin
     expected = 0x0807060504030201
     @test _reinterpret_pack_u8_to_u64() == expected
@@ -34,8 +43,10 @@ end
     @test compare_julia_wasm(_reinterpret_pack_u8_to_u64).pass
     @test compare_julia_wasm(_reinterpret_split_u32_to_u8).pass
     @test compare_julia_wasm(_reinterpret_store_both_directions).pass
+    @test compare_julia_wasm(_reinterpret_invalid_dimension).pass
 
     source = read(joinpath(@__DIR__, "..", "src", "codegen", "interpreter.jl"), String)
     @test occursin("Base.array_subpadding", source)
+    @test occursin("{S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true", source)
     @test !occursin("getfield(a, :parent)", source)
 end

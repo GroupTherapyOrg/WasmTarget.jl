@@ -164,6 +164,14 @@ end
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
 # Remove when: codegen handles IOBuffer-based string construction
 
+@noinline @overlay WASM_METHOD_TABLE function Base.print_to_string(xs...)
+    out = ""
+    for x in xs
+        out = out * string(x)
+    end
+    return out
+end
+
 @noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String)
     al = ncodeunits(a)
     bl = ncodeunits(b)
@@ -792,8 +800,10 @@ _wt_uint_type(::Val{8}) = UInt64
 # Primitive numeric elements have no padding. Folding this target-independent
 # layout fact keeps ReinterpretArray construction out of Julia's host pointer/
 # datatype-layout machinery while preserving Base.array_subpadding semantics.
+@overlay WASM_METHOD_TABLE Base.isbitstype(
+    ::Type{T}) where {T<:_WT_PRIMITIVE_BITS} = true
 @overlay WASM_METHOD_TABLE Base.array_subpadding(
-    ::Type{S}, ::Type{T}) where {S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = false
+    ::Type{S}, ::Type{T}) where {S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true
 
 @overlay WASM_METHOD_TABLE function Base.getindex(
         a::Base.ReinterpretArray{T,N,S,A,false}, i::Int

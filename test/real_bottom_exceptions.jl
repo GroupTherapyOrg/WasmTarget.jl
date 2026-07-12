@@ -1,6 +1,7 @@
 using Test
 
 _wt_bottom_throw(x::Int64) = throw(ArgumentError("bottom-$x"))
+_wt_interpolation_length(x::Int64)::Int64 = length("value=$x")
 function _wt_bottom_catch(x::Int64)::Int64
     try
         _wt_bottom_throw(x)
@@ -61,4 +62,6 @@ end
     @test compare_julia_wasm(_wt_inexact_helper_catch, Int64(1)).pass
     @test compare_julia_wasm(_wt_domain_helper_catch, Int64(1)).pass
     @test compare_julia_wasm(_wt_overflow_helper_catch, Int64(1)).pass
+    @test compare_julia_wasm(_wt_interpolation_length, typemax(Int64)).pass
+    @test compare_julia_wasm(_wt_interpolation_length, typemin(Int64)).pass
 end
