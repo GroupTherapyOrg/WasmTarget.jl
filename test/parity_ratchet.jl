@@ -229,6 +229,16 @@ const LOCKS = [
             forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
             count(p -> occursin(p, strings_src), forbidden)
         end),
+    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            forbidden = ["catch\n        Dict{Int,Type}()", "capture analysis fallback"]
+            required = ["_numeric_joins = try", "catch\n        rethrow()",
+                        "propagate_numeric_value_types",
+                        "f3_self_box_joins", "f3_closure_box_seeds"]
+            count(p -> occursin(p, context_src), forbidden) +
+                count(p -> !occursin(p, context_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

@@ -729,7 +729,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
         _joins
     catch
-        Dict{Int,Type}()
+        rethrow()
     end
     # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
@@ -978,7 +978,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         end
         _joins
     catch
-        Dict{Int,Type}()
+        rethrow()
     end
     # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call

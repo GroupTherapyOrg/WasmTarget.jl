@@ -9,9 +9,9 @@
 # `Union`/abstract/`Any` → anyref `Box` (dart2wasm's top-type field). This reconstructs what
 # dart2wasm gets for free from Dart's static types — NOT a heuristic, NOT "type by init and hope".
 #
-# L0 (this file): the pure inference, a pure analysis over the typed IR. NOT yet wired into codegen
-# (byte-identical); L1 registered the specialized `Box{contents}` struct, L2 threads it through
-# %new / setfield! / getfield / the closure captured-box field. Unit-tested in test/f3_box_capture_l0.jl.
+# This file owns the pure inference over typed IR. `compute_numeric_joins!` invokes it once per
+# context phase; specialized `Box{contents}` layouts flow through %new, setfield!/getfield, and
+# closure capture fields. Unit-tested in test/f3_box_capture_l0.jl.
 
 const _F3_CC = Core.Compiler
 
@@ -497,8 +497,8 @@ the box's contents WASM type, into `registry.box_contents_types`. `register_clos
 types the captured-box field as a typed `Box{contents}` instead of anyref. Dynamic-contents boxes
 (`box_contents_type` ⇒ `nothing`) get NO entry → anyref fallback (current behavior, no regression).
 
-DORMANT until the L2 wiring consults the side-table + types box SSAs (context.jl SSA-type pass);
-adding entries to a dict that nothing reads is byte-identical. See dev/F3_LOOP.md.
+The context value-channel proof invokes this before local typing, and closure registration reads
+the side table when choosing its captured-cell field type. See dev/F3_LOOP.md.
 """
 function populate_box_field_types!(mod, registry, code, ssa_types)
     registry.box_contents_types === nothing && return registry.box_contents_types

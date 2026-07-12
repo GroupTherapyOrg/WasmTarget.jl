@@ -1405,7 +1405,7 @@ a DIFFERENT struct than the immutable `{typeId,value}` numeric box. Cached in `r
 so the enclosing fn's `%new`, the closure's captured-box field, and setfield!/getfield all share ONE
 type. dart2wasm-aligned (a typed context-struct field, not a boxed `Any`).
 
-L1 — DORMANT (no codegen call sites yet); wired through the live sites in L2.
+The live capture analysis and Core.Box registration share this constructor.
 """
 function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_type::WasmValType)::UInt32
     if registry.box_types !== nothing && haskey(registry.box_types, contents_wasm_type)
