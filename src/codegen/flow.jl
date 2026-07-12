@@ -227,7 +227,7 @@ end
 
 """
 Store a phi edge value to a phi local, with type compatibility checking — THE
-builder-native implementation (march3: the bytes shell below delegates here).
+builder-native implementation.
 If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
 the store is skipped (these represent unreachable code paths in Union types).
 Returns true if the store was emitted, false if skipped.
@@ -266,12 +266,4 @@ function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::Abstra
     vty === phi_local_type || coerce_stack_top!(b, phi_local_type, ctx)
     local_set!(b, local_idx)
     return true
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_phi_local_set!(bytes::Vector{UInt8}, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
-    lb = _ctx_builder(ctx, "emit_phi_local_set!")
-    r = emit_phi_local_set!(lb, val, phi_ssa_idx, ctx)
-    append!(bytes, builder_code(lb))
-    return r
 end

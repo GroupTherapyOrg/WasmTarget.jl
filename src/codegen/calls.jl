@@ -191,14 +191,6 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     return bld
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function _emit_throw_error_struct!(bytes::Vector{UInt8}, ctx::AbstractCompilationContext, @nospecialize(T))
-    bld = _ctx_builder(ctx, "_emit_throw_error_struct!")
-    _emit_throw_error_struct!(bld, ctx, T)
-    append!(bytes, builder_code(bld))
-    return bytes
-end
-
 """Emit Julia's exact `FieldError(type, field)` through the typed exception tag."""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                             @nospecialize(owner_type), field::Symbol)

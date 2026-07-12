@@ -62,14 +62,6 @@ function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType,
     return b
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = _ctx_builder(ctx, "emit_numeric_to_externref!")
-    emit_numeric_to_externref!(b, val, val_wasm, ctx)
-    append!(target_bytes, builder_code(b))
-    return
-end
-
 """
     emit_numeric_to_anyref!(b, val, val_wasm, ctx)
 
@@ -91,14 +83,6 @@ function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ct
                 from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
     return b  # No extern_convert_any — struct ref is already anyref
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = _ctx_builder(ctx, "emit_numeric_to_anyref!")
-    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
-    append!(target_bytes, builder_code(b))
-    return
 end
 
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes

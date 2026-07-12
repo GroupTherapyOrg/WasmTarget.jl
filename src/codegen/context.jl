@@ -599,22 +599,6 @@ function emit_convert_to_f64!(b, valtype::WasmValType)
     return b
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_convert_to_f64(valtype::WasmValType)::Vector{UInt8}
-    if valtype == I32
-        return UInt8[0xB7]  # f64.convert_i32_s
-    elseif valtype == I64
-        return UInt8[0xB9]  # f64.convert_i64_s
-    elseif valtype == F32
-        return UInt8[0xBB]  # f64.promote_f32
-    elseif valtype == F64
-        return UInt8[]      # Already f64, no conversion needed
-    else
-        # For other types (refs, etc.), no conversion - will cause type error
-        return UInt8[]
-    end
-end
-
 """
 Encode a block result type (for if/block/loop).
 Handles both simple types (i32/i64/f32/f64) and concrete reference types.
@@ -2261,14 +2245,6 @@ function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
     return nothing
 end
 
-function emit_ref_cast_if_structref!(bytes::Vector{UInt8}, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
-    b = _ctx_builder(ctx, "emit_ref_cast_if_structref!")
-    seed_input!(b, WasmValType[AnyRef])  # consumes the ref the caller left on the stack
-    _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
-    append!(bytes, builder_code(b))
-    return
-end
-
 """builder-native form: resolve the source's declared wasm type and narrow on `b`."""
 function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
     _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
@@ -2302,59 +2278,6 @@ function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
         ref_cast!(b, Int64(target_type_idx), true)
     end
     return b
-end
-
-"""
-    _get_local_wasm_type(val, compiled_bytes, ctx) -> WasmValType or nothing
-
-PURE-6025: Get the Wasm type of the value that `compiled_bytes` pushes onto the stack.
-Checks SSA locals, phi locals, and parameter types. Returns the local's Wasm type
-or nothing if it can't be determined.
-"""
-function _get_local_wasm_type(val, compiled_bytes::Vector{UInt8}, ctx::AbstractCompilationContext)
-    # Check via val (SSA or Argument)
-    if val isa Core.SSAValue
-        local_idx = get(ctx.ssa_locals, val.id, nothing)
-        if local_idx === nothing
-            local_idx = get(ctx.phi_locals, val.id, nothing)
-        end
-        if local_idx !== nothing
-            arr_idx = local_idx - ctx.n_params + 1
-            if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                return ctx.locals[arr_idx]
-            end
-        end
-    end
-    # Fallback: decode local_get from compiled bytes
-    if length(compiled_bytes) >= 2 && compiled_bytes[1] == Opcode.LOCAL_GET
-        src_idx = 0
-        shift = 0
-        pos = 2
-        while pos <= length(compiled_bytes)
-            b = compiled_bytes[pos]
-            src_idx |= (Int(b & 0x7f) << shift)
-            shift += 7
-            pos += 1
-            (b & 0x80) == 0 && break
-        end
-        if pos - 1 == length(compiled_bytes)
-            if src_idx >= ctx.n_params
-                arr_idx = src_idx - ctx.n_params + 1
-                if arr_idx >= 1 && arr_idx <= length(ctx.locals)
-                    return ctx.locals[arr_idx]
-                end
-            else
-                # Parameter — infer wasm type from arg_types
-                # Wasm param N → arg_types[N+1] for non-closures (param 0 = arg_types[1])
-                # Wasm param N → arg_types[N+1] for closures (param 0 = closure = arg_types[1])
-                arg_idx = src_idx + 1
-                if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-                    return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry)
-                end
-            end
-        end
-    end
-    return nothing
 end
 
 """

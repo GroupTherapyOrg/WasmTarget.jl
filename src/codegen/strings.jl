@@ -178,36 +178,6 @@ function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
     return b
 end
 
-"""bytes shell for the remaining byte-region callers (dies with them).
-`tmp_local` is historical and unused."""
-function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
-    ib = InstrBuilder(; func_name="emit_jl_string_to_js")
-    seed_input!(ib, WasmValType[ArrayRef])
-    emit_jl_string_to_js!(ib, decode_func_idx)
-    append!(bytes, builder_code(ib))
-end
-
-"""
-    emit_js_to_jl_string!(bytes, encode_func_idx)
-
-Emit bytecode to convert a JS string (externref on stack) to a Julia string (WasmGC i8 array).
-
-**Stack effect:** `[externref] → [(ref \$str_arr)]`
-
-NOTE: This currently uses the legacy wasm:text-encoder path. For the playground,
-only the decode (Julia→JS) direction is needed for println output.
-"""
-function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
-    # Stack: [externref]
-    # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
-    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
-    # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
-    # Typed helper builder with the declared [externref] → [str_arr] effect.
-    ib = InstrBuilder(; func_name="emit_js_to_jl_string")
-    call!(ib, encode_func_idx, WasmValType[], WasmValType[])
-    append!(bytes, builder_code(ib))
-end
-
 # ============================================================================
 # Stack Trace Support — JS new Error().stack Import
 # ============================================================================

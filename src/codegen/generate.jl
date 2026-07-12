@@ -382,8 +382,6 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-
 """builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
 
 # P2-batch22 (gap bac7c93c2871): `if cond; try A catch X end else try B catch
