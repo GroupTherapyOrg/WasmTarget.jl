@@ -210,6 +210,17 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src), forbidden) +
                 count(p -> !occursin(p, test_src), required)
         end),
+    "L71_no_silent_io_argument_skip" => ("out-of-scope IO glue may reject an unrepresentable show argument but cannot silently omit it and report success",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["show: unsupported argument type \$arg_type, skipping"]
+            required = ["show has no IO bridge representation for argument type",
+                        "_wt_unsupported_show", "@test_throws WasmTarget.WasmCompileError"]
+            all_src = invoke_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
     "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

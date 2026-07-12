@@ -3234,7 +3234,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             emit_value!(bsh2, arg, ctx, I32)
                             call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
                         else
-                            @debug "show: unsupported argument type $arg_type, skipping"
+                            record_unsupported!(ctx, :unsupported_method,
+                                "show has no IO bridge representation for argument type $arg_type";
+                                idx=idx, detail=arg)
+                            unreachable!(bsh2) # recorded unsupported; polymorphic bottom
+                            ctx.last_stmt_was_stub = true
+                            break
                         end
                     end
                     # show returns `nothing`; io imports are void — same contract

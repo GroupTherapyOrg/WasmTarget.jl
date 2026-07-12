@@ -68,6 +68,7 @@ L67_one_exception_and_block_owner = 0
 L68_one_runtime_type_representation = 0
 L69_one_vector_mutation_path = 0
 L70_no_host_power_fallback = 0
+L71_no_silent_io_argument_skip = 0
 L6_all_builders_strict = 0
 L7_wasmtools_demoted = 0
 L8_no_silent_traps = 0
