@@ -22,6 +22,15 @@
 # dead empty-reduce branches dynamic); collection itself (TRIM_UNSAFE
 # semantics — what this function does) works on both.
 
+# Julia 1.13 deliberately reports `isconcretetype(Type{T}) == false`, even
+# though a closed-world call-site value of that type has exactly one possible
+# runtime identity: `T`. Treat these singleton type-object slots as exact for
+# specialization alongside ordinary concrete value types.
+@inline _closed_world_exact_type(@nospecialize(T)) =
+    T isa Type && (isconcretetype(T) ||
+        (T isa DataType && T <: Type && length(T.parameters) == 1 &&
+         !(T.parameters[1] isa TypeVar)))
+
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                       superseded::Set{Any}, protected::Set{Any}=Set{Any}())
@@ -75,7 +84,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     # method-table lookup and concrete MethodInstance
                     # specialization as ordinary functions.
                     if (f isa Function || f isa Type) &&
-                       all(T -> T isa Type && isconcretetype(T), arg_types)
+                       all(_closed_world_exact_type, arg_types)
                         ftype = Tuple{Core.Typeof(f), arg_types...}
                         # Re-resolve with the same overlay table used by the
                         # closed-world compiler. An explicit invoke can retain
@@ -343,7 +352,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # A formerly-erased call whose complete signature is now proven is
             # monomorphic. Enroll exactly Julia's selected method; `seen` keeps
             # ordinary already-collected concrete calls a no-op here.
-            absp = Int[j for j in 1:length(atypes) if !(atypes[j] isa DataType && isconcretetype(atypes[j]))]
+            absp = Int[j for j in 1:length(atypes) if !_closed_world_exact_type(atypes[j])]
             if isempty(absp)
                 local concrete_args = Tuple(atypes)
                 hasmethod(g, concrete_args) || continue

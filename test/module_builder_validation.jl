@@ -136,6 +136,13 @@ _mbv_string_init() = "framework-seed"
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
+    @testset "singleton Type arguments are exact closed-world values" begin
+        @test MBV._closed_world_exact_type(Int64)
+        @test MBV._closed_world_exact_type(Type{Float64})
+        @test !MBV._closed_world_exact_type(Type)
+        @test !MBV._closed_world_exact_type(Function)
+    end
+
     @testset "closure roots use declared global substitutions" begin
         getter, setter, handler = _mbv_signal_closures()
         captured = Dict{Symbol,Tuple{Bool,UInt32}}()

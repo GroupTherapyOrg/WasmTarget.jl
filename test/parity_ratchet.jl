@@ -506,9 +506,9 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
-                        "_capture_joins", "if isempty(absp)",
+                        "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
                         "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
-                        "function get_exact_candidate", "all(t -> t isa Type && isconcretetype(t), arg_types)",
+                        "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
                         "info.is_candidate && info.arg_types == arg_types",
                         "infos = FunctionInfo[i for i in infos if !i.is_candidate]",
                         "_target = get_exact_candidate", "target_info = get_exact_candidate",

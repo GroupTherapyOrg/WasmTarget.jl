@@ -1124,7 +1124,7 @@ to ordinary/fuzzy cross-call lookup and to abstract sites.
 """
 function get_exact_candidate(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                              expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo,Nothing}
-    all(t -> t isa Type && isconcretetype(t), arg_types) || return nothing
+    all(_closed_world_exact_type, arg_types) || return nothing
     infos = get_func_ref_infos(registry, func_ref)
     infos === nothing && return nothing
     _ret_ok(info) = expected_return === nothing || expected_return === Any ||
