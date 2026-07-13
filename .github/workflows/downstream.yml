@@ -97,4 +97,5 @@ jobs:
         if: matrix.pkg == 'Snapshot.jl'
         working-directory: Snapshot.jl
         run: |
-          julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
+          julia --project=. -e 'import Pkg; Pkg.develop(Pkg.PackageSpec(path="../WasmTarget.jl")); Pkg.instantiate()'
+          julia --project=. -e 'import Pkg; Pkg.test()'
