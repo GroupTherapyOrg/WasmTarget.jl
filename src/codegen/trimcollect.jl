@@ -239,6 +239,23 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         end
         return
     end
+    function observe_runtime_literal!(@nospecialize(x))
+        # Optimized IR may constant-fold `%new(T, fields...)` into an actual
+        # immutable `T(...)` object embedded as a call argument (not a QuoteNode
+        # and no longer an explicit :new). Such a value is stronger evidence of
+        # runtime class membership than an inferred SSA type: it is the value
+        # being stored/passed by the collected program.
+        x isa Core.SSAValue && return
+        x isa Core.Argument && return
+        x isa Core.SlotNumber && return
+        x isa GlobalRef && return
+        if x isa QuoteNode
+            observe_type!(Core.Typeof(x.value))
+        elseif !(x isa Expr)
+            observe_type!(Core.Typeof(x))
+        end
+        return
+    end
     # Explicit root arguments cross into the component and therefore exist at
     # runtime even if their construction happened in the host.
     for entry in entry_mis
@@ -250,11 +267,14 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
          codeinfos[j + 1] isa Core.CodeInfo) || continue
         local src0 = codeinfos[j + 1]
         for stmt0 in src0.code
-            if stmt0 isa Expr && stmt0.head === :new && !isempty(stmt0.args)
-                local nt = stmt0.args[1]
-                local T = nt isa GlobalRef && isdefined(nt.mod, nt.name) ?
-                          getfield(nt.mod, nt.name) : nt
-                observe_type!(T)
+            if stmt0 isa Expr
+                if stmt0.head === :new && !isempty(stmt0.args)
+                    local nt = stmt0.args[1]
+                    local T = nt isa GlobalRef && isdefined(nt.mod, nt.name) ?
+                              getfield(nt.mod, nt.name) : nt
+                    observe_type!(T)
+                end
+                foreach(observe_runtime_literal!, stmt0.args[2:end])
             end
         end
     end

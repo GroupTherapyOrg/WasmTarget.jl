@@ -1121,7 +1121,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 # alias is not proof that the fragment validator already owns its
                 # operand. Follow the alias to its real producer/slot so value
                 # emission has an explicit, architecture-independent stack effect.
-                emit_value!(b, stmt, ctx)
+                emit_value!(b, stmt, ctx, static_wasm_type(val, ctx))
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
