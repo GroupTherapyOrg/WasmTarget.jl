@@ -44,6 +44,9 @@ jobs:
             Pkg.resolve()
             Pkg.instantiate()
           '
+          # The Lorenz disassembly gate uses Binaryen_jll from the package's
+          # test environment, which is separate from the docs environment.
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
       - name: Build docs
         run: |
