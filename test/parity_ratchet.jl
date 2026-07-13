@@ -535,6 +535,20 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls, so host IO imports cannot shift framework-owned function indices",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
+            required = ["_ir_call_has_explicit_io(stmt, code_info)",
+                        "_invoke_has_explicit_io(param_types)",
+                        "explicit IO formatting does not activate host-console imports",
+                        "Verify interactive docs islands compiled",
+                        "window.TherapyHydrate[\"examplelorenz\"]"]
+            count(p -> !occursin(p,
+                compile_src * invoke_src * read(joinpath(ROOT, "test", "module_builder_validation.jl"), String) * docs_ci),
+                required)
+        end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)

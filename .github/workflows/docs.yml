@@ -49,6 +49,11 @@ jobs:
         run: |
           julia --project=docs --optimize=3 docs/app.jl build
 
+      - name: Verify interactive docs islands compiled
+        run: |
+          rg -F 'window.TherapyHydrate["examplelorenz"]' docs/dist/index.html
+          julia --project=. test/verify_lorenz_docs.jl docs/dist/index.html
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 

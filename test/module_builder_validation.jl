@@ -30,6 +30,8 @@ end
 Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
 _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
 _mbv_string_init() = "framework-seed"
+Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = print(io, '\\', c)
+Base.@noinline _mbv_host_print(x::Int64) = print(x)
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -149,6 +151,22 @@ _mbv_string_init() = "framework-seed"
     @testset "Binaryen Windows scheduling is bounded" begin
         @test MBV._binaryen_worker_count(true) == "1"
         @test MBV._binaryen_worker_count(false) === nothing
+    end
+
+    @testset "explicit IO formatting does not activate host-console imports" begin
+        function print_invoke(fn, arg_types)
+            ci = only(Base.code_typed(fn, arg_types; optimize=true))[1]
+            site = findfirst(ci.code) do stmt
+                stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2 &&
+                    stmt.args[2] isa GlobalRef && stmt.args[2].name === :print
+            end
+            site === nothing && error("explicit-IO fixture lost its print invoke")
+            return ci.code[site], ci
+        end
+        io_stmt, io_ci = print_invoke(_mbv_io_receiver_print, (IOBuffer, Char))
+        host_stmt, host_ci = print_invoke(_mbv_host_print, (Int64,))
+        @test MBV._ir_call_has_explicit_io(io_stmt, io_ci)
+        @test !MBV._ir_call_has_explicit_io(host_stmt, host_ci)
     end
 
     @testset "closure roots use declared global substitutions" begin
