@@ -1,3 +1,16 @@
+# Only receiver-free display calls belong to WT's host-console bridge.  Julia's
+# `print(io, ...)` / `show(io, ...)` methods are formatting machinery and must be
+# resolved and compiled like ordinary calls.
+function _invoke_has_explicit_io(param_types)::Bool
+    (param_types === nothing || isempty(param_types)) && return false
+    first_type = try
+        Core.Compiler.widenconst(first(param_types))
+    catch
+        Any
+    end
+    return first_type isa Type && first_type <: IO
+end
+
 # parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
 # their DATA array (op contract: these positions are strings; no type re-query).
 function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
@@ -3138,7 +3151,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 ctx.last_stmt_was_stub = true  # PURE-908
 
             # PURE-9040: println/print → JS IO bridge imports
-            elseif name === :println || name === :print
+            elseif (name === :println || name === :print) &&
+                   !_invoke_has_explicit_io(param_types)
                 fb = _compile_invoke_print_b(name, args, ctx)
                 # print returns `nothing`; the io imports are void. If this SSA
                 # has a local (the nothing value is USED downstream — common in
@@ -3152,7 +3166,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             # PURE-9041: show(x) → IO bridge imports (like print, no newline)
             # show(42) displays "42", show(true) displays "true", show(nothing) displays "nothing"
-            elseif name === :show
+            elseif name === :show && !_invoke_has_explicit_io(param_types)
                 io = get_io_imports()
                 if io !== nothing
                     bsh2 = _ctx_builder(ctx, "compile_invoke")

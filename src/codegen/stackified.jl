@@ -429,7 +429,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     for target_idx in ctx.entry_calls
         params, results = _true_call_sig(b, target_idx, WasmValType[], WasmValType[])
         isempty(params) && isempty(results) || throw(ArgumentError(
-            "root entry call $target_idx must have signature () -> ()"))
+            "root entry call $target_idx must have signature () -> (); got " *
+            "$(params) -> $(results) while compiling $(ctx.func_ref)"))
         call!(b, target_idx, WasmValType[], WasmValType[])
     end
 

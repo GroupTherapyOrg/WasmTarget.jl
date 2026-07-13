@@ -95,6 +95,7 @@ L92_runtime_predicates_and_bottom_edges_are_exact = 0
 L93_recovered_capture_calls_are_exact_closed_world_edges = 0
 L94_codegen_errors_keep_structured_ledgers = 0
 L95_type_object_specializations_match_runtime_representation = 0
+L96_explicit_io_never_becomes_host_console = 0
 L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
