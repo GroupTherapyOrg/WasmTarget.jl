@@ -307,6 +307,13 @@ const WASM_OPT_PRODUCTION_FLAGS = [
     "--type-merging", "-Os", "--type-finalizing", "--minimize-rec-groups",
 ]
 
+# Binaryen's optimizer parallelizes internally. Its v130 artifact can stall in
+# that worker pool on Windows for otherwise small WasmGC modules, while the same
+# invocation is deterministic and completes when constrained to one worker.
+# Keep the artifact executable and the exact production pass pipeline; only its
+# host-side scheduling differs on Windows.
+_binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
+
 """
     optimize(bytes::Vector{UInt8}; level=:size, validate=true) -> Vector{UInt8}
 
@@ -350,6 +357,8 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         # library environment. Optimization therefore has no ambient PATH or
         # system-package dependency.
         cmd = `$(wasmopt()) $(flags) $(input_path) -o $(output_path)`
+        worker_count = _binaryen_worker_count()
+        worker_count === nothing || (cmd = addenv(cmd, "BINARYEN_CORES" => worker_count))
         try
             Base.run(cmd)
         catch e

@@ -146,6 +146,11 @@ _mbv_string_init() = "framework-seed"
         @test MBV._canonical_type_object_arg(Type{Float64}, Type) === Type{Float64}
     end
 
+    @testset "Binaryen Windows scheduling is bounded" begin
+        @test MBV._binaryen_worker_count(true) == "1"
+        @test MBV._binaryen_worker_count(false) === nothing
+    end
+
     @testset "closure roots use declared global substitutions" begin
         getter, setter, handler = _mbv_signal_closures()
         captured = Dict{Symbol,Tuple{Bool,UInt32}}()

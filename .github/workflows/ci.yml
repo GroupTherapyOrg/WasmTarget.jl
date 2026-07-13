@@ -8,7 +8,10 @@ on:
 jobs:
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    timeout-minutes: 75
+    # Direct Windows slices historically finish well below 45 minutes. Keep a
+    # tighter bound there so an external optimizer regression cannot consume a
+    # second blind multi-hour certification run.
+    timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 45 || 75 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
     strategy:

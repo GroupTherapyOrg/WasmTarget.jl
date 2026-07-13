@@ -1096,7 +1096,8 @@ const LOCKS = [
             tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
             project_src = read(joinpath(ROOT, "Project.toml"), String)
             missing = count(p -> !occursin(p, api_src * project_src),
-                            ["using Binaryen_jll: wasmopt", "Binaryen_jll =", "\$(wasmopt())"])
+                            ["using Binaryen_jll: wasmopt", "Binaryen_jll =", "\$(wasmopt())",
+                             "_binaryen_worker_count", "BINARYEN_CORES"])
             forbidden = count(p -> occursin(p, api_src * tests_src),
                               ["Sys.which(\"wasm-opt\")", "wasm-opt not found", "skipping optimization tests"])
             missing + forbidden
