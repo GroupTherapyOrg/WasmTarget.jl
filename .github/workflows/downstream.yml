@@ -39,14 +39,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GroupTherapyOrg/WasmMakie.jl
+          ref: ${{ vars.WASMMAKIE_DOWNSTREAM_REF || 'main' }}
           path: WasmMakie.jl
       - uses: actions/checkout@v4
         with:
           repository: GroupTherapyOrg/Therapy.jl
+          ref: ${{ vars.THERAPY_DOWNSTREAM_REF || 'main' }}
           path: Therapy.jl
       - uses: actions/checkout@v4
         with:
           repository: GroupTherapyOrg/Snapshot.jl
+          ref: ${{ vars.SNAPSHOT_DOWNSTREAM_REF || 'main' }}
           path: Snapshot.jl
 
       - uses: julia-actions/setup-julia@v2
@@ -72,7 +75,7 @@ jobs:
         run: |
           julia --project=test -e 'import Pkg; Pkg.instantiate()'
           julia --project=test test/c002_parity.jl
-          julia --project=test test/runtests.jl || julia --project=test test/runtests.jl
+          julia --project=test test/runtests.jl
 
       # Therapy compiles reactive @island components (the dashboard that the
       # select_t fix unblocked). Point its env at this WasmTarget and run its
@@ -88,19 +91,10 @@ jobs:
       # WasmTarget and verifies each with a differential oracle (native vs wasm) —
       # the closest signal to the real notebook-export use case. Its Project.toml
       # sources WasmTarget from ../WasmTarget.jl (this checkout). A deliberate
-      # breaking WasmTarget release can make Snapshot.jl's compat unresolvable; that's
-      # "compat-incompatible", NOT a codegen regression, so skip cleanly on a
-      # ResolverError (the ChainRules reverse-dep convention).
+      # breaking WasmTarget release must be coordinated with Snapshot's selected
+      # integration ref. Compat failure is a red downstream gate, never a skip.
       - name: Snapshot.jl test suite
         if: matrix.pkg == 'Snapshot.jl'
         working-directory: Snapshot.jl
         run: |
-          julia --project=. -e '
-            import Pkg
-            try
-                Pkg.instantiate()
-            catch e
-                isa(e, Pkg.Resolve.ResolverError) && (@info "Snapshot.jl compat-incompatible with this WasmTarget; skipping (not a regression)"; exit(0))
-                rethrow()
-            end
-            Pkg.test()'
+          julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
