@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.5.1...v0.5.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* preserve explicit IO calls in closed worlds ([#114](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/114)) ([f6b38cb](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f6b38cb9a2534d41e518d854dbf86b0c5984000e))
+
 ## [0.5.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.5.0...v0.5.1) (2026-07-13)
 
 
