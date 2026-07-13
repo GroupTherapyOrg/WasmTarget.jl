@@ -16,12 +16,12 @@ main residual).
 
 ## ORDERING CONSTRAINT (wasm: supertypes precede subtypes in the type section)
 ensure_abstract_struct! recurses parent-first (low indices); lazily-registered types
-ensure their parent chain AT REGISTRATION (never a forward ref). The post-body
-retrofit re-parents per-class (same recursion).
+ensure their parent chain AT REGISTRATION (never a forward ref). No finalization pass
+may mutate a declared supertype after code generation.
 
 ## SLICES
 A. ensure_abstract_struct! + registration wiring (register_struct_type!,
    get_numeric_box_type!, the closure base) — parent synthetics at creation.
-B. set_struct_supertypes! per-class re-parenting (the retrofit).
-C. consumers audit (anything reading supertype_idx === base_struct_idx).
+B. Internal closure contexts and vtables remain outside the Object class hierarchy.
+C. Consumers audit (anything reading supertype_idx === base_struct_idx).
 Full gate per slice.

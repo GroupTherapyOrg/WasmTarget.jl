@@ -1,5 +1,6 @@
 module WasmTarget
 
+using Binaryen_jll: wasmopt
 using PrecompileTools: @setup_workload, @compile_workload
 
 # Builder - Low-level Wasm binary emitter
@@ -11,7 +12,7 @@ include("builder/instr_ir.jl")
 include("builder/instr_builder.jl")
 
 # Codegen - Julia IR to Wasm bytecode
-include("codegen/diagnostics.jl")  # strict-mode diagnostics; must precede context.jl (struct field)
+include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic field)
 include("codegen/interpreter.jl")
 include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
@@ -25,12 +26,11 @@ include("codegen/structs.jl")
 include("codegen/closures.jl")   # march16: the closure layouter consumers
 include("codegen/unions.jl")
 include("codegen/int128.jl")
-include("codegen/box_capture.jl")  # F3 mutable-capture (dev/F3_LOOP.md); L0 = inference only (dormant)
+include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/F3_LOOP.md)
 include("codegen/context.jl")
 include("codegen/generate.jl")
 include("codegen/flow.jl")
 include("codegen/stackified.jl")
-include("codegen/conditionals.jl")
 include("codegen/statements.jl")
 include("codegen/values.jl")
 include("codegen/calls.jl")
@@ -39,8 +39,6 @@ include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
-
-include("codegen/wasm_constructors.jl")
 
 # Runtime - Intrinsics and stdlib mapping
 include("runtime/intrinsics.jl")
@@ -51,32 +49,20 @@ include("bridge.jl")
 
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
-export FrozenCompilationState, build_frozen_state, compile_module_from_ir_frozen, compile_module_from_ir_frozen_no_dict
-export wasm_bytes_length, wasm_bytes_get, wasm_compile_source, wasm_compile_flat
-export wasm_create_ssa_value, wasm_create_argument, wasm_create_goto_node
-export wasm_create_goto_if_not, wasm_create_return_node, wasm_create_return_node_nothing
-export wasm_create_phi_node, wasm_create_expr, wasm_set_code_info!, wasm_create_simple_codeinfo
-export SimpleCodeInfo
-export wasm_create_any_vector, wasm_set_any_ssa!, wasm_set_any_arg!, wasm_set_any_i64!
-export wasm_set_any_expr!, wasm_set_any_return!, wasm_set_any_gotoifnot!
-export wasm_set_any_goto!, wasm_set_any_phi!
-export wasm_get_ssa_id, wasm_get_gotoifnot_dest, wasm_any_vector_length
-export wasm_create_i32_vector, wasm_set_i32!, wasm_get_i32, wasm_i32_vector_length
-export wasm_create_ssatypes_all_i64
-export wasm_symbol_call, wasm_symbol_invoke, wasm_symbol_new
-export wasm_symbol_boundscheck, wasm_symbol_foreigncall
+export RootBindings
+export wasm_bytes_length, wasm_bytes_get
 export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
-# Therapy.jl integration - direct IR compilation for reactive handlers
-export compile_handler, compile_closure_body, DOMBindingSpec, TypeRegistry, FunctionRegistry, register_function!
+export TypeRegistry, FunctionRegistry, register_function!
+export add_string_global!, add_uninitialized_ref_global!, add_root_global_initializer!
 export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
-# Soundness: strict-mode diagnostics + validation gate
+# Soundness diagnostics + independent validation cross-check
 export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
 
 """
@@ -101,7 +87,7 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
-                 strict::Bool=true, validate::Bool=_wt_default_validate(),
+                 validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
     # Get function name for export
     func_name = string(nameof(f))
@@ -112,8 +98,7 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     mod = try
-        # Compile to WasmModule (strict=true raises WasmCompileError on unsupported constructs)
-        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir, strict=strict)
+        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end
@@ -130,8 +115,8 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
 end
 
 # Convenience method for single argument type
-compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, strict::Bool=true, validate::Bool=_wt_default_validate()) =
-    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, strict=strict, validate=validate)
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate()) =
+    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, validate=validate)
 
 """
     compile_multi(functions; optimize=false) -> Vector{UInt8}
@@ -153,18 +138,39 @@ wasm_bytes = compile_multi([
 ```
 
 Functions can call each other within the module.
+
+Hosts that provide typed WebAssembly imports may pass an `existing_module`
+containing those declarations together with `import_stubs`. Imported Julia stub
+calls then participate in the same closed-world collection, typed builder,
+serialization, optimization, and validation pipeline as every other root.
+Frameworks may attach a `RootBindings` value by export name to substitute
+captured fields with globals declared in that module or exact Julia constants.
+Constants go through the canonical value-materialization pipeline. Context
+elision is fail-closed: every closure field must have exactly one explicit
+substitution.
+
+Framework runtime adapters that must reference compiled roots may use
+`link_roots(mod, root_indices, type_registry)`. It runs once after every root
+has a typed placeholder and before root bodies are emitted; adding late imports
+is rejected because it would invalidate all function indices.
 """
-function compile_multi(functions::Vector; optimize=false, stub_names::Set{String}=Set{String}(),
+function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
-                       register_ir_types::Bool=false, strict::Bool=true, validate::Bool=_wt_default_validate(),
+                       register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
                        discovery::Symbol=:trim,
+                       existing_module::Union{WasmModule,Nothing}=nothing,
+                       import_stubs::Vector=Any[],
+                       root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                       link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
-        compile_module(functions; stub_names=stub_names, return_registries=return_registries,
-                       optimize_ir=optimize_ir, register_ir_types=register_ir_types, strict=strict,
-                       discovery=discovery)
+        compile_module(functions; return_registries=return_registries,
+                       optimize_ir=optimize_ir, register_ir_types=register_ir_types,
+                       discovery=discovery, existing_module=existing_module,
+                       import_stubs=import_stubs, root_bindings=root_bindings,
+                       link_roots=link_roots)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end
@@ -301,6 +307,13 @@ const WASM_OPT_PRODUCTION_FLAGS = [
     "--type-merging", "-Os", "--type-finalizing", "--minimize-rec-groups",
 ]
 
+# Binaryen's optimizer parallelizes internally. Its v130 artifact can stall in
+# that worker pool on Windows for otherwise small WasmGC modules, while the same
+# invocation is deterministic and completes when constrained to one worker.
+# Keep the artifact executable and the exact production pass pipeline; only its
+# host-side scheduling differs on Windows.
+_binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
+
 """
     optimize(bytes::Vector{UInt8}; level=:size, validate=true) -> Vector{UInt8}
 
@@ -315,16 +328,9 @@ Uses dart2wasm's production WasmGC flags by default.
 Optimized `Vector{UInt8}`.
 
 # Throws
-- Error if `wasm-opt` is not found (with install instructions)
 - Error if optimization or validation fails
 """
 function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
-    # Check wasm-opt availability
-    wasm_opt = Sys.which("wasm-opt")
-    if wasm_opt === nothing
-        error("wasm-opt not found. Install Binaryen: brew install binaryen (macOS) or apt install binaryen (Linux)")
-    end
-
     # Build flags based on level
     flags = copy(WASM_OPT_GC_FLAGS)
     if level === :size
@@ -347,7 +353,12 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         output_path = joinpath(dir, "output.wasm")
         write(input_path, bytes)
 
-        cmd = `$(wasm_opt) $(flags) $(input_path) -o $(output_path)`
+        # Binaryen_jll supplies a platform-correct executable plus its required
+        # library environment. Optimization therefore has no ambient PATH or
+        # system-package dependency.
+        cmd = `$(wasmopt()) $(flags) $(input_path) -o $(output_path)`
+        worker_count = _binaryen_worker_count()
+        worker_count === nothing || (cmd = addenv(cmd, "BINARYEN_CORES" => worker_count))
         try
             Base.run(cmd)
         catch e
@@ -364,7 +375,7 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
 end
 
 # ============================================================================
-# Validation gate — wasm-tools validate (default-on soundness check)
+# Independent validation cross-check — opt-in; the typed builder is the gate
 # ============================================================================
 
 const _WARNED_NO_WASM_TOOLS = Ref(false)

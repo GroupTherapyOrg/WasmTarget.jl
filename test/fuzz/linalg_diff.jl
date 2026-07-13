@@ -48,13 +48,23 @@ const LINALG_VERIFIED = Set{Symbol}([
 # `true` iff every input matches (native-throw ⇒ wasm-trap parity).
 function _la_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     res = bridge_run_args(fn, argTs, inputs; rettype = rettype)
-    res isa Vector || return false
+    if !(res isa Vector)
+        @error("LinearAlgebra differential compile/run failure",
+            function_name=string(nameof(fn)), argument_types=argTs,
+            return_type=rettype, result=res)
+        return false
+    end
     rdesc = _LA_B.descriptor(rettype)[1]
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(a...)) catch; (false, nothing) end
         ok = r[1] === :ok ? (nat[1] && _LA_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
-        ok || return false
+        if !ok
+            @error("LinearAlgebra differential mismatch",
+                function_name=string(nameof(fn)), argument_types=argTs,
+                return_type=rettype, input=a, native=nat, wasm=r)
+            return false
+        end
     end
     return true
 end

@@ -24,37 +24,9 @@ function get_char_array_type!(mod::WasmModule)::UInt32
 end
 
 """
-    add_string_io_imports!(mod, type_registry) -> (decode_idx, encode_idx)
-
-Add `wasm:js-string.fromCharCodeArray` and `wasm:js-string.intoCharCodeArray`
-imports. These are standardized JS String Builtins auto-provided by engines
-when compiled with `builtins: ["js-string"]` (Chrome 131+, Node 23+).
-
-Returns a named tuple `(decode_idx, encode_idx)` with the import function indices.
-"""
-function add_string_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
-    char_arr_type_idx = get_char_array_type!(mod)
-    char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)   # (ref null $i16arr)
-
-    str_arr_type_idx = get_string_array_type!(mod, type_registry)
-    str_arr_ref_nonnull = ConcreteRef(str_arr_type_idx, false)     # (ref $str_arr)
-
-    # fromCharCodeArray: (ref null (array (mut i16)), i32, i32) → (ref extern)
-    decode_idx = add_import!(mod, "wasm:js-string", "fromCharCodeArray",
-        WasmValType[char_arr_ref_nullable, I32, I32],
-        WasmValType[NonNullExternRef])
-
-    # intoCharCodeArray: (externref, ref null (array (mut i16)), i32) → i32
-    # For encode, we keep the old approach as a stub — not yet used at IO boundary
-    encode_idx = decode_idx  # placeholder — encode not used in println path
-
-    return (decode_idx=decode_idx, encode_idx=encode_idx)
-end
-
-"""
 Module-level storage for the utf8_to_js helper function index.
 This helper converts an i8 UTF-8 array to a JS string via fromCharCodeArray.
-Created once per module in add_string_io_imports! or add_io_imports!.
+Created once per module in add_io_imports!.
 """
 const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
 
@@ -95,7 +67,7 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     # i16 char array → fromCharCodeArray. Byte-identical to the raw emission below.
     char_arr_ref = ConcreteRef(char_arr_type_idx, true)
     b = InstrBuilder(WasmValType[i8arr_ref], WasmValType[NonNullExternRef];
-                     func_name="create_utf8_to_js_helper", strict=_wt_builder_strict())
+                     func_name="create_utf8_to_js_helper")
     builder_set_local_type!(b, local_len, I32)
     builder_set_local_type!(b, local_i16arr, char_arr_ref)
     builder_set_local_type!(b, local_i, I32)
@@ -114,14 +86,14 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     local_set!(b, local_i)
 
     # block { loop {
-    block!(b)
-    loop!(b)
+    done_label = block!(b)
+    loop_label = loop!(b)
 
     # if i >= len, break
     local_get!(b, local_i)
     local_get!(b, local_len)
     num!(b, Opcode.I32_GE_U)
-    br_if!(b, 1)
+    br_if!(b, done_label)
 
     # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
     local_get!(b, local_i16arr)
@@ -138,7 +110,7 @@ function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry,
     local_set!(b, local_i)
 
     # br loop
-    br!(b, 0)
+    br!(b, loop_label)
 
     end_block!(b)  # end loop
     end_block!(b)  # end block
@@ -176,36 +148,6 @@ function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
     # Call $utf8_to_js(i8_arr_ref) → (ref extern), the REAL declared effect.
     call!(b, helper_idx, WasmValType[ArrayRef], WasmValType[NonNullExternRef])
     return b
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them).
-`tmp_local` is historical and unused."""
-function emit_jl_string_to_js!(bytes::Vector{UInt8}, decode_func_idx::UInt32, tmp_local::UInt32)
-    ib = InstrBuilder(; func_name="emit_jl_string_to_js")
-    seed_input!(ib, WasmValType[ArrayRef])
-    emit_jl_string_to_js!(ib, decode_func_idx)
-    append!(bytes, builder_code(ib))
-end
-
-"""
-    emit_js_to_jl_string!(bytes, encode_func_idx)
-
-Emit bytecode to convert a JS string (externref on stack) to a Julia string (WasmGC i8 array).
-
-**Stack effect:** `[externref] → [(ref \$str_arr)]`
-
-NOTE: This currently uses the legacy wasm:text-encoder path. For the playground,
-only the decode (Julia→JS) direction is needed for println output.
-"""
-function emit_js_to_jl_string!(bytes::Vector{UInt8}, encode_func_idx::UInt32)
-    # Stack: [externref]
-    # Call encodeStringToUTF8Array(externref) → (ref $str_arr)
-    # MIGRATED to InstrBuilder (typed). call! emits CALL + leb_u(encode_func_idx), byte-identical.
-    # External emit_*!(bytes,...) helper that mutates the caller's buffer → build into a local
-    # collect-mode builder and splice (caller's bridge declares the [externref] → [str_arr] effect).
-    ib = InstrBuilder(; func_name="emit_js_to_jl_string")
-    call!(ib, encode_func_idx, WasmValType[], WasmValType[])
-    append!(bytes, builder_code(ib))
 end
 
 # ============================================================================
@@ -424,21 +366,8 @@ Compile string concatenation (str1 * str2).
 Creates a new string array with combined contents.
 Uses locals for intermediate values.
 """
-# Thin delegator. The explicit-locals implementation below is the real one; the old
-# inline body here built a `bytes` vector then discarded it (dead bloat) — removed.
-function compile_string_concat(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8}
-    return compile_string_concat_with_locals(str1, str2, ctx)
-end
-
-"""
-String concatenation implementation using explicit locals.
-Uses scratch locals allocated by allocate_scratch_locals!.
-"""
 # MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
 # array.copy. Byte-identical to before.
-compile_string_concat_with_locals(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(compile_string_concat_b(str1, str2, ctx))
-
 """builder-returning core (march3): callers merge via append_builder!."""
 function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
@@ -449,7 +378,7 @@ function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::I
     end
     result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_concat", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="compile_string_concat")
     set_context!(b, "string concat")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, result_local, strref)
@@ -487,6 +416,45 @@ function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::I
     return b
 end
 
+_all_string_args(args, ctx::AbstractCompilationContext) =
+    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
+
+"""Concatenate every proven String/Symbol argument through one N-way builder."""
+function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("N-way string concatenation requires at least one argument")
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    strref = ConcreteRef(str_type_idx, true)
+    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
+    offset_local = allocate_local!(ctx, I32)
+    total_len_local = allocate_local!(ctx, I32)
+    result_local = allocate_local!(ctx, strref)
+    b = _ctx_builder(ctx, "compile_string_concat_many")
+
+    for i in eachindex(args)
+        emit_value!(b, args[i], ctx, strref)
+        local_set!(b, str_locals[i])
+    end
+    i32_const!(b, 0)
+    for loc in str_locals
+        local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
+    end
+    local_set!(b, total_len_local)
+    local_get!(b, total_len_local); array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
+    i32_const!(b, 0); local_set!(b, offset_local)
+
+    for loc in str_locals
+        local_get!(b, result_local); local_get!(b, offset_local)
+        local_get!(b, loc); i32_const!(b, 0)
+        local_get!(b, loc); array_len!(b)
+        array_copy!(b, str_type_idx, str_type_idx)
+        local_get!(b, offset_local); local_get!(b, loc); array_len!(b)
+        num!(b, Opcode.I32_ADD); local_set!(b, offset_local)
+    end
+    local_get!(b, result_local)
+    return b
+end
+
 """
 Compile string equality comparison (str1 == str2).
 Returns i32 (0 or 1).
@@ -494,9 +462,6 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
 # control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-compile_string_equal(str1, str2, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(compile_string_equal_b(str1, str2, ctx))
-
 """builder-returning core (march3): callers merge via append_builder!."""
 function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
@@ -507,7 +472,7 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     end
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_equal", strict=_wt_builder_strict())
+    b = InstrBuilder(; func_name="compile_string_equal")
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, str1_local, strref)
@@ -531,12 +496,12 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
         i32_const!(b, 0)                                   # lengths differ → not equal
     else_!(b)
         i32_const!(b, 0); local_set!(b, i_local)           # i = 0
-        block!(b, 0x7F; results=WasmValType[I32])          # break-with-result block
-            loop!(b, 0x40)                                 # void loop
+        done_label = block!(b, 0x7F; results=WasmValType[I32]) # break-with-result block
+            loop_label = loop!(b, 0x40)                    # void loop
                 # if i >= len → all matched, push 1 and break to block
                 local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
                 if_!(b, 0x40)
-                    i32_const!(b, 1); br!(b, 2)
+                    i32_const!(b, 1); br!(b, done_label)
                 end_block!(b)
                 # compare str1[i] vs str2[i] (unsigned packed-byte get)
                 local_get!(b, str1_local); local_get!(b, i_local)
@@ -545,11 +510,11 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
                 array_get!(b, str_type_idx, I32; signed=false)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)
-                    i32_const!(b, 0); br!(b, 2)             # differ → not equal
+                    i32_const!(b, 0); br!(b, done_label)    # differ → not equal
                 end_block!(b)
                 # i += 1; continue
                 local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
-                br!(b, 0)
+                br!(b, loop_label)
             end_block!(b)                                  # end loop
             unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
         end_block!(b)                                      # end result block
@@ -557,4 +522,3 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
 
     return b
 end
-

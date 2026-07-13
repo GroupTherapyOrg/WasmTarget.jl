@@ -123,12 +123,10 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
         push!(wasm_fields, FieldType(wasm_vt, false))  # immutable for closures
     end
 
-    # Add struct type to module
-    # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
-    local _dagp = dag_supertype_idx!(mod, registry, T)
-    type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
-               UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
+    # This is the captured-fields CONTEXT, not the user-visible closure object.
+    # Dart contexts are internal structs and do not participate in the Object /
+    # Function class hierarchy; the separately allocated closure object does.
+    type_idx = add_struct_type!(mod, wasm_fields)
 
     # Record mapping (field_offset=1 for typeId prefix)
     info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
@@ -166,6 +164,7 @@ Check if a type is self-referential (has fields that reference itself).
 function is_self_referential_type(T::DataType)::Bool
     for i in 1:fieldcount(T)
         ft = fieldtype(T, i)
+        ft === T && return true
         # Check nullable fields (Union{Nothing, T})
         if ft isa Union
             inner = get_nullable_inner_type(ft)
@@ -184,36 +183,36 @@ end
 """
 Register a Julia struct type in the Wasm module.
 """
-# Cycle guard for register_struct_type!: the haskey fast-path only helps AFTER
-# a registration completes, so mutually/self-recursive struct types (Luxor/
-# Karnak/Graphs object graphs inside Makie figures) recursed to StackOverflow.
-# WasmGC rec-groups could support these properly (future); until then, refuse
-# with a NAMED error so pipelines degrade honestly instead of crashing.
-const _STRUCT_REG_STACK = Vector{DataType}()
+# A per-compile diagnostic stack for unexpected registration-dependency cycles.
+# Julia's realizable self-recursive layouts take the reserved rec-group path
+# below; this guard catches unbounded registration algorithms without sharing
+# mutable state between concurrent compilation tasks.
+_struct_reg_stack() = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
 
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
-    if T in _STRUCT_REG_STACK
+    local reg_stack = _struct_reg_stack()
+    if T in reg_stack
         throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-            "recursive struct type $(T) (registration cycle: $(join(_STRUCT_REG_STACK, " → ")) → $(T)); WasmGC rec-group support not implemented",
+            "struct registration dependency cycle $(join(reg_stack, " → ")) → $(T) escaped the reserved recursion-group path",
             nothing, nothing)))
     end
-    if length(_STRUCT_REG_STACK) > 120
+    if length(reg_stack) > 120
         # not a cycle — unbounded DESCENT through ever-new parametric types
         # (each nesting level mints a fresh type, so the cycle check never
         # fires). Name the tail of the chain so the growth pattern is visible.
-        tail = join((string(nameof(t)) for t in _STRUCT_REG_STACK[end-7:end]), " → ")
+        tail = join((string(nameof(t)) for t in reg_stack[end-7:end]), " → ")
         throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
             "struct type registration exceeded depth 120 (type-descent, last: … → $(tail) → $(T))",
             nothing, nothing)))
     end
-    push!(_STRUCT_REG_STACK, T)
+    push!(reg_stack, T)
     try
         return _register_struct_type_inner!(mod, registry, T)
     finally
-        pop!(_STRUCT_REG_STACK)
+        pop!(reg_stack)
     end
 end
 
@@ -230,8 +229,8 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
     # Register it as an externref array type so _svec_len and _svec_ref work.
     # SimpleVector elements are Any-typed, mapping to externref in WasmGC.
     if T === Core.SimpleVector
-        # PURE-9064: When JlType hierarchy is active, reuse the $JlSVec array type
-        # (array (mut (ref null $JlType))). Previously this created a separate
+        # PURE-9064: When JlType hierarchy is active, reuse the heterogeneous
+        # $JlSVec array type. Previously this created a separate
         # (array (mut anyref)) which caused type mismatch: struct.get on $JlDataType.parameters
         # returns (ref null $JlSVec) but the local was typed with a different array type index.
         if registry.jl_svec_idx !== nothing
@@ -242,6 +241,17 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         end
         # Register as a "struct" with 0 Julia fields but backed by an array type
         info = StructInfo(T, arr_idx, Symbol[], DataType[], UInt32(0))  # SimpleVector is an array type, no typeId
+        registry.structs[T] = info
+        return info
+    end
+
+    # Core.Box is a mutable captured-variable CELL inside Dart's context model,
+    # not a user-visible Object allocation. Keep its `{classId, contents}` Top
+    # representation and its one-field Julia offset; the closure object owns
+    # identity, while all closures sharing this cell observe the same contents.
+    if T === Core.Box
+        idx = get_box_type!(mod, registry, AnyRef)
+        info = StructInfo(T, idx, [:contents], Type[Any], UInt32(1))
         registry.structs[T] = info
         return info
     end
@@ -313,10 +323,36 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         end
         delete!(_registering_types, T)
 
+        # The wrapper's size tuple must precede the contiguous recursive group.
+        # Registering it after the reserved struct would split the group interval.
+        local has_recursive_vector = any(1:fieldcount(T)) do i
+            local ft = fieldtype(T, i)
+            local inner = ft isa Union ? get_nullable_inner_type(ft) : ft
+            inner isa DataType && inner <: AbstractVector && eltype(inner) === T
+        end
+        if has_recursive_vector && !haskey(registry.structs, Tuple{Int64})
+            register_tuple_type!(mod, registry, Tuple{Int64})
+        end
+
+        # The recursive struct's own superclass must also precede its reserved
+        # index; a supertype in a later recursion group is invalid Wasm.
+        dag_supertype_idx!(mod, registry, T)
+
+        # Any recursive Vector wrapper must know its class parent before the
+        # contiguous recursive group begins; creating a parent inside the group
+        # would split its type-index interval.
+        for i in 1:fieldcount(T)
+            local ft = fieldtype(T, i)
+            local inner = ft isa Union ? get_nullable_inner_type(ft) : ft
+            if inner isa DataType && inner <: AbstractVector && eltype(inner) === T
+                dag_supertype_idx!(mod, registry, inner)
+            end
+        end
+
         # Step 1: Add struct placeholder first (with placeholder fields)
         # We need the struct index before creating array types that reference it
         # PURE-9024: Prepend typeId:i32 as field 0
-        temp_fields = FieldType[FieldType(I32, false)]
+        temp_fields = object_prefix_fields()
         for i in 1:fieldcount(T)
             ft = fieldtype(T, i)
             if ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
@@ -368,12 +404,15 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
                     size_struct_info = registry.structs[size_tuple_type]
                     # PURE-9024: Prepend typeId:i32 as field 0
                     vec_fields = [
-                        FieldType(I32, false),  # PURE-9024: typeId
+                        FieldType(I32, false),  # classId
+                        FieldType(I32, true),   # identityHash
                         FieldType(ConcreteRef(arr_idx, true), true),
                         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)
                     ]
-                    vec_type_idx = add_struct_type!(mod, vec_fields)
-                    vec_info = StructInfo(vec_type, vec_type_idx, [:ref, :size], DataType[Array{T, 1}, size_tuple_type], UInt32(1))
+                    local vec_parent = dag_supertype_idx!(mod, registry, vec_type)
+                    vec_type_idx = vec_parent === nothing ? add_struct_type!(mod, vec_fields) :
+                                   UInt32(add_type!(mod, StructType(vec_fields, vec_parent)))
+                    vec_info = StructInfo(vec_type, vec_type_idx, [:ref, :size], DataType[Array{T, 1}, size_tuple_type], UInt32(2))
                     registry.structs[vec_type] = vec_info
                     push!(vector_wrapper_indices, vec_type_idx)
                 end
@@ -387,6 +426,7 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         end
         append!(rec_group_types, vector_wrapper_indices)
         if length(rec_group_types) > 1
+            sort!(rec_group_types)
             add_rec_group!(mod, rec_group_types)
         end
 
@@ -420,7 +460,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
     # Memory <: AbstractVector but should map to raw array, not Vector struct
     # PURE-9024: Prepend typeId:i32 as field 0
-    wasm_fields = FieldType[FieldType(I32, false)]
+    wasm_fields = object_prefix_fields()
     for ft in field_types
         if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
             # MemoryRef{T} / GenericMemoryRef maps to array type for element T
@@ -561,8 +601,8 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     mod.types[reserved_idx + 1] = _dagp2 === nothing ? StructType(wasm_fields) : StructType(wasm_fields, _dagp2)   # step5
 
     # Record mapping (rec groups already set up by register_struct_type!)
-    # PURE-9024: field_offset=1 for typeId prefix
-    info = StructInfo(T, reserved_idx, field_names, field_types, UInt32(1))
+    # Ordinary heap representation: classId + identityHash prefix.
+    info = StructInfo(T, reserved_idx, field_names, field_types, UInt32(2))
     registry.structs[T] = info
 
     return info
@@ -574,8 +614,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
 
     # Create WasmGC field types
-    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
-    wasm_fields = FieldType[FieldType(I32, false)]
+    # Prepend the inherited Object prefix.
+    wasm_fields = object_prefix_fields()
     for ft in field_types
         # For array fields, use concrete reference to registered array type
         # But for Vector{T}, use the Vector struct type (with ref and size fields)
@@ -763,8 +803,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
 
-    # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
-    info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
+    # Record the two inherited Object fields.
+    info = StructInfo(T, type_idx, field_names, field_types, UInt32(2))
     registry.structs[T] = info
 
     return info
@@ -790,6 +830,47 @@ function _canonical_tuple_type(T::DataType)
     return changed ? Tuple{ps...} : T
 end
 
+is_vararg_tuple_type(@nospecialize(T)) =
+    T isa DataType && T <: Tuple && any(p -> typeof(p) === Core.TypeofVararg, T.parameters)
+
+"""True only for the homogeneous runtime tuple layout this backend represents."""
+function is_runtime_vararg_tuple_type(@nospecialize(T))
+    (T isa DataType && T <: Tuple && length(T.parameters) == 1) || return false
+    local v = T.parameters[1]
+    typeof(v) === Core.TypeofVararg || return false
+    isdefined(v, :T) || return false
+    return v.T isa Type && isconcretetype(v.T)
+end
+
+function vararg_tuple_eltype(T::DataType)::Type
+    is_runtime_vararg_tuple_type(T) ||
+        error("no homogeneous runtime Vararg tuple representation for $T")
+    return T.parameters[1].T
+end
+
+"""Register the runtime-length tuple wrapper `{Object, data, size}`."""
+function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+    is_runtime_vararg_tuple_type(T) ||
+        error("cannot register unsupported runtime Vararg tuple layout $T")
+    haskey(registry.structs, T) && return registry.structs[T]
+    local E = vararg_tuple_eltype(T)
+    local size_type = Tuple{Int64}
+    local size_info = haskey(registry.structs, size_type) ? registry.structs[size_type] :
+                      register_tuple_type!(mod, registry, size_type)
+    local data_idx = get_array_type!(mod, registry, E)
+    local fields = FieldType[
+        FieldType(I32, false),
+        FieldType(I32, true),
+        FieldType(ConcreteRef(data_idx, true), false),
+        FieldType(ConcreteRef(size_info.wasm_type_idx, true), false),
+    ]
+    local idx = UInt32(add_type!(mod, StructType(fields, get_object_struct_type!(mod, registry))))
+    local info = StructInfo(T, idx, [:ref, :size],
+                            Type[Array{E,1}, size_type], UInt32(2))
+    registry.structs[T] = info
+    return info
+end
+
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -805,6 +886,12 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     # .parameters — only DataType does. Return nothing for non-concrete tuples.
     if T isa UnionAll
         return nothing
+    end
+
+    if is_vararg_tuple_type(T)
+        is_runtime_vararg_tuple_type(T) ||
+            error("unsupported Vararg tuple layout $T must not be registered as a fixed tuple")
+        return register_vararg_tuple_type!(mod, registry, T)
     end
 
     # P2-batch17: canonicalize Type{X} elements to DataType. Inference spells a
@@ -825,7 +912,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
 
     # Create WasmGC field types
     # PURE-9024: Prepend typeId:i32 as field 0
-    wasm_fields = FieldType[FieldType(I32, false)]
+    wasm_fields = object_prefix_fields()
     field_names = Symbol[]
     field_types_vec = DataType[]
 
@@ -894,8 +981,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
 
-    # Record mapping (PURE-9024: field_offset=1 for typeId prefix)
-    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
+    # Record the two inherited Object fields.
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))
     registry.structs[T] = info
 
     return info
@@ -938,7 +1025,8 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # - Field 1: ref (nullable reference to data array)
     # - Field 2: size (nullable reference to size tuple struct)
     wasm_fields = [
-        FieldType(I32, false),  # PURE-9024: typeId
+        FieldType(I32, false),  # classId
+        FieldType(I32, true),   # identityHash
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), false)  # size, immutable
     ]
@@ -950,11 +1038,11 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
 
-    # Record mapping with field info (PURE-9024: field_offset=1)
+    # Record the two inherited Object fields.
     field_names = [:ref, :size]  # Julia field names
     field_types_vec = DataType[Array{elem_type, 1}, size_tuple_type]  # Use Vector for ref field type
 
-    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))
     registry.structs[T] = info
 
     return info
@@ -998,7 +1086,8 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # - Field 1: ref (reference to data array)
     # - Field 2: size (MUTABLE reference to size tuple struct)
     wasm_fields = [
-        FieldType(I32, false),  # PURE-9024: typeId
+        FieldType(I32, false),  # classId
+        FieldType(I32, true),   # identityHash
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
         FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)  # size, MUTABLE for setfield!
     ]
@@ -1010,11 +1099,11 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
 
-    # Record mapping with field info (PURE-9024: field_offset=1)
+    # Record the two inherited Object fields.
     field_names = [:ref, :size]  # Julia field names
     field_types_vec = DataType[Array{elem_type, 1}, size_tuple_type]
 
-    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(1))
+    info = StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))
     registry.structs[T] = info
 
     return info
@@ -1085,8 +1174,8 @@ function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeR
     registry.jl_type_idx === nothing && return
 
     # PURE-9064: Patch SimpleVector StructInfo to use $JlSVec array type from hierarchy.
-    # SimpleVector may have been registered before the hierarchy existed, creating a
-    # duplicate (array (mut anyref)) type instead of reusing (array (mut (ref null $JlType))).
+    # SimpleVector may have been registered before the hierarchy existed; converge
+    # every consumer on the one heterogeneous $JlSVec type.
     if registry.jl_svec_idx !== nothing && haskey(registry.structs, Core.SimpleVector)
         old_info = registry.structs[Core.SimpleVector]
         if old_info.wasm_type_idx != registry.jl_svec_idx
@@ -1186,4 +1275,3 @@ function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)
         register_struct_type!(mod, registry, T)
     end
 end
-

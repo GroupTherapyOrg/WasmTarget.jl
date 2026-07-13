@@ -40,407 +40,18 @@ Uses a block-based translation for control flow.
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     ENV["WT_CUR_FN"] = try first(string(ctx.func_ref), 80) catch; "?" end   # debug context for builder errors
     code = ctx.code_info.code
-    n = length(code)
 
     # Analyze control flow to find basic block structure
     blocks = analyze_blocks(code)
 
-    # Generate code using structured control flow
-    bytes = generate_structured(ctx, blocks)
-
-    # PURE-6025: Fix dead returns at the very end of a function body.
-    # This happens when all paths inside the block return, leaving a dead return
-    # with empty stack. Two patterns:
-    # Pattern 1: [end] [return] [unreachable] [end] — dead return before unreachable
-    # Pattern 2: [return] [end] [return] [end] — both if/else branches return
-    # Forward-parse to find genuine instruction boundaries: raw backward byte checks
-    # misfire when a LEB immediate collides with an opcode — e.g. `local.get 1418`
-    # encodes as [0x20, 0x8a, 0x0b] and the trailing 0x0b reads as END, turning
-    # [local.get N][return][unreachable][end] into a false Pattern-1 match that
-    # rewrites a LIVE return to unreachable (gap 4c8236022172).
-    if length(bytes) >= 4 && bytes[end] == Opcode.END
-        _tail = _last_instr_starts(bytes, 4)
-        if length(_tail) == 4
-            _t1, _t2, _t3, _t4 = bytes[_tail[1]], bytes[_tail[2]], bytes[_tail[3]], bytes[_tail[4]]
-            if _t1 == Opcode.END && _t2 == Opcode.RETURN && _t3 == Opcode.UNREACHABLE && _t4 == Opcode.END
-                bytes[_tail[2]] = Opcode.UNREACHABLE  # Pattern 1: dead RETURN after END
-            elseif _t1 == Opcode.RETURN && _t2 == Opcode.END && _t3 == Opcode.RETURN && _t4 == Opcode.END
-                bytes[_tail[3]] = Opcode.UNREACHABLE  # Pattern 2: dead final RETURN
-            end
-        end
-    end
-
-    # PURE-6022: Strip excess bytes after the function body's closing `end`.
-    # The flow generator may emit dead code (unreachable, br, etc.) after all blocks
-    # are closed, creating bytes outside the function body expression. The WASM spec
-    # requires: func = locals* expr, where expr = instr* end. Any bytes after the
-    # expression's closing `end` cause "operators remaining after end of function body."
-    bytes = strip_excess_after_function_end(bytes)
-
-    return bytes
+    # The finalized typed instruction stream is authoritative. In particular,
+    # post-return code is already stack-polymorphic in the builder; no serialized
+    # opcode may be inspected or rewritten after this point.
+    return generate_structured(ctx, blocks)
 end
 
 
 
-
-
-
-# Helper: number of LEB128 operands to skip for a given opcode
-function _skip_leb_count(op::UInt8)::Int
-    # local.get/set/tee, global.get/set
-    (op == 0x20 || op == 0x21 || op == 0x22 || op == 0x23 || op == 0x24) && return 1
-    # br, br_if
-    (op == 0x0C || op == 0x0D) && return 1
-    # throw (tag index)
-    op == 0x08 && return 1
-    # br_on_null / br_on_non_null (label)
-    (op == 0xD5 || op == 0xD6) && return 1
-    # call
-    op == 0x10 && return 1
-    # call_indirect (type_idx, table_idx)
-    op == 0x11 && return 2
-    # ref.null (heap type)
-    op == 0xD0 && return 1
-    # ref.func
-    op == 0xD2 && return 1
-    # block/loop/if (blocktype)
-    (op == 0x02 || op == 0x03 || op == 0x04) && return 1
-    # i32.const, i64.const (signed LEB128 value)
-    (op == 0x41 || op == 0x42) && return 1
-    # memory load/store instructions (align + offset)
-    (op >= 0x28 && op <= 0x3E) && return 2
-    # memory.size, memory.grow
-    (op == 0x3F || op == 0x40) && return 1
-    return 0
-end
-
-# Helper: number of LEB128 operands to skip for a GC prefix sub-opcode
-function _skip_gc_leb_count(sub_op::UInt8)::Int
-    sub_op == 0x00 && return 1  # struct.new
-    sub_op == 0x01 && return 1  # struct.new_default
-    (sub_op >= 0x02 && sub_op <= 0x05) && return 2  # struct.get/get_s/get_u/set
-    (sub_op == 0x06 || sub_op == 0x07) && return 1  # array.new/new_default
-    sub_op == 0x08 && return 2  # array.new_fixed (type, count)
-    (sub_op == 0x09 || sub_op == 0x0a) && return 2  # array.new_data/new_elem (type, seg)
-    (sub_op >= 0x0b && sub_op <= 0x0e) && return 1  # array.get/get_s/get_u/set
-    sub_op == 0x0f && return 0  # array.len
-    sub_op == 0x10 && return 1  # array.fill (type)
-    (sub_op >= 0x11 && sub_op <= 0x13) && return 2  # array.copy/init_data/init_elem
-    (sub_op >= 0x14 && sub_op <= 0x17) && return 1  # ref.test/cast
-    (sub_op == 0x1a || sub_op == 0x1b) && return 0  # extern/any convert
-    (sub_op >= 0x1c && sub_op <= 0x1e) && return 0  # i31 ops
-    return 0
-end
-
-"""
-Forward-parse an instruction byte buffer and return the start index of the LAST
-instruction, or 0 if the buffer is empty / truncated mid-instruction. Backward
-scans for "does this buffer end with local.get?" misfire when an immediate byte
-collides with an opcode — e.g. `i32.const 32` encodes as [0x41, 0x20] and the
-0x20 immediate reads as LOCAL_GET (the titlecase ±32 wrong-value family, where
-ASCII case distance is exactly 32). A forward parse from a known instruction
-boundary is unambiguous.
-"""
-function _last_instr_start(bytes::Vector{UInt8})::Int
-    i = 1
-    n = length(bytes)
-    last_start = 0
-    while i <= n
-        last_start = i
-        i = _instr_next(bytes, i)
-        i == 0 && return 0
-    end
-    return last_start
-end
-
-"""
-Advance past the single instruction starting at index `i`; return the index of
-the next instruction, or 0 if the buffer ends mid-instruction.
-"""
-function _instr_next(bytes::Vector{UInt8}, i::Int)::Int
-    n = length(bytes)
-    op = bytes[i]
-    if op == 0xFB  # GC prefix: sub-opcode + LEB operands
-        i + 1 > n && return 0
-        sub_op = bytes[i + 1]
-        i += 2
-        for _ in 1:_skip_gc_leb_count(sub_op)
-            while true
-                i > n && return 0
-                b = bytes[i]; i += 1
-                (b & 0x80) == 0 && break
-            end
-        end
-    elseif op == 0x43  # f32.const: 4 raw payload bytes
-        i + 4 > n && return 0
-        i += 5
-    elseif op == 0x44  # f64.const: 8 raw payload bytes
-        i + 8 > n && return 0
-        i += 9
-    elseif op == 0xFC  # saturating-trunc / misc prefix: sub-opcode LEB
-        i += 1
-        while true
-            i > n && return 0
-            b = bytes[i]; i += 1
-            (b & 0x80) == 0 && break
-        end
-    elseif op == 0x0E  # br_table: count N, then N+1 label LEBs
-        i += 1
-        cnt = 0; shift = 0
-        while true
-            i > n && return 0
-            b = bytes[i]; i += 1
-            cnt |= (Int(b & 0x7f) << shift); shift += 7
-            (b & 0x80) == 0 && break
-        end
-        for _ in 1:(cnt + 1)
-            while true
-                i > n && return 0
-                b = bytes[i]; i += 1
-                (b & 0x80) == 0 && break
-            end
-        end
-    elseif op == 0x1F  # try_table: blocktype, count N, then N catch clauses
-        i += 1
-        i > n && return 0
-        # blocktype LEB (single byte for valtypes/void; signed LEB for type idx)
-        while true
-            i > n && return 0
-            b = bytes[i]; i += 1
-            (b & 0x80) == 0 && break
-        end
-        cnt = 0; shift = 0
-        while true
-            i > n && return 0
-            b = bytes[i]; i += 1
-            cnt |= (Int(b & 0x7f) << shift); shift += 7
-            (b & 0x80) == 0 && break
-        end
-        for _ in 1:cnt
-            i > n && return 0
-            kind = bytes[i]; i += 1
-            # catch (0x00) / catch_ref (0x01): tag LEB + label LEB;
-            # catch_all (0x02) / catch_all_ref (0x03): label LEB only
-            nlebs = kind <= 0x01 ? 2 : 1
-            for _ in 1:nlebs
-                while true
-                    i > n && return 0
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-        end
-    else
-        i += 1
-        for _ in 1:_skip_leb_count(op)
-            while true
-                i > n && return 0
-                b = bytes[i]; i += 1
-                (b & 0x80) == 0 && break
-            end
-        end
-    end
-    return i
-end
-
-"""
-Forward-parse an instruction buffer and return the start indices of the last
-`k` instructions (oldest first). Returns fewer than `k` entries if the buffer
-holds fewer instructions, and an empty vector if it is truncated mid-instruction.
-"""
-function _last_instr_starts(bytes::Vector{UInt8}, k::Int)::Vector{Int}
-    i = 1
-    n = length(bytes)
-    starts = Int[]
-    while i <= n
-        push!(starts, i)
-        length(starts) > k && popfirst!(starts)
-        i = _instr_next(bytes, i)
-        i == 0 && return Int[]
-    end
-    return starts
-end
-
-
-function strip_excess_after_function_end(bytes::Vector{UInt8})::Vector{UInt8}
-    depth = 0
-    i = 1
-    while i <= length(bytes)
-        op = bytes[i]
-
-        # Track block depth
-        if op == 0x02 || op == 0x03 || op == 0x04  # block, loop, if
-            depth += 1
-            i += 1
-            # Skip blocktype (void=0x40, or signed LEB128 type index/value type)
-            if i <= length(bytes)
-                if bytes[i] == 0x40  # void
-                    i += 1
-                else
-                    # LEB128 blocktype
-                    while i <= length(bytes)
-                        b = bytes[i]
-                        i += 1
-                        (b & 0x80) == 0 && break
-                    end
-                end
-            end
-            continue
-        end
-
-        if op == 0x05  # else — doesn't change depth
-            i += 1
-            continue
-        end
-
-        if op == 0x0B  # end
-            if depth == 0
-                # This is the function body's closing `end`.
-                # Truncate everything after this byte.
-                if i < length(bytes)
-                    return bytes[1:i]
-                end
-                return bytes
-            end
-            depth -= 1
-            i += 1
-            continue
-        end
-
-        # Skip GC prefix instructions with LEB128 params
-        if op == 0xFB && i + 1 <= length(bytes)
-            i += 1  # GC prefix
-            sub_op = bytes[i]
-            i += 1
-            n_leb = if sub_op == 0x00; 1                          # struct.new
-                    elseif sub_op == 0x01; 1                          # struct.new_default
-                    elseif sub_op in (0x02, 0x03, 0x04, 0x05); 2     # struct.get/get_s/get_u/set
-                    elseif sub_op in (0x06, 0x07); 1                  # array.new/new_default
-                    elseif sub_op == 0x08; 2                          # array.new_fixed
-                    elseif sub_op in (0x09, 0x0a); 2                  # array.new_data/new_elem
-                    elseif sub_op in (0x0b, 0x0c, 0x0d, 0x0e); 1     # array.get/get_s/get_u/set
-                    elseif sub_op == 0x0f; 0                          # array.len
-                    elseif sub_op == 0x10; 1                          # array.fill
-                    elseif sub_op == 0x11; 2                          # array.copy
-                    elseif sub_op in (0x12, 0x13); 2                  # array.init_data/init_elem
-                    elseif sub_op in (0x14, 0x15, 0x16, 0x17); 1     # ref.test/cast variants
-                    elseif sub_op in (0x1a, 0x1b); 0                  # any_convert_extern/extern_convert_any
-                    elseif sub_op in (0x1c, 0x1d, 0x1e); 0           # ref.i31/i31.get_s/i31.get_u
-                    else 0
-                    end
-            for _ in 1:n_leb
-                while i <= length(bytes)
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-            continue
-        end
-
-        # Skip f32.const (4 raw bytes) and f64.const (8 raw bytes)
-        if op == 0x43 && i + 4 <= length(bytes)
-            i += 5; continue
-        end
-        if op == 0x44 && i + 8 <= length(bytes)
-            i += 9; continue
-        end
-
-        # P2-batch12: opcodes with non-trivial immediates the decoder previously
-        # treated as single-byte. Mis-skipping makes the scanner read an OPERAND
-        # byte as an opcode — an operand byte of 0x0B then looks like the
-        # function's closing `end` at depth 0 and TRUNCATES the real tail.
-        # select_t's type-index operand was the trigger: type indices shift per
-        # module, so the same function validated in one module and lost its last
-        # 9 instructions in another (Ryu kernel, gaps 19d59e9a61b3/b72318c9598c).
-        _skip_leb() = (while i <= length(bytes); b = bytes[i]; i += 1; (b & 0x80) == 0 && break; end)
-        if op == 0x08  # throw: tag index LEB
-            i += 1; _skip_leb(); continue
-        end
-        if op == 0x0E  # br_table: vec(label) + default label
-            i += 1
-            cnt = 0; shift = 0
-            while i <= length(bytes)
-                b = bytes[i]; i += 1
-                cnt |= Int(b & 0x7f) << shift
-                (b & 0x80) == 0 && break
-                shift += 7
-            end
-            for _ in 1:(cnt + 1); _skip_leb(); end
-            continue
-        end
-        if op == 0x1C  # select_t: vec(valtype); each valtype is 1 byte, or 0x63/0x64 + heaptype LEB
-            i += 1
-            cnt = 0; shift = 0
-            while i <= length(bytes)
-                b = bytes[i]; i += 1
-                cnt |= Int(b & 0x7f) << shift
-                (b & 0x80) == 0 && break
-                shift += 7
-            end
-            for _ in 1:cnt
-                i > length(bytes) && break
-                vt = bytes[i]; i += 1
-                (vt == 0x63 || vt == 0x64) && _skip_leb()  # ref null ht / ref ht
-            end
-            continue
-        end
-        if op == 0x1F  # try_table: blocktype + vec(catch clause); OPENS A FRAME
-            depth += 1
-            i += 1
-            if i <= length(bytes)
-                if bytes[i] == 0x40
-                    i += 1
-                else
-                    _skip_leb()
-                end
-            end
-            cnt = 0; shift = 0
-            while i <= length(bytes)
-                b = bytes[i]; i += 1
-                cnt |= Int(b & 0x7f) << shift
-                (b & 0x80) == 0 && break
-                shift += 7
-            end
-            for _ in 1:cnt
-                i > length(bytes) && break
-                kind = bytes[i]; i += 1
-                # 0x00 catch tag+label, 0x01 catch_ref tag+label: 2 LEBs;
-                # 0x02 catch_all label, 0x03 catch_all_ref label: 1 LEB
-                (kind == 0x00 || kind == 0x01) && _skip_leb()
-                _skip_leb()
-            end
-            continue
-        end
-
-        # Skip instructions with LEB128 operands
-        n_skip = if op == 0x20 || op == 0x21 || op == 0x22; 1      # local.get/set/tee
-                 elseif op == 0x23 || op == 0x24; 1                  # global.get/set
-                 elseif op == 0x0C || op == 0x0D; 1                  # br, br_if
-                 elseif op == 0x10; 1                                # call
-                 elseif op == 0x11; 2                                # call_indirect
-                 elseif op == 0xD0; 1                                # ref.null
-                 elseif op == 0xD2; 1                                # ref.func
-                 elseif op == 0x41 || op == 0x42; 1                  # i32.const, i64.const
-                 elseif op >= 0x28 && op <= 0x3E; 2                  # memory load/store
-                 elseif op == 0x3F || op == 0x40; 1                  # memory.size/grow
-                 else 0
-                 end
-        if n_skip > 0
-            i += 1  # Skip opcode
-            for _ in 1:n_skip
-                while i <= length(bytes)
-                    b = bytes[i]; i += 1
-                    (b & 0x80) == 0 && break
-                end
-            end
-            continue
-        end
-
-        # All other instructions: single byte (no operands)
-        i += 1
-    end
-    return bytes  # No excess found
-end
 
 
 
@@ -520,72 +131,41 @@ function has_try_catch(code)::Bool
 end
 
 """
-    stmt_must_execute(code, idx) -> Bool
+    stmt_is_proven_unreachable(code, idx) -> Bool
 
-Strict-mode reachability gate. Returns `true` iff statement `idx`'s basic block
-**dominates every normal-return block** — i.e. the statement is executed on every call
-that returns normally. Used to make loud strict rejects SOUND: an un-lowerable construct
-is rejected only when it is DEFINITELY hit. A working (compiles+runs) function can never
-have a must-execute trap-stub (it would trap on every call, so it wouldn't work), so
-gating rejects on this can never regress valid code; branch/dead-code-guarded stubs stay
-sound *silent* traps.
-
-Conservative by construction: any uncertainty → `false` (don't reject). Functions with
-`try`/`catch` (exception edges this simple CFG doesn't model) return `false` outright.
+Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reached
+from entry.  This is the sole condition under which an unsupported lowering may be
+kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
+(including exception-bearing CFGs) is reachable for soundness purposes.
 """
-function stmt_must_execute(code, idx::Int)::Bool
+function stmt_is_proven_unreachable(code, idx::Int)::Bool
     (code isa AbstractVector && 1 <= idx <= length(code)) || return false
-    has_try_catch(code) && return false          # exception edges unmodeled → never reject
+    has_try_catch(code) && return false
     blocks = analyze_blocks(code)
-    nb = length(blocks)
-    nb == 0 && return false
+    isempty(blocks) && return false
     bidx = findfirst(b -> b.start_idx <= idx <= b.end_idx, blocks)
     bidx === nothing && return false
-    start2id = Dict{Int,Int}(blocks[i].start_idx => i for i in 1:nb)
-    succs = [Int[] for _ in 1:nb]
-    retids = Int[]
-    for i in 1:nb
-        t = blocks[i].terminator
-        if t isa Core.ReturnNode
-            isdefined(t, :val) && push!(retids, i)   # normal return (unreachable-return has no val)
-        elseif t isa Core.GotoNode
-            haskey(start2id, t.label) && push!(succs[i], start2id[t.label])
-        elseif t isa Core.GotoIfNot
-            haskey(start2id, t.dest) && push!(succs[i], start2id[t.dest])
-            i < nb && push!(succs[i], i + 1)
-        else
-            i < nb && push!(succs[i], i + 1)         # fall-through (nothing terminator)
+    start2id = Dict{Int,Int}(blocks[i].start_idx => i for i in eachindex(blocks))
+    reachable = falses(length(blocks))
+    reachable[1] = true
+    work = Int[1]
+    while !isempty(work)
+        bi = pop!(work)
+        term = blocks[bi].terminator
+        successors = Int[]
+        if term isa Core.GotoNode
+            haskey(start2id, term.label) && push!(successors, start2id[term.label])
+        elseif term isa Core.GotoIfNot
+            haskey(start2id, term.dest) && push!(successors, start2id[term.dest])
+            bi < length(blocks) && push!(successors, bi + 1)
+        elseif !(term isa Core.ReturnNode)
+            bi < length(blocks) && push!(successors, bi + 1)
+        end
+        for si in successors
+            reachable[si] || (reachable[si] = true; push!(work, si))
         end
     end
-    # reachable-from-entry (block 1); only consider reachable normal returns
-    reach = falses(nb); stack = [1]; reach[1] = true
-    while !isempty(stack)
-        b = pop!(stack)
-        for s in succs[b]; reach[s] || (reach[s] = true; push!(stack, s)); end
-    end
-    retids = filter(r -> reach[r], retids)
-    isempty(retids) && return false              # always-throws / no reachable normal return
-    reach[bidx] || return false
-    preds = [Int[] for _ in 1:nb]
-    for i in 1:nb, s in succs[i]; push!(preds[s], i); end
-    # iterative dominators: dom[b] = blocks dominating b
-    full = Set(1:nb)
-    dom = Vector{Set{Int}}(undef, nb)
-    for i in 1:nb; dom[i] = (i == 1 ? Set([1]) : copy(full)); end
-    changed = true
-    while changed
-        changed = false
-        for b in 2:nb
-            reach[b] || continue
-            ps = [p for p in preds[b] if reach[p]]
-            isempty(ps) && continue
-            nd = copy(dom[ps[1]])                    # fresh copy — never mutate a shared dom set
-            for k in 2:length(ps); intersect!(nd, dom[ps[k]]); end
-            push!(nd, b)
-            nd == dom[b] || (dom[b] = nd; changed = true)
-        end
-    end
-    return all(r -> bidx in dom[r], retids)
+    return !reachable[bidx]
 end
 
 """
@@ -790,7 +370,7 @@ GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
 
 Structure:
   block \$catch_landing (void)          ; catch_all jumps here
-    try_table (catch_all 0) (void)     ; catch clause routes to label 0
+    try_table (catch \$exceptionTag)   ; catch clause retains its landing label
       ; generate_stackified_flow for all blocks before catch handler
       ; (handles phi nodes, nested control flow, all returns)
     end
@@ -802,8 +382,6 @@ Structure:
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-
 """builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
 
 # P2-batch22 (gap bac7c93c2871): `if cond; try A catch X end else try B catch
@@ -818,4 +396,3 @@ Structure:
 #   end
 #   <else arm: try_table B / catch Y>     ;; all paths return
 """builder-native front for the branch-split try generator."""
-

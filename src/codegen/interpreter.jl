@@ -22,17 +22,37 @@ using Base.Experimental: @overlay
 
 Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
 
+"""Flat source-level type for runtime-length function composition."""
+struct _RuntimeComposition{V<:AbstractVector} <: Function
+    fs::V
+end
+
+@noinline function _runtime_composition_apply(fs::AbstractVector, i::Int, x)
+    i == 0 && return x
+    return _runtime_composition_apply(fs, i - 1, fs[i](x))
+end
+
+@noinline function (c::_RuntimeComposition)(x)
+    isempty(c.fs) && throw(MethodError(∘, ()))
+    return _runtime_composition_apply(c.fs, length(c.fs), x)
+end
+
 # ─── Dict literal-constructor Overlay ───────────────────────────────────────
 # Why: Dict{K,V}(::Tuple{Pair...}) (the `Dict(k=>v, …)` literal) is mis-compiled as
 #      a fieldwise struct.new from the tuple argument (Dict is a hash table, not a
 #      simple struct) → emits invalid wasm (ref where i64 expected). Empty
 #      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
 # Remove when: codegen compiles the real Dict tuple-constructor body.
+@inline _wasm_dict_insert_pairs!(d::Dict, ::Tuple{}) = d
+@inline function _wasm_dict_insert_pairs!(d::Dict{K,V}, kv::Tuple) where {K,V}
+    p = first(kv)
+    d[p.first] = p.second
+    return _wasm_dict_insert_pairs!(d, Base.tail(kv))
+end
+
 @overlay WASM_METHOD_TABLE function (::Type{Dict{K,V}})(kv::Tuple) where {K,V}
     d = Dict{K,V}()
-    for p in kv
-        d[p.first] = p.second
-    end
+    _wasm_dict_insert_pairs!(d, kv)
     return d
 end
 
@@ -89,6 +109,16 @@ end
     return v
 end
 
+# `partialsort!` permits arbitrary permutation of its input outside the selected
+# indices. A full stable sort is therefore an exact (if less asymptotically
+# selective) implementation and stays on the same pure-Julia array path.
+@overlay WASM_METHOD_TABLE function Base.partialsort!(v::AbstractVector, k;
+        lt=isless, by=identity, rev::Bool=false,
+        order::Base.Order.Ordering=Base.Order.Forward)
+    sort!(v; lt=lt, by=by, rev=rev, order=order)
+    return v[k]
+end
+
 # ─── sort Overlay (non-mutating) ──────────────────────────────────────────
 # Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
 #      Use our copy overlay + sort! overlay for a clean path.
@@ -138,6 +168,18 @@ end
 # Why: Base.*(::String, ::String) calls string() which uses print_to_string/IOBuffer
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
 # Remove when: codegen handles IOBuffer-based string construction
+
+@inline _wasm_print_to_string_tuple(::Tuple{}) = ""
+@inline function _wasm_print_to_string_tuple(xs::Tuple)
+    return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.print_to_string(xs...)
+    # Tuple recursion preserves each fixed call site's concrete heterogeneous
+    # field types. Iterating `xs` widens the element to Any and enrolls the
+    # generic show/IO universe even for interpolation like (String, Int, String).
+    return _wasm_print_to_string_tuple(xs)
+end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String)
     al = ncodeunits(a)
@@ -280,6 +322,13 @@ end
     push!(bytes, UInt8(']'))
     return String(bytes)
 end
+
+# Julia's ordinary one-line `repr(::AbstractVector)` is the same rendering as
+# `string(v)`. Keep that relationship as one container-level overlay; concrete
+# supported element types then select their exact pure-Julia `string` renderer,
+# while an unsupported element type continues into normal collection and fails
+# loudly rather than acquiring a hand-picked representation.
+@overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
 
 # Why: `string(::Vector{String})` (PI dither island shows its colour palette via
 #      `_plain_body(colorscheme)`) hits the same array-show trap.
@@ -740,6 +789,7 @@ const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
 const _WT_BITS64 = Union{Int64, UInt64, Float64}
 const _WT_BITS16 = Union{Int16, UInt16}
 const _WT_BITS8  = Union{Int8, UInt8, Bool}
+const _WT_PRIMITIVE_BITS = Union{_WT_BITS8, _WT_BITS16, _WT_BITS32, _WT_BITS64}
 @overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS32) where {Out<:_WT_BITS32}
     Core.bitcast(Out, x)
 end
@@ -753,7 +803,152 @@ end
     Core.bitcast(Out, x)
 end
 
+# Padding-free ReinterpretArray elements are assembled from the parent's value bits.
+# Julia's native implementation probes GC object headers through pointer_from_objref;
+# WasmGC has no such header ABI. State the complete little-endian value semantics in
+# valid Julia instead: equal-width elements bitcast directly, wider destinations pack
+# consecutive parent elements, and narrower destinations select their byte lane.
+_wt_uint_type(::Val{1}) = UInt8
+_wt_uint_type(::Val{2}) = UInt16
+_wt_uint_type(::Val{4}) = UInt32
+_wt_uint_type(::Val{8}) = UInt64
+
+# Primitive numeric elements have no padding. Folding this target-independent
+# layout fact keeps ReinterpretArray construction out of Julia's host pointer/
+# datatype-layout machinery while preserving Base.array_subpadding semantics.
+@overlay WASM_METHOD_TABLE Base.isbitstype(
+    ::Type{T}) where {T<:_WT_PRIMITIVE_BITS} = true
+@overlay WASM_METHOD_TABLE Base.array_subpadding(
+    ::Type{S}, ::Type{T}) where {S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true
+
+@overlay WASM_METHOD_TABLE function Base.getindex(
+        a::Base.ReinterpretArray{T,N,S,A,false}, i::Int
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
+    parent_array = getfield(a, 1)
+    target_bytes = sizeof(T)
+    source_bytes = sizeof(S)
+    TargetBits = _wt_uint_type(Val(target_bytes))
+    SourceBits = _wt_uint_type(Val(source_bytes))
+    if target_bytes == source_bytes
+        return Core.bitcast(T, getindex(parent_array, i))
+    elseif target_bytes > source_bytes
+        ratio = target_bytes ÷ source_bytes
+        first_parent = (i - 1) * ratio + 1
+        bits = zero(TargetBits)
+        for lane in 0:(ratio - 1)
+            source = Core.bitcast(SourceBits, getindex(parent_array, first_parent + lane))
+            bits |= convert(TargetBits, source) << (8 * source_bytes * lane)
+        end
+        return Core.bitcast(T, bits)
+    else
+        ratio = source_bytes ÷ target_bytes
+        parent_index = (i - 1) ÷ ratio + 1
+        lane = (i - 1) % ratio
+        source = Core.bitcast(SourceBits, getindex(parent_array, parent_index))
+        bits = (source >> (8 * target_bytes * lane)) % TargetBits
+        return Core.bitcast(T, bits)
+    end
+end
+@overlay WASM_METHOD_TABLE function Base.setindex!(
+        a::Base.ReinterpretArray{T,N,S,A,false}, value, i::Int
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
+    converted = convert(T, value)
+    parent_array = getfield(a, 1)
+    target_bytes = sizeof(T)
+    source_bytes = sizeof(S)
+    TargetBits = _wt_uint_type(Val(target_bytes))
+    SourceBits = _wt_uint_type(Val(source_bytes))
+    target = Core.bitcast(TargetBits, converted)
+    if target_bytes == source_bytes
+        setindex!(parent_array, Core.bitcast(S, target), i)
+    elseif target_bytes > source_bytes
+        ratio = target_bytes ÷ source_bytes
+        first_parent = (i - 1) * ratio + 1
+        for lane in 0:(ratio - 1)
+            bits = (target >> (8 * source_bytes * lane)) % SourceBits
+            setindex!(parent_array, Core.bitcast(S, bits), first_parent + lane)
+        end
+    else
+        ratio = source_bytes ÷ target_bytes
+        parent_index = (i - 1) ÷ ratio + 1
+        lane = (i - 1) % ratio
+        shift = 8 * target_bytes * lane
+        old = Core.bitcast(SourceBits, getindex(parent_array, parent_index))
+        lane_mask = convert(SourceBits, typemax(TargetBits)) << shift
+        merged = (old & ~lane_mask) | (convert(SourceBits, target) << shift)
+        setindex!(parent_array, Core.bitcast(S, merged), parent_index)
+    end
+    return value
+end
+
 # ─── show typeinfo overlay ────────────────────────────────────────────────
+
+@overlay WASM_METHOD_TABLE function Base.getindex(
+        a::Base.ReinterpretArray{T,N,S,A,false}, r::UnitRange{Int}
+    ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
+    out = Vector{T}(undef, length(r))
+    source_index = first(r)
+    for destination_index in eachindex(out)
+        out[destination_index] = getindex(a, source_index)
+        source_index += 1
+    end
+    return out
+end
+
+# Julia's native implementation walks mutable BindingPartition history. Keep
+# the native meaning for ordinary Julia execution, but preserve one non-inlined
+# semantic boundary for WT inference so codegen can read the immutable result
+# captured in its TypeName metadata. This is analogous to dart2wasm retaining a
+# recognized runtime operation instead of inlining VM implementation details.
+@noinline function _closed_world_type_bounds(tn::Core.TypeName)
+    binding = ccall(:jl_get_module_binding, Ref{Core.Binding},
+                    (Any, Any, Cint), tn.module, tn.name, true)
+    isdefined(binding, :partitions) || return nothing
+    partition = @atomic binding.partitions
+    while true
+        if Base.is_defined_const_binding(Base.binding_kind(partition))
+            value = Base.partition_restriction(partition)
+            if value isa Type && value <: tn.wrapper
+                max_world = @atomic partition.max_world
+                max_world == typemax(UInt) && return nothing
+                return Int(partition.min_world):Int(max_world)
+            end
+        end
+        isdefined(partition, :next) || return nothing
+        partition = @atomic partition.next
+    end
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.check_world_bounded(tn::Core.TypeName)
+    return _closed_world_type_bounds(tn)
+end
+
+@noinline function _closed_world_isvisible(sym::Symbol, parent::Module, from::Module)
+    Base.isdeprecated(parent, sym) && return false
+    Base.isdefinedglobal(from, sym) || return false
+    Base.isdefinedglobal(parent, sym) || return false
+    parent_binding = convert(Core.Binding, GlobalRef(parent, sym))
+    from_binding = convert(Core.Binding, GlobalRef(from, sym))
+    while true
+        from_binding === parent_binding && return true
+        partition = Base.lookup_binding_partition(Base.tls_world_age(), from_binding)
+        Base.is_some_explicit_imported(Base.binding_kind(partition)) || break
+        from_binding = Base.partition_restriction(partition)::Core.Binding
+    end
+    parent_partition = Base.lookup_binding_partition(Base.tls_world_age(), parent_binding)
+    from_partition = Base.lookup_binding_partition(Base.tls_world_age(), from_binding)
+    if Base.is_defined_const_binding(Base.binding_kind(parent_partition)) &&
+       Base.is_defined_const_binding(Base.binding_kind(from_partition))
+        return parent_partition.restriction === from_partition.restriction
+    end
+    return false
+end
+
+@noinline @overlay WASM_METHOD_TABLE function Base.isvisible(sym::Symbol, parent::Module,
+                                                              from::Module)
+    return _closed_world_isvisible(sym, parent, from)
+end
+
 # Why: `Base.nonnothing_nonmissing_typeinfo(io) =
 #      nonmissingtype(nonnothingtype(get(io,:typeinfo,Any)))` does RUNTIME type
 #      subtraction (typesplit over the type lattice), which the backend can't
@@ -1027,6 +1222,21 @@ end
     return v
 end
 
+@overlay WASM_METHOD_TABLE function Base.resize!(v::Vector{T}, n::Integer) where T
+    newlen = Int(n)
+    oldlen = length(v)
+    new_v = similar(v, newlen)
+    limit = min(oldlen, newlen)
+    i = 1
+    while i <= limit
+        new_v[i] = v[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
+    return v
+end
+
 @overlay WASM_METHOD_TABLE function Base.pop!(v::Vector{T}) where T
     n = length(v)
     val = v[n]
@@ -1223,16 +1433,30 @@ end
 end
 
 # ─── unsigned Overlay ─────────────────────────────────────────────────────
-# Why: Base.unsigned(::Int64) produces 387 IR stmts with foreigncall(:jl_get_field_offset),
+# Why: Base.unsigned(::Signed) can enter reinterpret infrastructure containing
+#      foreigncall(:jl_get_field_offset),
 #      foreigncall(:memcpy), foreigncall(:jl_value_ptr), etc. — complex reinterpret infrastructure.
-#      The actual operation is a single bitcast (no-op in WASM since Int64/UInt64 are both i64).
-# Remove when: codegen handles reinterpret(UInt64, ::Int64) natively
+#      The actual operation is a same-width bitcast (a no-op for scalar Wasm
+#      integers; WT's two-i64 Int128 representation preserves the same bits).
+# Remove when: codegen handles same-width signed→unsigned reinterpret natively
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int8)
+    return Core.bitcast(UInt8, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int16)
+    return Core.bitcast(UInt16, x)
+end
+
 @overlay WASM_METHOD_TABLE function Base.unsigned(x::Int64)
     return Core.bitcast(UInt64, x)
 end
 
 @overlay WASM_METHOD_TABLE function Base.unsigned(x::Int32)
     return Core.bitcast(UInt32, x)
+end
+
+@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int128)
+    return Core.bitcast(UInt128, x)
 end
 
 # ─── copy(Vector) Overlay ─────────────────────────────────────────────────
@@ -2151,6 +2375,14 @@ end
 
 @overlay WASM_METHOD_TABLE Base.string(::Type{T}) where {T} = _wt_type_name_str(T)
 
+# Base.print(io, x::Type) reaches show through a deliberately unspecialized
+# argument and loses the concrete Type{T}. Preserve that static parameter at the
+# overlay boundary so generated type-name metadata never becomes runtime data.
+@overlay WASM_METHOD_TABLE function Base.print(io::IO, ::Type{T}) where {T}
+    print(io, _wt_type_name_str(T))
+    return nothing
+end
+
 @overlay WASM_METHOD_TABLE function Base.show(io::IO, ::Type{T}) where {T}
     print(io, _wt_type_name_str(T))
     return nothing
@@ -2300,6 +2532,33 @@ CC.cache_owner(interp::WasmInterpreter) = interp.cache_token
 CC.method_table(interp::WasmInterpreter) = interp.method_table
 CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 
+# Julia's native inference models `(∘)(runtime_vector...)` as an unbounded
+# recursive union of nested ComposedFunction types, then specializes downstream
+# IR into representation-specific getfield branches. WT uses one flat callable
+# context, analogous to dart2wasm's closure context + vtable. Teach inference the
+# target representation before optimization so downstream IR is generated from
+# that truth; all unrelated builtins delegate unchanged to Julia's implementation.
+function CC.abstract_apply(interp::WasmInterpreter, argtypes::Vector{Any},
+                           si::CC.StmtInfo,
+                           sv::Union{CC.IRInterpretationState,CC.InferenceState},
+                           max_methods::Int)
+    if length(argtypes) == 4
+        local target = argtypes[3]
+        local container = CC.widenconst(argtypes[4])
+        if target isa CC.Const && target.val === (∘) &&
+           container isa DataType && container <: AbstractVector
+            # Conservative effects/exceptions are intentional: the source-level
+            # callable may invoke arbitrary functions and rejects an empty list.
+            return CC.Future(CC.CallMeta(_RuntimeComposition{container}, Any,
+                                         CC.Effects(), CC.NoCallInfo()))
+        end
+    end
+    return invoke(CC.abstract_apply,
+                  Tuple{CC.AbstractInterpreter,Vector{Any},CC.StmtInfo,
+                        Union{CC.IRInterpretationState,CC.InferenceState},Int},
+                  interp, argtypes, si, sv, max_methods)
+end
+
 # Disable concrete eval (GPUCompiler pattern).
 # Without this, the compiler constant-folds calls using Base implementation,
 # bypassing overlays.
@@ -2323,6 +2582,10 @@ CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 # known compile-time constant, scoped surgically. MUST be total (runs during
 # inference of arbitrary code).
 function _is_typelevel_foldable(@nospecialize(f))::Bool
+    # This generated helper exists solely to bake the name of a statically known
+    # type into the module. Letting its `_compute_sparams(Method, ...)` body enter
+    # the runtime graph would incorrectly turn compiler metadata into user data.
+    f === _wt_type_name_str && return true
     f === Core.apply_type && return true
     (isdefined(Core, :_compute_sparams) && f === Core._compute_sparams) && return true
     (isdefined(Core, :_svec_ref)        && f === Core._svec_ref)        && return true

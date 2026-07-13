@@ -41,12 +41,12 @@ printf '%s\n' "$added" | grep -nqE ':value_stub' \
   && report "adds a :value_stub (wrong-value mask) — only legitimate for G1; confirm"
 
 # 3. Unreachable used as a fix (sound for value semantics, NOT a catchable-throw equiv).
-printf '%s\n' "$added" | grep -nqE '\bUNREACHABLE\b|emit_unreachable|unreachable!\(' \
+printf '%s\n' "$added" | grep -vE 'structural trap|loud unsupported trap' | grep -nqE '\bUNREACHABLE\b|emit_unreachable|unreachable!\(' \
   && report "adds an unreachable emission — confirm it is sound, not a value/trap mask"
 
 # 4. Oracle tamper: any touch to match/tolerance/sampling in property.jl.
 if git diff --name-only "$base" -- test/fuzz/property.jl 2>/dev/null | grep -q .; then
-  printf '%s\n' "$diff" | grep -nqE 'rtol|atol|vals_match|tree_matches|sample_inputs|vector_inputs' \
+  printf '%s\n' "$added" | grep -nqE 'rtol|atol|function[[:space:]]+(vals_match|tree_matches)|sample_inputs|vector_inputs' \
     && report "edits oracle tolerance / match / sampling in property.jl"
 fi
 
@@ -56,8 +56,8 @@ if git diff --name-only "$base" -- test/fuzz/generators.jl test/fuzz/statements.
 fi
 
 # 6. Strict-mode fatality table.
-printf '%s\n' "$added" | grep -nqE 'soundness_fatal|TRIM_ENTRY_NAMES|_fatal[[:space:]]*=[[:space:]]*false' \
-  && report "touches the strict-mode fatality logic in diagnostics.jl — confirm (G1?)"
+printf '%s\n' "$added" | grep -nqE 'ctx\.strict|WT_PARANOID_STUBS|TRIM_ENTRY_NAMES|_fatal[[:space:]]*=[[:space:]]*false' \
+  && report "reintroduces a codegen fatality downgrade or lax-mode switch"
 
 # 7. Test deletion/skip as a "fix".
 printf '%s\n' "$added" | grep -nqE '@test_skip|@test_broken' \

@@ -7,7 +7,7 @@
 # property under test: it must type a same-category numeric cycle but NEVER a heterogeneous or
 # mixed-int/float phi (those stay boxed, matching dart's top-type + the union resolver).
 
-@testset "Loop C: propagate_numeric_value_types (value channel, dormant)" begin
+@testset "Loop C: propagate_numeric_value_types value channel" begin
     # SAFETY (default interp gives reliable IRs): no false positives.
     ghet(b::Bool) = (x = b ? 1 : "two"; x === 1)            # Int|String → must NOT be typed numeric
     fmix(b::Bool) = (x = b ? 1 : 2.5; x + 1)                # Int|Float (mixed category) → stays boxed

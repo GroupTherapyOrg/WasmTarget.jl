@@ -142,10 +142,10 @@ value-channel (Loop C). Probe data (boxed i32-repped types discriminated by isa 
   i32 BEFORE `isa` runs (isa then defaults to the first branch). Root structural facts: `get_numeric_box_type!`
   creates the box with NO `$JlBase` supertype (types.jl:1116, `add_struct_type!` no super), so `emit_typeof!`'s
   `ref.cast $JlBase; struct.get 0` can't uniformly read it; AND the value doesn't STAY boxed to the consumer.
-- **STRUCTURAL HALF IS ALREADY DONE.** `set_struct_supertypes!` (types.jl:614) sets EVERY StructType with
-  `supertype_idx===nothing` (incl. the numeric box) to subtype `$JlBase` — only the JlType hierarchy
-  (jl_type_idx/jl_typename_idx) is excluded. So the box DOES subtype `$JlBase` and `emit_typeof!` CAN read its
-  field-0 classId. ⇒ the reason storing the real classId had zero effect is **purely the CHANNEL: the value is
+- **2026-07-10 update:** the finalization retrofit described here was deleted. Numeric/value boxes now declare
+  `$JlBase` at creation, ordinary objects declare their Object/class-DAG parent at creation, and raw closure
+  contexts remain unclassed. The box therefore still subtypes `$JlBase`, and the reason storing the real
+  classId had zero effect was **purely the CHANNEL: the value was
   eagerly UNBOXED to a raw i32 before `isa`, so the box is never consulted.**
 - **CONCLUSION / RE-SEQUENCE (with Dale's "fundamental-first / combine-loops" steer 2026-06-29):** the fundamental
   blocker is NOT Loop B's box-rep (box exists, subtypes `$JlBase`, has the classId field — B1 fixed truncation) —

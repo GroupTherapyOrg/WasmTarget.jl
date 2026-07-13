@@ -9,7 +9,7 @@ function is_func(func, name::Symbol)::Bool
     if func isa GlobalRef
         return func.name === name
     elseif hasproperty(func, :name) && func.name isa Symbol
-        # TRUE-INT-002-impl2: Handle FakeGlobalRef and similar structs with .name field
+        # Handle callable descriptors with a `.name` field.
         return func.name === name
     elseif func isa Core.IntrinsicFunction
         # Compare intrinsic by string representation
@@ -25,6 +25,22 @@ function is_func(func, name::Symbol)::Bool
         return func.def.name === name
     end
     return false
+end
+
+"""True when a reference resolves to the named Core/Base builtin binding."""
+function is_builtin_func(func, name::Symbol)::Bool
+    resolved = if func isa GlobalRef
+        try
+            getglobal(func.mod, func.name)
+        catch
+            return false
+        end
+    else
+        func
+    end
+    core_target = isdefined(Core, name) ? getglobal(Core, name) : nothing
+    base_target = isdefined(Base, name) ? getglobal(Base, name) : nothing
+    return resolved === core_target || resolved === base_target
 end
 
 """
@@ -67,4 +83,8 @@ function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
     end
     return false
 end
-
+# Julia IR nodes whose value is supplied at runtime rather than embedded as a
+# literal/global constant. Keep this classification centralized so optimized
+# (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
+is_runtime_ir_value(x) = x isa Core.SSAValue || x isa Core.Argument ||
+                         x isa Core.SlotNumber || x isa Core.PiNode

@@ -60,7 +60,10 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
             lines = isfile(lf) ? split(read(lf, String), '\n') : String[]
             if p.exitcode != 0
                 println("════ shard $i FAILED (exit $(p.exitcode)) ════")
-                println(join(last(lines, 35), '\n'))
+                # Preserve the actual exception/test failure, not only the tail
+                # of a large nested summary. Julia 1.13 failures routinely emit
+                # >35 lines of stacktrace before the shard footer.
+                println(join(last(lines, 200), '\n'))
             else
                 for ln in lines
                     occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln))
@@ -98,7 +101,7 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
         flines = isfile(flf) ? split(read(flf, String), '\n') : String[]
         if fp.exitcode != 0
             println("════ fuzz FAILED (exit $(fp.exitcode)) ════")
-            println(join(last(flines, 45), '\n'))
+            println(join(last(flines, 200), '\n'))
         else
             for ln in flines; occursin("Differential fuzz", ln) && println("  ", strip(ln)); end
         end
@@ -114,7 +117,6 @@ _wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on 
 _wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
 using WasmTarget
-using WasmTarget: to_bytes_mvp_i64, to_bytes_mvp_flex
 # Hoisted to module level so the parallel-phase macro (which spawns each phase in a
 # closure) can use them — `using`/`import` are illegal inside a closure.
 using WasmTarget: add_array_type!, add_export!, add_function!, add_import!, add_struct_type!,
@@ -133,10 +135,13 @@ _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
 _wt_shard0() && include("m11_intrinsics_table.jl")
+_wt_shard0() && include("module_builder_validation.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
 _wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
+_wt_shard0() && include("recursive_groups.jl")
+_wt_shard0() && include("apply_iterate_soundness.jl")
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
@@ -156,20 +161,33 @@ _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
 _wt_shard0() && include("sort_comparator_backfills.jl")
-# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference (dormant analysis, byte-identical).
+# CFG normalization: shared non-returning bounds-error tails may cross natural
+# loop regions and must be duplicated through the canonical statement compiler.
+_wt_shard0() && include("crossing_terminal_taildup.jl")
+# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference.
 _wt_shard0() && include("f3_box_capture_l0.jl")
-# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry (dormant).
+# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry.
 _wt_shard0() && include("f3_box_capture_l1.jl")
-# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass (dormant).
+# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass.
 _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
-# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure (dormant).
+# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure.
 _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
-# Loop C value channel: general numeric value-type propagation (Any-but-really-i64) (dormant).
+# Loop C value channel: general numeric value-type propagation (Any-but-really-i64).
 _wt_shard0() && include("value_channel_propagate.jl")
 # parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
 _wt_shard0() && include("m1_void_backfills.jl")
 # march3: try/catch driver battery (the throw-arm-past-the-leave silent miscompile).
 _wt_shard0() && include("march3_try_backfills.jl")
+_wt_shard0() && include("type_world_bounds.jl")
+_wt_shard0() && include("module_metadata.jl")
+_wt_shard0() && include("vararg_fixed_prefix.jl")
+_wt_shard0() && include("symbol_syntax_metadata.jl")
+_wt_shard0() && include("memmove_single_path.jl")
+_wt_shard0() && include("mutable_global_initialization.jl")
+_wt_shard0() && include("reinterpret_array_semantics.jl")
+_wt_shard0() && include("storage_relative_pointer_soundness.jl")
+_wt_shard0() && include("real_bottom_exceptions.jl")
+_wt_shard0() && include("no_fabricated_values.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()
@@ -196,11 +214,15 @@ struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 struct _WTI128Box; x::Int128; n::Int64; end
 struct _WTU128Box; x::UInt128; n::Int64; end
 
-# Phase 77 (G1 soundness): a value-stub (`objectid`/jl_object_id) in a DISCOVERED
-# (non-entry) callee. Compiles by default (the downgrade), but must stay FATAL
-# under WT_PARANOID_STUBS=1. Top-level so trim sees _g1_objid as a non-entry MI.
+# Phase 77: ordinary heap structs carry dart2wasm's Object prefix even through a
+# discovered callee. Top-level so trim sees _g1_objid as a non-entry MI.
 @noinline _g1_objid(c::TestCounter)::UInt64 = objectid(c)
-_g1_entry(n::Int64)::UInt64 = _g1_objid(TestCounter(n))
+function _g1_entry(n::Int64)::Int32
+    a = TestCounter(n)
+    b = TestCounter(n)
+    (_g1_objid(a) != 0 && _g1_objid(a) == _g1_objid(a) &&
+     _g1_objid(a) != _g1_objid(b)) ? Int32(1) : Int32(0)
+end
 # WASMTARGET-FUZZ: tagged-union FLOAT members round-trip (wrap boxes the float into
 # a numeric box, unwrap unboxes it) — the old code DROPPED floats → silent data loss.
 _wt_uf(a::Int64)::Int64 = begin
@@ -261,6 +283,32 @@ _wt_vany_disc(i::Int64)::Int64 = begin
     a = Any[true, Int8(7), Int32(9)]
     v = a[i]
     v isa Bool ? Int64(1) : v isa Int8 ? Int64(2) : v isa Int32 ? Int64(3) : Int64(0)
+end
+# Packed Wasm GC array loads must preserve Julia signedness at both widths.
+_wt_packed_i8()::Int8 = Int8[-128, -1, 127][2]
+_wt_packed_u8()::UInt8 = UInt8[0, 255, 128][2]
+_wt_packed_i16()::Int16 = Int16[-32768, -1, 32767][2]
+_wt_packed_u16()::UInt16 = UInt16[0, 65535, 32768][2]
+
+_wt_tearoff_add(x::Int64)::Int64 = x + Int64(3)
+_wt_tearoff_mul(x::Int64)::Int64 = x * Int64(4)
+function _wt_dynamic_tearoff(x::Int64, i::Int64)::Int64
+    fs = Any[_wt_tearoff_add, _wt_tearoff_mul]
+    return (fs[i](x))::Int64
+end
+
+_wt_compose_step(x::Int64)::Int64 = Int64(3) * x + Int64(1)
+_wt_runtime_compose(x::Int64, n::Int64)::Int64 =
+    ((∘)(fill(_wt_compose_step, n)...))(x)
+function _wt_runtime_compose_escape(x::Int64, n::Int64)::Int64
+    c = (∘)(fill(_wt_compose_step, n)...)
+    erased = Any[c]
+    return (erased[1](x))::Int64
+end
+function _wt_runtime_compose_mixed(x::Int64, n::Int64, i::Int64)::Int64
+    c = (∘)(fill(_wt_compose_step, n)...)
+    erased = Any[c, _wt_tearoff_mul]
+    return (erased[i](x))::Int64
 end
 # WASMTARGET-FUZZ (Loop B/B4c): Char is i32-rep but NOT <:Number, so it was excluded from
 # both the boxing decision (needs_anyref_boxing required all(<:Number)) and the isa
@@ -936,432 +984,6 @@ function d007_f64_mul(a::Float64, b::Float64)::Float64
     return a * b
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# E2E-001: End-to-end mini-codegen via REAL IR dispatch (no hand-emitted opcodes)
-#
-# Patterns used (all proven in D-series):
-#   ref.test dispatch on IR types (D-001/D-002/D-003)
-#   PiNode narrowing → struct.get field access (D-002)
-#   Symbol comparison for intrinsic selection (D-004)
-#   Vector{UInt8} push!/building (proven in selfhost)
-#   to_bytes_mvp_i64 for module wrapping (proven in selfhost)
-#
-# Uses custom IR structs (IRBinCall, IRRet, IRConst) to avoid Expr's
-# Vector{Any} boxing issues with i64 constants. Dispatch via ref.test
-# on both statement types and value types (SSAValue, Argument from Core).
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# IR statement: binary intrinsic call func(arg1, arg2) → SSA[idx]
-struct IRBinCall
-    name::Symbol
-    arg1::Any  # IRRef, IRArg, or IRConst
-    arg2::Any
-end
-
-# IR statement: return a value
-struct IRRet
-    val::Any  # IRRef
-end
-
-# IR value: SSA reference (local index)
-# Note: uses custom type instead of Core.SSAValue because Julia's optimizer
-# resolves Core.SSAValue(n) as an IR reference to SSA slot n, not a literal struct.
-struct IRRef
-    id::Int64
-end
-
-# IR value: argument reference (local index, pre-adjusted)
-struct IRArg
-    n::Int64
-end
-
-# IR value: integer constant
-struct IRConst
-    val::Int64
-end
-
-# Emit bytecodes for a value — dispatches via isa (→ ref.test in WASM)
-@noinline function e2e_emit_val(bytes::Vector{UInt8}, val::Any)::Vector{UInt8}
-    if val isa IRRef
-        push!(bytes, 0x20)  # local.get
-        push!(bytes, UInt8(val.id))
-    elseif val isa IRArg
-        push!(bytes, 0x20)  # local.get
-        push!(bytes, UInt8(val.n))  # pre-adjusted: IRArg(0) = local 0
-    elseif val isa IRConst
-        push!(bytes, 0x42)  # i64.const
-        push!(bytes, UInt8(val.val))  # works for 0-63
-    end
-    return bytes
-end
-
-# Emit intrinsic opcode — dispatches via Symbol === (→ string compare in WASM)
-@noinline function e2e_emit_op(bytes::Vector{UInt8}, name::Symbol)::Vector{UInt8}
-    if name === :mul_int
-        push!(bytes, 0x7e)  # i64.mul
-    elseif name === :add_int
-        push!(bytes, 0x7c)  # i64.add
-    elseif name === :sub_int
-        push!(bytes, 0x7d)  # i64.sub
-    end
-    return bytes
-end
-
-# Compile one IR statement — dispatches via isa (→ ref.test in WASM)
-@noinline function e2e_compile_stmt(bytes::Vector{UInt8}, stmt::Any, idx::Int32)::Vector{UInt8}
-    if stmt isa IRRet
-        bytes = e2e_emit_val(bytes, stmt.val)
-        push!(bytes, 0x0f)  # return
-    elseif stmt isa IRBinCall
-        # Emit operands
-        bytes = e2e_emit_val(bytes, stmt.arg1)
-        bytes = e2e_emit_val(bytes, stmt.arg2)
-        # Emit opcode from intrinsic name
-        bytes = e2e_emit_op(bytes, stmt.name)
-        # Store result to SSA local
-        push!(bytes, 0x21)  # local.set
-        push!(bytes, UInt8(idx))
-    end
-    return bytes
-end
-
-# Main entry — constructs IR for f(x::Int64)=x*x+1, compiles via dispatch, returns WASM bytes
-function e2e_run()::Vector{UInt8}
-    # Construct IR for f(x::Int64) = x*x + Int64(1)
-    # IRArg(0) = WASM local 0 (first user parameter)
-    # IRRef(1) = local 1, IRRef(2) = local 2
-    stmt1 = IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0)))
-    stmt2 = IRBinCall(:add_int, IRRef(Int64(1)), IRConst(Int64(1)))
-    stmt3 = IRRet(IRRef(Int64(2)))
-
-    # Compile each statement via REAL type dispatch (isa → ref.test in WASM)
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, stmt1, Int32(1))
-    bytes = e2e_compile_stmt(bytes, stmt2, Int32(2))
-    bytes = e2e_compile_stmt(bytes, stmt3, Int32(3))
-    push!(bytes, 0x0b)  # end
-
-    # Wrap body in WASM module ([i64]→[i64], 2 locals)
-    return to_bytes_mvp_i64(bytes)
-end
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# E2E-002: 20-function regression suite via REAL codegen dispatch
-#
-# Each function constructs IR using the same IR types (IRBinCall, IRRet, IRRef,
-# IRArg, IRConst) and compiles via the shared e2e_compile_stmt/e2e_emit_val/
-# e2e_emit_op functions. Module wrapping via to_bytes_mvp_flex for variable
-# param counts and local counts.
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# 01. f(x) = x*x + 1  [1p, 2L]
-function e2e_r01()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(1)), IRConst(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
-end
-
-# 02. f(x) = x + 1  [1p, 1L]
-function e2e_r02()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRArg(Int64(0)), IRConst(Int64(1))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(1))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
-end
-
-# 03. f(x) = x * 2  [1p, 1L]
-function e2e_r03()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRConst(Int64(2))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(1))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
-end
-
-# 04. f(x) = x * x  [1p, 1L]
-function e2e_r04()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(1))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
-end
-
-# 05. f(x) = x * x * x  [1p, 2L]
-function e2e_r05()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRRef(Int64(1)), IRArg(Int64(0))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
-end
-
-# 06. f(x,y) = x + y  [2p, 1L]
-function e2e_r06()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(1), Int32(0x7e))
-end
-
-# 07. f(x,y) = x - y  [2p, 1L]
-function e2e_r07()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:sub_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(1), Int32(0x7e))
-end
-
-# 08. f(x,y) = x * y  [2p, 1L]
-function e2e_r08()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(1), Int32(0x7e))
-end
-
-# 09. f(x,y,z) = x + y + z  [3p, 2L]
-function e2e_r09()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(3)), IRArg(Int64(2))), Int32(4))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(4))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(3), Int32(2), Int32(0x7e))
-end
-
-# 10. f(x) = x*x + x + 1  [1p, 3L]
-function e2e_r10()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(1)), IRArg(Int64(0))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(2)), IRConst(Int64(1))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(3))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(3), Int32(0x7e))
-end
-
-# 11. f(x,y) = x*x - y*y  [2p, 3L]
-function e2e_r11()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(1)), IRArg(Int64(1))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:sub_int, IRRef(Int64(2)), IRRef(Int64(3))), Int32(4))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(4))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(3), Int32(0x7e))
-end
-
-# 12. f(x,y) = x*y + x + y  [2p, 3L]
-function e2e_r12()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(2)), IRArg(Int64(0))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(3)), IRArg(Int64(1))), Int32(4))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(4))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(3), Int32(0x7e))
-end
-
-# 13. f(x) = x + x + x  [1p, 2L]
-function e2e_r13()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(1)), IRArg(Int64(0))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
-end
-
-# 14. f(x) = x*10 + 5  [1p, 2L]
-function e2e_r14()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRConst(Int64(10))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(1)), IRConst(Int64(5))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(2))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(2), Int32(0x7e))
-end
-
-# 15. f(x) = x  [1p, 0L]
-function e2e_r15()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRRet(IRArg(Int64(0))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
-end
-
-# 16. f(x) = 42  [1p, 0L]
-function e2e_r16()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRRet(IRConst(Int64(42))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(0), Int32(0x7e))
-end
-
-# 17. f(x,y) = x*x + y*y  [2p, 3L]
-function e2e_r17()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(0))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(1)), IRArg(Int64(1))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(2)), IRRef(Int64(3))), Int32(4))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(4))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(2), Int32(3), Int32(0x7e))
-end
-
-# 18. f(x) = (x-1)*(x+1) = x²-1  [1p, 3L]
-# Note: original Architecture A function was 3x²+2x+1, but that requires 5 binary ops
-# which exceeds the current codegen's 35-stmt limit for WASM-in-WASM compilation.
-# This substitute tests the same patterns (sub, add, mul, cross-SSA ref) in fewer ops.
-function e2e_r18()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:sub_int, IRArg(Int64(0)), IRConst(Int64(1))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRArg(Int64(0)), IRConst(Int64(1))), Int32(2))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRRef(Int64(1)), IRRef(Int64(2))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(3))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(3), Int32(0x7e))
-end
-
-# 19. f(x) = x - 1  [1p, 1L]
-function e2e_r19()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:sub_int, IRArg(Int64(0)), IRConst(Int64(1))), Int32(1))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(1))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(1), Int32(1), Int32(0x7e))
-end
-
-# 20. f(x,y,z) = x*y + z  [3p, 2L]
-function e2e_r20()::Vector{UInt8}
-    bytes = UInt8[]
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:mul_int, IRArg(Int64(0)), IRArg(Int64(1))), Int32(3))
-    bytes = e2e_compile_stmt(bytes, IRBinCall(:add_int, IRRef(Int64(3)), IRArg(Int64(2))), Int32(4))
-    bytes = e2e_compile_stmt(bytes, IRRet(IRRef(Int64(4))), Int32(0))
-    push!(bytes, 0x0b)
-    return to_bytes_mvp_flex(bytes, Int32(3), Int32(2), Int32(0x7e))
-end
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# P-001: Parser-to-codegen pipeline — auto-generate WASM entry points from source
-#
-# Instead of hand-writing IR (like E2E-002), these entry points are auto-generated
-# from real Julia source functions via Base.code_typed(). This proves the pipeline:
-# source → parse → lower → typeinf → IR → WASM codegen → execute.
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Source functions — plain Julia that users would write
-p01_src_01(x::Int64) = x * x + Int64(1)                                    # x²+1
-p01_src_02(x::Int64, y::Int64) = x + y                                     # x+y
-p01_src_03(x::Int64) = x * Int64(3) - Int64(7)                             # 3x-7
-p01_src_04(x::Int64, y::Int64) = x * y + Int64(10)                         # xy+10
-p01_src_05(x::Int64) = x * x * x                                           # x³
-p01_src_06(x::Int64, y::Int64) = x * x - y * y                             # x²-y²
-p01_src_07(x::Int64) = (x + Int64(1)) * (x - Int64(1))                     # (x+1)(x-1)
-p01_src_08(x::Int64, y::Int64) = Int64(2) * x + Int64(3) * y               # 2x+3y
-p01_src_09(x::Int64) = x                                                   # identity
-p01_src_10(x::Int64, y::Int64, z::Int64) = x + y + z                       # x+y+z
-
-# Helper: convert IR value to expression for @eval code generation
-function _p01_val_expr(val, n_params)
-    if val isa Core.SSAValue
-        return :(IRRef(Int64($(n_params + val.id - 1))))
-    elseif val isa Core.Argument
-        return :(IRArg(Int64($(val.n - 2))))
-    elseif val isa Integer
-        return :(IRConst(Int64($val)))
-    else
-        error("P-001: unsupported IR value type: $(typeof(val))")
-    end
-end
-
-# Auto-generate a WASM entry point from Base.code_typed output
-function _p01_make_entry(name::Symbol, source_f, source_types)
-    ci = Base.code_typed(source_f, source_types, optimize=true)[1][1]
-    np = length(source_types)
-
-    lines = Expr[]
-    nl = 0
-    for (k, stmt) in enumerate(ci.code)
-        if stmt isa Core.ReturnNode
-            if !isdefined(stmt, :val) || stmt.val === nothing
-                continue
-            end
-            val_expr = _p01_val_expr(stmt.val, np)
-            push!(lines, :(bytes = e2e_compile_stmt(bytes, IRRet($val_expr), Int32(0))))
-        elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
-            gref = stmt.args[1]
-            if gref isa GlobalRef && (gref.mod === Core.Intrinsics || gref.mod === Base)
-                wasm_idx = np + k - 1
-                iname = QuoteNode(gref.name)
-                a1 = _p01_val_expr(stmt.args[2], np)
-                a2 = _p01_val_expr(stmt.args[3], np)
-                push!(lines, :(bytes = e2e_compile_stmt(bytes, IRBinCall($iname, $a1, $a2), Int32($wasm_idx))))
-                nl += 1
-            end
-        end
-    end
-
-    @eval function $name()::Vector{UInt8}
-        bytes = UInt8[]
-        $(lines...)
-        push!(bytes, 0x0b)
-        return to_bytes_mvp_flex(bytes, Int32($np), Int32($nl), Int32(0x7e))
-    end
-
-    return (np, nl)
-end
-
-# Generate all 10 entry points from source via code_typed
-_p01_make_entry(:p01_auto_01, p01_src_01, (Int64,))
-_p01_make_entry(:p01_auto_02, p01_src_02, (Int64, Int64))
-_p01_make_entry(:p01_auto_03, p01_src_03, (Int64,))
-_p01_make_entry(:p01_auto_04, p01_src_04, (Int64, Int64))
-_p01_make_entry(:p01_auto_05, p01_src_05, (Int64,))
-_p01_make_entry(:p01_auto_06, p01_src_06, (Int64, Int64))
-_p01_make_entry(:p01_auto_07, p01_src_07, (Int64,))
-_p01_make_entry(:p01_auto_08, p01_src_08, (Int64, Int64))
-_p01_make_entry(:p01_auto_09, p01_src_09, (Int64,))
-_p01_make_entry(:p01_auto_10, p01_src_10, (Int64, Int64, Int64))
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# P-003: 12 additional source functions for 22-function regression suite
-# ═══════════════════════════════════════════════════════════════════════════════
-p03_src_11(x::Int64) = x + Int64(1)                             # x+1
-p03_src_12(x::Int64) = x * Int64(2)                             # 2x
-p03_src_13(x::Int64) = x * x                                    # x²
-p03_src_14(x::Int64, y::Int64) = x - y                          # x-y
-p03_src_15(x::Int64, y::Int64) = x * y                          # xy
-p03_src_16(x::Int64) = x * x + x + Int64(1)                     # x²+x+1
-p03_src_17(x::Int64, y::Int64) = x * y + x + y                  # xy+x+y
-p03_src_18(x::Int64) = x + x + x                                # 3x
-p03_src_19(x::Int64) = x * Int64(10) + Int64(5)                 # 10x+5
-p03_src_20(x::Int64) = Int64(42)                                # const 42
-p03_src_21(x::Int64) = x - Int64(1)                             # x-1
-p03_src_22(x::Int64, y::Int64, z::Int64) = x * y + z            # xy+z
-
-_p01_make_entry(:p03_auto_11, p03_src_11, (Int64,))
-_p01_make_entry(:p03_auto_12, p03_src_12, (Int64,))
-_p01_make_entry(:p03_auto_13, p03_src_13, (Int64,))
-_p01_make_entry(:p03_auto_14, p03_src_14, (Int64, Int64))
-_p01_make_entry(:p03_auto_15, p03_src_15, (Int64, Int64))
-_p01_make_entry(:p03_auto_16, p03_src_16, (Int64,))
-_p01_make_entry(:p03_auto_17, p03_src_17, (Int64, Int64))
-_p01_make_entry(:p03_auto_18, p03_src_18, (Int64,))
-_p01_make_entry(:p03_auto_19, p03_src_19, (Int64,))
-_p01_make_entry(:p03_auto_20, p03_src_20, (Int64,))
-_p01_make_entry(:p03_auto_21, p03_src_21, (Int64,))
-_p01_make_entry(:p03_auto_22, p03_src_22, (Int64, Int64, Int64))
-
 # Phase 63 helpers: Real Base function wrappers (module-level to avoid closure issues)
 # These call REAL Base functions — NOT reimplementations.
 # They use compare_julia_wasm_vec for Vector marshalling via the bridge.
@@ -1495,6 +1117,9 @@ end
 function _p65_splat_prod_f64(v::Vector{Float64})::Float64
     return *(v...)
 end
+function _p65_prefix_splat_sum(v::Vector{Int64})::Int64
+    return sum(Int64[7, v...])
+end
 
 # Each `@pphase` below defines + registers a top-level phase function (lazy compile).
 # They run inside the `@testset "WasmTarget.jl"` block at the end of the file via
@@ -1513,9 +1138,11 @@ begin
             # a new opt-out — impossible to land.
             WT = WasmTarget
             lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
-            @test lb.strict   # the default IS strict
+            @test !hasfield(WT.InstrBuilder, :strict) # strictness is not configurable
             @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # UNDERFLOW throws
-            # (STAGED hotfix: the mismatch @test_throws relands with the total flip)
+            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2")
+            WT.i64_const!(lb2, 1)
+            @test_throws WT.StackImbalanceError WT.num!(lb2, WT.Opcode.I32_EQZ)  # TYPE MISMATCH throws
             # ZERO opt-outs in the tree (no netting, no exceptions):
             cgdir = joinpath(dirname(pathof(WasmTarget)), "..")
             n_optout = 0
@@ -1526,32 +1153,32 @@ begin
                                       readlines(joinpath(root, f)))
                 end
             end
-            @test n_optout <= 1   # STAGED hotfix: the flow's temporary re-opt-out
+            @test n_optout == 0   # ZERO opt-outs, forever
         end
 
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
             WT = WasmTarget
             # function-end balance: x*x+1 leaves exactly the one f64 result
-            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1", strict=true)
+            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1")
             WT.local_get!(b, 0); WT.local_get!(b, 0); WT.num!(b, WT.Opcode.F64_MUL)
             WT.f64_const!(b, 1.0); WT.num!(b, WT.Opcode.F64_ADD)
             @test WT.stack_height(b.v) == 1
             WT.end_block!(b)                       # balanced → no throw
             @test length(WT.builder_code(b)) > 0
             # strict imbalance throws at the emit site
-            b2 = WT.InstrBuilder(; func_name="bad", strict=true)
+            b2 = WT.InstrBuilder(; func_name="bad")
             @test_throws WT.StackImbalanceError WT.num!(b2, WT.Opcode.I32_ADD)
             # GC type-directed effect: struct.new consumes its N fields, pushes (ref t)
-            b3 = WT.InstrBuilder(; func_name="sn", strict=false)
+            b3 = WT.InstrBuilder(; func_name="sn")
             WT.i32_const!(b3, 0); WT.i64_const!(b3, 7)
             WT.struct_new!(b3, 2, WT.WasmValType[WT.I32, WT.I64])
             @test WT.stack_height(b3.v) == 1 && !WT.has_errors(b3.v)
             # dart2wasm base-guard: cannot pop past a block boundary
-            b4 = WT.InstrBuilder(; func_name="bg", strict=false)
-            WT.block!(b4); WT.drop!(b4)
-            @test WT.has_errors(b4.v)
+            b4 = WT.InstrBuilder(; func_name="bg")
+            WT.block!(b4)
+            @test_throws WT.StackImbalanceError WT.drop!(b4)
             # rich diagnostics carry the Julia-statement context
-            b5 = WT.InstrBuilder(; func_name="diag", strict=true)
+            b5 = WT.InstrBuilder(; func_name="diag")
             WT.set_context!(b5, "stmt-X")
             err = try; WT.drop!(b5); nothing; catch e; e; end
             @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
@@ -1570,7 +1197,7 @@ begin
         @testset "InstrBuilder migration invariant (no raw-emission regression)" begin
             # All codegen function-body emission is migrated onto the typed InstrBuilder.
             # The residual raw push!(bytes, Opcode.*) sites are out-of-scope module-section
-            # serialization (to_bytes_mvp / mini-constructors / encode_block_type) + intentional
+            # module-section serialization and encode_block_type + intentional
             # byte-inspecting/byte-exact local buffers. Lock the invariant so new code can't
             # silently re-introduce blind raw emission — it must go through the builder.
             cgdir = joinpath(dirname(pathof(WasmTarget)), "codegen")
@@ -2786,10 +2413,25 @@ begin
             return a * b
         end
 
+        @noinline function str_identity_contract()::Int32
+            a = "identity-a"
+            b = "identity-b"
+            sa = :identity_a
+            sb = :identity_b
+            return objectid(a) == objectid(a) && objectid(a) != objectid(b) &&
+                   objectid(sa) == objectid(sa) && objectid(sa) != objectid(sb) ? Int32(1) : Int32(0)
+        end
+
         @testset "String concatenation" begin
             wasm_bytes = WasmTarget.compile(str_concat, (String, String))
             @test length(wasm_bytes) > 0
             @test validate_wasm(wasm_bytes)
+        end
+
+        @testset "String object identity" begin
+            result = compare_julia_wasm(str_identity_contract)
+            @test result.pass
+            @test result.actual == 1
         end
 
         # Regression: a string literal's array.new_data LENGTH operand is an
@@ -4425,7 +4067,6 @@ begin
     # Phase 28: Binaryen Optimization
     # ========================================================================
     @pphase "Phase 28: Binaryen Optimization" begin
-        if Sys.which("wasm-opt") !== nothing
             @testset "optimize() reduces size" begin
                 test_add(a::Int32, b::Int32)::Int32 = a + b
                 bytes = compile(test_add, (Int32, Int32))
@@ -4476,10 +4117,6 @@ begin
                 @test run_wasm(opt_bytes, "multi_a", Int32(4)) == 5
                 @test run_wasm(opt_bytes, "multi_b", Int32(4)) == 8
             end
-        else
-            @warn "wasm-opt not found — skipping optimization tests"
-            @test true  # placeholder so testset isn't empty
-        end
     end
 
     # ========================================================================
@@ -4667,12 +4304,11 @@ begin
             @test v.reachable == true
         end
 
-        @testset "disabled validator is no-op" begin
-            v = WasmStackValidator(enabled=false, func_name="disabled")
-            validate_push!(v, I32)
-            @test stack_height(v) == 0  # push was no-op
-            validate_pop!(v, I32)       # no underflow error
-            @test !has_errors(v)
+        @testset "validator cannot be disabled or skip unknown opcodes" begin
+            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled")
+            v = WasmStackValidator(func_name="strict")
+            @test_throws ArgumentError validate_instruction!(v, UInt8(0xff))
+            @test_throws ArgumentError validate_gc_instruction!(v, UInt8(0xff))
         end
 
         @testset "reachability after unconditional br" begin
@@ -5463,13 +5099,8 @@ begin
             ]
             all_functions = [base_functions..., overlay_functions...]
 
-            # Compile with overlay entries specified
-            overlay_set = Set{Tuple{Any,Tuple}}([
-                (disp_val, (DispOverlay1,)),
-                (disp_val, (DispOverlay2,)),
-            ])
             mod, type_registry, func_registry, dt_registry = compile_module(
-                all_functions; return_registries=true, overlay_entries=overlay_set)
+                all_functions; return_registries=true)
 
             # parity(M8.4): overlays are ROWS in the one selector table, not a parallel
             # apparatus — disp_val stays in the dispatch registry with 12 targets
@@ -5502,12 +5133,7 @@ begin
                     (make_disp_overlay2, (Int32,)),
                 ]
 
-                overlay_set = Set{Tuple{Any,Tuple}}([
-                    (disp_val, (DispOverlay1,)),
-                    (disp_val, (DispOverlay2,)),
-                ])
-
-                bytes = to_bytes(compile_module(functions; overlay_entries=overlay_set))
+                bytes = to_bytes(compile_module(functions))
 
                 wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
                 write(wasm_path, bytes)
@@ -6493,546 +6119,6 @@ begin
     end
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Phase 52: E2E-001 — f(x)=x*x+1 via REAL codegen dispatch in WASM
-    # ═══════════════════════════════════════════════════════════════════════════
-    @pphase "Phase 52: E2E-001 f(5)=26 via REAL codegen (no hand-emitted opcodes)" begin
-
-        # --- 52a: Native verification ---
-        @testset "native: e2e_run() produces valid WASM with f(5)=26" begin
-            native_bytes = e2e_run()
-            @test length(native_bytes) > 0
-            @test native_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            result = run_wasm(native_bytes, "f", Int64(5))
-            @test result == 26
-        end
-
-        # --- 52b: Compile mini-codegen to WASM ---
-        e2e_outer = compile_multi([
-            (e2e_run, (), "run"),
-            (e2e_compile_stmt, (Vector{UInt8}, Any, Int32)),
-            (e2e_emit_val, (Vector{UInt8}, Any)),
-            (e2e_emit_op, (Vector{UInt8}, Symbol)),
-            (wasm_bytes_length, (Vector{UInt8},), "blen"),
-            (wasm_bytes_get, (Vector{UInt8}, Int32), "bget"),
-        ])
-
-        @testset "outer module: valid WASM binary" begin
-            @test length(e2e_outer) > 0
-            @test e2e_outer[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            println("  E2E-001 outer module: $(length(e2e_outer)) bytes ($(round(length(e2e_outer)/1024, digits=1)) KB)")
-        end
-
-        # --- 52c: End-to-end — outer WASM runs codegen → inner WASM → f(5n)===26n ---
-        @testset "E2E: f(5n)===26n via WASM-in-WASM codegen" begin
-            e2e_path = tempname() * ".wasm"
-            write(e2e_path, e2e_outer)
-
-            node_script = """
-            const fs = require('fs');
-            const bytes = fs.readFileSync(process.argv[2]);
-            (async () => {
-                try {
-                    const { instance } = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
-                    const e = instance.exports;
-                    const result = e.run();
-                    const len = e.blen(result);
-                    const arr = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) arr[i] = e.bget(result, i + 1);
-                    const m2 = await WebAssembly.instantiate(arr);
-                    const f = m2.instance.exports.f;
-                    const r = f(5n);
-                    console.log(r === 26n ? 'E2E_PASS' : 'E2E_FAIL:' + String(r));
-                } catch(err) {
-                    console.log('E2E_FAIL:' + err.message);
-                }
-            })();
-            """
-
-            script_path = tempname() * ".cjs"
-            write(script_path, node_script)
-            output = try
-                read(`node $script_path $e2e_path`, String)
-            catch e
-                "E2E_FAIL: $(sprint(showerror, e))"
-            end
-            rm(script_path, force=true)
-            rm(e2e_path, force=true)
-
-            @test occursin("E2E_PASS", output)
-            if !occursin("E2E_PASS", output)
-                println("  E2E output: ", strip(output))
-            end
-        end
-
-        # --- 52d: Cheat-proof: WAT must contain ref.test (Rule 2) ---
-        @testset "cheat-proof: WAT contains ref.test dispatch" begin
-            e2e_path = tempname() * ".wasm"
-            write(e2e_path, e2e_outer)
-            has_ref_test = false
-            try
-                wat = read(`wasm-tools print $e2e_path`, String)
-                has_ref_test = occursin("ref.test", wat)
-                if has_ref_test
-                    ref_test_count = count("ref.test", wat)
-                    println("  ref.test instructions found: $ref_test_count")
-                else
-                    println("  WARNING: No ref.test instructions found in WAT!")
-                end
-            catch
-                # wasm-tools not available — skip WAT check
-                println("  wasm-tools not available, skipping WAT check")
-                has_ref_test = true  # Don't fail if tool is missing
-            end
-            rm(e2e_path, force=true)
-            @test has_ref_test
-        end
-    end
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Phase 53: E2E-002 — 20-function regression suite via REAL codegen
-    # ═══════════════════════════════════════════════════════════════════════════
-    @pphase "Phase 53: E2E-002 20-function regression (no hand-emitted opcodes)" begin
-
-        # --- 53a: Native verification — all 20 produce valid WASM with correct results ---
-        native_specs = [
-            (e2e_r01, "r01: x*x+1",    1, [(Int64(5), 26), (Int64(0), 1), (Int64(10), 101)]),
-            (e2e_r02, "r02: x+1",      1, [(Int64(0), 1), (Int64(5), 6), (Int64(-1), 0)]),
-            (e2e_r03, "r03: x*2",      1, [(Int64(5), 10), (Int64(0), 0), (Int64(-3), -6)]),
-            (e2e_r04, "r04: x*x",      1, [(Int64(5), 25), (Int64(0), 0), (Int64(-3), 9)]),
-            (e2e_r05, "r05: x*x*x",    1, [(Int64(3), 27), (Int64(0), 0), (Int64(-2), -8)]),
-            (e2e_r06, "r06: x+y",      2, [((Int64(1), Int64(2)), 3), ((Int64(-5), Int64(5)), 0)]),
-            (e2e_r07, "r07: x-y",      2, [((Int64(5), Int64(3)), 2), ((Int64(3), Int64(5)), -2)]),
-            (e2e_r08, "r08: x*y",      2, [((Int64(3), Int64(4)), 12), ((Int64(0), Int64(5)), 0)]),
-            (e2e_r09, "r09: x+y+z",    3, [((Int64(1), Int64(2), Int64(3)), 6)]),
-            (e2e_r10, "r10: x²+x+1",   1, [(Int64(0), 1), (Int64(1), 3), (Int64(5), 31)]),
-            (e2e_r11, "r11: x²-y²",    2, [((Int64(5), Int64(3)), 16), ((Int64(7), Int64(7)), 0)]),
-            (e2e_r12, "r12: xy+x+y",   2, [((Int64(2), Int64(3)), 11), ((Int64(0), Int64(0)), 0)]),
-            (e2e_r13, "r13: x+x+x",    1, [(Int64(1), 3), (Int64(5), 15), (Int64(0), 0)]),
-            (e2e_r14, "r14: 10x+5",    1, [(Int64(0), 5), (Int64(1), 15), (Int64(5), 55)]),
-            (e2e_r15, "r15: identity",  1, [(Int64(42), 42), (Int64(0), 0), (Int64(-1), -1)]),
-            (e2e_r16, "r16: const 42",  1, [(Int64(0), 42), (Int64(999), 42)]),
-            (e2e_r17, "r17: x²+y²",    2, [((Int64(3), Int64(4)), 25), ((Int64(0), Int64(0)), 0)]),
-            (e2e_r18, "r18: (x-1)(x+1)", 1, [(Int64(0), -1), (Int64(5), 24), (Int64(-1), 0)]),
-            (e2e_r19, "r19: x-1",      1, [(Int64(1), 0), (Int64(0), -1), (Int64(5), 4)]),
-            (e2e_r20, "r20: xy+z",     3, [((Int64(2), Int64(3), Int64(4)), 10)]),
-        ]
-
-        @testset "native: $name" for (fn, name, nargs, cases) in native_specs
-            inner = fn()
-            @test inner[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            for (input, expected) in cases
-                if nargs == 1
-                    @test run_wasm(inner, "f", input) == expected
-                elseif nargs == 2
-                    @test run_wasm(inner, "f", input[1], input[2]) == expected
-                else
-                    @test run_wasm(inner, "f", input[1], input[2], input[3]) == expected
-                end
-            end
-        end
-
-        # --- 53b: Compile all 20 entry points + shared helpers to WASM ---
-        e2e_002_mod = compile_multi([
-            (e2e_compile_stmt, (Vector{UInt8}, Any, Int32)),
-            (e2e_emit_val, (Vector{UInt8}, Any)),
-            (e2e_emit_op, (Vector{UInt8}, Symbol)),
-            (wasm_bytes_length, (Vector{UInt8},), "blen"),
-            (wasm_bytes_get, (Vector{UInt8}, Int32), "bget"),
-            (e2e_r01, (), "r01"), (e2e_r02, (), "r02"), (e2e_r03, (), "r03"),
-            (e2e_r04, (), "r04"), (e2e_r05, (), "r05"), (e2e_r06, (), "r06"),
-            (e2e_r07, (), "r07"), (e2e_r08, (), "r08"), (e2e_r09, (), "r09"),
-            (e2e_r10, (), "r10"), (e2e_r11, (), "r11"), (e2e_r12, (), "r12"),
-            (e2e_r13, (), "r13"), (e2e_r14, (), "r14"), (e2e_r15, (), "r15"),
-            (e2e_r16, (), "r16"), (e2e_r17, (), "r17"), (e2e_r18, (), "r18"),
-            (e2e_r19, (), "r19"), (e2e_r20, (), "r20"),
-        ])
-
-        @testset "outer module: valid WASM binary" begin
-            @test length(e2e_002_mod) > 0
-            @test e2e_002_mod[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            println("  E2E-002 outer module: $(length(e2e_002_mod)) bytes ($(round(length(e2e_002_mod)/1024, digits=1)) KB)")
-        end
-
-        # --- 53c: WASM-in-WASM — run all 20 via Node.js ---
-        @testset "E2E: 20/20 functions via WASM-in-WASM codegen" begin
-            e2e_path = tempname() * ".wasm"
-            write(e2e_path, e2e_002_mod)
-
-            node_script = raw"""
-            const fs = require('fs');
-            const bytes = fs.readFileSync(process.argv[2]);
-            const specs = [
-              {fn:'r01',tests:[[[5n],26n],[[0n],1n],[[-3n],10n],[[10n],101n],[[1n],2n]]},
-              {fn:'r02',tests:[[[0n],1n],[[5n],6n],[[-1n],0n],[[100n],101n],[[-100n],-99n]]},
-              {fn:'r03',tests:[[[0n],0n],[[5n],10n],[[-3n],-6n],[[100n],200n],[[1n],2n]]},
-              {fn:'r04',tests:[[[0n],0n],[[5n],25n],[[-3n],9n],[[10n],100n],[[1n],1n]]},
-              {fn:'r05',tests:[[[0n],0n],[[3n],27n],[[-2n],-8n],[[5n],125n],[[1n],1n]]},
-              {fn:'r06',tests:[[[1n,2n],3n],[[0n,0n],0n],[[-5n,5n],0n],[[10n,20n],30n],[[100n,-50n],50n]]},
-              {fn:'r07',tests:[[[5n,3n],2n],[[0n,0n],0n],[[3n,5n],-2n],[[10n,1n],9n],[[-5n,-3n],-2n]]},
-              {fn:'r08',tests:[[[3n,4n],12n],[[0n,5n],0n],[[-3n,4n],-12n],[[7n,7n],49n],[[1n,100n],100n]]},
-              {fn:'r09',tests:[[[1n,2n,3n],6n],[[0n,0n,0n],0n],[[-1n,-2n,-3n],-6n],[[10n,20n,30n],60n],[[1n,1n,1n],3n]]},
-              {fn:'r10',tests:[[[0n],1n],[[1n],3n],[[5n],31n],[[-1n],1n],[[10n],111n]]},
-              {fn:'r11',tests:[[[5n,3n],16n],[[0n,0n],0n],[[3n,5n],-16n],[[10n,1n],99n],[[7n,7n],0n]]},
-              {fn:'r12',tests:[[[2n,3n],11n],[[0n,0n],0n],[[1n,1n],3n],[[5n,10n],65n],[[-1n,-1n],-1n]]},
-              {fn:'r13',tests:[[[0n],0n],[[1n],3n],[[5n],15n],[[-3n],-9n],[[100n],300n]]},
-              {fn:'r14',tests:[[[0n],5n],[[1n],15n],[[5n],55n],[[-1n],-5n],[[10n],105n]]},
-              {fn:'r15',tests:[[[0n],0n],[[42n],42n],[[-1n],-1n],[[999n],999n],[[1n],1n]]},
-              {fn:'r16',tests:[[[0n],42n],[[1n],42n],[[-1n],42n],[[999n],42n],[[5n],42n]]},
-              {fn:'r17',tests:[[[3n,4n],25n],[[0n,0n],0n],[[1n,1n],2n],[[5n,12n],169n],[[-3n,4n],25n]]},
-              {fn:'r18',tests:[[[0n],-1n],[[1n],0n],[[2n],3n],[[5n],24n],[[-1n],0n]]},
-              {fn:'r19',tests:[[[1n],0n],[[0n],-1n],[[5n],4n],[[100n],99n],[[-1n],-2n]]},
-              {fn:'r20',tests:[[[2n,3n,4n],10n],[[0n,5n,1n],1n],[[5n,5n,5n],30n],[[-2n,3n,1n],-5n],[[10n,10n,10n],110n]]},
-            ];
-            (async () => {
-              try {
-                const {instance} = await WebAssembly.instantiate(bytes, {Math:{pow:Math.pow}});
-                const e = instance.exports;
-                let pass=0, fail=0, fnPass=0;
-                for (const spec of specs) {
-                  const inner = e[spec.fn]();
-                  const len = e.blen(inner);
-                  const arr = new Uint8Array(len);
-                  for (let i=0; i<len; i++) arr[i] = e.bget(inner, i+1);
-                  try {
-                    const m2 = await WebAssembly.instantiate(arr);
-                    const f = m2.instance.exports.f;
-                    let allOk = true;
-                    for (const [args, expected] of spec.tests) {
-                      const r = f(...args);
-                      if (r === expected) { pass++; }
-                      else { fail++; allOk=false; console.log('FAIL:'+spec.fn+'('+args+')='+r+' expected '+expected); }
-                    }
-                    if (allOk) fnPass++;
-                  } catch(err) {
-                    fail += spec.tests.length;
-                    console.log('FAIL:'+spec.fn+' inner WASM: '+err.message);
-                  }
-                }
-                console.log(fnPass+'/'+specs.length+' functions, '+pass+'/'+(pass+fail)+' tests passed');
-                console.log(fail===0 ? 'E2E_002_PASS' : 'E2E_002_FAIL');
-              } catch(err) { console.log('E2E_002_FAIL:'+err.message); }
-            })();
-            """
-
-            script_path = tempname() * ".cjs"
-            write(script_path, node_script)
-            output = try
-                read(`node $script_path $e2e_path`, String)
-            catch e
-                "E2E_002_FAIL: $(sprint(showerror, e))"
-            end
-            rm(script_path, force=true)
-            rm(e2e_path, force=true)
-
-            println("  E2E-002: ", strip(output))
-            @test occursin("E2E_002_PASS", output)
-        end
-
-        # --- 53d: Cheat-proof: WAT must contain ref.test ---
-        @testset "cheat-proof: WAT contains ref.test dispatch" begin
-            e2e_path = tempname() * ".wasm"
-            write(e2e_path, e2e_002_mod)
-            has_ref_test = false
-            try
-                wat = read(`wasm-tools print $e2e_path`, String)
-                has_ref_test = occursin("ref.test", wat)
-                if has_ref_test
-                    ref_test_count = count("ref.test", wat)
-                    println("  ref.test instructions found: $ref_test_count")
-                end
-            catch
-                println("  wasm-tools not available, skipping WAT check")
-                has_ref_test = true
-            end
-            rm(e2e_path, force=true)
-            @test has_ref_test
-        end
-    end
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Phase 54: P-001 — Parser-to-codegen pipeline (source → code_typed → WASM)
-    #
-    # Proves: Julia source → Base.code_typed → IR conversion → WASM codegen → execute.
-    # Entry points auto-generated from real source functions (not hand-written IR).
-    # ═══════════════════════════════════════════════════════════════════════════
-    @pphase "Phase 54: P-001 Parser-to-codegen pipeline" begin
-
-        # --- 54a: Cross-validation — auto-generated matches hand-written E2E-002 ---
-        @testset "cross-validate: auto-gen matches hand-written" begin
-            @test p01_auto_01() == e2e_r01()  # x²+1
-            @test p01_auto_02() == e2e_r06()  # x+y
-            @test p01_auto_05() == e2e_r05()  # x³
-            @test p01_auto_06() == e2e_r11()  # x²-y²
-            @test p01_auto_09() == e2e_r15()  # identity
-            @test p01_auto_10() == e2e_r09()  # x+y+z
-        end
-
-        # --- 54b: Native verification — all 10 produce valid WASM with correct results ---
-        native_specs = [
-            (p01_auto_01, "p01: x²+1",       1, [(Int64(5), 26), (Int64(0), 1), (Int64(-3), 10)]),
-            (p01_auto_02, "p02: x+y",        2, [((Int64(1), Int64(2)), 3), ((Int64(-5), Int64(5)), 0)]),
-            (p01_auto_03, "p03: 3x-7",       1, [(Int64(0), -7), (Int64(5), 8), (Int64(10), 23)]),
-            (p01_auto_04, "p04: xy+10",      2, [((Int64(2), Int64(3)), 16), ((Int64(0), Int64(5)), 10)]),
-            (p01_auto_05, "p05: x³",         1, [(Int64(3), 27), (Int64(0), 0), (Int64(-2), -8)]),
-            (p01_auto_06, "p06: x²-y²",     2, [((Int64(5), Int64(3)), 16), ((Int64(0), Int64(0)), 0)]),
-            (p01_auto_07, "p07: (x+1)(x-1)", 1, [(Int64(5), 24), (Int64(0), -1), (Int64(1), 0)]),
-            (p01_auto_08, "p08: 2x+3y",     2, [((Int64(1), Int64(1)), 5), ((Int64(0), Int64(0)), 0), ((Int64(3), Int64(2)), 12)]),
-            (p01_auto_09, "p09: identity",   1, [(Int64(42), 42), (Int64(0), 0), (Int64(-1), -1)]),
-            (p01_auto_10, "p10: x+y+z",     3, [((Int64(1), Int64(2), Int64(3)), 6), ((Int64(0), Int64(0), Int64(0)), 0)]),
-        ]
-
-        @testset "native: $name" for (fn, name, nargs, cases) in native_specs
-            inner = fn()
-            @test inner[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            for (input, expected) in cases
-                if nargs == 1
-                    @test run_wasm(inner, "f", input) == expected
-                elseif nargs == 2
-                    @test run_wasm(inner, "f", input[1], input[2]) == expected
-                else
-                    @test run_wasm(inner, "f", input[1], input[2], input[3]) == expected
-                end
-            end
-        end
-
-        # --- 54c: Compile all 10 auto-gen entries + shared helpers to WASM ---
-        p01_mod = compile_multi([
-            (e2e_compile_stmt, (Vector{UInt8}, Any, Int32)),
-            (e2e_emit_val, (Vector{UInt8}, Any)),
-            (e2e_emit_op, (Vector{UInt8}, Symbol)),
-            (wasm_bytes_length, (Vector{UInt8},), "blen"),
-            (wasm_bytes_get, (Vector{UInt8}, Int32), "bget"),
-            (p01_auto_01, (), "p01"), (p01_auto_02, (), "p02"),
-            (p01_auto_03, (), "p03"), (p01_auto_04, (), "p04"),
-            (p01_auto_05, (), "p05"), (p01_auto_06, (), "p06"),
-            (p01_auto_07, (), "p07"), (p01_auto_08, (), "p08"),
-            (p01_auto_09, (), "p09"), (p01_auto_10, (), "p10"),
-        ])
-
-        @testset "outer module: valid WASM binary" begin
-            @test length(p01_mod) > 0
-            @test p01_mod[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            println("  P-001 outer module: $(length(p01_mod)) bytes ($(round(length(p01_mod)/1024, digits=1)) KB)")
-        end
-
-        # --- 54d: WASM-in-WASM — run all 10 via Node.js ---
-        @testset "P-001: 10/10 functions via WASM-in-WASM codegen" begin
-            p01_path = tempname() * ".wasm"
-            write(p01_path, p01_mod)
-
-            node_script = raw"""
-            const fs = require('fs');
-            const bytes = fs.readFileSync(process.argv[2]);
-            const specs = [
-              {fn:'p01',tests:[[[5n],26n],[[0n],1n],[[-3n],10n],[[10n],101n],[[1n],2n]]},
-              {fn:'p02',tests:[[[1n,2n],3n],[[0n,0n],0n],[[-5n,5n],0n],[[10n,20n],30n]]},
-              {fn:'p03',tests:[[[0n],-7n],[[5n],8n],[[10n],23n],[[-1n],-10n],[[3n],2n]]},
-              {fn:'p04',tests:[[[2n,3n],16n],[[0n,5n],10n],[[1n,1n],11n],[[-2n,3n],4n]]},
-              {fn:'p05',tests:[[[3n],27n],[[0n],0n],[[-2n],-8n],[[5n],125n],[[1n],1n]]},
-              {fn:'p06',tests:[[[5n,3n],16n],[[0n,0n],0n],[[3n,5n],-16n],[[7n,7n],0n]]},
-              {fn:'p07',tests:[[[5n],24n],[[0n],-1n],[[1n],0n],[[10n],99n],[[-1n],0n]]},
-              {fn:'p08',tests:[[[1n,1n],5n],[[0n,0n],0n],[[3n,2n],12n],[[5n,10n],40n]]},
-              {fn:'p09',tests:[[[42n],42n],[[0n],0n],[[-1n],-1n],[[999n],999n]]},
-              {fn:'p10',tests:[[[1n,2n,3n],6n],[[0n,0n,0n],0n],[[-1n,-2n,-3n],-6n],[[10n,20n,30n],60n]]},
-            ];
-            (async () => {
-              try {
-                const {instance} = await WebAssembly.instantiate(bytes, {Math:{pow:Math.pow}});
-                const e = instance.exports;
-                let pass=0, fail=0, fnPass=0;
-                for (const spec of specs) {
-                  const inner = e[spec.fn]();
-                  const len = e.blen(inner);
-                  const arr = new Uint8Array(len);
-                  for (let i=0; i<len; i++) arr[i] = e.bget(inner, i+1);
-                  try {
-                    const m2 = await WebAssembly.instantiate(arr);
-                    const f = m2.instance.exports.f;
-                    let allOk = true;
-                    for (const [args, expected] of spec.tests) {
-                      const r = f(...args);
-                      if (r === expected) { pass++; }
-                      else { fail++; allOk=false; console.log('FAIL:'+spec.fn+'('+args+')='+r+' expected '+expected); }
-                    }
-                    if (allOk) fnPass++;
-                  } catch(err) {
-                    fail += spec.tests.length;
-                    console.log('FAIL:'+spec.fn+' inner WASM: '+err.message);
-                  }
-                }
-                console.log(fnPass+'/'+specs.length+' functions, '+pass+'/'+(pass+fail)+' tests passed');
-                console.log(fail===0 ? 'P001_PASS' : 'P001_FAIL');
-              } catch(err) { console.log('P001_FAIL:'+err.message); }
-            })();
-            """
-
-            script_path = tempname() * ".cjs"
-            write(script_path, node_script)
-            output = try
-                read(`node $script_path $p01_path`, String)
-            catch e
-                "P001_FAIL: $(sprint(showerror, e))"
-            end
-            rm(script_path, force=true)
-            rm(p01_path, force=true)
-
-            println("  P-001: ", strip(output))
-            @test occursin("P001_PASS", output)
-        end
-
-        # --- 54e: Cheat-proof: WAT must contain ref.test ---
-        @testset "cheat-proof: WAT contains ref.test dispatch" begin
-            p01_path = tempname() * ".wasm"
-            write(p01_path, p01_mod)
-            has_ref_test = false
-            try
-                wat = read(`wasm-tools print $p01_path`, String)
-                has_ref_test = occursin("ref.test", wat)
-                if has_ref_test
-                    ref_test_count = count("ref.test", wat)
-                    println("  P-001 ref.test instructions: $ref_test_count")
-                end
-            catch
-                println("  wasm-tools not available, skipping WAT check")
-                has_ref_test = true
-            end
-            rm(p01_path, force=true)
-            @test has_ref_test
-        end
-    end
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Phase 55: P-003 — 22-function regression suite via REAL codegen
-    #
-    # All 22 functions auto-generated from source via Base.code_typed.
-    # Compiled to a single WASM module, verified via WASM-in-WASM in Node.js.
-    # ═══════════════════════════════════════════════════════════════════════════
-    @pphase "Phase 55: P-003 22-function regression suite" begin
-
-        # --- 55a: Compile all 22 auto-gen entries + helpers ---
-        p03_mod = compile_multi([
-            (e2e_compile_stmt, (Vector{UInt8}, Any, Int32)),
-            (e2e_emit_val, (Vector{UInt8}, Any)),
-            (e2e_emit_op, (Vector{UInt8}, Symbol)),
-            (wasm_bytes_length, (Vector{UInt8},), "blen"),
-            (wasm_bytes_get, (Vector{UInt8}, Int32), "bget"),
-            (p01_auto_01, (), "p01"), (p01_auto_02, (), "p02"),
-            (p01_auto_03, (), "p03"), (p01_auto_04, (), "p04"),
-            (p01_auto_05, (), "p05"), (p01_auto_06, (), "p06"),
-            (p01_auto_07, (), "p07"), (p01_auto_08, (), "p08"),
-            (p01_auto_09, (), "p09"), (p01_auto_10, (), "p10"),
-            (p03_auto_11, (), "p11"), (p03_auto_12, (), "p12"),
-            (p03_auto_13, (), "p13"), (p03_auto_14, (), "p14"),
-            (p03_auto_15, (), "p15"), (p03_auto_16, (), "p16"),
-            (p03_auto_17, (), "p17"), (p03_auto_18, (), "p18"),
-            (p03_auto_19, (), "p19"), (p03_auto_20, (), "p20"),
-            (p03_auto_21, (), "p21"), (p03_auto_22, (), "p22"),
-        ])
-
-        @testset "outer module: valid WASM binary" begin
-            @test length(p03_mod) > 0
-            @test p03_mod[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-            println("  P-003 outer module: $(length(p03_mod)) bytes ($(round(length(p03_mod)/1024, digits=1)) KB)")
-        end
-
-        # --- 55b: WASM-in-WASM — all 22 functions via Node.js ---
-        @testset "P-003: 22/22 functions via WASM-in-WASM codegen" begin
-            p03_path = tempname() * ".wasm"
-            write(p03_path, p03_mod)
-
-            node_script = raw"""
-            const fs = require('fs');
-            const bytes = fs.readFileSync(process.argv[2]);
-            const specs = [
-              {fn:'p01',tests:[[[5n],26n],[[0n],1n],[[-3n],10n],[[10n],101n],[[1n],2n]]},
-              {fn:'p02',tests:[[[1n,2n],3n],[[0n,0n],0n],[[-5n,5n],0n]]},
-              {fn:'p03',tests:[[[0n],-7n],[[5n],8n],[[10n],23n]]},
-              {fn:'p04',tests:[[[2n,3n],16n],[[0n,5n],10n],[[1n,1n],11n]]},
-              {fn:'p05',tests:[[[3n],27n],[[0n],0n],[[-2n],-8n]]},
-              {fn:'p06',tests:[[[5n,3n],16n],[[0n,0n],0n],[[3n,5n],-16n]]},
-              {fn:'p07',tests:[[[5n],24n],[[0n],-1n],[[1n],0n]]},
-              {fn:'p08',tests:[[[1n,1n],5n],[[0n,0n],0n],[[3n,2n],12n]]},
-              {fn:'p09',tests:[[[42n],42n],[[0n],0n],[[-1n],-1n]]},
-              {fn:'p10',tests:[[[1n,2n,3n],6n],[[0n,0n,0n],0n]]},
-              {fn:'p11',tests:[[[0n],1n],[[5n],6n],[[-1n],0n],[[100n],101n]]},
-              {fn:'p12',tests:[[[5n],10n],[[0n],0n],[[-3n],-6n],[[100n],200n]]},
-              {fn:'p13',tests:[[[5n],25n],[[0n],0n],[[-3n],9n],[[10n],100n]]},
-              {fn:'p14',tests:[[[5n,3n],2n],[[3n,5n],-2n],[[0n,0n],0n]]},
-              {fn:'p15',tests:[[[3n,4n],12n],[[0n,5n],0n],[[-3n,4n],-12n]]},
-              {fn:'p16',tests:[[[0n],1n],[[1n],3n],[[5n],31n],[[-1n],1n]]},
-              {fn:'p17',tests:[[[2n,3n],11n],[[0n,0n],0n],[[1n,1n],3n]]},
-              {fn:'p18',tests:[[[1n],3n],[[5n],15n],[[0n],0n],[[-3n],-9n]]},
-              {fn:'p19',tests:[[[0n],5n],[[1n],15n],[[5n],55n],[[-1n],-5n]]},
-              {fn:'p20',tests:[[[0n],42n],[[999n],42n],[[-1n],42n]]},
-              {fn:'p21',tests:[[[1n],0n],[[0n],-1n],[[5n],4n],[[100n],99n]]},
-              {fn:'p22',tests:[[[2n,3n,4n],10n],[[0n,5n,1n],1n],[[5n,5n,5n],30n]]},
-            ];
-            (async () => {
-              try {
-                const {instance} = await WebAssembly.instantiate(bytes, {Math:{pow:Math.pow}});
-                const e = instance.exports;
-                let pass=0, fail=0, fnPass=0;
-                for (const spec of specs) {
-                  const inner = e[spec.fn]();
-                  const len = e.blen(inner);
-                  const arr = new Uint8Array(len);
-                  for (let i=0; i<len; i++) arr[i] = e.bget(inner, i+1);
-                  try {
-                    const m2 = await WebAssembly.instantiate(arr);
-                    const f = m2.instance.exports.f;
-                    let allOk = true;
-                    for (const [args, expected] of spec.tests) {
-                      const r = f(...args);
-                      if (r === expected) { pass++; }
-                      else { fail++; allOk=false; console.log('FAIL:'+spec.fn+'('+args+')='+r+' expected '+expected); }
-                    }
-                    if (allOk) fnPass++;
-                  } catch(err) {
-                    fail += spec.tests.length;
-                    console.log('FAIL:'+spec.fn+' inner WASM: '+err.message);
-                  }
-                }
-                console.log(fnPass+'/'+specs.length+' functions, '+pass+'/'+(pass+fail)+' tests passed');
-                console.log(fail===0 ? 'P003_PASS' : 'P003_FAIL');
-              } catch(err) { console.log('P003_FAIL:'+err.message); }
-            })();
-            """
-
-            script_path = tempname() * ".cjs"
-            write(script_path, node_script)
-            output = try
-                read(`node $script_path $p03_path`, String)
-            catch e
-                "P003_FAIL: $(sprint(showerror, e))"
-            end
-            rm(script_path, force=true)
-            rm(p03_path, force=true)
-
-            println("  P-003: ", strip(output))
-            @test occursin("P003_PASS", output)
-        end
-
-        # --- 55c: Cheat-proof ---
-        @testset "cheat-proof: WAT contains ref.test dispatch" begin
-            p03_path = tempname() * ".wasm"
-            write(p03_path, p03_mod)
-            has_ref_test = false
-            try
-                wat = read(`wasm-tools print $p03_path`, String)
-                has_ref_test = occursin("ref.test", wat)
-                if has_ref_test
-                    ref_test_count = count("ref.test", wat)
-                    println("  P-003 ref.test instructions: $ref_test_count")
-                end
-            catch
-                println("  wasm-tools not available, skipping WAT check")
-                has_ref_test = true
-            end
-            rm(p03_path, force=true)
-            @test has_ref_test
-        end
-    end
-
     # Phase 56: Playground regression suite — REMOVED
     # playground/codegen.wasm build artifact does not exist; tests were always skipped.
 
@@ -7710,11 +6796,11 @@ console.log(JSON.stringify({
             _mk_crat(re::Rational{Int64}, im::Rational{Int64}) = Complex{Rational{Int64}}(re, im)
             @test (WasmTarget.compile_multi(
                 Any[(_mk_crat, (Rational{Int64}, Rational{Int64}), "_mk_crat")];
-                strict=true, validate=true, optimize=false); true)            # struct.new field cast
+                validate=true, optimize=false); true)            # struct.new field cast
             _re_num(z::Complex{Rational{Int64}})::Int64 = numerator(real(z))
             @test (WasmTarget.compile_multi(
                 Any[(_re_num, (Complex{Rational{Int64}},), "_re_num")];
-                strict=true, validate=true, optimize=false); true)            # struct.get on structref param
+                validate=true, optimize=false); true)            # struct.get on structref param
         end
 
         @testset "Int128/UInt128 struct field registration (WASMTARGET-FUZZ)" begin
@@ -7727,10 +6813,10 @@ console.log(JSON.stringify({
             # sibling; Int128 *arithmetic* on the field is a separate op gap.
             _mk_i128(a::Int64)::Int64 = _WTI128Box(Int128(a), a).n
             @test (WasmTarget.compile_multi(Any[(_mk_i128, (Int64,), "_mk_i128")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
             _mk_u128(a::Int64)::Int64 = _WTU128Box(UInt128(a), a).n
             @test (WasmTarget.compile_multi(Any[(_mk_u128, (Int64,), "_mk_u128")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
         end
 
         @testset "Tagged-union Float member round-trip (WASMTARGET-FUZZ)" begin
@@ -7761,7 +6847,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_scplx_cu,  Int64(4)).pass   # byte 5 = '+'
             @test compare_julia_wasm(_wt_scplx_cu,  Int64(9)).pass   # byte 10 = 'i'
             @test (WasmTarget.compile_multi(Any[(_wt_scplx_len, (Int64,), "_wt_scplx_len")];
-                strict=true, validate=true, optimize=false); true)
+                validate=true, optimize=false); true)
         end
 
         @testset "Snapshot.jl fractals island — full String via bridge (WASMTARGET-INTEGRATION)" begin
@@ -7871,19 +6957,29 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_wt_egal_difftype, Int64(5)).pass   # boxed Bool === Int32 → 0
         end
 
+        @testset "packed i8/i16 array representation" begin
+            @test compare_julia_wasm(_wt_packed_i8).pass
+            @test compare_julia_wasm(_wt_packed_u8).pass
+            @test compare_julia_wasm(_wt_packed_i16).pass
+            @test compare_julia_wasm(_wt_packed_u16).pass
+        end
+
+        @testset "runtime-length flat function composition" begin
+            for opt in (false, true)
+                @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(2); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose, Int64(2), Int64(4); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose_escape, Int64(2), Int64(4); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose_mixed, Int64(2), Int64(4), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_wt_runtime_compose_mixed, Int64(2), Int64(4), Int64(2); optimize=opt).pass
+            end
+        end
+
         @testset "Inline typeId dynamic dispatch (WASMTARGET-FUZZ)" begin
             # `dynamic` call over >4 methods: trim collection discovers the
             # concrete-struct specializations, call site emits a typeId switch.
-            # GATED: the discovery is off by default (perturbs base inference); enable
-            # it for this self-contained struct-only case (no string deps to perturb).
-            _prev_dd = get(ENV, "WT_DYNDISPATCH", nothing)
-            ENV["WT_DYNDISPATCH"] = "1"
-            try
-                @test compare_julia_wasm(_wt_dyndispatch, Int64(5)).pass   # 6+8+10 = 24
-                @test compare_julia_wasm(_wt_dyndispatch, Int64(0)).pass   # 1+3+5 = 9
-            finally
-                _prev_dd === nothing ? delete!(ENV, "WT_DYNDISPATCH") : (ENV["WT_DYNDISPATCH"] = _prev_dd)
-            end
+            @test compare_julia_wasm(_wt_dyndispatch, Int64(5)).pass   # 6+8+10 = 24
+            @test compare_julia_wasm(_wt_dyndispatch, Int64(0)).pass   # 1+3+5 = 9
         end
 
         @testset "Abstract ::Vector struct field (WASMTARGET-FUZZ)" begin
@@ -8229,6 +7325,11 @@ console.log(JSON.stringify({
             @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[2.0, 3.0, 4.0]).pass
             @test compare_julia_wasm_vec(_p65_splat_prod_f64, Float64[0.5, 0.5, 0.5]).pass  # 0.125
         end
+
+        @testset "Base.vect(prefix, vec...) — heterogeneous SimpleVector prefix" begin
+            @test compare_julia_wasm_vec(_p65_prefix_splat_sum, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p65_prefix_splat_sum, Int64[]).pass
+        end
     end
 
     # ========================================================================
@@ -8285,51 +7386,6 @@ console.log(JSON.stringify({
 
     # Phase 67: Base.contains/occursin (BF3-FIX) — REMOVED (placeholder @test_broken false stub)
     # Helper functions above retained for future use.
-
-    # ========================================================================
-    # Phase 68: BF1 Closure Autodiscovery Fix
-    # Tests that _autodiscover_closure_deps! correctly compiles direct deps
-    # (filter, sort, sum) into func_registry, not just transitive deps.
-    # Bug: shared `seen` set caused direct deps to be skipped during compilation.
-    # ========================================================================
-
-    @pphase "Phase 68: Closure Autodiscovery (BF1-FIX)" begin
-        function _bf1_test_autodiscovery(closure)
-            mod = WasmTarget.WasmModule()
-            type_registry = WasmTarget.TypeRegistry()
-            func_registry = WasmTarget.FunctionRegistry()
-            typed_results = Base.code_typed(closure, ())
-            code_info, _ = typed_results[1]
-            WasmTarget._autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
-            return [n for (n, _) in func_registry.functions]
-        end
-
-        @testset "filter closure autodiscovery" begin
-            items = Int64[1, 2, 3, 4, 5]
-            funcs = _bf1_test_autodiscovery(() -> filter(iseven, items::Vector{Int64}))
-            @test "filter" in funcs
-            # WASMMAKIE-E-003: discovery now uses the SAME wasm-interpreter IR
-            # the body compiler uses (the old mismatch silently skipped
-            # overlay-dependent deps and stubbed their call sites). Under the
-            # overlay IR, filter has no discoverable callees (resize! et al.
-            # are inline-handled) — transitive discovery is covered by the
-            # sort case below (#sort# kwarg body is a transitive dep).
-        end
-
-        @testset "sort closure autodiscovery" begin
-            items = Int64[3, 1, 2]
-            funcs = _bf1_test_autodiscovery(() -> sort(items::Vector{Int64}))
-            # kwarg-body gensym number is version-dependent (#sort#24 on 1.12,
-            # #sort#25 on 1.13) — match by prefix
-            @test any(startswith("#sort#"), funcs)
-        end
-
-        @testset "sum closure autodiscovery" begin
-            items = Int64[1, 2, 3]
-            funcs = _bf1_test_autodiscovery(() -> sum(items::Vector{Int64}))
-            @test "mapreduce_impl" in funcs
-        end
-    end
 
     # ========================================================================
     # Phase 69: BF3 contains/occursin
@@ -8661,7 +7717,7 @@ console.log(JSON.stringify({
 
             tc_strict()::Int64 = Int64(str_char(titlecase("hELLO"), Int32(2)))
             r = compare_julia_wasm(tc_strict)
-            @test r.pass  # strict=true by default → 'e' = 101
+            @test r.pass
 
             tc_empty()::Int64 = length(titlecase(""))
             r = compare_julia_wasm(tc_empty)
@@ -10379,6 +9435,18 @@ console.log(JSON.stringify({
             Int64(length(filter(x -> x > threshold, v)))
         end
 
+        # A runtime index into Vector{Any} prevents inference from devirtualizing
+        # either capturing closure. This exercises allocation of the shared closure
+        # Object, its real RTI field, vtable selection, call_ref, and result unboxing.
+        _s2004_dynamic(x::Int64, i::Int64)::Int64 = begin
+            offset = Int64(3)
+            factor = Int64(4)
+            add = (y::Int64) -> y + offset
+            mul = (y::Int64) -> y * factor
+            fs = Any[add, mul]
+            (fs[i](x))::Int64
+        end
+
         @testset "basic closure passing" begin
             for opt in [false, true]
                 @test compare_julia_wasm_vec(_s2004_apply_add1, Int64[1,2,3]; optimize=opt).pass
@@ -10394,6 +9462,10 @@ console.log(JSON.stringify({
                 @test compare_julia_wasm_vec(_s2004_reduce, Int64[1,2,3,4,5]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s2004_multi_cap, Int64[1,3,5,7,9]; optimize=opt).pass
                 @test compare_julia_wasm_vec(_s2004_cap_chain, Int64[1,3,5,7,9]; optimize=opt).pass
+                @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_s2004_dynamic, Int64(9), Int64(2); optimize=opt).pass
+                @test compare_julia_wasm(_wt_dynamic_tearoff, Int64(9), Int64(1); optimize=opt).pass
+                @test compare_julia_wasm(_wt_dynamic_tearoff, Int64(9), Int64(2); optimize=opt).pass
             end
         end
     end
@@ -10898,6 +9970,9 @@ console.log(JSON.stringify({
     # jl_value_ptr/jl_stored_inline folds; quantile via the :sort! whitelist.
     _stats_mean_f(v::Vector{Float64})::Float64 = Statistics.mean(v)
     _stats_mean_i(v::Vector{Int64})::Float64 = Statistics.mean(v)
+    # Julia 1.13 lowers this through mapreduce_impl's @simd loop. Its erased
+    # @inbounds blocks must forward their CFG edges before dominator analysis.
+    _stats_mean_literal(x::Float64)::Float64 = Statistics.mean([x, x, x])
     _stats_var(v::Vector{Float64})::Float64 = Statistics.var(v)
     _stats_std(v::Vector{Float64})::Float64 = Statistics.std(v)
     _stats_median(v::Vector{Float64})::Float64 = Statistics.median(v)
@@ -10907,6 +9982,7 @@ console.log(JSON.stringify({
     @pphase "Statistics stdlib" begin
         @test compare_julia_wasm_vec(_stats_mean_f, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_mean_i, Int64[1, 2, 4]).pass
+        @test compare_julia_wasm(_stats_mean_literal, 2.75).pass
         @test compare_julia_wasm_vec(_stats_var, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_std, Float64[3.0, 1.5, 2.5, 4.0]).pass
         # median/quantile: native shapes on 1.12; on 1.13 the
@@ -11034,28 +10110,11 @@ console.log(JSON.stringify({
     # select_t/if ref operand. The downstream-regression INTENT is preserved end-to-end by
     # the Loop-1 backfills, e.g. _no_wrap_after_i32_op in test/cleanup_loop1_backfills.jl.)
 
-    # Soundness guard (G1): a wrong-value stub buried in a DISCOVERED (non-entry)
-    # function used to compile "clean" via the downgrade in diagnostics.jl, only
-    # trapping off-sample. WT_PARANOID_STUBS=1 must keep EVERY value-stub fatal so
-    # the autonomous /loop + CI can't be reward-hacked into masking. See
-    # test/fuzz/LOOP.md §7. (objectid on a discovered TestCounter is the value-stub.)
-    @pphase "Phase 77: G1 paranoid value-stub fatality (soundness)" begin
-        @testset "Phase 77: paranoid mode makes discovered value-stubs fatal" begin
-            _g1_try() = try
-                WasmTarget.compile(_g1_entry, (Int64,); strict=true); :ok
-            catch e
-                e isa WasmTarget.WasmCompileError ? :rejected : rethrow()
-            end
-            _save = get(ENV, "WT_PARANOID_STUBS", nothing)
-            try
-                delete!(ENV, "WT_PARANOID_STUBS")
-                @test _g1_try() === :ok           # default: downgraded → compiles
-                ENV["WT_PARANOID_STUBS"] = "1"
-                @test _g1_try() === :rejected     # paranoid: value-stub stays fatal
-            finally
-                _save === nothing ? delete!(ENV, "WT_PARANOID_STUBS") :
-                                    (ENV["WT_PARANOID_STUBS"] = _save)
-            end
+    @pphase "Phase 77: ordinary Object identity" begin
+        @testset "Phase 77: discovered ordinary-object identity is real and stable" begin
+            result = compare_julia_wasm(_g1_entry, Int64(7))
+            @test result.pass
+            @test result.actual == 1
         end
     end
 

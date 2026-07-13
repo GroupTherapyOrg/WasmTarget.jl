@@ -9,9 +9,9 @@
 # `Union`/abstract/`Any` → anyref `Box` (dart2wasm's top-type field). This reconstructs what
 # dart2wasm gets for free from Dart's static types — NOT a heuristic, NOT "type by init and hope".
 #
-# L0 (this file): the pure inference, a pure analysis over the typed IR. NOT yet wired into codegen
-# (byte-identical); L1 registered the specialized `Box{contents}` struct, L2 threads it through
-# %new / setfield! / getfield / the closure captured-box field. Unit-tested in test/f3_box_capture_l0.jl.
+# This file owns the pure inference over typed IR. `compute_numeric_joins!` invokes it once per
+# context phase; specialized `Box{contents}` layouts flow through %new, setfield!/getfield, and
+# closure capture fields. Unit-tested in test/f3_box_capture_l0.jl.
 
 const _F3_CC = Core.Compiler
 
@@ -370,7 +370,7 @@ operands in arithmetic that consumes the box's `:contents` reads (e.g. `contents
 function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
     out = Dict{Int,Type}()
 
-    boxfields = (selfT isa DataType && isstructtype(selfT)) ?
+    boxfields = (selfT isa DataType && isconcretetype(selfT) && isstructtype(selfT)) ?
         Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT)
                     if fieldtype(selfT, i) === Core.Box) : Set{Symbol}()
     _wc(t) = t isa Type ? _F3_CC.widenconst(t) : (t === nothing ? Any : try _F3_CC.widenconst(t) catch; Any end)
@@ -388,7 +388,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
     # closure compiling its own body) OR any local value whose type has Core.Box
     # fields (parity M10b: a closure RETURNED by a callee and used here — the box
     # was born in the callee; the inlined body reads it through the closure value).
-    _has_box_fields(T) = T isa DataType && isstructtype(T) &&
+    _has_box_fields(T) = T isa DataType && isconcretetype(T) && isstructtype(T) &&
         any(i -> fieldtype(T, i) === Core.Box, 1:fieldcount(T))
     _saw_ssa_carrier = false
     _saw_write = false
@@ -419,8 +419,26 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         fldn === :contents && push!(contents_reads, i)
     end
     isempty(contents_reads) && return out
-    cand = nothing
+    # A concrete write to the captured box is the strongest dart-style capture
+    # type evidence. This covers non-numeric captures (for example a Vector built
+    # and assigned before its first read) without guessing from consumers.
+    direct_types = Type[]
+    for stmt in code
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 4) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :setfield!) || continue
+        (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fldn === :contents || continue
+        vt = _opT(stmt.args[4])
+        vt isa Type && vt !== Any && vt !== Union{} && push!(direct_types, vt)
+    end
+    cand = isempty(direct_types) ? nothing : foldl(typejoin, direct_types)
+    (cand isa DataType && isconcretetype(cand)) || (cand = nothing)
+    # When no definite concrete write exists, retain the proven numeric consumer
+    # inference used for accumulator captures.
     for (i, stmt) in enumerate(code)
+        cand === nothing || break
         (stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)) || continue
         _cargs = stmt.head === :invoke ? stmt.args[2:end] : stmt.args
         any(a -> a isa Core.SSAValue && a.id in contents_reads, _cargs[2:end]) || continue
@@ -432,7 +450,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
             end
         end
     end
-    (cand isa Type && _f3_is_numeric_jl(cand)) || return out
+    (cand isa Type && cand !== Any && cand !== Union{}) || return out
     seeds = Dict{Int,Type}(b => cand for b in box_reads)
     _spec = argtypes === nothing ? nothing :
             (self_shift == 1 ? Any[selfT; argtypes...] : Any[argtypes...])
@@ -448,7 +466,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         _saw_write = true
         v = stmt.args[4]
         vt = v isa Core.SSAValue ? get(joins, v.id, _ssat(v.id)) : _opT(v)
-        (_f3_is_numeric_jl(vt) && vt <: cand) || return Dict{Int,Type}()
+        (vt isa Type && vt <: cand) || return Dict{Int,Type}()
     end
     # The BOX-READ ids are Core.Box VALUES, never numerics — they must not appear in
     # the join output (they'd re-type the box itself and break every consumer).
@@ -497,8 +515,8 @@ the box's contents WASM type, into `registry.box_contents_types`. `register_clos
 types the captured-box field as a typed `Box{contents}` instead of anyref. Dynamic-contents boxes
 (`box_contents_type` ⇒ `nothing`) get NO entry → anyref fallback (current behavior, no regression).
 
-DORMANT until the L2 wiring consults the side-table + types box SSAs (context.jl SSA-type pass);
-adding entries to a dict that nothing reads is byte-identical. See dev/F3_LOOP.md.
+The context value-channel proof invokes this before local typing, and closure registration reads
+the side table when choosing its captured-cell field type. See dev/F3_LOOP.md.
 """
 function populate_box_field_types!(mod, registry, code, ssa_types)
     registry.box_contents_types === nothing && return registry.box_contents_types

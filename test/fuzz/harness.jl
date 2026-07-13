@@ -107,7 +107,7 @@ function _unmarshal(v)
 end
 
 """
-    compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict=true) -> Union{Vector,Symbol}
+    compile_and_run(fn, argtypes::Tuple, inputs::Vector) -> Union{Vector,Symbol}
 
 Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in a
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
@@ -119,12 +119,12 @@ _norm_arg(a, T) = T === Char ? reinterpret(Int32, a isa Char ? a : Char(a)) : a
 _norm_inputs(inputs::Vector, argtypes::Tuple) =
     [Tuple(_norm_arg(a, T) for (a, T) in zip(tup, argtypes)) for tup in inputs]
 
-function compile_and_run(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=DEFAULT_TIMEOUT, opt=false)
+function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFAULT_TIMEOUT, opt=false)
     NODE_OK || return :no_node
     Char in argtypes && (inputs = _norm_inputs(inputs, argtypes))
     fname = string(nameof(fn))
     bytes = try
-        WasmTarget.compile(fn, argtypes; strict=strict, validate=true, optimize=opt)
+        WasmTarget.compile(fn, argtypes; validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end
@@ -180,14 +180,14 @@ function _ret_vec_eltype(fn, argtypes)
 end
 
 """
-    compile_and_run_vec(fn, argtypes, inputs; strict=true, timeout=8)
+    compile_and_run_vec(fn, argtypes, inputs; timeout=8)
 
 Natural-signature harness: handles `Vector{Int64}`/`Vector{Float64}` (and scalar)
 arguments AND returns by compiling the target together with the wasm marshalling
 bridge. `inputs` is a Vector of arg-tuples (args may be Vectors). Returns per-input
 `(:ok, value)` / `(:trap, msg)` — a Vector result comes back as a Julia Vector.
 """
-function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=true, timeout::Real=DEFAULT_TIMEOUT, opt=false)
+function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFAULT_TIMEOUT, opt=false)
     NODE_OK || return :no_node
     fname = string(nameof(fn))
     needs_i64 = any(==(Vector{Int64}), argtypes)
@@ -199,7 +199,7 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; strict::Bool=t
     needs_i64 && append!(funcs, _BRIDGE_I64)
     needs_f64 && append!(funcs, _BRIDGE_F64)
     bytes = try
-        WasmTarget.compile_multi(funcs; strict=strict, validate=true, optimize=opt)
+        WasmTarget.compile_multi(funcs; validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end

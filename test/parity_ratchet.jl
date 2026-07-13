@@ -40,7 +40,9 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
         if (m = match(r"^\[(\w+)\]$", s)) !== nothing
             section = m.captures[1]
             out[section] = get(out, section, Dict{String,Int}())
-        elseif (m = match(r"^(\w+)\s*=\s*(\d+)$", s)) !== nothing && !isempty(section)
+        # Accept TOML inline comments.  Without this, an annotated baseline entry is
+        # silently omitted and reported as NEW(baseline), which disables its ratchet.
+        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing && !isempty(section)
             out[section][m.captures[1]] = parse(Int, m.captures[2])
         end
     end
@@ -107,8 +109,8 @@ const METRICS = [
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
     "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::Integer\)")),
-    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory — per-object identity, documented floor] + funnel fallbacks)",
+        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
@@ -133,6 +135,1026 @@ const METRICS = [
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
+        () -> count_sites(r"bytes shell|\(bytes::Vector\{UInt8\}|target_bytes::Vector\{UInt8\}";
+                          roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
+    "L66_no_fabricated_string_results" => ("specialized string lowering either proves every input representation or rejects it; mixed arguments can never become an empty string",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)",
+                         "For now, just do first two", "Multi-string concat: concat pairwise"]
+            required = ["specialized multi-argument string lowering requires every argument to be String or Symbol",
+                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value",
+                        "function compile_string_concat_many_b", "for loc in str_locals",
+                        "_wt_many_string_length"]
+            all_src = invoke_src * strings_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L67_one_exception_and_block_owner" => ("the stackifier alone owns block and try-region structure; no dead block-emission adapter or statement-level EnterNode implementation may coexist",
+        () -> begin
+            api_src = read(joinpath(SRC, "WasmTarget.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["codegen/conditionals.jl", "generate_block_code!",
+                         "For now, we just skip this - full implementation requires try_table"]
+            required = ["THE stackifier owns the", "every CFG shape, including a single block",
+                        "try_open_at", "try_table!(b"]
+            all_src = api_src * stmt_src * flow_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L68_one_runtime_type_representation" => ("type constants, TypeNames, population, and lookup tables use only the canonical JlType hierarchy; the raw Julia DataType fallback is extinct",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            forbidden = ["_populate_legacy_types!", "Legacy path: Populate Julia DataType",
+                         "else fall back to Julia DataType", "else Julia DataType struct",
+                         "Fallback: return i32 typeId", "Type not in globals — return null ref",
+                         "Fallback: i32 typeId"]
+            required = ["type constants require the canonical JlType hierarchy",
+                        "TypeName constants require the canonical JlType hierarchy",
+                        "type constant population requires the canonical JlType hierarchy",
+                        "type lookup table requires the canonical JlType hierarchy"]
+            all_src = types_src * calls_src * context_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L69_one_vector_mutation_path" => ("push!, pop!, and resize! compile their collected pure-Julia overlays; name-routed mutation emitters and capacity assumptions are extinct",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            runtime_src = read(joinpath(SRC, "runtime", "arrayops.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
+                         "is_func(func, :resize!)", "assume capacity is sufficient",
+                         "function _resize!"]
+            required = ["function Base.push!(v::Vector{T}, x)",
+                        "function Base.pop!(v::Vector{T})",
+                        "function Base.resize!(v::Vector{T}, n::Integer)",
+                        "_wt_vector_mutation_semantics"]
+            all_src = calls_src * interp_src * runtime_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L70_no_host_power_fallback" => ("power compiles through the collected Julia body; unresolved invokes cannot switch to a Math.pow host import or approximation",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["pow_import_idx", "requires 'pow' import", "approximation using exp",
+                         "add_import!(mod, \"Math\", \"pow\"", "assume `Math.pow` sits at import index 0"]
+            required = ["_wt_pure_power_semantics"]
+            count(p -> occursin(p, invoke_src * compile_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
+    "L71_no_silent_io_argument_skip" => ("out-of-scope IO glue may reject an unrepresentable show argument but cannot silently omit it and report success",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["show: unsupported argument type \$arg_type, skipping"]
+            required = ["show has no IO bridge representation for argument type",
+                        "_wt_unsupported_show", "@test_throws WasmTarget.WasmCompileError"]
+            all_src = invoke_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L72_no_fabricated_string_encoder" => ("the JS string boundary exposes only implemented imports; no unused encoder API may alias the decoder as a placeholder",
+        () -> begin
+            strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
+            count(p -> occursin(p, strings_src), forbidden)
+        end),
+    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            capture_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            capture_test = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
+            forbidden = ["catch\n        Dict{Int,Type}()", "capture analysis fallback"]
+            required = ["_numeric_joins = try", "catch\n        rethrow()",
+                        "propagate_numeric_value_types",
+                        "f3_self_box_joins", "f3_closure_box_seeds",
+                        "isconcretetype(T) && isstructtype(T)",
+                        "Tuple{Vararg{Int64}}"]
+            all_src = context_src * capture_src * capture_test
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L74_builder_owns_statement_arity" => ("post-emission drop decisions use the builder's actual stack delta; no Julia-type/registry heuristic may re-guess whether a call produced a value",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["function statement_produces_wasm_value", "assume no value produced"]
+            required = ["_stmt_stack0 = length(bb.v.stack)",
+                        "_stmt_pushed_value = length(bb.v.stack) > _stmt_stack0",
+                        "_stmt_emitted && _stmt_pushed_value"]
+            all_src = context_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L75_globalref_absence_is_explicit" => ("core typing, dispatch, and cross-call resolution test binding existence explicitly; broad catches cannot disguise internal resolution failures as a missing GlobalRef",
+        () -> begin
+            files = ["flow.jl", "stackified.jl", "dispatch.jl", "invoke.jl", "calls.jl"]
+            src = join((read(joinpath(CODEGEN, f), String) for f in files), "\n")
+            forbidden = ["actual_val = getfield(val.mod, val.name)\n            return get_phi_edge_wasm_type(actual_val",
+                         "called_func = try\n            getfield(func.mod, func.name)",
+                         "ft_early = try\n            infer_value_type"]
+            required = ["isdefined(val.mod, val.name) || return nothing",
+                        "isdefined(callee.mod, callee.name)",
+                        "isdefined(actual_func_ref.mod, actual_func_ref.name)",
+                        "isdefined(func.mod, func.name)"]
+            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
+        end),
+    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; unsupported IO cannot disappear or fabricate question-mark output",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            forbidden = ["func_type.instance\n                    catch", "try infer_value_type",
+                         "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
+                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup"]
+            required = ["function _compile_invoke_print_b", "_invoke_singleton_instance",
+                        "Base.issingletontype(T)",
+                        "println/print requires an explicitly configured IO bridge",
+                        "println/print has no IO bridge representation"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, invoke_src), required)
+        end),
+    "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            forbidden = ["try getfield(func.mod, func.name) catch", "try infer_value_type",
+                         "try fieldtypes(obj_type) catch", "return try Base.padding",
+                         "try getfield(target_type_ref.mod", "try getfield(args[1].value"]
+            required = ["isdefined(func.mod, func.name)",
+                        "obj_type isa DataType && isconcretetype(obj_type)",
+                        "sext_int target is not a defined Julia type",
+                        "zext_int target is not a defined Julia type",
+                        "trunc_int target is not a defined Julia type"]
+            count(p -> occursin(p, calls_src), forbidden) +
+                count(p -> !occursin(p, calls_src), required)
+        end),
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
+                         "try CC.specialize_method", "try collect(methods", "try which(f, ats)"]
+            required = ["while true", "hasmethod(f, ats) ? which(f, ats) : nothing",
+                        "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
+                        "collect_new_pairs!", "original_mi in protected ||",
+                        "append!(prune_roots, _DYNAMIC_ROOT_MIS[])",
+                        "dynamic dispatch: discover every target admitted by the closed",
+                        "has no environment opt-out or arbitrary round/method ceiling"]
+            all_src = trim_src * tests_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L79_partial_new_requires_definite_initialization" => ("Wasm physical defaults for missing primitive fields are emitted only when a closed-world CFG must-analysis proves every field is written before read or escape",
+        () -> begin
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["struct_type === Random.Xoshiro", "nameof(struct_type)",
+                         "primitive_init_proven = true", "allow_uninitialized"]
+            required = ["function _definitely_initializes_in_ir", "intersect(incoming[dest], assigned)",
+                        "_partial_new_is_definitely_initialized", "primitive_init_proven",
+                        "_wt_make_undefined_field", "_wt_use_definitely_initialized_fields"]
+            all_src = stmts_src * test_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L80_dynamic_callable_enrollment_is_function_scoped" => ("dynamic callable bodies are paired only with signatures observed in the same collected function; no component-wide arity Cartesian product may enroll unrelated functions",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            forbidden = ["    dyn_sigs = Set", "    callable_types = Set", "for _T in callable_types",
+                         "for ds in dyn_sigs"]
+            required = ["callable_invocations = Set{Tuple{DataType,Tuple}}()",
+                        "function flush_callable_invocations!",
+                        "for T in _fn_callables, sig in _fn_dyn_sigs",
+                        "Never form a component-wide Cartesian product"]
+            count(p -> occursin(p, trim_src), forbidden) +
+                count(p -> !occursin(p, trim_src), required)
+        end),
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and collection world instead of a generic trap",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
+                        "args_tuple_type = Tuple{arg_julia_types...}",
+                        "Base.get_world_counter()", "_wt_exact_kwerr_exception"]
+            count(p -> !occursin(p, invoke_src * test_src), required)
+        end),
+    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            required = ["name === :throw_inexacterror", "payload = args[2:end]",
+                        "payload_type = Tuple{payload_types...}",
+                        "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
+                        "_wt_exact_inexact_exception"]
+            count(p -> !occursin(p, invoke_src * test_src), required)
+        end),
+    "L83_fieldwise_constructors_are_structural" => ("concrete exact-field constructors route through the sole %new implementation before dynamic dispatch, even when inference erased a field expression",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            linalg_src = read(joinpath(ROOT, "test", "fuzz", "linalg_diff.jl"), String)
+            forbidden = ["called_func === DimensionMismatch", "nameof(called_func)",
+                         "constructor_allowlist"]
+            required = ["A concrete field-wise constructor is structural, not dynamic",
+                        "called_func === _ctor_result && length(args) == fieldcount(_ctor_result)",
+                        "return compile_new!(b, Expr(:new, _ctor_result, args...)",
+                        "_la_solve", "_la_lusolve"]
+            count(p -> occursin(p, calls_src), forbidden) +
+                count(p -> !occursin(p, calls_src * linalg_src), required)
+        end),
+    "L84_boxing_requires_exact_julia_class" => ("the sole numeric boxer always stamps a proven concrete Julia classId; width-default class substitution and typeless boxing calls are extinct",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            all_codegen = join((read(joinpath(dir, f), String)
+                                for (dir, _, files) in walkdir(CODEGEN)
+                                for f in files if endswith(f, ".jl")), "\n")
+            forbidden = ["wasm-rep-id fallback", "width-default type",
+                         "wasm_type === I32 ? Int32", "emit_classid_box!(b, ctx, src_type, nothing)",
+                         "emit_classid_box!(_xcb, ctx, ret_wasm, nothing)"]
+            required = ["julia_type::Type", "isconcretetype(julia_type)",
+                        "emit_type_id!(b, ctx.type_registry, julia_type)",
+                        "There is no width-based fallback"]
+            count(p -> occursin(p, all_codegen), forbidden) +
+            count(p -> !occursin(p, values_src), required)
+        end),
+    "L85_constructors_never_drop_real_values" => ("constructor lowering represents every supplied value exactly or rejects loudly; vector and Union fields may never be repaired with null",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            forbidden = ["Non-Array AbstractVector (UnitRange, StepRange) — use ref.null",
+                         "keep the type-correct null so the module validates",
+                         "ref_null!(b, Int64(size_info_inner.wasm_type_idx)"]
+            required = ["vector construction requires a concrete backing array; refusing to substitute null",
+                        "emit_struct_prefix!(b, ctx.type_registry, size_tuple_type_inner, size_info_inner)",
+                        "coerce_stack_top!(b, I64, ctx;",
+                        "registered union field \$i has no physical Wasm type",
+                        "emit_value!(b, val, ctx, _cn_expected;"]
+            count(p -> occursin(p, statements_src), forbidden) +
+            count(p -> !occursin(p, statements_src), required)
+        end),
+    "L86_phi_null_is_semantic_not_numeric" => ("phi lowering recognizes exact SSA/Pi aliases of Julia nothing before numeric conversion, so null can never become a fabricated classId box",
+        () -> begin
+            unions_src = read(joinpath(CODEGEN, "unions.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            required = ["stmt isa GlobalRef && stmt.name === :nothing",
+                        "stmt.typ === Nothing && return true",
+                        "return is_nothing_value(stmt.val, ctx)",
+                        "if is_nothing_value(val, ctx)",
+                        "before compiling SSA aliases"]
+            count(p -> !occursin(p, unions_src * stack_src), required)
+        end),
+    "L87_symbolic_control_labels" => ("builder and codegen branch only to identity-bearing labels; numeric depths exist solely in the private serialization boundary, matching dart2wasm _labelIndex",
+        () -> begin
+            builder_src = read(joinpath(ROOT, "src", "builder", "instr_builder.jl"), String)
+            validator_src = read(joinpath(ROOT, "src", "builder", "validator.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            all_codegen = join((read(joinpath(dir, f), String)
+                                for (dir, _, files) in walkdir(CODEGEN)
+                                for f in files if endswith(f, ".jl")), "\n")
+            forbidden = [r"br!\([^,]+,\s*(?:UInt32\()?\d",
+                         r"br_if!\([^,]+,\s*(?:UInt32\()?\d",
+                         r"br_on_(?:non_)?null!\([^,]+,\s*\d",
+                         r"function\s+get_(?:forward|loop)_label_depth",
+                         r"br!\(b::InstrBuilder,\s*depth::Integer",
+                         r"catch_clause\(tag::Integer,\s*label::Integer"]
+            required = ["mutable struct ControlLabel", "handle::ControlLabel",
+                        "function _label_depth(b::InstrBuilder, target::ControlLabel)",
+                        "br!(b::InstrBuilder, target::ControlLabel)",
+                        "branch target is not an open label",
+                        "try_table catches must retain symbolic ControlLabel targets",
+                        "catch target type mismatch",
+                        "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
+                        "get_forward_label(target_block::Int)::ControlLabel"]
+            sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +
+            count(p -> !occursin(p, validator_src * builder_src * stack_src), required)
+        end),
+    "L88_constant_fields_keep_exact_classes" => ("constant materialization uses each known field value's concrete runtime Julia type, never an abstract declaration that would erase its classId",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            forbidden = ["from_julia=fieldtype(T, fi)", "from_julia=fieldtype(T, i)",
+                         "has_undefined\n            ref_null!"]
+            required = ["A materialized constant supplies stronger evidence than its declared",
+                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))",
+                        "closure constant of type \$T has undefined captures; WT never fabricates capture values"]
+            count(p -> occursin(p, values_src), forbidden) +
+                count(p -> !occursin(p, values_src), required)
+        end),
+    "L89_erased_boundschecks_preserve_cfg_edges" => ("erasing explicit @inbounds checks forwards their control edges before dominator and loop ownership analysis",
+        () -> begin
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            resolver = findfirst("function resolve_through_dead_boundscheck", stack_src)
+            cfg = findfirst("# Build successor/predecessor maps", stack_src)
+            dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
+            ordering_fail = resolver === nothing || cfg === nothing || dominators === nothing ||
+                            first(resolver) > first(cfg) || first(resolver) > first(dominators)
+            required = ["dropping the nodes without forwarding their edges disconnects the graph",
+                        "dest_block = resolve_through_dead_boundscheck(dest_block)",
+                        "fall_through_block = resolve_through_dead_boundscheck(fall_through_block)",
+                        "next_block = resolve_through_dead_boundscheck(next_block)"]
+            Int(ordering_fail) + count(p -> !occursin(p, stack_src), required)
+        end),
+    "L90_crossing_regions_are_normalized_or_rejected" => ("shared terminal CFG tails are duplicated through the canonical visitor and every physical label closure is LIFO-checked",
+        () -> begin
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            required = ["duplicated_terminal_targets = Set{Int}()",
+                        "terminal && phi_free && !prev_can_fallthrough",
+                        "compile_statement!(tb, stmt, i, ctx)",
+                        "crossing control regions at block",
+                        "_lb == length(label_stack)",
+                        "_lp == length(label_stack)"]
+            count(p -> !occursin(p, stack_src), required)
+        end),
+    "L91_framework_roots_are_declarative" => ("framework closure globals, exact constants, and root-to-root calls are declarative inputs to the one closed-world compilation route",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
+            required = ["captured_constants::Dict{Symbol,Any}",
+                        "invoke_roots::Dict{Int,String}",
+                        "invoke_arguments::Dict{Int,Vector{Int}}",
+                        "bound_leaves::Vector{Tuple{Any,Tuple}}",
+                        "entry_calls::Vector{UInt32}",
+                        "link_roots::Union{Nothing,Function}",
+                        "root \$name binds closure fields twice",
+                        "invokes unknown compilation roots",
+                        "selects arguments for unbound invoke sites",
+                        "static_wasm_type(_captured_value, ctx)",
+                        "Declaratively bound invoke", "params, _ = _true_call_sig",
+                        "emit_value!(bii, arg, ctx, expected",
+                        "root entry call \$target_idx must have signature () -> ()",
+                        "add_root_global_initializer!",
+                        "registry.module_init_functions",
+                        "add_string_global!",
+                        "the root linker cannot add imports after function indices are frozen",
+                        "constant_root", "root-link fixture", "unknown_link", "bad_entry",
+                        "linked_indices", "bindings.bound_leaves"]
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
+        end),
+    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup",
+        () -> begin
+            box_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
+            required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
+                        "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
+                        "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
+                        "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
+                        "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
+                        "info.is_candidate && info.arg_types == arg_types",
+                        "infos = FunctionInfo[i for i in infos if !i.is_candidate]",
+                        "_target = get_exact_candidate", "target_info = get_exact_candidate",
+                        "boxed_vector_capture", "vmod isa Vector{UInt8}"]
+            count(p -> !occursin(p, box_src * trim_src * types_src * calls_src * test_src), required)
+        end),
+    "L94_codegen_errors_keep_structured_ledgers" => ("the closed-world planner propagates WasmCompileError and validation errors without catch-all conversion to ErrorException, preserving caller-facing diagnostic ledgers",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "diagnostics_sink.jl"), String)
+            forbidden = ["code generation failed for", "sprint(showerror, err)"]
+            required = ["body = generate_body(ctx)",
+                        "err isa WasmTarget.WasmCompileError", "err.diag in err.all",
+                        "DIAGNOSTICS_SINK[] === nothing"]
+            count(p -> occursin(p, compile_src), forbidden) +
+            count(p -> !occursin(p, compile_src * test_src), required)
+        end),
+    "L95_type_object_specializations_match_runtime_representation" => ("transitive Type{T} specializations collapse to an already-collected representation-class specialization only under identical method identity, while singleton precision remains available when dispatch requires it",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["_canonical_type_object_arg", "collected_method_specs",
+                        "!haskey(entry_keys, mi)", "canonical_args != arg_types",
+                        "(mi.def, canonical_sig) in collected_method_specs"]
+            count(p -> !occursin(p, trim_src), required)
+        end),
+    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            forbidden = ["jl_type_unionall` (no lowering)",
+                         "get_concrete_wasm_type(Union{}"]
+            required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
+                        "elseif _fc_sym === :jl_type_unionall",
+                        "ref_test!(b, Int64(unionall_idx), false)",
+                        "A bottom producer has no runtime value to classify or coerce",
+                        "bottom phi source has no terminating statement"]
+            all_src = context_src * stmts_src * stack_src
+            count(p -> occursin(p, all_src), forbidden) +
+                count(p -> !occursin(p, all_src), required)
+        end),
+    "L64_no_unknown_numeric_type_guess" => ("unknown values and unresolved globals retain Any instead of being guessed as Int64",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            forbidden = ["If we can't evaluate, default to Int64",
+                         "phi_julia_type = Int64", "phic_julia_type = Int64",
+                         "phi_wasm_type = I64  # Default for Any/Union"]
+            required = ["An unresolved global has no numeric type evidence",
+                        "Preserve missing type evidence as Any", "end\n    return Any\nend"]
+            count(p -> occursin(p, context_src), forbidden) +
+                count(p -> !occursin(p, context_src), required)
+        end),
+    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            forbidden = ["push_default! =", "drop!(b); i32_const!(b, 0)",
+                         "emit default values for the missing fields"]
+            required = ["value-producing dynamic dispatch selected a void target",
+                        "Bool condition has a non-boolean reference representation",
+                        "struct construction leaves a non-reference Julia field undefined",
+                        "_wt_make_undefined_field"]
+            count(p -> occursin(p, calls_src) || occursin(p, values_src) || occursin(p, stmts_src), forbidden) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, values_src) ||
+                             occursin(p, stmts_src) || occursin(p, test_src)), required)
+        end),
+    "L62_exact_primitive_reinterpret_layout" => ("primitive ReinterpretArray construction folds exact bits/padding predicates, preserves runtime dimension errors, and bottom helpers never acquire a result representation",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "reinterpret_array_semantics.jl"), String)
+            required = ["Base.isbitstype(", "{S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true",
+                        "ctx.return_type === Union{}", "ctx.return_type !== Union{}",
+                        "_reinterpret_invalid_dimension"]
+            count(p -> !(occursin(p, interp_src) || occursin(p, context_src) ||
+                         occursin(p, stack_src) || occursin(p, test_src)), required)
+        end),
+    "L61_one_pure_interpolation_path" => ("Base.print_to_string is one pure-Julia overlay route and no invoke arm may truncate Int64 interpolation through Int32",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["elseif name === :print_to_string", "string interpolation requires int_to_string"]
+            required = ["function Base.print_to_string(xs...)", "typemax(Int64)", "typemin(Int64)"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !(occursin(p, interp_src) || occursin(p, test_src)), required)
+        end),
+    "L60_no_fabricated_exception_payloads" => ("exception lowering either initializes every Julia field exactly or rejects it; no null/zero/default exception fabrication remains",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            forbidden = ["struct_new_default!(_thrb", "Default: push null ref for ref fields",
+                         "ref_null!(berr, ArrayRef)", "name === :throw || name === :throw_boundserror",
+                         "PURE-9032: Error constructors"]
+            required = ["constant exception contains undefined fields",
+                        "isempty(args) ? \"\" : args[1]"]
+            count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required)
+        end),
+    "L59_real_base_exception_helpers" => ("Bounds/Inexact/Domain/Overflow helper bodies construct and throw their real Julia exceptions; no name-routed null-payload helper family remains",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["Stash a ref.null any as exception", "no specific value for these",
+                         "no specific value)"]
+            required = ["_wt_bounds_helper_catch", "_wt_inexact_helper_catch",
+                        "_wt_domain_helper_catch", "_wt_overflow_helper_catch"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
+    "L58_no_bottom_invoke_stub" => ("Bottom-returning invokes compile their collected target and preserve native catch flow; no generic null exception may replace an unresolved invoke",
+        () -> begin
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["get(ctx.ssa_types, idx, Any) === Union{}",
+                         "an :invoke with inferred rettype Union{}"]
+            required = ["_wt_bottom_invoke_catch", "typemax(Int64)"]
+            count(p -> occursin(p, invoke_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
+    "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func, context, expected type, and the concretely boxed got value",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            required = ["function _emit_typeerror_throw!", "Any[:typeassert, \"\", target, got]",
+                        "i == 4 ? get_ssa_type(ctx, got)",
+                        "_emit_typeerror_throw!(fb, args[1], _ta_target",
+                        "err.expected === String", "err.got isa Int64"]
+            forbidden = ["null-payload throw", "union_bottom_throw_stub shape"]
+            count(p -> !occursin(p, calls_src * test_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
+    "L56_real_bottom_exception_bodies" => ("Union{} functions compile their actual Julia body and preserve catchable exception identity; no null-payload whole-body stub may replace them",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
+            forbidden = ["union_bottom_throw_stub", "Auto-stub functions that always throw",
+                         "if return_type === Union{}"]
+            required = ["_wt_bottom_throw", "err isa ArgumentError"]
+            count(p -> occursin(p, compile_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
+        end),
+    "L55_static_type_rendering_excludes_compiler_metadata" => ("Type{T} stays specialized through string/print/show so generated-function Method metadata never enters the runtime constant graph",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            required = ["Base.string(::Type{T})", "Base.print(io::IO, ::Type{T})",
+                        "Base.show(io::IO, ::Type{T})", "_wt_type_name_str(T)",
+                        "f === _wt_type_name_str"]
+            count(p -> !occursin(p, interp_src), required)
+        end),
+    "L54_pure_dense_statistics_correlation" => ("dense float correlation retains Statistics corm arithmetic over one explicitly length-validated index domain",
+        () -> begin
+            stats_src = read(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl"), String)
+            required = ["Statistics.corm(", "x::Vector{T}, mx::T, y::Vector{T}, my::T",
+                        "length(y) == n", "@simd for i in eachindex(x)",
+                        "Statistics.clampcor("]
+            forbidden = ["@simd for i in eachindex(x, y)"]
+            count(p -> !occursin(p, stats_src), required) +
+                count(p -> occursin(p, stats_src), forbidden)
+        end),
+    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain",
+        () -> begin
+            linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
+            required = ["LinearAlgebra.norm(x::Array{T,N})",
+                        "LinearAlgebra.opnorm(", "_wt_osj_svdvals(A)",
+                        "a::T, x::Vector{T}, y::Vector{T}",
+                        "a::T, x::Vector{T}, b::T, y::Vector{T}",
+                        "LinearAlgebra.rotate!(", "LinearAlgebra.reflect!(",
+                        "length(x) == length(y)", "for i in eachindex(x)"]
+            forbidden = ["for i in eachindex(x, y)",
+                         "LinearAlgebra.norm(x::Vector{T})"]
+            count(p -> !occursin(p, linalg_src), required) +
+                count(p -> occursin(p, linalg_src), forbidden)
+        end),
+    "L52_dynamic_storage_owner_and_generic_norm" => ("pointer consumers retain runtime Memory/MemoryRef ownership across allocation phis, memmove returns its exact destination, and float norm uses LinearAlgebra's pure generic reference path instead of BLAS FFI",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
+            required = ["owner_is_memory ? owner_arg",
+                        "Canonicalize repeated `.mem` projections",
+                        "emit_value!(b, dest_ptr_arg, ctx, I64)",
+                        "LinearAlgebra.generic_norm2(x)",
+                        "LinearAlgebra.generic_normp(x, p)"]
+            forbidden = ["memmove returns dest ptr — push i64.const 0"]
+            all_src = statements_src * linalg_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L51_no_escaping_or_ambiguous_storage_pointers" => ("jl_value_ptr is an exact storage-relative offset only under whole-use-graph proof; escaping values and phis over different backing objects reject",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["_storage_relative_pointer_is_closed(ctx, idx)",
+                        "jl_value_ptr escapes storage-relative WasmGC operations",
+                        "phi-multiple-storage",
+                        "soundness_fatal=true"]
+            forbidden = ["fake-pointer", "fake pointer"]
+            all_src = statements_src * calls_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L50_closed_world_result_lub_and_reinterpret_bits" => ("dynamic selector results use the closed-world target LUB, proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["foldl(typejoin, returns)",
+                        "ctx.ssa_types[_jk] = _jv",
+                        "foreach(observe_type!, T.parameters)",
+                        "stmt0.head === :new",
+                        "entry.specTypes",
+                        "target_type <: atypes[p]",
+                        "concrete_args = Tuple{spec...}",
+                        "m = which(g, concrete_args)",
+                        "Base.array_subpadding",
+                        "Core.bitcast(T, bits)",
+                        "% TargetBits",
+                        "% SourceBits"]
+            forbidden = ["getfield(a, :parent)"]
+            all_src = context_src * interp_src * trim_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            required = ["ir_arg_type = function", "CC.findall(ftype, lookup_table; limit=-1)",
+                        "f isa Function || f isa Type",
+                        "param_types = first_explicit <= length(target_info_early.arg_types)",
+                        "Push arguments through the resolved target signature",
+                        "Base.ReinterpretArray{T,N,S,A,false}"]
+            forbidden = ["only handle the case where the LAST arg",
+                         "Also handle middle args if needed",
+                         "extern_convert_emitted_args", "compile_compute_sparams"]
+            all_src = trim_src * invoke_src * calls_src * interp_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L48_exact_mutable_global_initialization" => ("mutable GlobalRefs use identity-keyed exact initializer functions behind the one module start; fabricated default objects and silent partial emission are forbidden",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            all_src = compile_src * context_src * types_src * values_src
+            required = ["mutable_constant_globals", "module_init_functions",
+                        "finalize_module_initializers!", "function_wasm_signature",
+                        "GlobalRef is not defined in its source module"]
+            forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
+                         "If we can't evaluate, might be a type reference"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L47_single_memmove_lowering" => ("memmove/memcpy has one array-copy lowering and its one pointer walk recognizes Vector, Memory, String, and Symbol backing identities",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
+                        "backing_type === String || backing_type === Symbol"]
+            count(p -> !occursin(p, stmt_src), required) +
+                abs(length(collect(eachmatch(r"if \(name === :memmove \|\| name === :memcpy\)", stmt_src))) - 1)
+        end),
+    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            all_src = types_src * values_src * stmt_src
+            required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
+                        "name in (:jl_is_operator, :jl_is_syntactic_operator)",
+                        "dynamically-created Symbol lacks operator metadata"]
+            forbidden = [":name_is_operator", ":singleton_is_operator",
+                         "ASCII-only operator"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L45_one_source_slot_and_vararg_abi" => ("semantic Core.Argument source types have one slot authority while the one physical vararg projection path maps fixed-prefix packs by their ABI offset",
+        () -> begin
+            context_src = read(joinpath(CODEGEN, "context.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
+            helpers_src = read(joinpath(CODEGEN, "helpers.jl"), String)
+            required = ["function source_slot_type", "source_type = source_slot_type(ctx, val.n)",
+                        "function packed_vararg_source_type",
+                        "packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)",
+                        "Reconstruct the one source-level vararg tuple",
+                        "local _gft_fixed = args[1].n - 2",
+                        "physical_offset + i - 1", "_gft_result_T isa Union ? AnyRef",
+                        "function is_builtin_func"]
+            forbidden = ["ctx.code_info.slottypes[args[1].n]",
+                         "ctx.code_info.slottypes[val.id]",
+                         "func.name in (:isdefined, :getfield, :setfield!) && func.mod in"]
+            all_src = context_src * calls_src * values_src * flow_src * helpers_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L44_interned_module_metadata" => ("Module is one interned identity object with exact name/parent and collected binding visibility metadata; no empty shell or TypeName module-name string surrogate remains",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            all_src = types_src * values_src * calls_src * stmt_src
+            required = ["get_module_constant_global!", "_closed_world_isvisible",
+                        "emit_closed_world_isvisible!", "name_visible_main",
+                        "_fc_sym === :jl_module_parent", "_fc_sym === :jl_module_name"]
+            forbidden = ["Module constant — empty struct", "module_name (mut string ref)",
+                         "module_name → string"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L43_typename_world_bounds_metadata" => ("mutable Julia BindingPartition history is reduced once to exact immutable TypeName world-bound metadata; no partial Binding object or fake partition chain exists",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            all_src = types_src * calls_src * interp_src * trim_src
+            required = ["world_bounded", "Base.check_world_bounded(tn)",
+                        "emit_closed_world_type_bounds!",
+                        "_closed_world_type_bounds", "f === _closed_world_type_bounds"]
+            forbidden = ["registry.structs[Core.Binding]",
+                         "registry.structs[Core.BindingPartition]",
+                         "jl_bpart_get_restriction_value"]
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper; target Wasm never substitutes ASCII-only answers",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["const _UTF8PROC_PROPERTY_DATA",
+                        "get_or_create_unicode_property_func!",
+                        "needs_unicode_properties && get_or_create_unicode_property_func!",
+                        "_fc_sym === :utf8proc_category",
+                        "_fc_sym === :utf8proc_charwidth",
+                        "name === :jl_id_start_char", "name === :jl_id_char"]
+            forbidden = ["assume valid, conservative", "true = always a grapheme break"]
+            all_src = types_src * compile_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L41_cross_calls_share_builder_stack" => ("cross-function argument pushes, call pops, and result coercion execute on the same authoritative builder stack",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["local _xcb = fb", "Arguments already live on `fb`"]
+            forbidden = ["local _xcb = _ctx_builder(ctx, \"compile_call\")\n                call!(_xcb, target_info.wasm_idx"]
+            count(p -> !occursin(p, calls_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; unspecialized Vararg signatures never become physical Wasm entries",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["function _missing_explicit_invoke_mis",
+                        "changed = collect_new_pairs!(_missing_explicit_invoke_mis(",
+                        "original_mi in protected || push!(superseded, original_mi)",
+                        "any(T -> T isa Core.TypeofVararg, arg_types) && continue"]
+            count(p -> !occursin(p, trim_src), required)
+        end),
+    "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",
+        () -> begin
+            diag_src = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            required = ["function stmt_is_proven_unreachable",
+                        "!stmt_is_proven_unreachable",
+                        "soundness_fatal=(soundness_fatal && !_dead2)",
+                        "soundness_fatal=(soundness_fatal && !_dead)"]
+            forbidden = ["soundness_fatal && _me", "soundness_fatal && _me2",
+                         "sound *silent* trap", "A non-must-execute"]
+            count(p -> !occursin(p, diag_src * gen_src), required) +
+                count(p -> occursin(p, diag_src), forbidden)
+        end),
+    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, and grapheme gaps reject instead of substituting null, zero, one, or an arbitrary arm",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["Memory constant of type \$T has an undefined slot",
+                        "array.new_fixed 0",
+                        "ifelse condition did not lower to i32",
+                        "ifelse operand emitted no runtime value",
+                        "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime",
+                        "jl_alloc_string without its required length operand"]
+            forbidden = ["Memory constant too large to materialize (\$n_mem elements) — emitting null",
+                         "Fall back to emitting just the true value",
+                         "true = always a grapheme break"]
+            all_src = values_src * calls_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L37_no_fabricated_constant_fields" => ("constant fallbacks emit the registered Object prefix and every real field through its physical expected type; undefined fields are rejected",
+        () -> begin
+            values_src = read(joinpath(CODEGEN, "values.jl"), String)
+            required = ["WT never fabricates field values",
+                        "emit_struct_prefix!(b, ctx.type_registry, T, info)",
+                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))"]
+            forbidden = ["emit ref.null for the field's expected type",
+                         "type-correct defaults",
+                         "mismatched concrete struct ref"]
+            count(p -> !occursin(p, values_src), required) +
+                count(p -> occursin(p, values_src), forbidden)
+        end),
+    "L36_no_hash_dispatch_residue" => ("the live selector registry contains no FNV-era hash/table/global fields and never fabricates a numeric value for a void target",
+        () -> begin
+            dispatch_src = read(joinpath(CODEGEN, "dispatch.jl"), String)
+            forbidden = ["hash::UInt32", "table_size::Int32", "mask::Int32",
+                         "keys_global_idx::", "values_global_idx::", "typeids_global_idx::",
+                         "func_table_idx::", "i32_array_type_idx::",
+                         "VALUE-typed dispatch signature over a", "MIRROR hole"]
+            required = ["all_no_return ? nothing"]
+            count(p -> occursin(p, dispatch_src), forbidden) +
+                count(p -> !occursin(p, dispatch_src), required)
+        end),
+    "L34_single_pointer_lowering" => ("add_ptr/sub_ptr/pointerref/pointerset each have one compile_call lowering route",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            sum(max(count(line -> occursin("func.name === :$(name)", line), split(calls_src, '\n')) - 1, 0)
+                for name in (:add_ptr, :sub_ptr, :pointerref, :pointerset))
+        end),
+    "L35_unwrapped_emissions_classified" => ("every intentional no-expectedType emission is explicitly classified by why its actual type is the consumer contract",
+        () -> begin
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    occursin(r"emit_value!\([^()]*, ctx\)", line) || continue
+                    occursin("function emit_value!", line) && continue
+                    occursin("R17-floor:", line) || (n += 1)
+                end
+            end
+            n
+        end),
+    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton: dynamic Any-versus-() egal tests its concrete tuple type rather than heap identity",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["tuples are still egal in Julia",
+                        "(arg_type === Any && arg2_type === Tuple{})",
+                        "ref_test!(bld, Int64(empty_info.wasm_type_idx), false)"]
+            count(p -> !occursin(p, calls_src), required)
+        end),
+    "L31_multi_container_apply" => ("homogeneous multi-Vector _apply_iterate reductions traverse every container through one loop generator and never return an identity for Julia's invalid all-empty +()/*() call",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["container_args = args[3:end]",
+                        "for (container_arg, container_type) in zip(container_args, container_types)",
+                        "_emit_apply_method_error!",
+                        "MethodError(f, (), world)",
+                        "Base.get_world_counter()",
+                        "_get_binary_reduce_opcode(target_value, elem_type)",
+                        "func === (+)",
+                        "local_set!(bld, has_value)"]
+            forbidden = ["_get_binary_reduce_opcode(func_name"]
+            count(p -> !occursin(p, calls_src), required) +
+                count(p -> occursin(p, calls_src), forbidden)
+        end),
+    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples and tests Tuple{} from runtime arity; it never fabricates an empty tuple",
+        () -> begin
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            required = ["_iterable_proven_empty(container_arg, ctx)",
+                        "register_vararg_tuple_type!",
+                        "is_runtime_vararg_tuple_type",
+                        "unsupported Vararg tuple layout",
+                        "result_type=result_type",
+                        "A runtime-length tuple is empty iff its immutable size tuple says zero"]
+            forbidden = ["produces a Tuple{Vararg{Symbol}} which is checked",
+                         "must emit a struct.new of the actual Tuple{} type"]
+            all_src = calls_src * structs_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
+        () -> begin
+            builder_src = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            required = [
+                "recursive groups must be contiguous type-section intervals",
+                "recursive group indices must be in type-section order",
+                "sort!(rec_group_types)",
+                "_struct_reg_stack() = get!",
+                "ft === T && return true",
+                "The wrapper's size tuple must precede the contiguous recursive group",
+                "The recursive struct's own superclass must also precede its reserved",
+            ]
+            all_src = builder_src * structs_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src),
+                      ["ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"])
+        end),
+    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = [
+                "object_prefix_fields()",
+                "emit_object_prefix!",
+                "emit_struct_prefix!",
+                "fields = value_branch ? FieldType[FieldType(I32, false)] : object_prefix_fields()",
+                "T <: Number ? registry.base_struct_idx : get_object_struct_type!",
+                "wasm_fields = object_prefix_fields()",
+                "if T === Core.Box",
+                "StructInfo(T, idx, [:contents], Type[Any], UInt32(1))",
+                "StructInfo(T, type_idx, field_names, field_types, UInt32(2))",
+                "StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))",
+                "emit_struct_prefix!(b, ctx.type_registry, struct_type, info)",
+                "ctx.type_registry.structs[object_type].field_offset == 2",
+            ]
+            all_src = types_src * structs_src * stmt_src
+            count(p -> !occursin(p, all_src), required) +
+                count(p -> occursin(p, all_src), ["set_struct_supertypes!"])
+        end),
+    "L27_no_postbuilder_byte_truncation" => ("the finalized typed instruction IR is authoritative; no raw-byte scanner may truncate or repair function bodies afterward",
+        () -> begin
+            gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
+            builder_src = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            missing = count(p -> !occursin(p, gen_src * flow_src * builder_src),
+                            ["finish_function!(b)", "structured IR has"])
+            forbidden = count(p -> occursin(p, gen_src),
+                              ["strip_excess_after_function_end", "Truncate everything after this byte",
+                               "_last_instr_starts", "_instr_next", "_skip_leb_count",
+                               "bytes[_tail", "dead returns at the very end"])
+            missing + forbidden
+        end),
+    "L26_dispatch_roots_only" => ("dynamic selector candidates are only discovery roots; their transitive helper dependencies remain ordinary cross-call-visible functions",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["_DYNAMIC_ROOT_MIS", "union!(_DYNAMIC_ROOT_MIS[], extra)",
+                        "mi in _DYNAMIC_ROOT_MIS[]"]
+            forbidden = ["pair_no > base_pairs", "_TRIM_BASE_PAIRS"]
+            count(p -> !occursin(p, trim_src), required) + count(p -> occursin(p, trim_src), forbidden)
+        end),
+    "L25_flat_runtime_composition" => ("runtime-length composition is typed before optimization as a valid-Julia flat callable and allocated through normal struct codegen",
+        () -> begin
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            call_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["struct _RuntimeComposition", "function CC.abstract_apply(interp::WasmInterpreter",
+                        "_RuntimeComposition{container}", "_runtime_composition_apply",
+                        "_emit_runtime_composition_context!", "register_closure_type!",
+                        "T <: _RuntimeComposition"]
+            forbidden = ["compose_and_call", "composition_callsite", "fake_composition"]
+            all_src = interp_src * call_src * compile_src * trim_src
+            count(p -> !occursin(p, all_src), required) + count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L24_unified_static_tearoffs" => ("named-function tear-offs enroll in the closed world and use the same closure Object/context/vtable/RTI representation as capturing closures",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
+            required = ["_ENROLLED_CALLABLE_TYPES", "isdefined(T, :instance)",
+                        "typeof(f) in _ENROLLED_CALLABLE_TYPES[]", "takes_context ? 1 : 0",
+                        "get_nothing_global!(ctx.mod, ctx.type_registry)"]
+            forbidden = ["static_tearoff_struct", "tearoff_base_idx", "tearoff_callsite"]
+            all_src = trim_src * compile_src * closure_src
+            count(p -> !occursin(p, all_src), required) +
+            count(p -> occursin(p, all_src), forbidden)
+        end),
+    "L23_closure_rti" => ("closure objects copy Dart's Object/context/vtable/functionType layout and use a real closed-world Julia type object",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
+                        "haskey(type_globals, closure_type)",
+                        "global_get!(b, type_global",
+                        "observe_callable!(CC.widenconst(t))"]
+            forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
+            count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
+            count(p -> occursin(p, types_src * closure_src), forbidden)
+        end),
+    "L22_artifact_binaryen" => ("optimization uses Binaryen_jll's artifact executable and cannot silently depend on or skip for a system wasm-opt",
+        () -> begin
+            api_src = read(joinpath(SRC, "WasmTarget.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            project_src = read(joinpath(ROOT, "Project.toml"), String)
+            missing = count(p -> !occursin(p, api_src * project_src),
+                            ["using Binaryen_jll: wasmopt", "Binaryen_jll =", "\$(wasmopt())",
+                             "_binaryen_worker_count", "BINARYEN_CORES"])
+            forbidden = count(p -> occursin(p, api_src * tests_src),
+                              ["Sys.which(\"wasm-opt\")", "wasm-opt not found", "skipping optimization tests"])
+            missing + forbidden
+        end),
+    "L21_packed_integer_arrays" => ("Int8/UInt8 and Int16/UInt16 arrays use packed Wasm GC storage and generic loads derive signedness from the Julia element type",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            load_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                       read(joinpath(CODEGEN, "invoke.jl"), String)
+            required = ["T === Int8 || T === UInt8 ? UInt8(0x78)",
+                        "T === Int16 || T === UInt16 ? UInt8(0x77)",
+                        "packed_array_signedness(elem_type)"]
+            count(p -> !occursin(p, types_src * load_src), required) +
+            count(_ -> true, eachmatch(r"signed=\(elem_type === UInt8", load_src))
+        end),
+    "L20_object_identity_layout" => ("Top owns classId; Object adds mutable identityHash; objectid reads/writes that slot and never fabricates a constant/content hash",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
+            required = [
+                "object_struct_idx::Union{Nothing, UInt32}",
+                "StructType(fields, top)",
+                "FieldType(I32, true)",
+                "get_identity_counter_global!",
+                "struct_get!(b, object_idx, UInt32(1), I32)",
+                "struct_set!(b, object_idx, UInt32(1), I32)",
+                "StructType(fields, object)",
+                "struct_get!(tb, base_idx, UInt32(2), AnyRef)",
+                "struct_get!(b, base_idx, UInt32(3), StructRef)",
+                "ensure_type_id!(registry, body_return_type)",
+            ]
+            all_src = types_src * stmt_src * closure_src
+            missing = count(p -> !occursin(p, all_src), required)
+            forbidden = count(p -> occursin(p, all_src),
+                              ["constant 42", "array.len for strings", "fake identity", "fabricated identity"])
+            missing + forbidden
+        end),
+    "L19_no_fabricated_invoke_results" => ("invoke/call lowering may not substitute dummy exceptions, empty strings, constant hashes, or null SimpleVectors",
+        () -> count_sites(r"dummy anyref|emit empty string|fallback to constant hash|exception placeholder|benign null placeholder|union_bottom_throw_stub|Core\.svec \(SimpleVector construction\)")),
+    "L18_no_value_repair_defaults" => ("PiNode, GlobalRef, returns, SSA stores, and struct fields preserve and coerce the emitted value; no zero/null repair helper or duplicate return ladder may remain",
+        () -> begin
+            statements_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            forbidden_count = count_sites(
+                r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch|Push a type-correct default|compile_value produced empty bytes")
+            forbidden_count +
+                (occursin("emit_return_coerced!(b, stmt.val, ctx)", statements_src) ? 0 : 1)
+        end),
+    "L17_one_compilation_path" => ("public compilation always enters the closed-world planner; legacy discovery, recursive mode switching, byte shells, and legacy body compilers are extinct",
+        () -> count_sites(r"_TRIM_ACTIVE|discovery=:legacy|discover_dependencies|AUTODISCOVER|FrozenCompilationState|InplaceCompilationContext|compile_from_ir_(?:inplace|prebaked)|compile_module_from_ir_frozen|compile_handler|compile_closure_body|compile_function_into!|compile_const_value|overlay_entries|_autodiscover_closure_deps!|run_selfhost|run_direct|to_bytes_mvp|FakeGlobalRef|wasm_compile_(?:flat|source)|function _compile_function_legacy|function compile_(?:value|statement|call|invoke|new|foreigncall|condition_to_i32)\([^!]")),
+    "L16_no_codegen_lax_mode" => ("codegen correctness is unconditional: no strict keyword/field, paranoid environment toggle, or entry-vs-dependency downgrade state",
+        () -> count_sites(r"strict::Bool|ctx\.strict|WT_PARANOID_STUBS|TRIM_ENTRY_NAMES";
+                          exclude_files=["codegen/interpreter.jl"])),
+    "L15_no_fabricated_ssa_store" => ("an emitted SSA value is coerced from its builder-tracked actual type; the drop-and-default store repair path is extinct",
+        () -> count_sites(r"SSA-store type mismatch|value dropped, type-safe default|_cs4_func_ref")),
+    "L14_no_posthoc_module_repair" => ("no codegen-crash or external-validator failure may be converted into an unreachable function body after the fact",
+        () -> count_sites(r"_stub_invalid_isolated_funcs|dispatch-isolation|stubbing isolated|stub_names")),
     "L1_box_typeid_external" => ("emit_box_type_id! callers outside its home files (ONE box producer; locked 2026-06-30)",
         () -> count_sites(r"emit_box_type_id!\(";
                           exclude_files=["codegen/values.jl", "codegen/types.jl"],
@@ -147,22 +1169,32 @@ const LOCKS = [
             n = 0
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
-                prev = ""
+                recent = String[]
                 for line in eachline(joinpath(dir, f))
                     if occursin(r"unreachable!\(", line) && !occursin("function unreachable!", line) &&
                        !startswith(lstrip(line), "#") &&
-                       !occursin("structural trap", line) && !occursin("record_unsupported!", prev)
+                       !occursin("structural trap", line) &&
+                       !any(prev -> occursin("record_unsupported!", prev), recent)
                         n += 1
                     end
-                    prev = line
+                    push!(recent, line)
+                    length(recent) > 5 && popfirst!(recent)
                 end
             end
             n
         end),
     "L7_wasmtools_demoted" => ("no always-on external-validate default may return — validity is the strict builder's job; wasm-tools is opt-in (validate=true / WT_VALIDATE=1) (M4; locked 2026-07-01)",
         () -> count_sites(r"validate::Bool\s*=\s*true")),
-    "L6_all_builders_strict" => ("explicit InstrBuilder strict opt-outs beyond THE ONE documented (the whole-body flow builder, whose cross-fragment stack the per-builder model cannot see — merge validators + wasm-tools gate it). march17: the DEFAULT is now genuinely strict (the runtests L-strict lock asserts it + @test_throws); this lock keeps the opt-out set frozen at that single site.",
-        () -> count_sites(r"InstrBuilder\([^)]*strict\s*=\s*false") - 1),   # STAGED hotfix: the flow's temporary re-opt-out is netted; retires with the total flip
+    "L6_all_builders_strict" => ("instruction validation is unconditional: no strict/enabled field, environment switch, setter, constructor keyword, production opt-out, or silently unmodeled opcode may exist.",
+        () -> begin
+            builder_root = joinpath(SRC, "builder")
+            validator_src = read(joinpath(builder_root, "validator.jl"), String)
+            required = ["unmodeled Wasm opcode", "unmodeled Wasm GC opcode"]
+            forbidden_count = count_sites(
+                r"InstrBuilder\([^)]*strict\s*=|_wt_builder_strict|set_strict!|strict::Bool|enabled::Bool|enabled\s*=|skip silently";
+                roots=[builder_root])
+            forbidden_count + count(p -> !occursin(p, validator_src), required)
+        end),
     "L5_no_tagged_union" => ("the tagged-union wrapper family is DELETED — needs_tagged_union/emit_(un)wrap_union_value must never reappear (M3; locked 2026-07-01)",
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",

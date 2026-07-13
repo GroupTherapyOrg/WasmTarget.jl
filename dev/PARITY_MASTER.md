@@ -497,13 +497,10 @@ re-verified in code. Baseline: the 2026-06-30 census scored ~25-30%.
 
 ## LOAD-BEARING FINDINGS (doc-vs-code corrections + rooted bugs)
 
-**F1 — numeric boxes subtype $JlBase only via the finalization RETROFIT (CORRECTED +
-FIXED, march5).** The audit's strong claim was wrong: `set_struct_supertypes!` retrofits
-every plain struct to `sub $JlBase` at module finalization, so the EMITTED module was
-already correct (verified in wat: boxes are `(sub 0 …)`). The REAL gap was creation-time —
-during emission the strict builder couldn't use the subtype relation because it was
-declared only at the end. Fixed: `get_numeric_box_type!` now declares `sub $JlBase` AT
-CREATION (dart class_info.dart:288 shape), the typed-channel prerequisite.
+**F1 — numeric boxes declare $JlBase at creation.** The former finalization retrofit was
+deleted on 2026-07-10: it re-parented internal context structs and could create invalid
+Wasm. Value boxes, ordinary Objects, and internal contexts now each receive their final
+hierarchy placement at registration, matching dart class construction.
 
 **F2 — the isa-over-Any[] @test_broken ROOT CAUSE (pinned in code).** WT numbers classIds
 from an OPEN registry snapshot: `assign_type_ids!` freezes each abstract's [low,high] one-shot
@@ -562,7 +559,7 @@ dynamic forwarders/noSuchMethod (DIM 6 — Julia MethodError = trap), JS glue ge
 | item | status |
 |---|---|
 | F1 box supertype | ✅ CORRECTED (retrofit existed) + FIXED at creation — boxes `sub $JlBase` from birth |
-| F2 closed classId universe | ✅ (rebuilt after a WasmMakie-caught regression): `_collect_reachable_ir_types` feeds `assign_type_ids!` a PURE collection — numbering without registration (eager registration forked layouts via field-resolution order). The rebuild exposed the isa bug's SECOND root: `set_struct_supertypes!` ran before bodies, so lazily-registered structs never got `sub $JlBase` and the ref.test gate was false — the idempotent retrofit now re-runs post-bodies in all three pipelines. **The pinned isa @test_broken FLIPPED to @test** |
+| F2 closed classId universe | ✅ `_collect_reachable_ir_types` feeds `assign_type_ids!` a pure collection; every class representation declares its final supertype at creation. The old post-body retrofit is deleted and mechanically forbidden. |
 | F4 typeassert | ✅ the CHECKED cast (dart emitAsCheck): tee → ref.test $JlBase → typeof → classId range → tag-0 throw on mismatch; statically-proven casts pass through; battery covers structs + boxed numerics |
 | F3 constant interning | ✅ short strings (≤64B) → ONE immutable global each (constant array.new_fixed initializer); `===` identity + code size now dart-shaped; long strings stay inline (dart lazies those — deferred: init fns can't be added during body compile) |
 | F5 dead code | ✅ M8.1 SelectorInfo transcription (6.3KB) + its test + emit_box_type_id! + stale FNV comments — deleted |

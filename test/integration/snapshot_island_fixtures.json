@@ -22,10 +22,10 @@
         "extract_ok": true,
         "fn_src": "function (a::Int64, b::String, c::Bool, d::String, e::String, f::Dates.DateTime)\n    var\"##cellval#331\" = (a, b, c, d, e, f)\n    return var\"##cellval#331\"\nend",
         "golden": [
-          "(50, \"\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
-          "(100, \"\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
-          "(50, \"123\", false, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))",
-          "(50, \"\", true, \"one\", \"#000000\", Dates.DateTime(\"2026-01-01T00:00:00\"))"
+          "(50, \"\", false, \"one\", \"#000000\", DateTime(\"2026-01-01T00:00:00\"))",
+          "(100, \"\", false, \"one\", \"#000000\", DateTime(\"2026-01-01T00:00:00\"))",
+          "(50, \"123\", false, \"one\", \"#000000\", DateTime(\"2026-01-01T00:00:00\"))",
+          "(50, \"\", true, \"one\", \"#000000\", DateTime(\"2026-01-01T00:00:00\"))"
         ],
         "kind": "tree",
         "mime": "application/vnd.pluto.tree+object",
@@ -2904,8 +2904,8 @@
         "fn_src": "function (initial_value::Int64, initial_value_with_c::Int64, max_n::Int64)\n    sequence = create_sequence(F, initial_value, max_n)\n    var\"##cellval#826\" = sequence\n    return var\"##cellval#826\"\nend",
         "golden": [
           "[-10]",
-          "ERR:MethodError: no method matching (::Main.var\"##hv#838\".var\"#5#6\")(::BigInt, ::Int64, ::Int64)\nThe function `#5` exists, but no method is defined for this combination of argument types.\n\nClosest candidates are:\n  (::Main.var\"##hv#838\".var\"#5#6\")(!Matched::Int64, ::Int64, ::Int64)\n   @ Main.var\"##hv#838\" none:0\n",
-          "ERR:MethodError: no method matching (::Main.var\"##hv#838\".var\"#5#6\")(::Int64, ::BigInt, ::Int64)\nThe function `#5` exists, but no method is defined for this combination of argument types.\n\nClosest candidates are:\n  (::Main.var\"##hv#838\".var\"#5#6\")(::Int64, !Matched::Int64, ::Int64)\n   @ Main.var\"##hv#838\" none:0\n",
+          "[21]",
+          "[-10]",
           "[-10, 101, 10202, 104080805, 10832813969448026, -5257659521197158491, 8128048319517835354, 5447623955824582565, 450075922934751322, -6610599726280630363, 5290282140997804122, -2994486988833054811, -2306455147916795814, -1810588387028787291, -3614232991933636518, -1743865572590641243, 949347015816142938, 5646647375586107301, 2985183730106916954, 5539408661823332261]"
         ],
         "kind": "tree",
@@ -3141,7 +3141,7 @@
         "golden": [
           "\"458330\"",
           "\"7126870523349933989\"",
-          "ERR:MethodError: no method matching (::Main.var\"##hv#841\".var\"#2#3\")(::Int64, ::BigInt)\nThe function `#2` exists, but no method is defined for this combination of argument types.\n\nClosest candidates are:\n  (::Main.var\"##hv#841\".var\"#2#3\")(::Int64, !Matched::Int64)\n   @ Main.var\"##hv#841\" none:0\n"
+          "\"-5489424617250490278\""
         ],
         "kind": "string",
         "mime": "text/plain",

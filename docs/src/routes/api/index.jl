@@ -28,14 +28,13 @@
         # ── Core Compilation ──
         H2(:id => "compile", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Core Compilation"),
         api_entry(
-            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, strict=true, validate=true) -> Vector{UInt8}",
+            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, validate=false) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
-             `optimize=true` runs `wasm-opt` for an ~80–90% size reduction (requires Binaryen). \
-             Soundness defaults: `strict=true` raises a `WasmCompileError` (naming the construct + source location) rather \
-             than emit a wrong value for an unsupported construct — pass `strict=false` for permissive stub-and-trap; \
-             `validate=true` runs `wasm-tools validate` on the output and raises `WasmValidationError` instead of returning \
-             malformed bytes."
+             `optimize=true` runs the Binaryen_jll-provided `wasm-opt` for an ~80–90% size reduction; no system Binaryen installation is required. \
+             Codegen correctness is unconditional: there is no permissive or validator-opt-out builder mode. \
+             `validate=true` additionally runs `wasm-tools validate` as an independent cross-check; the typed builder \
+             remains responsible for validity by construction."
         ),
         api_entry(
             "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",
@@ -43,7 +42,7 @@
              type space and can call each other directly — this is the entry point for vector-bridge patterns and any \
              multi-function island. Callee discovery defaults to `:trim` — the upstream closed-world collection \
              (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`) walks every reachable invoke in \
-             one consistent inference world. Pass `discovery=:legacy` for the previous curated-whitelist walker."
+             one consistent inference world. This is the only supported discovery and module-codegen path."
         ),
         api_entry(
             "compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type, ...)",
@@ -135,19 +134,9 @@
             "Serialize a manually-built `WasmModule` to WASM binary."
         ),
         api_entry(
-            "build_frozen_state(...) / FrozenCompilationState",
-            "Snapshot of the compilation context (registered types, function table, overlay tables) suitable for reuse \
-             across many calls. Therapy.jl uses this between hot-reload iterations."
-        ),
-        api_entry(
             "TypeRegistry / FunctionRegistry",
             "Mutable registries the compiler walks while lowering IR — types it has seen, functions it has emitted. \
              Exposed for advanced consumers that need to inspect or pre-seed compilation state."
-        ),
-        api_entry(
-            "compile_handler(...) / DOMBindingSpec",
-            "Internal hook used by Therapy.jl's `@island` compiler to lower event-handler closures with DOM-binding \
-             metadata. Not intended for direct use."
         ),
         P(:class => "text-sm text-warm-500 dark:text-warm-400 pt-4",
             "For codegen primitives (",

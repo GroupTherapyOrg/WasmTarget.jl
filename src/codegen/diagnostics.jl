@@ -1,14 +1,12 @@
 # ============================================================================
-# Compiler Diagnostics — source-attributed, strict-mode-aware failure reporting
+# Compiler Diagnostics — source-attributed failure reporting
 # ============================================================================
 #
 # WasmTarget aims to be "correct-or-loud, never silently wrong". When codegen
 # meets a construct it cannot translate, it routes through `record_unsupported!`
-# below instead of silently emitting an `unreachable` trap. Under `strict=true`
-# (the default) this raises a `WasmCompileError` naming the offending Julia
-# construct and its source location; under `strict=false` it records the
-# diagnostic, logs at `@debug`, and lets the caller emit the legacy stub —
-# preserving the historical permissive behavior byte-for-byte.
+# below instead of silently emitting an `unreachable` trap. Wrong-value fallbacks
+# raise `WasmCompileError`; dart-style unsupported paths carry a diagnostic and a
+# validating trap. There is no permissive mode.
 
 """
     WasmDiagnostic
@@ -45,7 +43,7 @@ _kind_phrase(k::Symbol) =
 """
     WasmCompileError(diag)
 
-Thrown under `strict=true` when codegen hits a construct it cannot translate.
+Thrown when codegen cannot translate a construct without fabricating a value.
 Carries the [`WasmDiagnostic`](@ref) so callers can inspect `.diag`.
 """
 struct WasmCompileError <: Exception
@@ -59,15 +57,14 @@ function Base.showerror(io::IO, e::WasmCompileError)
     loc = d.julia_loc === nothing ? "" : " at $(d.julia_loc)"
     print(io, "WasmCompileError: cannot compile `$(d.func_name)`$loc\n")
     print(io, "  unsupported $(_kind_phrase(d.kind)): $(d.construct)\n")
-    print(io, "  → pass `strict=false` to emit a runtime-trap stub here instead, ")
-    print(io, "or file this construct as a coverage gap.")
+    print(io, "  → implement this construct or file it as a coverage gap.")
 end
 
 """
     WasmValidationError(msg, details)
 
-Thrown when `wasm-tools validate` rejects the emitted module (the default-on
-soundness gate). `details` carries the validator's stderr when available.
+Thrown when the opt-in independent `wasm-tools validate` cross-check rejects the
+emitted module. `details` carries the validator's stderr when available.
 """
 struct WasmValidationError <: Exception
     msg::String
@@ -141,18 +138,11 @@ end
 
 # --- The choke point --------------------------------------------------------
 
-# G1 (soundness): paranoid stub mode. When `WT_PARANOID_STUBS` is set, NO
-# value-stub is ever downgraded — every `:value_stub` is fatal under strict,
-# regardless of entry/discovered status (closes the downgrade hole in
-# `record_unsupported!`). Off by default so normal compiles are unchanged; the
-# autonomous soundness `/loop` + CI run with it ON. See test/fuzz/LOOP.md §7.
-_paranoid_stubs() = get(ENV, "WT_PARANOID_STUBS", "0") != "0"
-
 """
     DIAGNOSTICS_SINK
 
 When set (see `compile(...; diagnostics_sink=...)`), every `WasmDiagnostic` recorded by any
-compilation context — including non-fatal downgraded dependency stubs — is mirrored here.
+compilation context is mirrored here.
 This is the caller-facing ledger: tools like Snapshot.jl read it to explain *why* a
 compilation degraded, with source attribution per diagnostic.
 """
@@ -160,64 +150,41 @@ const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(no
 
 
 """
-    record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=(kind===:value_stub)) -> Nothing
+    record_unsupported!(ctx, kind, construct; idx=0, detail=nothing, soundness_fatal=nothing) -> Nothing
 
 Single funnel for "codegen cannot fully translate this". Always records a
 [`WasmDiagnostic`](@ref) on `ctx.diagnostics` (so every gap is queryable, even
 when compilation proceeds).
 
-`soundness_fatal` decides whether `strict=true` *rejects* the compile:
+By default compilation is rejected. A diagnosed trap is permitted only when the
+current Julia CFG proves the statement unreachable. `soundness_fatal=true` forces
+rejection; `false` is reserved for callers that already possess an equally strong
+structural proof.
 
-  * **`:value_stub`** (default fatal) — the stub would emit a *wrong value* inline
+  * **`:value_stub`** — the stub would emit a *wrong value* inline
     (e.g. `jl_object_id`→constant, non-zero `memset`). This is unsound regardless
-    of reachability, so under `strict` it throws [`WasmCompileError`](@ref).
-  * **`:unsupported_method` / `:unsupported_type`** (default non-fatal) — the stub
-    emits `unreachable`, which is *sound*: it traps if executed, never computes a
-    wrong value, and in practice sits on dead error-branches Julia's IR couldn't
-    prove dead (`kwerr`, `throw_*domainerror`, `mapreduce_empty_iter`, …). Rejecting
-    these at compile time would reject working core functions, so we record + trap
-    and let the runtime differential fuzzer catch the genuinely *reachable* ones.
+    of reachability, so it throws [`WasmCompileError`](@ref).
+  * **`:unsupported_method` / `:unsupported_type`** — reachable or uncertain
+    unsupported code rejects instead of leaving a latent runtime trap.
 
 Callers pass the SSA statement `idx` (already in scope at every codegen site) for
-source attribution. Pass `soundness_fatal=true` to force a strict rejection.
+source attribution. Pass `soundness_fatal=true` to force rejection.
 """
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
-                             soundness_fatal::Bool=(kind === :value_stub))
+                             soundness_fatal::Union{Nothing,Bool}=nothing)
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail)
     push!(ctx.diagnostics, diag)
     DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
-    # P5-trim: the closed-world collection is MORE complete than legacy
-    # discovery — it includes error-formatting dead paths (show/print
-    # machinery) the whitelist never compiled. On DISCOVERED (non-entry)
-    # functions, downgrade value-stubs to loud runtime stubs for parity with
-    # legacy behavior; entry functions keep full strictness.
-    #
-    # G1 (soundness): the downgrade below is a hole — a buried wrong-value stub on
-    # a discovered function compiles "clean" and only traps off-sample. Paranoid
-    # mode (`_paranoid_stubs()`) SKIPS the downgrade so EVERY value-stub stays
-    # fatal under strict. See test/fuzz/LOOP.md §7.
-    # Strict Approach A — ENTRY-STRICT, DEPENDENCY-PERMISSIVE. Loud-reject only the
-    # ENTRY's own unsupported constructs. A DISCOVERED/dependency function may carry an
-    # un-lowerable construct on a path that is dead IN THE MODULE (the function is compiled
-    # because it's in the static callgraph, but never actually called for the entry's real
-    # args — e.g. `Base._reinterpret_padding` pulled in by a WasmMakie figure). Rejecting
-    # those would fail the whole compile for code that runs fine; downgrade them to a sound
-    # silent trap and let the runtime differential fuzzer catch any genuinely-reachable one.
-    # (Generalized from the value_stub-only downgrade.) Paranoid mode keeps everything fatal.
-    local _fatal = ctx.strict && soundness_fatal
-    if _fatal && !_paranoid_stubs()
-        local _entries = TRIM_ENTRY_NAMES[]
-        if _entries !== nothing && !(_ctx_func_name(ctx) in _entries)
-            _fatal = false
-        end
-    end
-    if _fatal
+    fatal = soundness_fatal === nothing ?
+            !stmt_is_proven_unreachable(try ctx.code_info.code catch; nothing end, idx) :
+            soundness_fatal
+    if fatal
         _sink = DIAGNOSTICS_SINK[]
         throw(WasmCompileError(diag, _sink === nothing ? WasmDiagnostic[diag] : copy(_sink)))
     else
-        @debug "WasmTarget stub: $diag"
+        @warn "WasmTarget unsupported path emits a validating trap" diagnostic=diag
     end
     return nothing
 end
@@ -225,14 +192,12 @@ end
 """
     emit_unsupported_stub!(ctx, bytes, kind, construct; idx=0, detail=nothing, soundness_fatal=true) -> Nothing
 
-Category-C funnel (strict-mode Approach A). Use this — instead of a bare
+Category-C funnel. Use this — instead of a bare
 `push!(bytes, Opcode.UNREACHABLE)` — whenever the stub replaces a construct that would
 **return a value natively** but WT cannot lower (Int128 ops, externref-as-numeric/boxing,
 `Core.svec`, `:new` of an unresolved type, the typeId dispatch-ladder miss, deferred parse
-intrinsics, …). Routes through [`record_unsupported!`] so under `strict=true` (the default)
-it raises a source-attributed [`WasmCompileError`]; under `strict=false` it records the
-diagnostic and emits the legacy `unreachable` trap, marking `ctx.last_stmt_was_stub` so the
-downstream dead-code handling is unchanged.
+intrinsics, …). Routes through [`record_unsupported!`], which rejects wrong-value
+fallbacks and reports dart-style unsupported traps. There is no permissive mode.
 
 Do NOT use this for (A) structural dead-code unreachables (genuinely-unreachable points the
 validator requires) or (B) native-throws parity stubs (`Union{}`-return / `throw_*`/`kwerr`
@@ -245,9 +210,10 @@ function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)
     local _code2 = try ctx.code_info.code catch; nothing end
-    local _me2 = idx > 0 && _code2 !== nothing && stmt_must_execute(_code2, idx)
-    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail, soundness_fatal=(soundness_fatal && _me2))
-    unreachable!(b)
+    local _dead2 = stmt_is_proven_unreachable(_code2, idx)
+    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
+                        soundness_fatal=(soundness_fatal && !_dead2))
+    unreachable!(b)  # structural trap after recorded, proven-dead unsupported lowering
     ctx.last_stmt_was_stub = true
     return nothing
 end
@@ -255,17 +221,11 @@ end
 function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)
-    # Strict Approach A — REACHABILITY GATE: only loud-reject (fatal) when the construct
-    # is DEFINITELY executed on a returning call (`stmt_must_execute`). A non-must-execute
-    # stub is a sound *silent* trap: it sits on a branch WT can't prove dead (e.g. a Base
-    # dependency's fallback path that's never taken for the actual args — `Base.unsigned`'s
-    # `_apply_iterate` arm), and rejecting it would over-reject working code (the batch-4
-    # boundary). A working function can't have a must-execute trap-stub, so this never
-    # regresses valid code. See `stmt_must_execute` + test/fuzz/STRICT_MODE_INVENTORY.md.
+    # A trap is retained only for a block the Julia CFG proves unreachable.
     local _code = try ctx.code_info.code catch; nothing end
-    local _me = idx > 0 && _code !== nothing && stmt_must_execute(_code, idx)
+    local _dead = stmt_is_proven_unreachable(_code, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
-                        soundness_fatal=(soundness_fatal && _me))
+                        soundness_fatal=(soundness_fatal && !_dead))
     push!(bytes, Opcode.UNREACHABLE)
     ctx.last_stmt_was_stub = true
     return nothing

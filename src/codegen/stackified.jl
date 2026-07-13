@@ -33,12 +33,14 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 # or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
 # decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 function _value_julia_type(val, ctx::AbstractCompilationContext)
-    if val isa Core.SSAValue && val.id <= length(ctx.ssa_types)
-        return ctx.ssa_types[val.id]
-    elseif val isa Bool
-        return Bool
-    elseif val isa Core.Argument && val.n <= length(ctx.arg_types)
-        return ctx.arg_types[val.n]
+    if val isa Core.SSAValue
+        return get(ctx.ssa_types, val.id, nothing)
+    elseif val isa Core.Argument
+        return source_slot_type(ctx, val.n)
+    elseif val isa QuoteNode
+        return typeof(val.value)
+    elseif val isa Union{Bool, Signed, Unsigned, AbstractFloat, Char}
+        return typeof(val)
     end
     return nothing
 end
@@ -55,18 +57,13 @@ function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType,
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
     # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx)
-    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    emit_value!(b, val, ctx, val_wasm;
+                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
+        "numeric-to-extern boxing lacks a concrete Julia source type: $_jl_type")
+    emit_classid_box!(b, ctx, val_wasm, _jl_type)
     extern_convert_any!(b)
     return b
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_numeric_to_externref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = _ctx_builder(ctx, "emit_numeric_to_externref!")
-    emit_numeric_to_externref!(b, val, val_wasm, ctx)
-    append!(target_bytes, builder_code(b))
-    return
 end
 
 """
@@ -86,17 +83,12 @@ function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ct
     # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
     # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
     # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx)
-    emit_classid_box!(b, ctx, val_wasm, (_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    emit_value!(b, val, ctx, val_wasm;
+                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
+    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
+        "numeric-to-anyref boxing lacks a concrete Julia source type: $_jl_type")
+    emit_classid_box!(b, ctx, val_wasm, _jl_type)
     return b  # No extern_convert_any — struct ref is already anyref
-end
-
-"""bytes shell for the remaining byte-region callers (dies with them)."""
-function emit_numeric_to_anyref!(target_bytes::Vector{UInt8}, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
-    b = _ctx_builder(ctx, "emit_numeric_to_anyref!")
-    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
-    append!(target_bytes, builder_code(b))
-    return
 end
 
 """parity(M11): THE flow front — the ONE seam where a stackified region's bytes
@@ -199,6 +191,28 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # Normalize edges through blocks erased by an explicit `@inbounds`
+    # boundscheck. Those blocks still carry the Julia CFG's control transfer;
+    # dropping the nodes without forwarding their edges disconnects the graph
+    # and invalidates dominators/loop ownership.
+    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
+        visited = Set{Int}()
+        current = dest_block
+        while current !== nothing && current in dead_blocks && !(current in visited)
+            push!(visited, current)
+            blk = blocks[current]
+            t = blk.terminator
+            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
+                current = get(stmt_to_block, t.dest, nothing)
+            elseif t isa Core.GotoNode
+                current = get(stmt_to_block, t.label, nothing)
+            else
+                return nothing
+            end
+        end
+        return current !== nothing && !(current in dead_blocks) ? current : nothing
+    end
+
     # (successor edges for regions are added after the terminator walk below)
     # march6 slice B: region → block-event maps. A region OPENS at the end of the
     # block containing its EnterNode and CLOSES at the start of its handler block.
@@ -235,6 +249,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This GotoIfNot ALWAYS jumps (boundscheck is 0, NOT 0 = TRUE)
                 # Only add the jump target as successor, NOT the fall-through
                 dest_block = get(stmt_to_block, term.dest, nothing)
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
                 if dest_block !== nothing && !(dest_block in dead_blocks)
                     push!(successors[block_idx], dest_block)
                     push!(predecessors[dest_block], block_idx)
@@ -243,6 +260,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Real conditional: two successors
                 dest_block = get(stmt_to_block, term.dest, nothing)
                 fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
+
+                if dest_block !== nothing && dest_block in dead_blocks
+                    dest_block = resolve_through_dead_boundscheck(dest_block)
+                end
+                if fall_through_block !== nothing && fall_through_block in dead_blocks
+                    fall_through_block = resolve_through_dead_boundscheck(fall_through_block)
+                end
 
                 if fall_through_block !== nothing && fall_through_block <= length(blocks) && !(fall_through_block in dead_blocks)
                     push!(successors[block_idx], fall_through_block)
@@ -255,6 +279,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
+            if dest_block !== nothing && dest_block in dead_blocks
+                dest_block = resolve_through_dead_boundscheck(dest_block)
+            end
             if dest_block !== nothing
                 push!(successors[block_idx], dest_block)
                 push!(predecessors[dest_block], block_idx)
@@ -264,8 +291,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         else
             # Fall through to next block
             if block_idx < length(blocks)
-                push!(successors[block_idx], block_idx + 1)
-                push!(predecessors[block_idx + 1], block_idx)
+                next_block = block_idx + 1
+                if next_block in dead_blocks
+                    next_block = resolve_through_dead_boundscheck(next_block)
+                end
+                if next_block !== nothing
+                    push!(successors[block_idx], next_block)
+                    push!(predecessors[next_block], block_idx)
+                end
             end
         end
     end
@@ -283,6 +316,40 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if eb < length(blocks) && !((eb + 1) in successors[eb])
             push!(successors[eb], eb + 1)
             push!(predecessors[eb + 1], eb)
+        end
+    end
+
+    # Compute block dominators from the real CFG. Numeric block intervals are
+    # not loop membership: Julia 1.13 may lay a loop-exit merge between the
+    # header and a late latch even though an outer branch reaches that merge
+    # without passing through the header. Such a target must not receive a
+    # label nested inside the loop.
+    live_blocks = Set(i for i in eachindex(blocks) if !(i in dead_blocks))
+    dominators = Dict{Int,Set{Int}}()
+    entry_block = isempty(live_blocks) ? nothing : minimum(live_blocks)
+    for block_idx in live_blocks
+        dominators[block_idx] = block_idx == entry_block ? Set([block_idx]) : copy(live_blocks)
+    end
+    changed = true
+    while changed
+        changed = false
+        for block_idx in sort!(collect(live_blocks))
+            block_idx == entry_block && continue
+            preds = Int[p for p in predecessors[block_idx] if p in live_blocks]
+            new_dom = if isempty(preds)
+                Set([block_idx])
+            else
+                common = copy(dominators[first(preds)])
+                for pred in Iterators.drop(preds, 1)
+                    intersect!(common, dominators[pred])
+                end
+                push!(common, block_idx)
+                common
+            end
+            if new_dom != dominators[block_idx]
+                dominators[block_idx] = new_dom
+                changed = true
+            end
         end
     end
 
@@ -354,47 +421,22 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # - We use nested if/else for these patterns
     # - For more complex patterns, we use labeled blocks
 
-    # MIGRATED to InstrBuilder: the main accumulator is the typed builder `b`. The
-    # byte-INSPECTING helper closures (set_phi_locals_for_edge!, compile_phi_value,
-    # emit_phi_type_default) keep building their own local
-    # UInt8[] buffers — they LEB-decode + scan recursive results — and splice them into
-    # `b` via emit_raw!. strict=false (collect mode): a full control-flow body's stack
-    # effect can't be tracked precisely by the fragment model, so we never gate.
-    # Byte-identical to the prior raw emission.
-    # STAGED (hotfix): the flow re-opts-out while the corpus tail zeroes on
-    # wt-tag-run (its underflow class was the red); dies again with the total flip.
-    b = InstrBuilder(; func_name="generate_stackified_flow", strict=false, mod=ctx.mod)
+    # The main accumulator and every helper fragment are typed builders. Fragment
+    # composition preserves tracked stack contracts; no byte splice or validation
+    # exception exists in the flow path.
+    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
+    for target_idx in ctx.entry_calls
+        params, results = _true_call_sig(b, target_idx, WasmValType[], WasmValType[])
+        isempty(params) && isempty(results) || throw(ArgumentError(
+            "root entry call $target_idx must have signature () -> ()"))
+        call!(b, target_idx, WasmValType[], WasmValType[])
+    end
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
 
     # Collect all unique forward jump targets (excluding immediate fall-through)
-    # Helper: resolve a dest_block through boundscheck chains to find the real non-dead target.
-    # When a GotoIfNot targets a dead boundscheck block, that block's terminator always jumps
-    # to another block. Follow the chain until we find a non-dead block.
-    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
-        visited = Set{Int}()
-        current = dest_block
-        while current !== nothing && current in dead_blocks && !(current in visited)
-            push!(visited, current)
-            blk = blocks[current]
-            t = blk.terminator
-            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
-                # Boundscheck always-jump: follow to its destination
-                current = get(stmt_to_block, t.dest, nothing)
-            elseif t isa Core.GotoNode
-                current = get(stmt_to_block, t.label, nothing)
-            else
-                return nothing
-            end
-        end
-        if current !== nothing && !(current in dead_blocks)
-            return current
-        end
-        return nothing
-    end
-
     # Also exclude dead blocks and treat boundscheck-based jumps correctly
     non_trivial_targets = Set{Int}()
     for (block_idx, block) in enumerate(blocks)
@@ -439,6 +481,35 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
+    # Julia inference commonly shares a terminal throw block between checks in
+    # different loop regions. That gives the otherwise reducible loop body a
+    # crossing interval: one copy of a Wasm `block` label cannot be both outside
+    # the loop (for the outer predecessor) and inside it (for the inner one).
+    # Normalize this standard CFG shape by tail-duplicating terminal, phi-free,
+    # non-fallthrough blocks at each explicit incoming edge. The cloned tail is
+    # still ordinary Julia IR compiled by the one statement visitor; no value or
+    # alternate compiler path is introduced.
+    duplicated_terminal_targets = Set{Int}()
+    if isempty(try_regions)
+        for target in copy(non_trivial_targets)
+            block = blocks[target]
+            term = block.terminator
+            terminal = term isa Core.ReturnNode && !isdefined(term, :val)
+            phi_free = all(i -> !(code[i] isa Core.PhiNode),
+                           block.start_idx:block.end_idx)
+            prev_can_fallthrough = if target == 1
+                true
+            else
+                prev = blocks[target - 1].terminator
+                !(prev isa Core.GotoNode || prev isa Core.ReturnNode)
+            end
+            if terminal && phi_free && !prev_can_fallthrough
+                push!(duplicated_terminal_targets, target)
+                delete!(non_trivial_targets, target)
+            end
+        end
+    end
+
     # ========================================================================
     # Determine which targets are inside loops vs outside
     # ========================================================================
@@ -460,7 +531,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     target_loop = Dict{Int, Int}()
     for target in non_trivial_targets
         for (header, latch) in loop_latches
-            if target > header && target <= latch
+            if target > header && target <= latch &&
+               header in get(dominators, target, Set{Int}())
                 # Target is inside this loop
                 # If nested, pick the innermost loop (largest header)
                 if !haskey(target_loop, target) || header > target_loop[target]
@@ -520,36 +592,29 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         sort!(loop_inner_targets[header]; rev=true)
     end
 
-    # march6 slice A: ONE emission-ordered label stack (dart: one label stack) —
-    # each entry mirrors one OPEN wasm label this function emitted, innermost last.
-    # Kinds: (:block, target_block) | (:loop, header). Replaces the open_blocks +
-    # open_loops parallel arrays and their positional-math depth corrections; a
-    # third kind (:try) lands in slice B. Depth = distance from the top.
-    label_stack = Tuple{Symbol,Int}[]
+    # ONE emission-ordered symbolic label stack. Each entry retains the exact
+    # identity returned by the builder, matching dart2wasm's Label objects;
+    # branch depths are resolved only inside InstrBuilder at emission time.
+    label_stack = Tuple{Symbol,Int,ControlLabel}[]
     _ls_blocks() = Int[e[2] for e in label_stack if e[1] === :block]   # transitional views
     _ls_loops()  = Int[e[2] for e in label_stack if e[1] === :loop]
 
     # Open blocks for OUTER forward jump targets only (outermost first = largest target)
     for target in outer_targets
-        push!(label_stack, (:block, target))
-        block!(b)  # void
+        local label = block!(b)  # void
+        push!(label_stack, (:block, target, label))
     end
 
-    # march6 slice A: depth = position from the top of THE label stack. The old
-    # positional math (block-position + inner-loop-count corrections) is replaced by
-    # the direct emission-order scan; where the two disagreed, the OLD math was the
-    # suspect (the multi-back-edge bug class) — gates arbitrate.
-    function get_forward_label_depth(target_block::Int)::Int
-        i = findlast(==( (:block, target_block) ), label_stack)
-        i === nothing && return 0   # not open — matches the old fallback
-        return length(label_stack) - i
+    function get_forward_label(target_block::Int)::ControlLabel
+        i = findlast(e -> e[1] === :block && e[2] == target_block, label_stack)
+        i === nothing && error("forward branch target block $target_block is not open")
+        return label_stack[i][3]
     end
 
-    # Helper to get label depth for back edge (loop)
-    function get_loop_label_depth(loop_header::Int)::Int
-        i = findlast(==( (:loop, loop_header) ), label_stack)
-        i === nothing && return 0
-        return length(label_stack) - i
+    function get_loop_label(loop_header::Int)::ControlLabel
+        i = findlast(e -> e[1] === :loop && e[2] == loop_header, label_stack)
+        i === nothing && error("loop branch target block $loop_header is not open")
+        return label_stack[i][3]
     end
 
     # Helper to check if destination has phi nodes from this edge
@@ -572,61 +637,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         return false
     end
 
-    # Helper: emit a type-safe default value for a given WasmValType
-    # builder-native variant: emit the default directly into the target builder
-    function emit_phi_type_default!(tb::InstrBuilder, wasm_type::WasmValType)
-        if wasm_type isa ConcreteRef
-            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
-        elseif wasm_type === StructRef
-            ref_null!(tb, StructRef)
-        elseif wasm_type === ArrayRef
-            ref_null!(tb, ArrayRef)
-        elseif wasm_type === ExternRef
-            ref_null!(tb, ExternRef)
-        elseif wasm_type === AnyRef
-            ref_null!(tb, AnyRef)
-        elseif wasm_type === EqRef
-            ref_null!(tb, EqRef)
-        elseif wasm_type === I64
-            i64_const!(tb, 0)
-        elseif wasm_type === F32
-            f32_const!(tb, 0.0f0)
-        elseif wasm_type === F64
-            f64_const!(tb, 0.0)
-        else
-            i32_const!(tb, 0)
-        end
+    # A phi lowering failure may never be repaired with a fabricated zero/null.
+    # Match dart's unimplemented shape: diagnostic plus a validating polymorphic trap.
+    function emit_phi_failure!(tb::InstrBuilder, message::AbstractString; idx::Int=0)
+        record_unsupported!(ctx, :unsupported_type, message; idx=idx)
+        unreachable!(tb)  # loud unsupported trap
+        ctx.last_stmt_was_stub = true
         return tb
-    end
-
-    function emit_phi_type_default(wasm_type::WasmValType)::Vector{UInt8}
-        # MIGRATED to InstrBuilder: pure straight-line value emission (no inspection).
-        # strict=false; byte-identical to the prior raw emission.
-        tb = _ctx_builder(ctx, "emit_phi_type_default")
-        if wasm_type isa ConcreteRef
-            ref_null!(tb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
-        elseif wasm_type === StructRef
-            ref_null!(tb, StructRef)
-        elseif wasm_type === ArrayRef
-            ref_null!(tb, ArrayRef)
-        elseif wasm_type === ExternRef
-            ref_null!(tb, ExternRef)
-        elseif wasm_type === AnyRef
-            ref_null!(tb, AnyRef)
-        elseif wasm_type === EqRef
-            ref_null!(tb, EqRef)
-        elseif wasm_type === I64
-            i64_const!(tb, 0)
-        elseif wasm_type === I32
-            i32_const!(tb, 0)
-        elseif wasm_type === F64
-            f64_const!(tb, 0.0)
-        elseif wasm_type === F32
-            f32_const!(tb, 0.0f0)
-        else
-            i32_const!(tb, 0)
-        end
-        return builder_code(tb)
     end
 
     # Helper to compile a value, ensuring it actually produces bytes
@@ -650,7 +667,33 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
              isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
              length(pvb.v.stack))
         end
-        if val isa Core.SSAValue
+        if is_nothing_value(val, ctx)
+            # `nothing` is the null member of a reference-represented phi and the
+            # zero-width semantic member of a numeric nullable phi. Resolve it
+            # before compiling SSA aliases, which otherwise look like i32.const 0
+            # and could be mistaken for a numeric value requiring a classId box.
+            if haskey(ctx.phi_locals, phi_idx)
+                local_idx = ctx.phi_locals[phi_idx]
+                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
+                if local_wasm_type isa ConcreteRef
+                    ref_null!(pvb, Int64(local_wasm_type.type_idx), local_wasm_type)
+                elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
+                       local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
+                       local_wasm_type === EqRef
+                    ref_null!(pvb, local_wasm_type)
+                elseif local_wasm_type === I64
+                    i64_const!(pvb, 0)
+                elseif local_wasm_type === F32
+                    f32_const!(pvb, 0.0f0)
+                elseif local_wasm_type === F64
+                    f64_const!(pvb, 0.0)
+                else
+                    i32_const!(pvb, 0)
+                end
+            else
+                emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
+            end
+        elseif val isa Core.SSAValue
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
             if haskey(ctx.phi_locals, phi_idx)
@@ -675,8 +718,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _srcb = _ctx_builder(ctx, "phi_edge_src")
                         _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
-                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_local_type, _srcb)
-                            emit_phi_type_default!(pvb, phi_local_wasm_type)
+                        local _src_julia = _value_julia_type(val, ctx)
+                        _src_julia isa Type || (_src_julia = Any)
+                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                    ssa_local_type, _srcb, _src_julia)
+                            emit_phi_failure!(pvb, "phi edge has no valid coercion"; idx=phi_idx)
                         end
                     end
                 else
@@ -688,8 +734,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if _cpv_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
                        ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
                         # funnel-unbox directly on the builder (no byte seam)
-                        convert_type!(pvb, ssa_local_type, julia_to_wasm_type(_cpv_refined), ctx;
-                                      from_julia=_cpv_refined)
+                        coerce_stack_top!(pvb, julia_to_wasm_type(_cpv_refined), ctx;
+                                          from_julia=_cpv_refined)
                     end
                 end
             elseif haskey(ctx.phi_locals, val.id)
@@ -701,8 +747,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _srcb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, src_local_type, _srcb)
-                        emit_phi_type_default!(pvb, phi_local_wasm_type)
+                    local _src_julia = _value_julia_type(val, ctx)
+                    _src_julia isa Type || (_src_julia = Any)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                src_local_type, _srcb, _src_julia)
+                        emit_phi_failure!(pvb, "phi-to-phi edge has no valid coercion"; idx=phi_idx)
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
@@ -712,63 +761,45 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # This should ideally not happen for phi values, but handle it
                 # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
-                    emit_phi_type_default!(pvb, phi_local_wasm_type)
+                    emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
                     return _cpv_ret()
                 end
                 stmt = code[val.id]
                 # Type compatibility for recomputed SSA values (the M10a fix lives in the
                 # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
+                if ssa_julia_type === Union{}
+                    # A bottom producer has no runtime value to classify or coerce.
+                    # Revisit its real statement so the throw/unreachable terminator is
+                    # preserved; the enclosing edge is then stack-polymorphic by Wasm
+                    # validation, exactly as in dart's unreachable expression handling.
+                    stmt !== nothing && !(stmt isa Core.PhiNode) ?
+                        compile_statement!(pvb, stmt, val.id, ctx) :
+                        emit_phi_failure!(pvb, "bottom phi source has no terminating statement";
+                                          idx=phi_idx)
+                    return _cpv_ret()
+                end
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_sb, ctx)
-                    emit_value!(_sb, val, ctx)
-                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type, ssa_wasm_type, _sb)
-                        emit_phi_type_default!(pvb, phi_local_wasm_type)
+                    emit_value!(_sb, val, ctx)  # R17-floor: phi converter consumes the actual recomputed type
+                    local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                ssa_wasm_type, _sb, _src_julia)
+                        emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
                     # PURE-313: i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
-                    emit_value!(pvb, val, ctx)
+                    emit_value!(pvb, val, ctx, I32)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
                     compile_statement!(pvb, stmt, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
-                    emit_value!(pvb, val, ctx)
+                    emit_value!(pvb, val, ctx)  # R17-floor: i32 phi widening is selected after actual emission
                 end
-            end
-        elseif val === nothing || (val isa GlobalRef && val.name === :nothing)
-            # Value is `nothing` (can be Core.nothing or Main.nothing in IR)
-            # Emit the appropriate null/zero for the phi local's ACTUAL wasm type
-            # (which may differ from the Julia type due to phi type resolution)
-            if haskey(ctx.phi_locals, phi_idx)
-                local_idx = ctx.phi_locals[phi_idx]
-                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
-                if local_wasm_type isa ConcreteRef
-                    ref_null!(pvb, Int64(local_wasm_type.type_idx), ConcreteRef(UInt32(local_wasm_type.type_idx), true))
-                elseif local_wasm_type === ExternRef
-                    ref_null!(pvb, ExternRef)
-                elseif local_wasm_type === StructRef
-                    ref_null!(pvb, StructRef)
-                elseif local_wasm_type === ArrayRef
-                    ref_null!(pvb, ArrayRef)
-                elseif local_wasm_type === AnyRef
-                    ref_null!(pvb, AnyRef)
-                elseif local_wasm_type === I64
-                    i64_const!(pvb, 0)
-                elseif local_wasm_type === F32
-                    f32_const!(pvb, 0.0f0)
-                elseif local_wasm_type === F64
-                    f64_const!(pvb, 0.0)
-                else
-                    # I32 default
-                    i32_const!(pvb, 0)
-                end
-            else
-                # No phi local found — emit i32(0) as placeholder
-                i32_const!(pvb, 0)
             end
         else
             # Not an SSA and not nothing - just compile directly
@@ -781,18 +812,17 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
                     local _ne_b = _compile_value_b(val, ctx)
                     local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
+                    local _ne_jt = _value_julia_type(val, ctx)
+                    _ne_jt isa Type || (_ne_jt = typeof(val))
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
-                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b)
-                        # Type mismatch with no conversion arm: emit a type-safe default —
-                        # DIAGNOSED (M5 loud-visible; behavior unchanged pending the full audit).
-                        record_unsupported!(ctx, :unsupported_type,
-                            "phi-edge type mismatch with no conversion arm (type-safe default emitted)")
-                        emit_phi_type_default!(pvb, phi_local_type)
+                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b,
+                                                _ne_jt)
+                        emit_phi_failure!(pvb, "literal phi edge has no valid coercion"; idx=phi_idx)
                     end
                     return _cpv_ret()
                 end
             end
-            emit_value!(pvb, val, ctx)
+            emit_value!(pvb, val, ctx)  # R17-floor: literal phi edge has no sink when destination is unavailable
         end
         return _cpv_ret()
     end
@@ -860,12 +890,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if val.name === :nothing
                 return I32
             end
-            try
-                actual_val = getfield(val.mod, val.name)
-                return get_phi_edge_wasm_type(actual_val)
-            catch
-                return nothing
-            end
+            isdefined(val.mod, val.name) || return nothing
+            return get_phi_edge_wasm_type(getfield(val.mod, val.name))
         elseif val isa Char
             # PURE-317: Char is a 4-byte primitive type, compiled as I32
             return I32
@@ -1005,14 +1031,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # march3: typed merge — the audit proved the channel honest
                                 # (pv_n is now trustworthy; the phantom declared-push is gone).
                                 if pv_n >= 2
-                                    # multi-value emission can't feed one local.set — type-safe default
-                                    emit_phi_type_default!(b, phi_local_type)
-                                    local_set!(b, local_idx)
+                                    emit_phi_failure!(b, "multi-value phi edge cannot feed one local"; idx=i)
                                     phi_count += 1
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
-                                        convert_type!(b, pv_ty, phi_local_type, ctx)
+                                        local _edge_julia = _value_julia_type(val, ctx)
+                                        coerce_stack_top!(b, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
                                     end
                                     # parity(M11.4): ALWAYS store — the `ty===nothing`
                                     # skip orphaned the emitted value on the stack (the
@@ -1039,7 +1066,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
         (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
     if _debug_stackified
-        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, outer_targets=$outer_targets, return_type=$(ctx.return_type)"
+        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
+    end
+
+    function emit_duplicated_terminal!(tb::InstrBuilder, target::Int)
+        target in duplicated_terminal_targets || error(
+            "block $target is not an admitted duplicated terminal")
+        block = blocks[target]
+        for i in block.start_idx:block.end_idx
+            stmt = code[i]
+            stmt isa Core.ReturnNode && continue
+            compile_statement!(tb, stmt, i, ctx)
+            (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
+        end
+        if isempty(tb.instrs) || !(tb.instrs[end] isa InstrIR.Unreachable)
+            unreachable!(tb)  # structural trap: duplicated tail is proven non-returning
+        end
+        ctx.last_stmt_was_stub = true
+        return tb
     end
 
     # P2-batch23 (gaps 4be58371947f / 203da15d789c): when compiling a SUBSET of
@@ -1056,9 +1100,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                d = _term_dest(byt.terminator)
                                d > _subset_end && get(stmt_to_block, d, nothing) === nothing
                            end for byt in blocks)
-    _exit_depth() = length(label_stack)   # the exit block itself is never on the stack
+    exit_label = nothing
     if needs_exit_block
-        block!(b)
+        exit_label = block!(b)
     end
 
     # Now generate code for each block in order
@@ -1100,8 +1144,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # (slice-A exact-semantics note: the old code keyed on the LAST *block*
         # entry regardless of loops above it; replicated via findlast-:block)
         while true
-            local _lb = findlast(e -> e[1] === :block, label_stack)
-            (_lb !== nothing && label_stack[_lb][2] == block_idx) || break
+            local _lb = findlast(e -> e[1] === :block && e[2] == block_idx,
+                                 label_stack)
+            _lb === nothing && break
+            _lb == length(label_stack) || error(
+                "crossing control regions at block $block_idx: forward label is not " *
+                "the innermost open control label (open=$(label_stack))")
             deleteat!(label_stack, _lb)
             end_block!(b)  # End the block for this target
             if _debug_stackified
@@ -1116,6 +1164,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
             continue
         end
+        if block_idx in duplicated_terminal_targets
+            _debug_stackified && @warn "  SKIP duplicated terminal block $block_idx"
+            continue
+        end
 
         if _debug_stackified
             @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(_byte_len(b)) stack=$label_stack"
@@ -1125,15 +1177,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         is_loop_header = block_idx in loop_headers
 
         if is_loop_header
-            loop!(b)  # void
-            push!(label_stack, (:loop, block_idx))
+            local loop_label = loop!(b)  # void
+            push!(label_stack, (:loop, block_idx, loop_label))
 
             # Open BLOCKs for forward-jump targets INSIDE this loop (emission order:
             # the loop label sits below its inner-target labels)
             if haskey(loop_inner_targets, block_idx)
                 for target in loop_inner_targets[block_idx]  # sorted desc = outermost first
-                    push!(label_stack, (:block, target))
-                    block!(b)  # void
+                    local target_label = block!(b)  # void
+                    push!(label_stack, (:block, target, target_label))
                 end
             end
         end
@@ -1209,12 +1261,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
-                                    emit_phi_type_default!(bb, phi_local_type)
-                                    local_set!(bb, local_idx)
+                                    emit_phi_failure!(bb, "multi-value fallthrough phi cannot feed one local"; idx=i)
                                 elseif !isempty(pv_b2.instrs)
                                     append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
                                     if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
-                                        convert_type!(bb, pv_ty2, phi_local_type, ctx)
+                                        local _edge_julia = _value_julia_type(val, ctx)
+                                        coerce_stack_top!(bb, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
                                     end
                                     # parity(M11.4): ALWAYS store — an unknown-typed value
                                     # left on the stack (the old `ty===nothing` skip)
@@ -1234,8 +1288,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # march4 Phase C: THE statement visitor emits directly; the drop
                 # logic reads the emission's node window (byte sniffs are gone).
                 local _stmt_i0 = length(bb.instrs)
+                local _stmt_stack0 = length(bb.v.stack)
                 compile_statement!(bb, stmt, i, ctx)
                 local _stmt_emitted = length(bb.instrs) > _stmt_i0
+                local _stmt_pushed_value = length(bb.v.stack) > _stmt_stack0
 
                 # DEBUG: trace DROP emissions (node count)
                 _dbg_fn = try string(ctx.func_name) catch; "" end
@@ -1261,7 +1317,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
-                        if !already_dropped && _stmt_emitted && statement_produces_wasm_value(stmt, i, ctx)
+                        if !already_dropped && _stmt_emitted && _stmt_pushed_value
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
                                 if use_count == 0
@@ -1292,9 +1348,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if terminator_idx in boundscheck_jumps && term isa Core.GotoIfNot
             # This is an always-jump - emit unconditional br to the target
             dest_block = get(stmt_to_block, term.dest, nothing)
-            if dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
-                label_depth = get_forward_label_depth(dest_block)
-                br!(b, label_depth)
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
+                br!(b, get_forward_label(dest_block))
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
@@ -1335,7 +1392,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # If condition is TRUE, fall through to next block
             # If condition is FALSE, jump to dest
 
-            if dest_block !== nothing && dest_block > block_idx
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                # GotoIfNot: true falls through, false executes the cloned
+                # non-returning tail. The `if` merge remains reachable only from
+                # the true arm because the false arm ends polymorphically.
+                if_!(b)
+                else_!(b)
+                emit_duplicated_terminal!(b, dest_block)
+                end_block!(b)
+                ctx.last_stmt_was_stub = false
+            elseif dest_block !== nothing && dest_block > block_idx
                 # Forward jump when condition is false
                 if dest_block in non_trivial_targets
                     if has_phi
@@ -1345,15 +1411,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         else_!(b)
                         # Else branch: condition false, set all phi locals and jump
                         set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
-                        # Jump to destination (account for the if block we're inside)
-                        label_depth = get_forward_label_depth(dest_block) + 1
-                        br!(b, label_depth)
+                        br!(b, get_forward_label(dest_block))
                         end_block!(b)
                     else
                         # No phi - use br_if
-                        label_depth = get_forward_label_depth(dest_block)
                         num!(b, Opcode.I32_EQZ)  # Invert the condition
-                        br_if!(b, label_depth)
+                        br_if!(b, get_forward_label(dest_block))
                     end
                 else
                     # Simple fall-through pattern - condition true continues, false skips
@@ -1374,20 +1437,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         if_!(b)
                         else_!(b)
                         set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
-                        label_depth = get_loop_label_depth(dest_block) + 1
-                        br!(b, label_depth)
+                        br!(b, get_loop_label(dest_block))
                         end_block!(b)
                     else
-                        label_depth = get_loop_label_depth(dest_block)
                         num!(b, Opcode.I32_EQZ)
-                        br_if!(b, label_depth)
+                        br_if!(b, get_loop_label(dest_block))
                     end
                 end
             elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
                 # P2-batch23: dest is beyond the compiled subset — branch to the
                 # exit block (the caller's continuation begins right after it).
                 num!(b, Opcode.I32_EQZ)
-                br_if!(b, _exit_depth())
+                br_if!(b, exit_label::ControlLabel)
             elseif dest_block === nothing
                 # Unresolvable dest: drop the compiled condition rather than
                 # orphaning it on the operand stack.
@@ -1420,19 +1481,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing
-                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
+                if !(dest_block in duplicated_terminal_targets)
+                    set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
+                end
             end
 
-            if dest_block !== nothing && dest_block > block_idx
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx
                 # Forward jump
                 if dest_block in non_trivial_targets
-                    label_depth = get_forward_label_depth(dest_block)
+                    local target_label = get_forward_label(dest_block)
                     # WBUILD-3001: If the br exits ALL open blocks (outermost),
                     # emit return instead to avoid falling through to unreachable.
                     # The phi locals were just set by set_phi_locals_for_edge!.
                     # Find the destination block's ReturnNode and its phi local.
-                    exits_outermost = (label_depth + 1 >= length(label_stack))
-                    if exits_outermost && ctx.return_type !== Nothing
+                    local target_pos = findlast(e -> e[3] === target_label, label_stack)
+                    exits_outermost = target_pos == 1
+                    if exits_outermost && ctx.return_type !== Nothing && ctx.return_type !== Union{}
                         func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                         # Find the return phi local: look at the destination block
                         # for a ReturnNode whose value is a phi with a phi_local.
@@ -1472,27 +1538,26 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 _rl_arr = Int(ret_local) - ctx.n_params + 1
                                 _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
                                            ctx.locals[_rl_arr] : nothing
-                                convert_type!(b, _rl_wasm, func_ret_wasm, ctx)
+                                coerce_stack_top!(b, func_ret_wasm, ctx)
                             end
                             return_!(b)
                         else
-                            br!(b, label_depth)
+                            br!(b, target_label)
                         end
                     else
-                        br!(b, label_depth)
+                        br!(b, target_label)
                     end
                 end
                 # Otherwise, simple fall through - implicit
             elseif dest_block !== nothing && dest_block <= block_idx
                 # Back edge (loop)
                 if dest_block in loop_headers
-                    label_depth = get_loop_label_depth(dest_block)
-                    br!(b, label_depth)
+                    br!(b, get_loop_label(dest_block))
                 end
             elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
                 # P2-batch23: unconditional jump beyond the compiled subset —
                 # branch to the exit block (the caller's continuation).
-                br!(b, _exit_depth())
+                br!(b, exit_label::ControlLabel)
             end
         else
             # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
@@ -1508,23 +1573,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
         # march6 slice B: this block ends with an EnterNode (post-split guarantee) →
         # open the region: landing block (the catch's br target ends at the handler)
-        # then the try_table with catch_all → label 0 (the landing). Outermost first.
+        # then the try_table whose symbolic catch target is the landing. Outermost first.
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
                 # march6 slice D: the TYPED catch — the landing block carries the tag
-                # payload (exn, stackTrace) as its results; catch_clause(tag 0 → label 0)
+                # payload (exn, stackTrace) as its results; catch_clause retains
+                # the landing label identity until the builder serializes it
                 # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
                 local _lbt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[AnyRef, ExternRef]))
-                push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0)))
-                block!(b, Int(_lbt); results=WasmValType[AnyRef, ExternRef])
-                push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0)))
-                try_table!(b, InstrIR.TryCatch[catch_clause(0, 0)])
+                local landing_label = block!(b, Int(_lbt); results=WasmValType[AnyRef, ExternRef])
+                push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0), landing_label))
+                local try_label = try_table!(b, [catch_clause(0, landing_label)])
+                push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))
                 # region-inner forward targets open INSIDE the try_table
                 local _eb = get(stmt_to_block, r.enter_idx, 0)
                 if haskey(region_inner_targets, _eb)
                     for target in region_inner_targets[_eb]
-                        push!(label_stack, (:block, target))
-                        block!(b)
+                        local target_label = block!(b)
+                        push!(label_stack, (:block, target, target_label))
                     end
                 end
             end
@@ -1542,8 +1608,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Close any inner target blocks that are still open for this loop
                 if haskey(loop_inner_targets, dst)
                     for target in loop_inner_targets[dst]
-                        local _it = findlast(==( (:block, target) ), label_stack)
+                        local _it = findlast(e -> e[1] === :block && e[2] == target, label_stack)
                         if _it !== nothing
+                            _it == length(label_stack) || error(
+                                "crossing control regions while closing loop $dst at block " *
+                                "$block_idx: target $target is not innermost " *
+                                "(open=$(label_stack))")
                             deleteat!(label_stack, _it)
                             end_block!(b)  # End inner target block
                         end
@@ -1551,8 +1621,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
                 _debug_stackified && @warn "  END-OF-LOOP fires at block=$block_idx src=$src dst=$dst stack=$label_stack labels=$(length(b.v.labels))"
                 end_block!(b)  # End of loop
-                local _lp = findlast(==( (:loop, dst) ), label_stack)
-                _lp !== nothing && deleteat!(label_stack, _lp)
+                local _lp = findlast(e -> e[1] === :loop && e[2] == dst, label_stack)
+                if _lp !== nothing
+                    _lp == length(label_stack) || error(
+                        "crossing control regions while closing loop $dst at block " *
+                        "$block_idx: loop is not innermost (open=$(label_stack))")
+                    deleteat!(label_stack, _lp)
+                end
             end
         end
     end
@@ -1561,6 +1636,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     while true
         local _rb = findlast(e -> e[1] === :block, label_stack)
         _rb === nothing && break
+        _rb == length(label_stack) || error(
+            "crossing control regions during final label closure: forward label is " *
+            "not innermost (open=$(label_stack))")
         _debug_stackified && @warn "  FINAL-SWEEP close $(label_stack[_rb]) labels=$(length(b.v.labels))"
         deleteat!(label_stack, _rb)
         end_block!(b)
@@ -1581,4 +1659,3 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     return b
 end
-

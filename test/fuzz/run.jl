@@ -17,7 +17,7 @@
 #     reproducer a follow-up loop can run, fix, and auto-close via `verify`.
 
 using Supposition, Random
-using WasmTarget   # discovery_differential needs disable_cache!
+using WasmTarget
 using Statistics   # P4-stdlib: catalogue :stats entries resolve in Main
 using Dates: isleapyear, daysinmonth   # P4-stdlib: :dates entries
 using LinearAlgebra: norm, normalize, dot, cross   # P4-stdlib: :linalg entries
@@ -291,59 +291,15 @@ function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30
         res = @check db=db rng=Xoshiro(seed + i) max_examples=max_examples function ci_prop(body = gen)
             property_holds(body, T0) || _hits_known_gap(body, known)   # known-open gaps don't fail the ratchet
         end
-        something(res.result) isa Supposition.Fail && (allpass = false)
-    end
-    return allpass
-end
-
-# --- Discovery-mode differential: :trim (default) vs :legacy ----------------
-# For each generated body where the DEFAULT (:trim) pipeline is clean
-# (native == wasm), require the legacy pipeline to agree with native too.
-# A failure shrinks to a minimal body where the two discovery modes diverge.
-function _other_mode_agrees(body, ::Type{T0}; mode::Symbol = :legacy) where {T0}
-    fn, _, _ = make_function(body, T0)
-    samples = sample_inputs(T0)
-    rt = try
-        Core.Compiler.widenconst(only(Base.code_typed(fn, (T0,); optimize = true))[2])
-    catch
-        nothing
-    end
-    (rt isa Type && isconcretetype(rt) && FuzzBridge.bridge_supported(rt)) || return true
-    natives = map(samples) do tup
-        try
-            (:ok, Base.invokelatest(fn, tup...))
-        catch e
-            (:throw, e)
-        end
-    end
-    all(n -> n[1] === :ok, natives) || return true   # throwy bodies: out of scope here
-    wres = FuzzBridge.bridge_run(fn, (T0,), samples; rettype = rt, discovery = mode)
-    wres === :no_node && return true
-    wres isa Vector || return false                  # compile/exec error under :trim only
-    desc = FuzzBridge.descriptor(rt)[1]
-    return all(zip(natives, wres)) do (n, w)
-        w[1] === :ok && FuzzBridge.tree_matches(desc, n[2], w[2])
-    end
-end
-
-function discovery_differential(; types = (Int64, Float64), depth = 2,
-                                max_examples = 40, seed = 0xD15C,
-                                exclude = (:median,))   # known trim residual (show/print machinery)
-    FuzzHarness.NODE_OK || return true
-    WasmTarget.disable_cache!()   # cache is keyed without discovery mode
-    allpass = true
-    for (i, T0) in enumerate(types)
-        gen = gen_program(T0; depth = depth)
-        res = @check rng=Xoshiro(seed + i) max_examples=max_examples function disc_prop(body = gen)
-            any(h -> h in exclude, _call_heads(body)) && return true  # documented residuals
-            differential(body, T0).category === :ok || return true   # default mode not clean → out of scope
-            _other_mode_agrees(body, T0)
-        end
-        if something(res.result) isa Supposition.Fail
+        result = something(res.result)
+        if result isa Supposition.Fail
+            body = result.example.body
+            outcome = differential(body, T0)
+            @error("bounded differential fuzz counterexample",
+                input_type=T0, body=body, category=outcome.category,
+                input=outcome.input, native=outcome.native, wasm=outcome.wasm,
+                source=outcome.src, detail=outcome.detail)
             allpass = false
-            println("  ✗ $(T0): discovery modes diverge — see counterexample above")
-        else
-            println("  ✓ $(T0): :trim agrees with :legacy on $max_examples bodies (depth $depth)")
         end
     end
     return allpass

@@ -6,7 +6,7 @@
 # no codegen call sites yet (byte-identical); L2 threads it through %new / setfield! / getfield /
 # the closure captured-box field.
 
-@testset "F3 L1: get_box_type! specialized mutable Box struct (dormant)" begin
+@testset "F3 L1: get_box_type! specialized mutable Box struct" begin
     mod = WasmTarget.WasmModule()
     reg = WasmTarget.TypeRegistry()
 

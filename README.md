@@ -186,23 +186,15 @@ dispatch) are not supported and trap or raise a compile error:
 
 WasmTarget aims to be **correct-or-loud, never silently wrong**.
 
-**`strict=true` (default).** When codegen meets a construct it cannot lower to a
-faithful result, `compile` raises a `WasmCompileError` naming the construct and its
-source location instead of silently emitting a trap. This covers both *wrong-value*
-stubs (e.g. `objectid`, a non-zero `memset`) and *genuinely-unsupported operations*
-that would otherwise return a value natively (128-bit checked arithmetic, raw
-`pointerset`, `Core.svec`, `:new` of a non-constant type, a numeric op on a boxed/
-`Any` operand, …) — the guiding principle is **narrow-but-bulletproof: if it
-compiles, it's faithful to the Julia; if it can't, it tells you, up front.** Julia
-exceptions compile to *catchable* Wasm exceptions (a shared exception tag), so
-`try`/`catch` over throwing Base code behaves like native; ubiquitous dead
-error-arms (`@boundscheck`/DomainError that the IR can't prove dead) keep a sound
-silent trap rather than rejecting most of `Base`. Pass `strict=false` for permissive
-stub-and-trap.
+Codegen correctness is unconditional. There is no permissive builder mode: invalid
+instructions, fabricated replacement values, and wrong-value fallbacks are rejected.
+Unsupported live operations are recorded as diagnostics and lower only to a validating
+trap, never to a plausible value. Julia exceptions compile to catchable Wasm exceptions
+through the shared exception tag.
 
 ```julia
-compile(f, (T,))                 # strict + validated (default)
-compile(f, (T,); strict=false)   # permissive: emit runtime-trap stubs
+compile(f, (T,))                 # typed-builder validity is unconditional
+compile(f, (T,); validate=true)  # plus an independent wasm-tools cross-check
 ```
 
 **Author pre-flight (optional).** Because WasmTarget rejects type-unstable / boxed /

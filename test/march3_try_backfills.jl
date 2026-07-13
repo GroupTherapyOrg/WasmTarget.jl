@@ -94,7 +94,7 @@ end
 _m5_task(x::Int64)::Int64 = fetch(Threads.@spawn x + 1)
 @testset "march5: async loud-reject conformance (D10.1)" begin
     rejected = try
-        WasmTarget.compile_multi(Any[(_m5_task, (Int64,), "m5_task")]; strict=true, validate=true)
+        WasmTarget.compile_multi(Any[(_m5_task, (Int64,), "m5_task")]; validate=true)
         false
     catch
         true

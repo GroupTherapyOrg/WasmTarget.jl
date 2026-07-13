@@ -2,821 +2,102 @@
 # Main Compilation Entry Point
 # ============================================================================
 
+"""Declarative, typed substitutions for one closed-world compilation root."""
+struct RootBindings
+    captured_globals::Dict{Symbol,Tuple{Bool,UInt32}}
+    captured_constants::Dict{Symbol,Any}
+    dom_bindings::Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}
+    skip_stmts::Set{Int}
+    invoke_imports::Dict{Int,UInt32}
+    invoke_roots::Dict{Int,String}
+    invoke_arguments::Dict{Int,Vector{Int}}
+    bound_leaves::Vector{Tuple{Any,Tuple}}
+    entry_calls::Vector{UInt32}
+    elide_closure_context::Bool
+    void_return::Bool
+end
+
+function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
+                      captured_constants=Dict{Symbol,Any}(),
+                      dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
+                      skip_stmts=Set{Int}(), invoke_imports=Dict{Int,UInt32}(),
+                      invoke_roots=Dict{Int,String}(),
+                      invoke_arguments=Dict{Int,Vector{Int}}(),
+                      bound_leaves=Tuple{Any,Tuple}[],
+                      entry_calls=UInt32[],
+                      elide_closure_context::Bool=false, void_return::Bool=false)
+    RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
+                 Dict{Symbol,Any}(captured_constants),
+                 Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
+                 Set{Int}(skip_stmts), Dict{Int,UInt32}(invoke_imports),
+                 Dict{Int,String}(invoke_roots),
+                 Dict{Int,Vector{Int}}(k => Int[v...] for (k, v) in invoke_arguments),
+                 Tuple{Any,Tuple}[(f, Tuple(ts)) for (f, ts) in bound_leaves],
+                 UInt32[entry_calls...],
+                 elide_closure_context, void_return)
+end
+
+"""Add a nullable mutable reference global for initialization by a linked root."""
+function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
+    b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
+    ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
+    return add_global_ref!(mod, type_idx, true, builder_code(b); nullable=true)
+end
+
+"""
+    add_root_global_initializer!(mod, registry, global_idx, root_idx) -> UInt32
+
+Create a module initializer that stores the result of a typed zero-argument
+compilation root into a previously declared mutable reference global. Frameworks
+use this for exact mutable initial values that cannot appear in a Wasm constant
+expression. The initializer joins WT's canonical module-start composition.
+"""
+function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
+                                      global_idx::Integer, root_idx::Integer)::UInt32
+    0 <= global_idx < length(mod.globals) ||
+        throw(ArgumentError("framework global index $global_idx is out of bounds"))
+    global_def = mod.globals[Int(global_idx) + 1]
+    global_def.mutable_ || throw(ArgumentError("framework global $global_idx is immutable"))
+    root_type = _function_type(mod, root_idx)
+    isempty(root_type.params) ||
+        throw(ArgumentError("framework initializer root $root_idx must take no parameters"))
+    length(root_type.results) == 1 ||
+        throw(ArgumentError("framework initializer root $root_idx must return one value"))
+    wasm_subtype(only(root_type.results), global_def.valtype, mod) ||
+        throw(ArgumentError("framework initializer root result is incompatible with global $global_idx"))
+    b = InstrBuilder(; func_name="framework_global_initializer", mod=mod)
+    call!(b, root_idx, WasmValType[], root_type.results)
+    global_set!(b, global_idx)
+    end_block!(b)
+    init_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[],
+                             builder_code(b))
+    push!(registry.module_init_functions, init_idx)
+    return init_idx
+end
+
+"""The one Julia-signature → physical Wasm-signature derivation."""
+function function_wasm_signature(arg_types, return_type, global_args,
+                                 mod::WasmModule, type_registry::TypeRegistry)
+    pts = WasmValType[]
+    for (j, T) in enumerate(arg_types)
+        j in global_args && continue
+        push!(pts, T isa Union && needs_anyref_boxing(T) ? AnyRef :
+                   get_concrete_wasm_type(T, mod, type_registry))
+    end
+    rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+          WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+    return pts, rts
+end
+
 """
     compile_function(f, arg_types, func_name) -> WasmModule
 
 Compile a Julia function to a WebAssembly module.
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true, strict::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir, strict=strict)
-end
-
-# Legacy implementation kept for reference - now unused
-function _compile_function_legacy(f, arg_types::Tuple, func_name::String)::WasmModule
-    # Get typed IR
-    code_info, return_type = get_typed_ir(f, arg_types)
-
-    # Create module
-    mod = WasmModule()
-
-    # Create type registry for struct mappings
-    type_registry = TypeRegistry()
-
-    # Check if this is a closure (function with captured variables)
-    # For closures, we need to include the closure object as the first argument
-    closure_type = typeof(f)
-    is_closure = is_closure_type(closure_type)
-    if is_closure
-        # Prepend the closure type to arg_types
-        arg_types = (closure_type, arg_types...)
-    end
-
-    # Detect WasmGlobal arguments (phantom params that map to Wasm globals)
-    global_args = Set{Int}()
-    for (i, T) in enumerate(arg_types)
-        if T <: WasmGlobal
-            push!(global_args, i)
-            # Add the global to the module at the specified index
-            elem_type = global_eltype(T)
-            wasm_type = julia_to_wasm_type(elem_type)
-            global_idx = global_index(T)
-            # Ensure we have enough globals (fill with defaults if needed)
-            while length(mod.globals) <= global_idx
-                add_global!(mod, wasm_type, true, zero(elem_type))
-            end
-        end
-    end
-
-    # Register any struct/array/string/closure types used in parameters (skip WasmGlobal)
-    for (i, T) in enumerate(arg_types)
-        if i in global_args
-            continue  # Skip WasmGlobal
-        end
-        if is_closure_type(T)
-            # Closure types need special registration
-            register_closure_type!(mod, type_registry, T)
-        elseif is_struct_type(T)
-            register_struct_type!(mod, type_registry, T)
-        elseif T <: AbstractArray
-            # Register array type for Vector/Matrix parameters
-            elem_type = eltype(T)
-            get_array_type!(mod, type_registry, elem_type)
-        elseif T === String
-            # Register string array type
-            get_string_struct_type!(mod, type_registry)
-        end
-    end
-
-    # Register return type if it's a struct/array/string
-    # Skip Union{} (bottom type) which is a subtype of everything
-    if return_type === Union{}
-        # Bottom type - no registration needed
-    elseif is_struct_type(return_type)
-        register_struct_type!(mod, type_registry, return_type)
-    elseif return_type <: AbstractArray
-        elem_type = eltype(return_type)
-        get_array_type!(mod, type_registry, elem_type)
-    elseif return_type === String
-        get_string_struct_type!(mod, type_registry)
-    end
-
-    # Determine Wasm types for parameters and return (skip WasmGlobal args)
-    param_types = WasmValType[]
-    for (i, T) in enumerate(arg_types)
-        if !(i in global_args)
-            # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
-            if T isa Union && needs_anyref_boxing(T)
-                push!(param_types, AnyRef)
-            else
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-            end
-        end
-    end
-    result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-    # For single-function modules, the function index is 0
-    # This allows recursive calls to work
-    expected_func_idx = UInt32(0)
-
-    # Check if this is an intrinsic function that needs special code generation
-    intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
-
-    local body::Vector{UInt8}
-    local locals::Vector{WasmValType}
-
-    if intrinsic_body !== nothing
-        # Use the intrinsic body directly
-        body, locals = intrinsic_body
-    else
-        # Generate function body with the function reference for self-call detection
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_idx=expected_func_idx, func_ref=f, global_args=global_args,
-                                is_compiled_closure=is_closure)
-        body = generate_body(ctx)
-        locals = ctx.locals
-    end
-
-    # Add function to module
-    func_idx = add_function!(mod, param_types, result_types, locals, body)
-
-    # Export the function
-    add_export!(mod, func_name, 0, func_idx)
-
-    # PURE-4149: Populate DataType/TypeName fields for type constant globals
-    populate_type_constant_globals!(mod, type_registry)
-
-    return mod
-end
-
-# ============================================================================
-# WASM-057: Auto-discover function dependencies
-# ============================================================================
-
-"""
-Set of WasmTarget runtime function names that can be auto-discovered.
-These are intrinsic functions that have special compilation support.
-"""
-const WASMTARGET_RUNTIME_FUNCTIONS = Set([
-    # String operations (StringOps.jl)
-    :str_char, :str_getchar, :str_setchar!, :str_len, :str_charlen, :str_new, :str_copy, :str_substr,
-    :str_concat, :str_eq, :str_hash, :str_find, :str_contains, :str_startswith, :str_endswith,
-    :str_uppercase, :str_lowercase, :str_trim,
-    # String conversion (WASM-054, WASM-055)
-    :digit_to_str, :int_to_string,
-    # Array operations (ArrayOps.jl)
-    :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!,
-])
-
-"""
-    discover_dependencies(functions::Vector) -> Vector
-
-Scan the IR of all functions and discover WasmTarget runtime function dependencies.
-Returns an expanded function list with auto-discovered dependencies added.
-
-This enables calling runtime functions like str_eq without explicitly including them.
-"""
-function discover_dependencies(functions::Vector; interp=nothing)::Vector
-    # Normalize input first
-    normalized = Vector{Tuple{Any, Tuple, String}}()
-    for entry in functions
-        if length(entry) == 2
-            f, arg_types = entry
-            name = string(nameof(f))
-            push!(normalized, (f, arg_types, name))
-        else
-            push!(normalized, (entry[1], entry[2], entry[3]))
-        end
-    end
-
-    # Track which functions we've already seen (by (func_ref, arg_types))
-    seen_funcs = Set{Tuple{Any, Tuple}}()
-    for (f, arg_types, _) in normalized
-        push!(seen_funcs, (f, arg_types))
-    end
-
-    # Track discovered dependencies
-    to_add = Vector{Tuple{Any, Tuple, String}}()
-
-    # Queue of functions to scan (using Any-typed vector)
-    to_scan = Vector{Tuple{Any, Tuple, String}}(normalized)
-
-    skipped = Vector{Tuple{String, Any}}()  # (name, exception) pairs
-
-    while !isempty(to_scan)
-        f, arg_types, name = popfirst!(to_scan)
-
-        # Get IR for this function
-        code_info = try
-            kwargs = interp !== nothing ? (; interp=interp) : (;)
-            ir, _ = Base.code_ircode(f, arg_types; kwargs...)[1]
-            ir
-        catch e
-            @debug "discover_dependencies: skipping $name($(join(arg_types, ", "))) — $e"
-            push!(skipped, (name, e))
-            continue
-        end
-
-        # Verify we got IRCode (not Method or other types)
-        if !hasproperty(code_info, :stmts) || !hasproperty(code_info.stmts, :stmt)
-            continue
-        end
-
-        # Scan IR for GlobalRef calls to WasmTarget runtime functions
-        # Also pass IR + arg_types for :call expression method resolution (PURE-605)
-        for (stmt_idx, stmt) in enumerate(code_info.stmts.stmt)
-            if stmt isa Expr
-                scan_expr_for_deps!(stmt, seen_funcs, to_add, to_scan, code_info, stmt_idx, arg_types)
-            end
-        end
-    end
-
-    if !isempty(skipped)
-        @debug "discover_dependencies: discovered $(length(normalized) + length(to_add)) functions, skipped $(length(skipped))"
-    end
-
-    # Add discovered dependencies to the function list
-    result = copy(normalized)
-    append!(result, to_add)
-    return result
-end
-
-"""
-Scan an expression for WasmTarget runtime function calls and external method invocations.
-IR context (ir, stmt_idx, func_arg_types) enables :call GlobalRef method resolution (PURE-605).
-"""
-function scan_expr_for_deps!(expr::Expr, seen_funcs::Set, to_add::Vector, to_scan::Vector,
-                             ir=nothing, stmt_idx::Int=0, func_arg_types::Tuple=())
-    # Check if this is an invoke expression
-    if expr.head === :invoke && length(expr.args) >= 2
-        # Check for MethodInstance in args[1] - this enables auto-discovery of external methods
-        mi_or_ci = expr.args[1]
-        mi = if mi_or_ci isa Core.MethodInstance
-            mi_or_ci
-        elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
-            mi_or_ci.def
-        else
-            nothing
-        end
-
-        if mi !== nothing
-            check_and_add_external_method!(mi, seen_funcs, to_add, to_scan)
-        end
-
-        # Also check GlobalRef for WasmTarget runtime functions
-        func_ref = expr.args[2]
-        if func_ref isa GlobalRef
-            check_and_add_runtime_func!(func_ref, seen_funcs, to_add, to_scan)
-        end
-    elseif expr.head === :call && length(expr.args) >= 1
-        func_ref = expr.args[1]
-        if func_ref isa GlobalRef
-            check_and_add_runtime_func!(func_ref, seen_funcs, to_add, to_scan)
-            # PURE-605: Try to resolve :call GlobalRef to a method for external modules
-            if ir !== nothing
-                try_resolve_call_method!(func_ref, expr.args[2:end], ir, func_arg_types,
-                                        seen_funcs, to_add, to_scan)
-            end
-        end
-    end
-
-    # Recursively scan nested expressions
-    for arg in expr.args
-        if arg isa Expr
-            scan_expr_for_deps!(arg, seen_funcs, to_add, to_scan)
-        end
-    end
-end
-
-"""
-Set of modules whose methods should NOT be auto-discovered and compiled.
-These modules contain intrinsics, special handling, or are too complex.
-"""
-const SKIP_AUTODISCOVER_MODULES = Set([
-    :Core,
-    :Base,
-    :Main,
-])
-
-"""
-Set of method names that should be skipped during auto-discovery.
-These are handled specially in compile_invoke or are error/throw functions.
-"""
-const SKIP_AUTODISCOVER_METHODS = Set([
-    :throw, :rethrow, :ArgumentError, :BoundsError,
-    :_throw_argerror, :throw_boundserror,
-    :_throw_not_readable, :_throw_not_writable,
-    :throw_inexacterror,
-    # WBUILD-1013: Math domain error throws (auto-discovered from log/exp/log1p/pow)
-    :throw_complex_domainerror, :throw_complex_domainerror_neg1, :throw_exp_domainerror,
-    # PURE-605: Builtins that return Method from code_typed, not CodeInfo
-    :(===), :isa, :typeof, :ifelse, :throw_boundserror,
-    # PURE-9040: IO functions handled via JS imports
-    :println, :print,
-    # PURE-9041: show/repr handled via JS imports
-    :show,
-    # Therapy.jl `js()` interop intrinsic — a no-op in Julia, emitted as inline
-    # JS / a wasm import by generate_body, NEVER compiled as a function. Without
-    # this, closure dep auto-discovery tries to compile `js` and produces an
-    # invalid module (the DarkModeToggle island's `js(…, set_dark)` effect).
-    :js,
-    # WBUILD-3001: Error constructors from sort/collections internals
-    :DimensionMismatch,
-    # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC
-    # (WasmGC arrays have no capacity concept). Handled as identity in compile_invoke.
-    :sizehint!, Symbol("#sizehint!#81"),
-])
-
-"""
-Set of Base method names that SHOULD be auto-discovered and compiled.
-These are methods whose actual Julia implementations we want to compile
-to WasmGC rather than intercepting with workarounds.
-"""
-const AUTODISCOVER_BASE_METHODS = Set{Symbol}([
-    # P4-stdlib (Statistics quantile): the 5-arg sort!(v, lo, hi, alg, order)
-    # internal — partialsort/quantile paths invoke it un-inlined.
-    :sort!,
-    :setindex!, :getindex, :ht_keyindex, :ht_keyindex2_shorthash!, :rehash!,
-    # PURE-9065: Dict/Set operations
-    :delete!, :union!, :get, :pop!, :empty!, :push!, :in,
-    # PURE-325: String replace operations needed by parse_int_literal
-    :_replace_, :_replace_init, :_replace_finish, :take!, :findnext, :unsafe_write,
-    # PURE-325: String search operations needed by findnext/replace
-    :_search, :first_utf8_byte,
-    # PURE-325: Integer parsing needed by parse_int_literal
-    :tryparse_internal, :parseint_preamble,
-    :iterate_continued, Symbol("#_thisind_continued#_thisind_str##0"),
-    # WBUILD-1010: Transcendental math functions (sin/cos/tan/etc.) need auto-discovery
-    # when called through wrapper functions. These are large (600+ stmts) but compile
-    # correctly via the stackifier. Their only invokes are domain_error throws (handled).
-    :sin, :cos, :tan, :asin, :acos, :atan,
-    :sinh, :cosh, :tanh, :exp, :sinh_kernel,
-    # WBUILD-9001: Additional math functions
-    :log2, :log10, :log1p, :expm1, :exp2, :exp10,
-    # WBUILD-10000: Phase 59/60 math functions (pow, hypot, cbrt, trig variants)
-    :pow_body, :literal_pow, :_log_ext, :_hypot, :cbrt,
-    :sind, :cosd, :sinpi, :cospi, :tanpi,
-    :asinh, :acosh, :sincos, :rem2pi, :_cosc, :sinc,
-    # P3: Julia 1.13 sinc/cosc — polynomial-table evaluator + generic wrappers
-    :_cos_cardinal_eval, :_cosc_generic, :_sinc_generic,
-    # WBUILD-1013: Software FMA needed by log/exp when have_fma=false
-    :fma_emulated,
-    # WBUILD-1022: Float64 remainder (used by mod/rem)
-    :rem_internal,
-    # P3 / WASMMAKIE W-002: Float64 ranges (0.0:5.0) construct via the
-    # high-precision StepRangeLen path — TwicePrecision is plain float-pair
-    # struct arithmetic, compilable from its real Base IR.
-    :steprangelen_hp, :twiceprecision, :_colon, :unsafe_getindex,
-    # a8c00917b1b0 (Snapshot.jl newton): the 3-arg `(::Colon)(start, step, stop)`
-    # callable stays an un-inlined :invoke — without it on the list the call site
-    # silently compiled to `unreachable` (validates-then-traps). The deeper chain
-    # (_colon, steprangelen_hp, twiceprecision) was already allowed above.
-    :Colon,
-    # P3 / WASMMAKIE W-002: round(x; digits=d) — pure float math over pow_body
-    :_round_digits,
-    # P3 / WASMMAKIE W-002: broadcast over diff(v) views — alias-analysis copy
-    :unaliascopy,
-    # WBUILD-1040: Collection operations (pure Julia in 1.12)
-    :reverse, :_sort!, :reverse!,
-    :filter, :_similar_or_copy,
-    # WBUILD-2014: Unblock sum/reduce/prod for >15 elements + filter resize
-    :mapreduce_impl, :resize!,
-    # WBUILD-3001: unique(itr) at set.jl:224 needs Set, in!, push! — all compile cleanly
-    :unique,
-    # WBUILD-5202: unique! needs issorted→Sort.Order (Union types) — deferred
-    # :unique!, :_unique!, Symbol("#issorted#1"), :ord, :_by, :_ord,
-    # WBUILD-2014: Unblock sort internals
-    :log, Symbol("#_sort!#19"), :radix_chunk_size_heuristic,
-    :radix_sort!, :partition!,
-    # WBUILD-3001: Unblock radix sort pass (uses ReinterpretArray, pure Julia)
-    :radix_sort_pass!, :_accumulate1!,
-    # WBUILD-4000: Unblock sort(Float64) — send_to_end! for NaN handling,
-    # copyto! for ReinterpretArray in radix sort, overflow_case for StepRange,
-    # length for non-Array AbstractVector (StepRange, SubArray, etc.)
-    :send_to_end!, Symbol("#send_to_end!#12"),
-    :copyto!, :overflow_case, :steprange_last,
-    :length,
-    # WBUILD-5401: string(Int) compiles via real Base path: #string#NNN → dec → ndigits0zpb + append_c_digits_fast.
-    # #string#NNN is allowed by pattern match in check_and_add_external_method! (version-dependent name).
-    :dec, :append_c_digits_fast, :ndigits0zpb, :append_nine_digits, :append_c_digits,
-    # WBUILD-5401: string(Float64) via Ryu.writeshortest.
-    # The memmove foreigncall in Ryu needed a pointer-chain tracer for the
-    # bitcast→add_ptr→getfield(:mem) pattern. Now handled by _trace_ptr_to_memory_array.
-    :string, :writeshortest,
-    # WASMMAKIE W-004: tick-label formatting (Makie tick_format / Showoff).
-    :writefixed, :writeexp,
-    # BF-2000: String operations — primary functions
-    :chomp, :chopprefix, :chopsuffix, :lowercasefirst, :uppercasefirst,
-    :prevind, :first,
-    # BF-2000: String operations — transitive deps
-    :SubString, :_thisind_continued, :_nextind_continued, :nextind,
-    :getindex_continued, :_string, :string_index_err,
-    # BF-6000: SizeUnknown collect (filtered comprehensions) + foldr
-    :grow_to!, :_foldl_impl,
-    # P3 gap 5663ffe988fc: HasShape collect for non-isbits eltypes (String
-    # comprehensions) re-dispatches through collect/collect_to_with_first!
-    :collect, :_collect, :collect_to_with_first!, :collect_to!,
-    # FOUND-5001: sym_in needed for kwarg validation in count/argmax/argmin/etc.
-    :sym_in,
-    # FOUND-5001: unsigned overlay (bitcast) needed by gcd, lcm, strip, titlecase, etc.
-    :unsigned,
-    # FOUND-5001: copy overlay (element-by-element) needed by sort, filter, etc.
-    :copy,
-    # P2-batch4: div/rem on constant operands stay as un-inlined `:invoke`s when
-    # inference proves they always throw (rt Union{}) — compile the real Base
-    # methods so the guarded div intrinsic raises a catchable DivideError.
-    # P2-batch17: mod/fld/cld are the same family (gap 0feb6e87a716: mod(0x00,0x00)
-    # in a try stayed an :invoke with rt Union{} and stubbed to an uncatchable trap).
-    :div, :rem, :mod, :fld, :cld,
-    # P2-batch20: any/all with closure predicates stay un-inlined :invokes of
-    # Base._any/_all (gap f891246d19f5) — same precedent as :filter.
-    :_any, :_all, :any, :all,
-    # P2-batch25: gcd(typemin(T), x) routes through un-inlined checked_abs,
-    # whose invoke stubbed to an uncatchable unreachable (gap d85520bb7a58).
-    # checked_abs/checked_neg bodies are plain compilable Julia whose internal
-    # throw(OverflowError) lowers to the catchable tag-0 path.
-    :checked_abs, :checked_neg,
-    # P2-batch25 (gap d252317ff208): Int-from-Float constructors stay as real
-    # invokes when inference proves they always throw (`Int64(14.95…)` →
-    # InexactError) — the body is the guard + catchable throw, so compile it
-    # instead of stubbing the invoke to an uncatchable unreachable.
-    :Int8, :Int16, :Int32, :Int64, :Int128,
-    :UInt8, :UInt16, :UInt32, :UInt64, :UInt128,
-    # P2-batch20: Float64^Float64 must use Julia's correctly-rounded pow_body,
-    # not the JS Math.pow import (3-ulp divergence → sin(x^x) wildly off, gap
-    # e0f6a8de978a). The ^ wrapper is tiny; pow_body is already whitelisted.
-    :^,
-])
-
-"""
-Check if a MethodInstance should be auto-discovered and compiled.
-"""
-function check_and_add_external_method!(mi::Core.MethodInstance, seen_funcs::Set, to_add::Vector, to_scan::Vector)
-    meth = mi.def
-    if !(meth isa Method)
-        return
-    end
-
-    mod = meth.module
-    mod_name = nameof(mod)
-    meth_name = meth.name
-
-    # Check if module is Base or a submodule of Base (e.g., Base.Sort, Base.Math)
-    _is_base_or_sub = mod === Base || (try parentmodule(mod) === Base catch; false end)
-
-    # Skip core modules - these are handled specially
-    # BUT allow whitelisted Base methods (e.g., Dict operations, Sort) to be compiled
-    # WBUILD-5401: Also allow #string#NNN and #power_by_squaring#NNN kwarg wrappers
-    # (version-dependent names for kwarg expansion methods)
-    if mod_name in SKIP_AUTODISCOVER_MODULES || mod === Core || _is_base_or_sub
-        _meth_str = String(meth_name)
-        # P3: #sort#NN / #filter#NN kwarg-body numbers are version-dependent
-        # (1.12 has #sort#24, 1.13 has #sort#25) — match by prefix.
-        _is_allowed = _is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
-                                           startswith(_meth_str, "#string#") ||
-                                           startswith(_meth_str, "#power_by_squaring#") ||
-                                           startswith(_meth_str, "#sort#") ||
-                                           startswith(_meth_str, "#_sort!#") ||
-                                           startswith(_meth_str, "#filter#"))
-        # P2-batch22 (gap 8a25857213ba family): user closures defined in Main.
-        # A closure passed to a higher-order function compiles as a real
-        # :invoke when its body is too big to inline; skipping Main wholesale
-        # stubbed that invoke to unreachable (so `any(y->haskey(Dict(...)...)`
-        # trapped iff defined in Main — anonymous modules worked). Generated
-        # closure names start with '#'; allow those through.
-        _is_allowed |= mod === Main && startswith(_meth_str, "#")
-        if !_is_allowed
-            return
-        end
-    end
-
-    # Skip error/throw functions
-    if meth_name in SKIP_AUTODISCOVER_METHODS
-        return
-    end
-
-    # Get the function and argument types from the MethodInstance
-    func = nothing
-    arg_types = nothing
-
-    try
-        # Get the function - for constructors, it's the type itself
-        sig = mi.specTypes
-        if sig <: Tuple && length(sig.parameters) >= 1
-            func_type = sig.parameters[1]
-            if func_type isa DataType && func_type <: Function
-                # Regular function call
-                # The function is stored in the Method's sig
-                # P4-stdlib (Statistics pilot): Core.kwcall instances carry
-                # mi.def in the FUNCTION's module with the function's NAME
-                # (def.module=Statistics, def.name=:var for `var(v; kw...)`),
-                # so getfield(mod, meth_name) extracts the WRONG callee (var
-                # itself, with kwcall-shaped arg types — method lookup then
-                # fails and the invoke stubbed). Use the kwcall singleton;
-                # its sorter body recursively discovers the kwarg-body method.
-                _is_kwcall = try func_type.instance === Core.kwcall catch; false end
-                func = _is_kwcall ? Core.kwcall : try
-                    f0 = getfield(mod, meth_name)
-                    # a8c00917b1b0: singleton callable structs bound to their own
-                    # type name (e.g. `Base.Colon`) — getfield yields the TYPE, and
-                    # code_typed(Type, args) probes a CONSTRUCTOR call that doesn't
-                    # exist, so the callee was silently skipped and its invoke
-                    # compiled to `unreachable`. The method belongs to the
-                    # singleton INSTANCE — use it.
-                    (f0 isa Type && f0 === func_type && isdefined(func_type, :instance)) ?
-                        func_type.instance : f0
-                catch
-                    # WBUILD-4000: Inner functions (closures) aren't module-level bindings.
-                    # For singleton callable structs (zero-field closures like overflow_case),
-                    # use the type's singleton instance instead.
-                    try func_type.instance catch; nothing end
-                end
-                arg_types = Tuple(sig.parameters[2:end])
-            elseif func_type isa DataType && func_type <: Type
-                # Constructor call - function is the type
-                # e.g., ParseStream(args...) where func_type = Type{ParseStream}
-                inner_type = func_type.parameters[1]
-                # inner_type can be DataType or UnionAll (for parametric types like Lexer{IO})
-                if inner_type isa DataType || inner_type isa UnionAll
-                    func = inner_type
-                    arg_types = Tuple(sig.parameters[2:end])
-                end
-            end
-        end
-    catch
-        return  # Can't extract function/types
-    end
-
-    if func === nothing || arg_types === nothing
-        return
-    end
-
-    # PURE-605: Skip kwarg wrapper methods whose arg types contain function singletons
-    # (e.g., #untokenize#44 has typeof(untokenize) as a positional arg)
-    # These cause cascading discovery of methods that may not compile cleanly.
-    # PURE-800: Exempt WasmTarget (M4 self-hosting needs #compile#84)
-    # PURE-804: Exempt JuliaSyntax (parsestmt needs #_parse#75)
-    # PURE-914: Exempt whitelisted Base methods (findnext takes Fix2{typeof(isequal),Char})
-    # Also exempt JuliaSyntax submodules (e.g., Tokenize for accept_number with isdigit)
-    _is_julias = nameof(mod) === :JuliaSyntax ||
-                 (isdefined(mod, :parentmodule) && try nameof(parentmodule(mod)) === :JuliaSyntax catch; false end)
-    _is_kwarg_wrapper = startswith(String(meth_name), "#")
-    # P4-stdlib: kwcall sorters necessarily take the target function as an
-    # argument (typeof(var) etc.) — exempt them from the function-singleton
-    # skip, as the whole point is to compile through to the kwarg body.
-    # a8c00917b1b0 follow-up (Snapshot.jl newton): user-defined higher-order
-    # functions (e.g. `standard_Newton(f, …)` in a notebook sandbox module) were
-    # silently skipped by the function-singleton-arg heuristic below — their
-    # :invoke then compiled to `unreachable`. The heuristic exists to stop
-    # cascading discovery through Base/stdlib internals; USER code (any module
-    # rooted in Main, incl. gensym'd sandboxes) should always be attempted —
-    # the can_compile probe still gates what actually lands.
-    _root = mod
-    while parentmodule(_root) !== _root
-        _root = parentmodule(_root)
-    end
-    _is_userland = _root === Main
-    _exempt_mod = mod === WasmTarget || _is_julias || _is_kwarg_wrapper ||
-                  func === Core.kwcall || _is_userland ||
-                  (_is_base_or_sub && (meth_name in AUTODISCOVER_BASE_METHODS ||
-                                       startswith(String(meth_name), "#string#") ||
-                                       startswith(String(meth_name), "#power_by_squaring#") ||
-                                       startswith(String(meth_name), "#sort#") ||
-                                       startswith(String(meth_name), "#_sort!#") ||
-                                       startswith(String(meth_name), "#filter#")))
-    if !_exempt_mod
-        for t in arg_types
-            if t isa DataType && t <: Function && isconcretetype(t)
-                return
-            end
-        end
-    end
-
-    # WBUILD-4000: Skip length(Array) — handled inline via struct.get on size field.
-    # Only discover length() for non-Array AbstractVector types (StepRange, SubArray, etc.)
-    if meth_name === :length && arg_types !== nothing && length(arg_types) == 1 &&
-       arg_types[1] isa DataType && arg_types[1] <: Array
-        return
-    end
-
-    # Create a unique key for this function+types combination
-    key = (func, arg_types)
-    if key in seen_funcs
-        return
-    end
-
-    # PURE-605: Verify the function can actually be compiled before adding
-    can_compile = try
-        ct = Base.code_typed(func, Tuple{arg_types...})
-        !isempty(ct) && ct[1][1] isa Core.CodeInfo
-    catch
-        false
-    end
-    can_compile || return
-
-    # Add to seen and to_add
-    push!(seen_funcs, key)
-    name = string(meth_name)
-    entry = (func, arg_types, name)
-    push!(to_add, entry)
-    push!(to_scan, entry)  # Also scan this function for its deps
-end
-
-"""
-Check if a GlobalRef is a WasmTarget runtime function and add it if needed.
-"""
-function check_and_add_runtime_func!(ref::GlobalRef, seen_funcs::Set, to_add::Vector, to_scan::Vector)
-    # Get the actual function first - this handles cases where the function
-    # is imported into another module (e.g., Main.str_eq when using WasmTarget)
-    func = try
-        getfield(ref.mod, ref.name)
-    catch
-        return  # Can't get function
-    end
-
-    # Skip if not a function
-    if !isa(func, Function)
-        return
-    end
-
-    # Check if this function belongs to WasmTarget (by checking its parent module)
-    # This handles both WasmTarget.str_eq and imported str_eq (which becomes Main.str_eq)
-    if parentmodule(func) !== WasmTarget
-        return
-    end
-
-    # Check if this is a known runtime function
-    func_name = nameof(func)
-    if func_name in WASMTARGET_RUNTIME_FUNCTIONS
-        # Determine argument types based on the function name
-        arg_types = infer_runtime_func_arg_types(func_name)
-        if arg_types === nothing
-            return  # Can't infer types
-        end
-
-        # Check if we've already seen this (func, arg_types)
-        key = (func, arg_types)
-        if key in seen_funcs
-            return
-        end
-
-        # Add to seen and to_add
-        push!(seen_funcs, key)
-        name = string(func_name)
-        entry = (func, arg_types, name)
-        push!(to_add, entry)
-        push!(to_scan, entry)  # Also scan this function for its deps
-    end
-end
-
-"""
-    PURE-605: Set of modules whose :call GlobalRef expressions should be resolved
-    to methods and auto-discovered. Unlike :invoke (which has MethodInstance),
-    :call expressions need arg types extracted from IR ssavaluetypes.
-"""
-const CALL_AUTODISCOVER_MODULES = Set([:JuliaLowering, :JuliaSyntax])
-
-"""
-    PURE-605: Whitelisted Base method names for :call auto-discovery.
-    These are methods that appear as :call (not :invoke) in lowering IR
-    and need to be compiled rather than handled as builtins.
-"""
-const CALL_AUTODISCOVER_BASE_METHODS = Set([
-    :getindex, :setindex!,
-])
-
-"""
-    _sanitize_ssa_type(t) -> Type
-
-Convert compiler-internal SSA types (PartialStruct, Conditional, MustAlias, etc.)
-to concrete DataTypes suitable for `which()` / `Tuple{...}` construction.
-"""
-function _sanitize_ssa_type(t)
-    # Regular types pass through
-    t isa Type && return t
-    # PartialStruct → use its typ field (the concrete DataType)
-    if hasproperty(t, :typ)
-        return t.typ
-    end
-    # Conditional → Bool
-    if hasproperty(t, :thentype) && hasproperty(t, :elsetype)
-        return Bool
-    end
-    # Const → typeof the value
-    if hasproperty(t, :val)
-        return typeof(t.val)
-    end
-    return Any
-end
-
-"""
-    try_resolve_call_method!(func_ref, call_args, ir, func_arg_types, seen_funcs, to_add, to_scan)
-
-PURE-605: For :call GlobalRef expressions, try to resolve the method by extracting
-argument types from the IR's ssavaluetypes and using `which()` to find the Method.
-This handles dynamic calls where Julia couldn't specialize (no MethodInstance in IR).
-"""
-function try_resolve_call_method!(func_ref::GlobalRef, call_args, ir, func_arg_types::Tuple,
-                                  seen_funcs::Set, to_add::Vector, to_scan::Vector)
-    mod_name = nameof(func_ref.mod)
-
-    # Only resolve for target modules or whitelisted Base methods
-    is_target = mod_name in CALL_AUTODISCOVER_MODULES
-    is_base_whitelist = (func_ref.mod === Base && func_ref.name in CALL_AUTODISCOVER_BASE_METHODS)
-    (is_target || is_base_whitelist) || return
-
-    # Get the function object
-    called_func = try
-        getfield(func_ref.mod, func_ref.name)
-    catch
-        return
-    end
-
-    # Skip Core/Base builtins re-exported through JuliaLowering/JuliaSyntax
-    # (e.g., JuliaLowering.=== is actually Core.===)
-    actual_mod = try parentmodule(called_func) catch; nothing end
-    if actual_mod === Core || actual_mod === Base
-        # Only allow whitelisted Base methods that should actually be compiled
-        if !(actual_mod === Base && func_ref.name in CALL_AUTODISCOVER_BASE_METHODS)
-            return
-        end
-    end
-
-    # Skip builtins/intrinsics that can't be compiled
-    (typeof(called_func) <: Core.Builtin || typeof(called_func) <: Core.IntrinsicFunction) && return
-
-    # Extract argument types from IR ssavaluetypes
-    # Must sanitize compiler-internal types (PartialStruct, Conditional, etc.) to real Types
-    call_types = Any[]
-    for arg in call_args
-        t = if arg isa Core.SSAValue
-            ir.stmts.type[arg.id]
-        elseif arg isa Core.Argument
-            arg.n >= 1 && arg.n <= length(func_arg_types) ? func_arg_types[arg.n] : Any
-        elseif arg isa GlobalRef
-            try typeof(getfield(arg.mod, arg.name)) catch; Any end
-        else
-            typeof(arg)
-        end
-        # Sanitize compiler-internal types to concrete DataTypes
-        push!(call_types, _sanitize_ssa_type(t))
-    end
-
-    # Skip if any arg type is a function singleton (kwarg wrapper pattern)
-    for t in call_types
-        (t isa DataType && t <: Function) && return
-    end
-
-    # Try to find a matching method
-    arg_tuple = try Tuple{call_types...} catch; return end
-    # Try to add the function directly with the inferred arg types
-    # Verify it compiles via code_typed first (guards against invalid type combos)
-    key = (called_func, Tuple(call_types))
-    if key in seen_funcs
-        return
-    end
-
-    can_compile = try
-        ct = Base.code_typed(called_func, arg_tuple)
-        !isempty(ct)
-    catch
-        false
-    end
-
-    if can_compile
-        push!(seen_funcs, key)
-        name = string(func_ref.name)
-        entry = (called_func, Tuple(call_types), name)
-        push!(to_add, entry)
-        # NOTE: Do NOT push to to_scan — :call-discovered functions should not
-        # transitively discover more deps. This prevents explosion of the
-        # dependency graph into complex JuliaSyntax internals.
-    end
-end
-
-"""
-Infer argument types for WasmTarget runtime functions.
-Returns Nothing if types cannot be inferred.
-"""
-function infer_runtime_func_arg_types(name::Symbol)::Union{Tuple, Nothing}
-    # String operations typically use String and Int32
-    if name in [:str_char, :str_getchar]
-        return (String, Int32)
-    elseif name in [:str_setchar!]
-        return (String, Int32, Int32)
-    elseif name in [:str_len, :str_charlen]
-        return (String,)
-    elseif name in [:str_new]
-        return (Int32,)
-    elseif name in [:str_copy]
-        return (String, Int32, String, Int32, Int32)
-    elseif name in [:str_substr]
-        return (String, Int32, Int32)
-    elseif name in [:str_concat, :str_eq, :str_find, :str_contains]
-        return (String, String)
-    elseif name in [:str_startswith, :str_endswith]
-        return (String, String)
-    elseif name in [:str_hash]
-        return (String,)
-    elseif name in [:str_uppercase, :str_lowercase, :str_trim]
-        return (String,)
-    elseif name in [:digit_to_str]
-        return (Int32,)
-    elseif name in [:int_to_string]
-        return (Int32,)
-    # Array operations
-    elseif name in [:arr_len]
-        return nothing  # Can't infer element type
-    elseif name in [:arr_new]
-        return nothing  # Can't infer element type
-    elseif name in [:arr_get]
-        return nothing  # Can't infer element type
-    elseif name in [:arr_set!]
-        return nothing  # Can't infer element type
-    else
-        return nothing
-    end
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
 end
 
 """
@@ -829,7 +110,9 @@ function is_intrinsic_function(f)::Bool
         return false
     end
     fname = nameof(f)
-    return fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new, :str_setchar!, :str_concat, :str_substr]
+    return f === Base.rethrow ||
+           fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new,
+                     :str_setchar!, :str_concat, :str_substr]
 end
 
 """
@@ -837,14 +120,29 @@ Generate intrinsic function body for WasmTarget runtime functions.
 These functions have special WASM implementations that differ from their Julia fallbacks.
 Returns the function body bytes, or nothing if not an intrinsic.
 """
-function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
+function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                 return_type::Union{Type, Nothing}=nothing)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
     # Only functions can have intrinsic bodies
     if !(f isa Function)
         return nothing
     end
     fname = nameof(f)
-    b = InstrBuilder(; func_name="generate_intrinsic_body", mod=mod)
+    # tag-run: the builder declares its params (the same julia→wasm mapping the
+    # emitted function will carry) so the tracker reads truth for every local.get
+    local _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+    local _ib_results = (return_type === nothing || return_type === Nothing || return_type === Union{}) ?
+                        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+    b = InstrBuilder(_ib_params, _ib_results; func_name="generate_intrinsic_body", mod=mod)
     extra_locals = WasmValType[]
+
+    if f === Base.rethrow
+        ensure_exception_tag!(mod)
+        global_get!(b, ensure_exception_global!(mod), AnyRef)
+        ref_null!(b, ExternRef)
+        throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+        end_block!(b)
+        return (builder_code(b), extra_locals)
+    end
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)
@@ -856,12 +154,14 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
         local_set!(bb, scratch_idx)
         i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
+        i32_const!(bb, 0)
         local_get!(bb, scratch_idx)
+        i32_const!(bb, -1)
         struct_new!(bb, get_string_struct_type!(mod, type_registry),
-                    WasmValType[I32, ConcreteRef(UInt32(str_type_idx), true)])
+                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true), I32])
     end
     _str0!(bb) = (local_get!(bb, 0);
-                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                               ConcreteRef(UInt32(str_type_idx), true)))
 
     if fname === :str_char
@@ -1046,10 +346,10 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # i = 0, count = 0 (already zero-initialized)
 
         # block $exit (result i32)
-        block!(b, UInt8(I32))
+        exit_label = block!(b, UInt8(I32))
 
         # loop $loop (void)
-        loop!(b)
+        loop_label = loop!(b)
 
         # if i >= len: break with count
         local_get!(b, 1)  # i
@@ -1057,7 +357,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         num!(b, Opcode.I32_GE_U)
         if_!(b)
         local_get!(b, 2)  # count
-        br!(b, 2)  # br $exit
+        br!(b, exit_label)
         end_block!(b)
 
         # byte = s[i]; if (byte & 0xC0) != 0x80: count++
@@ -1083,7 +383,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 1)
 
         # continue loop
-        br!(b, 0)
+        br!(b, loop_label)
 
         end_block!(b)  # end loop
         unreachable!(b)  # structural trap (dart-legit dead path)
@@ -1115,10 +415,10 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 2)  # i = 0
 
         # block $exit (result i32) — for early return of false
-        block!(b, UInt8(I32))  # result type i32
+        exit_label = block!(b, UInt8(I32))  # result type i32
 
         # loop $loop (void)
-        loop!(b)  # void block type
+        loop_label = loop!(b)  # void block type
 
         # if i >= a.len → break out with true (all matched)
         local_get!(b, 2)  # i
@@ -1128,7 +428,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         if_!(b)  # void
         # Done — push 1 (true) and break out of block
         i32_const!(b, 1)
-        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        br!(b, exit_label)
         end_block!(b)  # end if
 
         # Compare a[i] vs b[i] (array.get_u for packed i8)
@@ -1142,7 +442,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         if_!(b)  # void
         # Mismatch — push 0 (false) and break out of block
         i32_const!(b, 0)
-        br!(b, 2)  # br $exit (block depth 2: if=0, loop=1, block=2)
+        br!(b, exit_label)
         end_block!(b)  # end if
 
         # i++
@@ -1152,7 +452,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         local_set!(b, 2)  # i = i + 1
 
         # br $loop (continue)
-        br!(b, 0)  # br to loop (depth 0 from here)
+        br!(b, loop_label)
         end_block!(b)  # end loop
         unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
         end_block!(b)  # end block
@@ -1195,14 +495,18 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
         _a_data = 2 + length(extra_locals) - 2
         _b_data = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, _a_data, extra_locals[end - 1])
+        builder_set_local_type!(b, _b_data, extra_locals[end])
         _str0!(b); local_set!(b, _a_data)
         local_get!(b, 1)
-        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(1),
+        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                     ConcreteRef(UInt32(str_type_idx), true))
         local_set!(b, _b_data)
         push!(extra_locals, I32)  # len_a
         str_ref_type = ConcreteRef(str_type_idx, true)
         push!(extra_locals, str_ref_type)  # local 3: result array ref
+        builder_set_local_type!(b, 4, I32)
+        builder_set_local_type!(b, 5, str_ref_type)
 
         # len_a = array.len(a)
         local_get!(b, _a_data)  # a data
@@ -1273,34 +577,20 @@ mod = compile_module([
 
 Functions can call each other within the module.
 """
-function compile_module(functions::Vector;
-                        stub_names::Set{String}=Set{String}(),
+function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
+                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                        link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
-                        overlay_entries::Set=Set{Tuple{Any,Tuple}}(),
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false,
-                        strict::Bool=true,
-                        discovery::Symbol=:trim
+                        register_ir_types::Bool=false
                         )
-    # P5-trim: discovery=:trim replaces the homegrown dependency walk +
-    # AUTODISCOVER whitelist with the upstream closed-world collection
-    # (collect_closed_world). The whole pipeline then compiles from the
-    # collection's paired CodeInfos via the TRIM_IR_CACHE served inside
-    # get_typed_ir. Cache cleanup is in the wrapper below.
-    discovery === :trim && return _compile_module_trim(functions;
-        stub_names, existing_module, import_stubs, return_registries,
-        overlay_entries, optimize_ir, register_ir_types, strict)
+    # This private entry receives only a complete plan produced by
+    # `trim_compile_plan`. It never discovers or silently adds functions.
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
-
-    # WASM-057: Auto-discover function dependencies
-    # P5-trim: skipped when the trim plan already expanded the closed world
-    if !_TRIM_ACTIVE[]
-        functions = discover_dependencies(functions; interp=interp)
-    end
 
     # Filter out any discovered functions that are import stubs
     # (import stubs are registered in func_registry at their import indices, not compiled)
@@ -1309,41 +599,20 @@ function compile_module(functions::Vector;
         functions = filter(entry -> !(entry isa Tuple && entry[1] in import_stub_funcs), functions)
     end
 
-    # Create shared module and registries (or use existing module)
+    # SOUNDNESS: reset every per-module task-local cache for every compilation.
+    # A framework-supplied `existing_module` is still a new component and must not
+    # inherit type/function indices or callable identities from the previous one.
+    clear_io_imports!()
+    clear_rng_globals!()
+    clear_perf_now!()
+    clear_char_array_type!()
+    clear_utf8_to_js_func!()
+
+    # Create shared module and registries (or use the framework's predeclared module).
     if existing_module !== nothing
         mod = existing_module
     else
-        # SOUNDNESS: reset all per-module task-local caches BEFORE building a fresh
-        # module. These are cleared on the success path at end-of-module (below), but
-        # NOT in a finally — so a PRIOR compile that threw before reaching the clears
-        # leaks a stale type/func index into this fresh module. The PI pipeline compiles
-        # many cells in one task with many throwing compiles, so the stale
-        # `_CHAR_ARRAY_TYPE_IDX` (i16-char-array index) got baked into this module's
-        # `utf8_to_js` helper as `array.new_default <stale>`, where that slot is now the
-        # `fromCharCodeArray` *func* type → "expected array type at index N, found (func …)".
-        # Clearing at the start of every fresh-module build makes each compile leak-proof.
-        clear_io_imports!()
-        clear_rng_globals!()
-        clear_perf_now!()
-        clear_char_array_type!()
-        clear_utf8_to_js_func!()
         mod = WasmModule()
-        # WASM-060 (issue #56): the `Math.pow` import was historically emitted in
-        # EVERY module to back float `^`. That path now compiles `pow_body`
-        # directly (P2-batch20 — the host `Math.pow` is 3 ulp off), so NOTHING
-        # calls this import: even `x^y` produces zero `call $Math.pow` (verified
-        # across Float64/Float32/Int/literal pow). Emitting it anyway is pure dead
-        # weight AND forces every embedder to supply `{ Math: { pow } }` at
-        # instantiation even for a trivial `a + b` (a module that imports nothing
-        # must be instantiated with no imports object — declaring an unused import
-        # breaks `WebAssembly.instantiate(bytes)`). Only emit it when the embedder
-        # is wiring imports via `import_stubs`, where a precomputed `wasm_idx` may
-        # assume `Math.pow` sits at import index 0 — keep that ABI stable. On the
-        # raw `compile`/`compile_multi` path the module is now genuinely
-        # import-free for pure code, and the README example works as-written.
-        if !isempty(import_stubs)
-            add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
-        end
     end
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
@@ -1377,6 +646,47 @@ function compile_module(functions::Vector;
             push!(normalized, (f, arg_types, name))
         else
             push!(normalized, entry)
+        end
+    end
+
+    requested_names = Set(String(entry[3]) for entry in normalized)
+    unknown_bindings = setdiff(Set(keys(root_bindings)), requested_names)
+    isempty(unknown_bindings) || throw(ArgumentError(
+        "root bindings do not match compilation roots: $(sort!(collect(unknown_bindings)))"))
+    n_imported_functions = num_imported_funcs(mod)
+    for (root_name, bindings) in root_bindings
+        for (_, (_, global_idx)) in bindings.captured_globals
+            Int(global_idx) < length(mod.globals) || throw(ArgumentError(
+                "root $root_name references missing global index $global_idx"))
+        end
+        for (global_idx, updates) in bindings.dom_bindings
+            Int(global_idx) < length(mod.globals) || throw(ArgumentError(
+                "root $root_name DOM binding references missing global index $global_idx"))
+            for (import_idx, _) in updates
+                Int(import_idx) < n_imported_functions || throw(ArgumentError(
+                    "root $root_name DOM binding references missing function import $import_idx"))
+            end
+        end
+        for import_idx in values(bindings.invoke_imports)
+            Int(import_idx) < n_imported_functions || throw(ArgumentError(
+                "root $root_name invoke binding references missing function import $import_idx"))
+        end
+        unknown_targets = setdiff(Set(values(bindings.invoke_roots)), requested_names)
+        isempty(unknown_targets) || throw(ArgumentError(
+            "root $root_name invokes unknown compilation roots: $(sort!(collect(unknown_targets)))"))
+        overlap_sites = intersect(Set(keys(bindings.invoke_imports)),
+                                  Set(keys(bindings.invoke_roots)))
+        isempty(overlap_sites) || throw(ArgumentError(
+            "root $root_name binds invoke sites twice: $(sort!(collect(overlap_sites)))"))
+        unknown_argument_sites = setdiff(Set(keys(bindings.invoke_arguments)),
+            union(Set(keys(bindings.invoke_imports)), Set(keys(bindings.invoke_roots))))
+        isempty(unknown_argument_sites) || throw(ArgumentError(
+            "root $root_name selects arguments for unbound invoke sites: " *
+            "$(sort!(collect(unknown_argument_sites)))"))
+        for target_idx in bindings.entry_calls
+            Int(target_idx) < n_imported_functions + length(mod.functions) ||
+                throw(ArgumentError(
+                    "root $root_name entry call references missing function $target_idx"))
         end
     end
 
@@ -1452,7 +762,22 @@ function compile_module(functions::Vector;
         # cached their pair under (T, arg_types); a miss errors loudly.)
         code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
 
-        if is_closure
+        bindings = get(root_bindings, name, nothing)
+        elide_closure_context = bindings !== nothing && bindings.elide_closure_context
+        if elide_closure_context
+            overlap = intersect(Set(keys(bindings.captured_globals)),
+                                Set(keys(bindings.captured_constants)))
+            isempty(overlap) || throw(ArgumentError(
+                "root $name binds closure fields twice: $(sort!(collect(overlap)))"))
+            missing_fields = Symbol[field for field in fieldnames(closure_type)
+                                    if !haskey(bindings.captured_globals, field) &&
+                                       !haskey(bindings.captured_constants, field)]
+            isempty(missing_fields) || throw(ArgumentError(
+                "root $name cannot elide closure context; unsubstituted fields: $(missing_fields)"))
+        end
+        bindings !== nothing && bindings.void_return && (return_type = Nothing)
+
+        if is_closure && !elide_closure_context
             # Prepend the closure type to arg_types for type registration and WASM codegen
             arg_types = (closure_type, arg_types...)
         end
@@ -1527,48 +852,13 @@ function compile_module(functions::Vector;
         end
     end
 
-    # Scan all function IR for GlobalRef to mutable structs (module-level globals)
-    # These need to be shared across all functions as WASM globals
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
-    for (f, arg_types, name, code_info, return_type, global_args, is_closure) in function_data
-        for stmt in code_info.code
-            if stmt isa GlobalRef
-                # Check if this GlobalRef points to a mutable struct instance
-                try
-                    actual_val = getfield(stmt.mod, stmt.name)
-                    T = typeof(actual_val)
-                    # Check if it's a mutable struct (but not a type, function, or module)
-                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                        key = (stmt.mod, stmt.name)
-                        if _lookup_module_global(module_globals, key) === nothing
-                            # Register the struct type first
-                            info = register_struct_type!(mod, type_registry, T)
-                            type_idx = info.wasm_type_idx
-
-                            # Build initialization expression: struct.new_default
-                            # Use struct_new_default to safely initialize all fields to defaults
-                            # (0 for numerics, null for refs). The global is mutable and gets
-                            # patched at runtime, so exact field values don't matter here.
-                            _init_b = InstrBuilder(; func_name="module_global_init")
-                            struct_new_default!(_init_b, type_idx)
-                            init_bytes = builder_code(_init_b)
-
-                            # Add global with reference type
-                            global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            push!(module_globals, (key, global_idx))
-                        end
-                    end
-                catch
-                    # If we can't evaluate, skip it
-                end
-            end
-        end
-    end
-
-    # PURE-9035: Pre-register all 12 core exception types for DFS typeIds.
-    # Only register types with simple fields to avoid creating complex types.
+    # Exception objects synthesized by lowering must join the closed component
+    # before DFS class IDs freeze; late registration makes catch-side `isa`
+    # structurally unable to classify an otherwise real payload.
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError)
+                   StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
+                   DomainError, InexactError, KeyError, MethodError,
+                   AssertionError, UndefVarError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 
@@ -1608,11 +898,6 @@ function compile_module(functions::Vector;
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
     # PURE-9065: Pre-create string hash helper function if any function uses memhash.
     # This must happen BEFORE function index assignment, because adding functions during
     # body compilation would shift indices and break cross-function calls.
@@ -1644,6 +929,25 @@ function compile_module(functions::Vector;
         get_or_create_string_hash_func!(mod, type_registry)
     end
 
+    # Pre-create the shared utf8proc property table/helper before function-index
+    # assignment. Both category and character width read the same packed byte.
+    needs_unicode_properties = false
+    for (_, _, _, code_info, _, _, _) in function_data
+        code_info === nothing && continue
+        for stmt in code_info.code
+            if stmt isa Expr && stmt.head === :foreigncall && !isempty(stmt.args)
+                fc_sym = extract_foreigncall_name(stmt.args[1])
+                if fc_sym in (:utf8proc_category, :utf8proc_charwidth,
+                              :jl_id_start_char, :jl_id_char)
+                    needs_unicode_properties = true
+                    break
+                end
+            end
+        end
+        needs_unicode_properties && break
+    end
+    needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
+
     # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
     # their init functions NOW — the same index-freeze constraint (functions cannot be
     # added during body compilation without shifting indices). dart constants.dart:454.
@@ -1668,33 +972,18 @@ function compile_module(functions::Vector;
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
-    _fn_signature = function(arg_types, return_type, global_args)
-        local pts = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            if !(j in global_args)
-                if T isa Union && needs_anyref_boxing(T)
-                    push!(pts, AnyRef)
-                else
-                    push!(pts, get_concrete_wasm_type(T, mod, type_registry))
-                end
-            end
-        end
-        local rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
-                    WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-        return (pts, rts)
-    end
-
     n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
-    _disp_cands = _TRIM_ISOLATED_FUNCS[]
+    _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
         # fullstrict: the PLACEHOLDER carries the true signature from birth
-        local _pp, _rr = _fn_signature(arg_types, return_type, global_args)
+        local _pp, _rr = function_wasm_signature(arg_types, return_type, global_args,
+                                                  mod, type_registry)
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
@@ -1703,12 +992,16 @@ function compile_module(functions::Vector;
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).
-    local _cvp = Tuple{Int, DataType}[]   # (function_data position, closure type)
+    local _cvp = Tuple{Int, DataType, Bool}[] # (function_data position, callable type, takes context)
     for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
-        f isa DataType && is_closure_type(f) && push!(_cvp, (i, f))
+        if f isa DataType && is_closure_type(f)
+            push!(_cvp, (i, f, true))
+        elseif f isa Function && typeof(f) in _ENROLLED_CALLABLE_TYPES[]
+            push!(_cvp, (i, typeof(f), false))
+        end
     end
     if !isempty(_cvp)
-        for (_slot, (_i, _T)) in enumerate(_cvp)
+        for (_slot, (_i, _T, _takes_context)) in enumerate(_cvp)
             local _entry = function_data[_i]
             local _ats, _rt = _entry[2], _entry[5]
             # fullstrict reorder: the placeholders occupy the body indices ALREADY —
@@ -1717,8 +1010,19 @@ function compile_module(functions::Vector;
             local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
             local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
                          WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
-            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs)
+            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs;
+                                   body_return_type=_rt, takes_context=_takes_context)
         end
+    end
+
+    if link_roots !== nothing
+        imports_before_link = length(mod.imports)
+        root_indices = Dict{String,UInt32}(
+            name => UInt32(n_imports + n_existing + i - 1)
+            for (i, (_, _, name, _, _, _, _)) in enumerate(function_data))
+        link_roots(mod, root_indices, type_registry)
+        length(mod.imports) == imports_before_link || throw(ArgumentError(
+            "the root linker cannot add imports after function indices are frozen"))
     end
 
 
@@ -1726,13 +1030,6 @@ function compile_module(functions::Vector;
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
-
-    # PURE-9062: Build overlay tables if overlay_entries are specified.
-    # parity(M8.4): overlays are NOT a parallel table apparatus — a user method is
-    # just a higher-priority ROW in the same selector (dart has one table, period).
-    # dt.entries already carries one entry per tuple with the user registration
-    # winning at register time; same-tuple collisions were resolved before build.
-    # The old split (build_overlay_tables → parallel tables checked first) is DELETED.
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
@@ -1743,19 +1040,11 @@ function compile_module(functions::Vector;
     # Track export names to avoid duplicates (WASM requires unique export names)
     export_name_counts = Dict{String, Int}()
 
-    # WASMTARGET dynamic dispatch: module func indices of discovery-added functions
-    # (see _TRIM_ISOLATED_FUNCS). After assembly, any of these whose bytecode fails
-    # validation is stubbed (a latent-bug in discovery-pulled-in code shouldn't fail
-    # the whole module — entries + their normal deps stay strict).
-    isolated_indices = Set{UInt32}()
-    _isolated_set = _TRIM_ISOLATED_FUNCS[]
-
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
-        _this_isolated = !isempty(_isolated_set) && (f, arg_types) in _isolated_set
         # Check if this is an intrinsic function that needs special code generation
-        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry) : nothing
+        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type) : nothing
 
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
@@ -1768,29 +1057,7 @@ function compile_module(functions::Vector;
             dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
         end
 
-        if name in stub_names
-            # PURE-6024: Emit unreachable stub for functions that should not be compiled
-            body = UInt8[Opcode.UNREACHABLE, Opcode.END]
-            locals = WasmValType[]
-        elseif return_type === Union{}
-            # PARSE-001: Auto-stub functions that always throw (return type Union{}).
-            # These are error/throw functions (e.g., _parser_stuck_error) whose bodies
-            # produce invalid WASM due to Union{}-typed values. Since they only throw,
-            # a throw is the correct semantics — and P2-batch17: it must be the
-            # CATCHABLE tag-0 throw, not `unreachable`: callers inside try/catch
-            # must be able to catch it (an unreachable here was an uncatchable trap).
-            ensure_exception_tag!(mod)
-            _exn_g = ensure_exception_global!(mod)
-            _stub_b = InstrBuilder(; func_name="union_bottom_throw_stub")
-            ref_null!(_stub_b, AnyRef)                     # ref.null any (0xD0 0x6E)
-            global_set!(_stub_b, _exn_g)                  # global.set _exn_g
-            global_get!(_stub_b, _exn_g, AnyRef)
-            ref_null!(_stub_b, ExternRef)
-            throw_!(_stub_b, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-            end_block!(_stub_b)                           # end
-            body = builder_code(_stub_b)
-            locals = WasmValType[]
-        elseif intrinsic_body !== nothing
+        if intrinsic_body !== nothing
             # Use the intrinsic body directly
             body, locals = intrinsic_body
         elseif dispatch_dt !== nothing
@@ -1807,37 +1074,44 @@ function compile_module(functions::Vector;
             end
         else
             # Generate function body from Julia IR
+            bindings = get(root_bindings, name, nothing)
+            local _root_invokes = bindings === nothing ? Dict{Int,UInt32}() :
+                Dict{Int,UInt32}(site => UInt32(n_imports + n_existing +
+                    findfirst(d -> d[3] == target, function_data) - 1)
+                    for (site, target) in bindings.invoke_roots)
+            local _bound_invokes = bindings === nothing ? Dict{Int,UInt32}() :
+                merge(bindings.invoke_imports, _root_invokes)
             ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
                                     func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                    global_args=global_args, is_compiled_closure=is_closure,
-                                    module_globals=module_globals, strict=strict)
-            # WASMTARGET dynamic dispatch: ISOLATE discovery-added functions (dispatch
-            # candidates + their transitive deps, pulled in only by the dynamic-dispatch
-            # collection). A latent-bug codegen crash in such a function stubs JUST it
-            # (→ trap only if that runtime type is actually dispatched here), instead of
-            # failing the whole module. Entries + their normal deps stay strict.
-            if _this_isolated
-                try
-                    body = generate_body(ctx)
-                    locals = ctx.locals
-                catch _iso_e
-                    @debug "WASMTARGET: stubbing isolated discovery-added function (codegen crash)" f arg_types _iso_e
-                    body = UInt8[Opcode.UNREACHABLE, Opcode.END]
-                    locals = WasmValType[]
-                end
-            else
-                body = generate_body(ctx)
-                locals = ctx.locals
-            end
+                                    global_args=global_args,
+                                    is_compiled_closure=is_closure &&
+                                        !(bindings !== nothing && bindings.elide_closure_context),
+                                    captured_signal_fields=bindings === nothing ?
+                                        Dict{Symbol,Tuple{Bool,UInt32}}() : bindings.captured_globals,
+                                    captured_constant_fields=bindings === nothing ?
+                                        Dict{Symbol,Any}() : bindings.captured_constants,
+                                    dom_bindings=bindings === nothing ?
+                                        Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}() : bindings.dom_bindings,
+                                    skip_stmts=bindings === nothing ? Set{Int}() : bindings.skip_stmts,
+                                    invoke_imports=_bound_invokes)
+            ctx.entry_calls = bindings === nothing ? UInt32[] : copy(bindings.entry_calls)
+            ctx.invoke_arguments = bindings === nothing ? Dict{Int,Vector{Int}}() :
+                deepcopy(bindings.invoke_arguments)
+            # Preserve structured compiler/validation errors and their complete
+            # diagnostic ledgers. The context already carries the root function
+            # and source location; converting failures to ErrorException here
+            # erased the machine-readable contract used by framework callers.
+            body = generate_body(ctx)
+            locals = ctx.locals
         end
 
         # fullstrict: FILL the pre-declared placeholder (same signature derivation)
-        param_types, result_types = _fn_signature(arg_types, return_type, global_args)
+        param_types, result_types = function_wasm_signature(arg_types, return_type, global_args,
+                                                             mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
         mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body)
         actual_idx = func_idx
-        _this_isolated && push!(isolated_indices, actual_idx)
 
         # Export the function with a unique name
         export_name = name
@@ -1846,7 +1120,7 @@ function compile_module(functions::Vector;
             export_name = "$(name)_$(count)"
         end
         export_name_counts[name] = count + 1
-        add_export!(mod, export_name, 0, actual_idx)
+        add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
     # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
@@ -1860,6 +1134,7 @@ function compile_module(functions::Vector;
     # PURE-4149: Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
+    finalize_module_initializers!(mod, type_registry)
 
     # PURE-9040/9042/9043: Clear module-level state after compilation
     clear_io_imports!()
@@ -1868,59 +1143,10 @@ function compile_module(functions::Vector;
     clear_char_array_type!()
     clear_utf8_to_js_func!()
 
-    # census F2 (march5, the ORIGINAL isa bug's second root): structs registered
-    # LAZILY during body compilation never received `sub $JlBase` — the early
-    # retrofit ran before bodies, so `ref.test (ref $JlBase)` (the isa/typeof gate)
-    # was FALSE for every late-registered struct at runtime. Re-run the idempotent
-    # retrofit now that every struct exists. (dart declares supertypes at class
-    # definition — class_info.dart:288 — so this second pass has no dart analog;
-    # it exists because WT registers lazily.)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    # WASMTARGET dynamic dispatch: stub any discovery-added function whose ASSEMBLED
-    # bytecode fails validation (invalid-but-non-crashing codegen not caught by the
-    # per-function try/catch above). A latent WT codegen bug in code pulled in only by
-    # the dynamic-dispatch discovery stubs that one function (→ trap only if its type is
-    # actually dispatched at runtime) instead of failing the whole module. Entries +
-    # their normal deps stay strict (a validation failure there is rethrown).
-    if !isempty(isolated_indices)
-        _stub_invalid_isolated_funcs!(mod, isolated_indices, n_imports)
-    end
-
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
     end
     return mod
-end
-
-# Validate the assembled module; while a DISCOVERY-ADDED (isolated) function fails
-# validation, replace its body with an `unreachable` stub and re-validate. A failure
-# in a non-isolated function is rethrown (genuine bug, not hidden).
-function _stub_invalid_isolated_funcs!(mod::WasmModule, isolated_indices::Set{UInt32},
-                                       n_imports::Int; max_iters::Int=512)
-    pending = copy(isolated_indices)
-    for _ in 1:max_iters
-        bytes = to_bytes(mod)
-        err = try
-            validate_wasm_bytes(bytes; label="dispatch-isolation")
-            nothing
-        catch e
-            e
-        end
-        err === nothing && return
-        m = match(r"func (\d+) failed to validate", sprint(showerror, err))
-        m === nothing && throw(err)                 # not a per-func error → rethrow
-        fidx = parse(UInt32, m.captures[1])
-        (fidx in pending) || throw(err)             # non-isolated func invalid → genuine bug
-        li = Int(fidx) - n_imports + 1
-        (1 <= li <= length(mod.functions)) || throw(err)
-        old = mod.functions[li]
-        mod.functions[li] = WasmFunction(old.type_idx, WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END])
-        delete!(pending, fidx)
-    end
-    throw(ErrorException("dispatch-isolation: exceeded $(max_iters) stub iterations"))
 end
 
 """
@@ -1931,645 +1157,33 @@ Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::S
 Optionally a 5th element func_ref can be provided for cross-function call resolution.
 
 This is the entry point for the eval_julia pipeline where type inference has already been run.
-Unlike compile_module, this does NOT call get_typed_ir() or discover_dependencies().
+Unlike `compile_module`, this adapter starts from caller-supplied typed IR rather than
+running inference, then enters the same closed-world module compiler.
 """
+struct _PrecomputedIRKey
+    id::Int
+end
+
 function compile_module_from_ir(ir_entries::Vector)::WasmModule
-    mod = WasmModule()
-    type_registry = TypeRegistry()
-    func_registry = FunctionRegistry()
-
-    # Add Math.pow import (same as compile_module)
-    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
-
-    # PURE-9026: Create base struct type FIRST
-    get_base_struct_type!(mod, type_registry)
-
-    # Pre-register numeric box types (same as compile_module)
-    for nt in (I32, I64, F32, F64)
-        get_numeric_box_type!(mod, type_registry, nt)
-    end
-    # PURE-9028: Pre-register BoxedNothing type
-    get_nothing_box_type!(mod, type_registry)
-
-    # Build function_data from pre-computed IR (no get_typed_ir call)
-    function_data = []
-    for entry in ir_entries
+    functions = Any[]
+    cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
+    for (i, entry) in enumerate(ir_entries)
+        length(entry) >= 4 || throw(ArgumentError(
+            "IR entry $i must be (CodeInfo, return_type, arg_types, name[, func_ref])"))
         code_info, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
-        # Optional 5th element: func_ref for cross-function call resolution
-        func_ref = length(entry) >= 5 ? entry[5] : nothing
-        global_args = Set{Int}()
-
-        # Register types used in parameters
-        for (i, T) in enumerate(arg_types)
-            if T === Symbol
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: Array && T isa DataType
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
-        end
-
-        # Register return type
-        if is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
-
-        push!(function_data, (func_ref, arg_types, name, code_info, return_type, global_args, false))
+        code_info isa Core.CodeInfo || throw(ArgumentError("IR entry $i does not contain Core.CodeInfo"))
+        arg_types isa Tuple || throw(ArgumentError("IR entry $i arg_types must be a Tuple"))
+        key = length(entry) >= 5 && entry[5] !== nothing ? entry[5] : _PrecomputedIRKey(i)
+        push!(functions, (key, arg_types, String(name)))
+        cache[(key, arg_types)] = (code_info, return_type)
     end
 
-    # Scan for GlobalRef to mutable structs (same as compile_module)
-    # TRUE-INT-002-impl2: Also scan Expr args for nested GlobalRef
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
-    function _scan_globalref!(val, module_globals, mod, type_registry)
-        if val isa GlobalRef
-            try
-                actual_val = getfield(val.mod, val.name)
-                T = typeof(actual_val)
-                if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                    key = (val.mod, val.name)
-                    if _lookup_module_global(module_globals, key) === nothing
-                        info = register_struct_type!(mod, type_registry, T)
-                        type_idx = info.wasm_type_idx
-                        _init_b = InstrBuilder(; func_name="module_global_init")
-                        struct_new_default!(_init_b, type_idx)
-                        init_bytes = builder_code(_init_b)
-                        global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                        push!(module_globals, (key, global_idx))
-                    end
-                end
-            catch
-            end
-        elseif val isa Expr
-            for arg in val.args
-                _scan_globalref!(arg, module_globals, mod, type_registry)
-            end
-        end
-    end
-    for (_, _, _, code_info, _, _, _) in function_data
-        for stmt in code_info.code
-            _scan_globalref!(stmt, module_globals, mod, type_registry)
-        end
-    end
-
-    # PURE-9035: Pre-register all core exception types for DFS typeIds
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError)
-        register_struct_type!(mod, type_registry, _exn_T)
-    end
-
-    # PURE-9025: Assign DFS type IDs after all types are registered
-    assign_type_ids!(type_registry)
-
-    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
-    get_nothing_global!(mod, type_registry)
-
-    # PURE-9063: Create $JlType hierarchy types (before type globals use them)
-    create_jl_type_hierarchy!(mod, type_registry)
-
-    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
-    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
-
-    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
-    ensure_all_type_globals!(mod, type_registry)
-    create_type_lookup_table!(mod, type_registry)
-
-    # PURE-9026: Set all struct types as subtypes of $JlBase for typeof(x)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    # Calculate function indices
-    n_imports = length(mod.imports)
-    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
-    end
-
-    # Compile function bodies
-    export_name_counts = Dict{String, Int}()
-    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-
-        # Generate function body from Julia IR (no intrinsic check — pre-computed IR is always normal code)
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                global_args=global_args, is_compiled_closure=false,
-                                module_globals=module_globals)
-        body = generate_body(ctx)
-        locals = ctx.locals
-
-        # Get param/result types
-        param_types = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            # PURE-9030: Union params with mixed int/float need anyref for runtime dispatch
-            if T isa Union && needs_anyref_boxing(T)
-                push!(param_types, AnyRef)
-            else
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-            end
-        end
-        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-        # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, locals, body)
-
-        # Export
-        export_name = name
-        count = get(export_name_counts, name, 0)
-        if count > 0
-            export_name = "$(name)_$(count)"
-        end
-        export_name_counts[name] = count + 1
-        add_export!(mod, export_name, 0, actual_idx)
-    end
-
-    populate_type_constant_globals!(mod, type_registry)
-    # census F2 (march5): the post-body supertype retrofit — lazily-registered
-    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
-    # the main pipeline's note).
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    return mod
-end
-
-"""
-Specification for a DOM update call after signal write.
-Used by compile_handler to inject DOM update calls after signal writes.
-"""
-struct DOMBindingSpec
-    import_idx::UInt32          # Index of the DOM import function
-    const_args::Vector{Int32}   # Constant arguments (e.g., hydration key)
-    include_signal_value::Bool  # Whether to pass signal value as final arg
-end
-
-"""
-    compile_handler(closure, signal_fields, export_name; globals, imports, dom_bindings) -> WasmModule
-
-Compile a Therapy.jl event handler closure to WebAssembly with signal substitution.
-
-The `signal_fields` dict maps captured closure field names to their signal info:
-- Key: field name (Symbol), e.g., :count, :set_count
-- Value: tuple (is_getter::Bool, global_idx::UInt32, value_type::Type)
-
-The handler closure should take no arguments. Signal getters/setters are captured
-in the closure and compiled to Wasm global.get/global.set operations.
-
-When `dom_bindings` is provided, DOM update calls are automatically injected after
-each signal write. This is used by Therapy.jl for reactive DOM updates.
-
-# Example
-```julia
-count, set_count = create_signal(0)
-handler = () -> set_count(count() + 1)
-
-signal_fields = Dict(
-    :count => (true, UInt32(0), Int64),      # getter for global 0
-    :set_count => (false, UInt32(0), Int64)  # setter for global 0
-)
-
-mod = compile_handler(handler, signal_fields, "onclick")
-```
-"""
-function compile_handler(
-    closure::Function,
-    signal_fields::Dict{Symbol, Tuple{Bool, UInt32, Type}},
-    export_name::String;
-    globals::Vector{Tuple{Type, Any}} = Tuple{Type, Any}[],  # (type, initial_value) pairs
-    imports::Vector{Tuple{String, String, Vector, Vector}} = Tuple{String, String, Vector, Vector}[],  # (module, name, params, results)
-    dom_bindings::Dict{UInt32, Vector{DOMBindingSpec}} = Dict{UInt32, Vector{DOMBindingSpec}}()  # global_idx -> DOM updates
-)::WasmModule
-    # Get typed IR for the closure (no arguments since it's a thunk)
-    typed_results = Base.code_typed(closure, ())
-    if isempty(typed_results)
-        error("Could not get typed IR for handler closure")
-    end
-    code_info, return_type = typed_results[1]
-
-    # Create module
-    mod = WasmModule()
-    type_registry = TypeRegistry()
-
-    # Add imports first (they affect function indices)
-    import_indices = Dict{Tuple{String, String}, UInt32}()
-    for (mod_name, func_name, params, results) in imports
-        idx = add_import!(mod, mod_name, func_name, params, results)
-        import_indices[(mod_name, func_name)] = idx
-    end
-
-    # Create globals from signal fields
-    # Collect unique global indices and their types
-    required_globals = Dict{UInt32, Type}()
-    for (_, (_, global_idx, value_type)) in signal_fields
-        if !haskey(required_globals, global_idx)
-            required_globals[global_idx] = value_type
-        end
-    end
-
-    # Add explicit globals passed in
-    for (i, (gtype, gval)) in enumerate(globals)
-        global_idx = UInt32(i - 1)
-        if !haskey(required_globals, global_idx)
-            required_globals[global_idx] = gtype
-        end
-    end
-
-    # Add all required globals to the module and export them
-    for global_idx in sort(collect(keys(required_globals)))
-        value_type = required_globals[global_idx]
-        wasm_type = julia_to_wasm_type(value_type)
-        # Find initial value from explicit globals if available
-        initial_value = zero(value_type)
-        if Int(global_idx) + 1 <= length(globals)
-            _, initial_value = globals[Int(global_idx) + 1]
-        end
-        while length(mod.globals) <= Int(global_idx)
-            actual_idx = add_global!(mod, wasm_type, true, initial_value)
-            # Export the global for JS access
-            add_global_export!(mod, "signal_$(actual_idx)", actual_idx)
-        end
-    end
-
-    # Build captured_signal_fields for CompilationContext
-    # Maps field_name -> (is_getter, global_idx) without the type
-    captured_signal_fields = Dict{Symbol, Tuple{Bool, UInt32}}()
-    for (field_name, (is_getter, global_idx, _)) in signal_fields
-        captured_signal_fields[field_name] = (is_getter, global_idx)
-    end
-
-    # Convert DOMBindingSpec to internal format for CompilationContext
-    # Internal format: global_idx -> [(import_idx, const_args), ...]
-    internal_dom_bindings = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}()
-    for (global_idx, specs) in dom_bindings
-        internal_dom_bindings[global_idx] = [(spec.import_idx, spec.const_args) for spec in specs]
-    end
-
-    # Compile the closure body
-    # Closures have one implicit argument (_1 = self)
-    ctx = CompilationContext(
-        code_info,
-        (),  # No explicit arguments
-        return_type,
-        mod,
-        type_registry;
-        captured_signal_fields = captured_signal_fields,
-        dom_bindings = internal_dom_bindings
-    )
-    body = generate_body(ctx)
-
-    # Handler functions take no params and return nothing (void)
-    # The return value (if any) is typically dropped in event handlers
-    param_types = WasmValType[]
-    result_types = WasmValType[]  # Event handlers return void
-
-    # Add function to module
-    func_idx = add_function!(mod, param_types, result_types, ctx.locals, body)
-
-    # Export the function
-    add_export!(mod, export_name, 0, func_idx)
-
-    return mod
-end
-
-"""
-    compile_closure_body(closure, captured_signal_fields, mod, type_registry; dom_bindings) -> (Vector{UInt8}, Vector{NumType})
-
-Compile a closure body to Wasm bytecode without creating a new module.
-Returns the body bytecode and locals needed for the function.
-
-This is the lower-level API used by Therapy.jl to compile handler closures
-into an existing module with shared globals and imports.
-
-The `captured_signal_fields` maps field names to (is_getter, global_idx).
-The `dom_bindings` maps global_idx to list of (import_idx, const_args) tuples.
-"""
-function compile_closure_body(
-    closure::Function,
-    captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}},
-    mod::WasmModule,
-    type_registry::TypeRegistry;
-    func_registry::Union{FunctionRegistry, Nothing} = nothing,
-    dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}} = Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
-    skip_stmts::Set{Int} = Set{Int}(),
-    invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}(),
-    void_return::Bool = false
-)
-    # Get typed IR for the closure (using WasmInterpreter for overlays).
-    # Import stubs use Base.donotdelete() to prevent DCE in optimized IR,
-    # so we always use optimize=true for proper :invoke resolution.
-    interp = get_wasm_interpreter()
-    typed_results = Base.code_typed(closure, (); interp=interp)
-    if isempty(typed_results)
-        error("Could not get typed IR for handler closure")
-    end
-    code_info, inferred_return_type = typed_results[1]
-
-    # For void handlers (like Therapy.jl event handlers), override return type
-    return_type = void_return ? Nothing : inferred_return_type
-
-    # Auto-discover and compile the closure's dependencies (sin/exp/sqrt/det,
-    # stdlib reductions, …) into the module — the same transitive discovery
-    # compile_module does. When the caller supplies no registry (e.g. Therapy's
-    # memo compilation, _compile_memo_wasm), create one locally: without it,
-    # EVERY non-inlined call in the closure body stubs to `unreachable`, so a
-    # memo could only use functions Julia happened to inline (plain arithmetic),
-    # and any `sin`/`std`/`det`/… silently trapped at runtime. Discovered deps
-    # are appended to the module + registered so the body's call sites resolve.
-    # Callers that already pass a registry are unaffected.
-    effective_func_registry = func_registry === nothing ? FunctionRegistry() : func_registry
-    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, effective_func_registry;
-                                invoke_imports = invoke_imports)
-
-    # Check if the closure captures non-signal fields (e.g., Vector{String} props).
-    # If so, pass the closure struct as parameter 0 (Leptos/dart2wasm pattern):
-    # the closure object IS the first WASM function argument, and getfield on
-    # Argument(1) compiles to struct.get on param 0.
-    closure_type = typeof(closure)
-    has_non_signal_captures = false
-    if is_closure_type(closure_type)
-        for fname in fieldnames(closure_type)
-            if !haskey(captured_signal_fields, fname)
-                has_non_signal_captures = true
-                break
-            end
-        end
-    end
-
-    arg_types = if has_non_signal_captures
-        # Register the closure struct type so getfield can compile to struct.get
-        register_closure_type!(mod, type_registry, closure_type)
-        (closure_type,)
-    else
-        ()
-    end
-
-    # Create compilation context
-    ctx = CompilationContext(
-        code_info,
-        arg_types,
-        return_type,
-        mod,
-        type_registry;
-        func_registry = effective_func_registry,
-        is_compiled_closure = has_non_signal_captures,
-        captured_signal_fields = captured_signal_fields,
-        dom_bindings = dom_bindings,
-        skip_stmts = skip_stmts,
-        invoke_imports = invoke_imports
-    )
-
-    # Generate body
-    body = generate_body(ctx)
-
-    return (body, ctx.locals)
-end
-
-"""
-    compile_function_into!(f, arg_types, mod, type_registry; export_name) -> UInt32
-
-Compile a standalone Julia function into an existing WASM module.
-Returns the function index. Used by Therapy.jl to add bridge functions
-(string/vector construction) to an island's shared module.
-
-Follows the same pattern as compile_multi's per-function compilation.
-"""
-function compile_function_into!(f::Function, arg_types::Tuple, mod::WasmModule,
-                                 type_registry::TypeRegistry;
-                                 export_name::Union{String, Nothing}=nothing,
-                                 interp=nothing)::UInt32
-    closure_type = typeof(f)
-    is_closure = is_closure_type(closure_type)
-    actual_arg_types = is_closure ? (closure_type, arg_types...) : arg_types
-
-    code_info, return_type = get_typed_ir(f, actual_arg_types; interp=interp)
-
-    # Register parameter types
-    for T in actual_arg_types
-        if is_closure_type(T)
-            register_closure_type!(mod, type_registry, T)
-        elseif T <: Vector
-            register_vector_type!(mod, type_registry, T)
-        elseif T <: Array && T isa DataType
-            register_matrix_type!(mod, type_registry, T)
-        elseif is_struct_type(T)
-            register_struct_type!(mod, type_registry, T)
-        elseif T === String
-            get_string_struct_type!(mod, type_registry)
-        end
-    end
-
-    # Register return type
-    if return_type !== Nothing && return_type !== Union{}
-        if return_type <: Vector
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type <: Array && return_type isa DataType
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
-    end
-
-    # Reserve function index
-    func_idx = UInt32(length(mod.functions) + length(mod.imports))
-
-    # Compile body
-    ctx = CompilationContext(code_info, actual_arg_types, return_type, mod, type_registry;
-                            func_idx=func_idx, func_ref=f, is_compiled_closure=is_closure)
-    body = generate_body(ctx)
-    locals = ctx.locals
-
-    # Param/result types
-    param_types = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in actual_arg_types]
-    result_types = (return_type === Nothing || return_type === Union{}) ?
-        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-    idx = add_function!(mod, param_types, result_types, locals, body)
-    if export_name !== nothing
-        add_export!(mod, export_name, 0, idx)
-    end
-    return idx
-end
-
-"""
-    _autodiscover_closure_deps!(closure, code_info, mod, type_registry, func_registry)
-
-Scan a closure's IR for method invocations that need to be compiled as separate
-functions in the module. This enables closures compiled via compile_closure_body
-to call filter(), map(), sort(), etc.
-
-Uses the same AUTODISCOVER_BASE_METHODS whitelist as compile_module's
-discover_dependencies path.
-"""
-function _autodiscover_closure_deps!(closure::Function, code_info::Core.CodeInfo,
-                                     mod::WasmModule, type_registry::TypeRegistry,
-                                     func_registry::FunctionRegistry;
-                                     invoke_imports::Dict{Int, UInt32} = Dict{Int, UInt32}())
-    # Collect all invoke targets from the closure's IR
-    deps = Vector{Tuple{Any, Tuple, String}}()
-    seen = Set{Tuple{Any, Tuple}}()
-
-    # Also collect from existing func_registry to avoid duplicates
-    for (name, info) in func_registry.functions
-        push!(seen, (info.func_ref, info.arg_types))
-    end
-
-    # Reuse check_and_add_external_method! to discover both Base whitelisted
-    # methods AND user-package methods (e.g., WasmPlot kwarg wrappers)
-    _to_scan_tmp = Vector{Tuple{Any, Tuple, String}}()
-    for (stmt_idx, stmt) in enumerate(code_info.code)
-        # Skip invokes already wired as WASM imports (Therapy.jl `js()` interop):
-        # they are emitted as `call <import>`, NOT compiled as functions. Without
-        # this, auto-discovery tries to COMPILE `js` (a no-op-in-Julia interop
-        # intrinsic) as a real function and produces an invalid module
-        # (e.g. the DarkModeToggle island's `js(…, set_dark)` effect).
-        haskey(invoke_imports, stmt_idx) && continue
-        if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
-            mi_or_ci = stmt.args[1]
-            mi = if mi_or_ci isa Core.MethodInstance
-                mi_or_ci
-            elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
-                mi_or_ci.def
-            else
-                nothing
-            end
-            mi === nothing && continue
-            check_and_add_external_method!(mi, seen, deps, _to_scan_tmp)
-        end
-    end
-
-    isempty(deps) && return
-
-    # Run full dependency discovery on the collected deps
-    # WASMMAKIE E-003: the wasm interpreter (overlay table) is REQUIRED here —
-    # without it code_ircode fails on overlay-dependent deps (resolve_axis),
-    # the dep is silently skipped, and its CALLEES (final_limits) never get
-    # discovered: the call site then stubs unreachable while the parent
-    # compiles fine. compile_module's discovery already passes it.
-    all_deps = discover_dependencies(deps; interp=get_wasm_interpreter())
-
-    # Reset seen to only func_registry entries — direct deps added during collection
-    # must NOT be skipped here (that was the seen-set bug: BF1)
-    compiled = Set{Tuple{Any, Tuple}}()
-    for (_n, info) in func_registry.functions
-        push!(compiled, (info.func_ref, info.arg_types))
-    end
-
-    # Two-pass compilation (same pattern as compile_module):
-    # Pass 1: Get typed IR and reserve function indices for ALL deps
-    # Pass 2: Compile bodies (all cross-call targets already in func_registry)
-    # This prevents stubbing when a caller (e.g. _render_axis!) is compiled
-    # before its callees (e.g. _render_bar!, _render_ticks!).
-
-    # Pass 1: collect typed IR, filter, reserve indices
-    dep_data = Vector{Tuple{Any, Tuple, String, Core.CodeInfo, Type}}()
-    for (f, arg_types, name) in all_deps
-        key = (f, arg_types)
-        key in compiled && continue
-        push!(compiled, key)
-
-        try
-            # WASMMAKIE E-003: use the SAME IR entry compile_module uses
-            # (constructor/closure handling) instead of bare code_typed, and
-            # pre-register parameter/return struct types — missing
-            # registration produced 'Unknown struct type reference' for
-            # constructor deps (TickLabel, SubString)
-            dep_code_info, dep_return_type = get_typed_ir(f, arg_types;
-                optimize=true, interp=get_wasm_interpreter())
-            dep_code_info === nothing && continue
-            dep_return_type === Union{} && continue
-            for T in arg_types
-                if T isa DataType
-                    if is_struct_type(T)
-                        register_struct_type!(mod, type_registry, T)
-                    elseif T <: Vector
-                        register_vector_type!(mod, type_registry, T)
-                    elseif T === String
-                        get_string_struct_type!(mod, type_registry)
-                    end
-                end
-            end
-            if dep_return_type isa DataType && is_struct_type(dep_return_type)
-                register_struct_type!(mod, type_registry, dep_return_type)
-            end
-            push!(dep_data, (f, arg_types, name, dep_code_info, dep_return_type))
-        catch e
-            @warn "compile_closure_body: skipping dependency $name — $e"
-        end
-    end
-
-    isempty(dep_data) && return
-
-    # Reserve function indices for ALL deps before compiling any bodies
-    # Pass 1.5 (WASMMAKIE E-003): append a typed `unreachable` placeholder
-    # SLOT for every dep up front. Body compilation below can itself create
-    # helper functions (string hash/iterate, vector helpers, …) which APPEND
-    # to mod.functions — with sequential add_function! that shifted every
-    # later dep above its reserved index and cross-calls hit the WRONG
-    # functions (validation: 'not enough arguments on the stack' /
-    # 'expected i64, found i32'). Reserve-then-replace makes reserved
-    # indices unconditionally stable.
-    #
-    # Unconvertible signatures (e.g. Vararg in code_typed tuples) can never
-    # compile OR be validly called: they keep an empty-sig slot for index
-    # alignment but are NOT registered — a registered entry made call sites
-    # emit `call <()→() placeholder>` with the caller's args still on the
-    # stack ('expected i64, found i32' at the next local.set); unregistered,
-    # the call site misses the lookup and stubs inline (stack-polymorphic,
-    # validates, traps loudly only if actually reached).
-    n_base = UInt32(length(mod.imports) + length(mod.functions))
-    slot_positions = Vector{Int}(undef, length(dep_data))
-    slot_ok = Vector{Bool}(undef, length(dep_data))
-    for (i, (f, arg_types, name, _, dep_return_type)) in enumerate(dep_data)
-        param_types, result_types, ok = try
-            (WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types],
-             dep_return_type === Nothing ? WasmValType[] : WasmValType[get_concrete_wasm_type(dep_return_type, mod, type_registry)],
-             true)
-        catch e
-            @warn "compile_closure_body: unconvertible dep signature $name — $e"
-            (WasmValType[], WasmValType[], false)
-        end
-        if ok
-            func_idx = n_base + UInt32(i - 1)
-            register_function!(func_registry, name, f, arg_types, func_idx, dep_return_type)
-        end
-        add_function!(mod, param_types, result_types, WasmValType[],
-                      UInt8[0x00, 0x0b])  # unreachable; end
-        slot_positions[i] = length(mod.functions)
-        slot_ok[i] = ok
-    end
-
-    # Pass 2: compile bodies and REPLACE each placeholder in place (failed
-    # bodies keep the placeholder — calling the failed dep traps loudly
-    # instead of corrupting unrelated calls)
-    for (i, (f, arg_types, name, dep_code_info, dep_return_type)) in enumerate(dep_data)
-        slot_ok[i] || continue   # unconvertible signature — placeholder stays
-        func_idx = n_base + UInt32(i - 1)
-        try
-            dep_ctx = CompilationContext(dep_code_info, arg_types, dep_return_type, mod, type_registry;
-                                         func_registry=func_registry, func_idx=func_idx, func_ref=f)
-            dep_body = generate_body(dep_ctx)
-            slot = slot_positions[i]
-            placeholder = mod.functions[slot]
-            mod.functions[slot] = WasmFunction(placeholder.type_idx,
-                                               WasmValType[l for l in dep_ctx.locals],
-                                               dep_body)
-        catch e
-            @warn "compile_closure_body: error compiling dependency $name — $e"
-        end
+    previous = TRIM_IR_CACHE[]
+    TRIM_IR_CACHE[] = cache
+    try
+        return _compile_closed_world_plan(functions)
+    finally
+        TRIM_IR_CACHE[] = previous
     end
 end
 
@@ -2681,1257 +1295,11 @@ function preprocess_ir_entries(ir_entries::Vector)
 end
 
 # ============================================================================
-# Frozen Compilation State — Phase 1-mini self-hosting support
-# ============================================================================
-
-"""
-    FrozenCompilationState
-
-Snapshot of WasmModule + TypeRegistry after all setup (type registration, hierarchy,
-box types, etc.) but BEFORE function body compilation. This allows Phase 1-mini to
-pre-compute the Dict-heavy setup at build time and ship only the pure codegen to WASM.
-
-The frozen state captures everything needed to compile function bodies without
-re-running any Dict-based setup code.
-"""
-struct FrozenCompilationState
-    mod::WasmModule
-    type_registry::TypeRegistry
-end
-
-"""
-    build_frozen_state(ir_entries::Vector) -> FrozenCompilationState
-
-Run the SETUP portion of compile_module_from_ir for representative functions,
-capturing the resulting WasmModule and TypeRegistry state. The frozen state can
-then be used by compile_module_from_ir_frozen to skip all Dict-heavy setup.
-
-Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-"""
-function build_frozen_state(ir_entries::Vector)::FrozenCompilationState
-    mod = WasmModule()
-    type_registry = TypeRegistry()
-    func_registry = FunctionRegistry()
-
-    # ---- SETUP (same as compile_module_from_ir lines 1722-1824) ----
-
-    # Add Math.pow import
-    add_import!(mod, "Math", "pow", NumType[F64, F64], NumType[F64])
-
-    # Create base struct type FIRST
-    get_base_struct_type!(mod, type_registry)
-
-    # Pre-register numeric box types
-    for nt in (I32, I64, F32, F64)
-        get_numeric_box_type!(mod, type_registry, nt)
-    end
-    # Pre-register BoxedNothing type
-    get_nothing_box_type!(mod, type_registry)
-
-    # Build function_data from pre-computed IR
-    function_data = []
-    for (code_info, return_type, arg_types, name) in ir_entries
-        global_args = Set{Int}()
-
-        # Register types used in parameters
-        for (i, T) in enumerate(arg_types)
-            if T === Symbol
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: Array && T isa DataType
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
-        end
-
-        # Register return type
-        if is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Array && return_type isa DataType
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
-
-        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
-    end
-
-    # Scan for GlobalRef to mutable structs
-    for (_, _, _, code_info, _, _, _) in function_data
-        for stmt in code_info.code
-            if stmt isa GlobalRef
-                try
-                    actual_val = getfield(stmt.mod, stmt.name)
-                    T = typeof(actual_val)
-                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                        info = register_struct_type!(mod, type_registry, T)
-                    end
-                catch
-                end
-            end
-        end
-    end
-
-    # Pre-register all core exception types for DFS typeIds
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError)
-        register_struct_type!(mod, type_registry, _exn_T)
-    end
-
-    # Assign DFS type IDs after all types are registered
-    assign_type_ids!(type_registry)
-
-    # Create BoxedNothing singleton global
-    get_nothing_global!(mod, type_registry)
-
-    # Create $JlType hierarchy types
-    create_jl_type_hierarchy!(mod, type_registry)
-
-    # Patch struct types registered before JlType hierarchy existed
-    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
-
-    # Create DataType globals for ALL types with DFS IDs + type lookup table
-    ensure_all_type_globals!(mod, type_registry)
-    create_type_lookup_table!(mod, type_registry)
-
-    # Set all struct types as subtypes of $JlBase for typeof(x)
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    return FrozenCompilationState(mod, type_registry)
-end
-
-"""
-    copy_wasm_module(src::WasmModule) -> WasmModule
-
-Create a shallow copy of a WasmModule. Each vector field is copied so that
-appending to the copy doesn't mutate the original. The elements themselves
-(immutable structs) are shared safely.
-"""
-function copy_wasm_module(src::WasmModule)::WasmModule
-    WasmModule(
-        copy(src.types),
-        [copy(rg) for rg in src.rec_groups],
-        copy(src.imports),
-        copy(src.functions),
-        copy(src.tables),
-        copy(src.memories),
-        copy(src.globals),
-        copy(src.exports),
-        copy(src.elem_segments),
-        copy(src.data_segments),
-        copy(src.tags),
-        src.start_function
-    )
-end
-
-"""
-    copy_type_registry(src::TypeRegistry) -> TypeRegistry
-
-Create a copy of a TypeRegistry. Dict fields get new Dict instances (shallow copy —
-keys and values are immutable or shared safely). Scalar fields are copied directly.
-"""
-function copy_type_registry(src::TypeRegistry)::TypeRegistry
-    TypeRegistry(
-        copy(src.structs),
-        copy(src.arrays),
-        src.string_array_idx,
-        copy(src.numeric_boxes),
-        copy(src.type_constant_globals),
-        copy(src.typename_constant_globals),
-        copy(src.type_ids),
-        copy(src.type_ranges),
-        src.base_struct_idx,
-        src.nothing_box_idx,
-        src.nothing_global_idx,
-        src.type_lookup_array_idx,
-        src.type_lookup_global,
-        src.jl_type_idx,
-        src.jl_datatype_idx,
-        src.jl_union_idx,
-        src.jl_unionall_idx,
-        src.jl_typevar_idx,
-        src.jl_typename_idx,
-        src.jl_svec_idx,
-        src.string_hash_func_idx,
-        src.box_types === nothing ? nothing : copy(src.box_types)  # F3 box_types
-    )
-end
-
-"""
-    compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompilationState)::WasmModule
-
-Compile pre-computed IR entries using a pre-built frozen state, skipping all Dict-heavy
-setup code. This is the Phase 1-mini compilation path: the frozen state was built at
-native Julia build time, and this function only runs the pure codegen (generate_body,
-compile_statement, etc.).
-
-Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-"""
-function compile_module_from_ir_frozen(ir_entries::Vector, frozen::FrozenCompilationState)::WasmModule
-    # Copy the frozen state so we don't mutate the original
-    mod = copy_wasm_module(frozen.mod)
-    type_registry = copy_type_registry(frozen.type_registry)
-    func_registry = FunctionRegistry()
-
-    # Build function_data (lightweight — no type registration needed)
-    function_data = []
-    module_globals = Tuple{Tuple{Module, Symbol}, UInt32}[]
-    for (code_info, return_type, arg_types, name) in ir_entries
-        global_args = Set{Int}()
-
-        # Scan for GlobalRef to mutable structs (need globals for these)
-        for stmt in code_info.code
-            if stmt isa GlobalRef
-                try
-                    actual_val = getfield(stmt.mod, stmt.name)
-                    T = typeof(actual_val)
-                    if ismutabletype(T) && !isa(actual_val, Type) && !isa(actual_val, Function) && !isa(actual_val, Module)
-                        key = (stmt.mod, stmt.name)
-                        if _lookup_module_global(module_globals, key) === nothing
-                            info = register_struct_type!(mod, type_registry, T)
-                            type_idx = info.wasm_type_idx
-                            _init_b = InstrBuilder(; func_name="module_global_init")
-                            struct_new_default!(_init_b, type_idx)
-                            init_bytes = builder_code(_init_b)
-                            global_idx = add_global_ref!(mod, type_idx, true, init_bytes; nullable=false)
-                            push!(module_globals, (key, global_idx))
-                        end
-                    end
-                catch
-                end
-            end
-        end
-
-        push!(function_data, (nothing, arg_types, name, code_info, return_type, global_args, false))
-    end
-
-    # Calculate function indices
-    n_imports = length(mod.imports)
-    for (i, (f, arg_types, name, _, return_type, _, _)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
-    end
-
-    # Compile function bodies (the PURE CODEGEN path)
-    export_name_counts = Tuple{String, Int}[]
-    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-
-        ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                func_registry=func_registry, func_idx=func_idx, func_ref=f,
-                                global_args=global_args, is_compiled_closure=false,
-                                module_globals=module_globals)
-        body = generate_body(ctx)
-        locals = ctx.locals
-
-        # Get param/result types
-        param_types = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            if T isa Union && needs_anyref_boxing(T)
-                push!(param_types, AnyRef)
-            else
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-            end
-        end
-        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-        # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, locals, body)
-
-        # Export (Dict-free name deduplication)
-        export_name = name
-        count = 0
-        for (n, c) in export_name_counts
-            if n == name
-                count = c
-                break
-            end
-        end
-        if count > 0
-            export_name = "$(name)_$(count)"
-        end
-        # Update or add count
-        found = false
-        for j in 1:length(export_name_counts)
-            if export_name_counts[j][1] == name
-                export_name_counts[j] = (name::String, count + 1)
-                found = true
-                break
-            end
-        end
-        if !found
-            push!(export_name_counts, (name::String, 1))
-        end
-        add_export!(mod, export_name, 0, actual_idx)
-    end
-
-    populate_type_constant_globals!(mod, type_registry)
-    # census F2 (march5): the post-body supertype retrofit — lazily-registered
-    # structs must get `sub $JlBase` or isa/typeof's ref.test gate is false (see
-    # the main pipeline's note).
-    if type_registry.base_struct_idx !== nothing
-        set_struct_supertypes!(mod, type_registry.base_struct_idx; registry=type_registry)
-    end
-
-    return mod
-end  # compile_module_from_ir_frozen
-
-"""
-    compile_module_from_ir_frozen_no_dict(ir_entries::Vector, frozen::FrozenCompilationState)::Vector{UInt8}
-
-Dict-free variant of compile_module_from_ir_frozen + to_bytes_no_dict, suitable for
-compilation to WASM. Returns the compiled WASM bytes directly (no Dict/Set in any
-top-level code path). For MVP: simple arithmetic functions (no GlobalRef, no closures).
-
-Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-"""
-function compile_module_from_ir_frozen_no_dict(ir_entries::Vector, frozen::FrozenCompilationState)::Vector{UInt8}
-    mod = compile_module_from_ir_frozen(ir_entries, frozen)
-    return to_bytes_no_dict(mod)
-end
-
-"""
-    compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
-
-Dict-free compilation path for WASM self-hosting. Convenience wrapper that creates
-WasmModule and TypeRegistry, then delegates to the prebaked version.
-"""
-function compile_from_ir_inplace(ir_entries::Vector)::Vector{UInt8}
-    return compile_from_ir_prebaked(ir_entries, WasmModule(), TypeRegistry(Val(:minimal)))
-end
-
-"""
-    compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_registry::TypeRegistry)::Vector{UInt8}
-
-Dict-free compilation path for WASM self-hosting. Uses InplaceCompilationContext
-(no Dict fields) so Julia specializes codegen functions without Dict dependencies.
-Uses the REAL codegen pipeline: generate_body → compile_statement → compile_call.
-
-Takes pre-baked WasmModule and TypeRegistry as arguments — avoids constructing
-Dict-dependent objects in WASM. For WASM self-hosting, these are embedded as globals.
-
-For MVP: Int64 arithmetic functions only (no structs, no closures, no exceptions).
-Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-"""
-function compile_from_ir_prebaked(ir_entries::Vector, mod::WasmModule, type_registry::TypeRegistry)::Vector{UInt8}
-    func_registry = FunctionRegistry()
-
-    # Build function_data
-    function_data = []
-    for (code_info, return_type, arg_types, name) in ir_entries
-        push!(function_data, (nothing, arg_types, name, code_info, return_type))
-    end
-
-    # Calculate function indices
-    n_imports = length(mod.imports)
-    for (i, (f, arg_types, name, _, return_type)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-        register_function!(func_registry, name, f, arg_types, func_idx, return_type)
-    end
-
-    # Compile function bodies using InplaceCompilationContext (Dict-free)
-    export_name_counts = Tuple{String, Int}[]
-    for (i, (f, arg_types, name, code_info, return_type)) in enumerate(function_data)
-        func_idx = UInt32(n_imports + i - 1)
-
-        ctx = InplaceCompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                       func_registry=func_registry, func_idx=func_idx, func_ref=f)
-        body = generate_body(ctx)
-        locals = ctx.locals
-
-        # Get param/result types
-        param_types = WasmValType[]
-        for (j, T) in enumerate(arg_types)
-            if T isa Union && needs_anyref_boxing(T)
-                push!(param_types, AnyRef)
-            else
-                push!(param_types, get_concrete_wasm_type(T, mod, type_registry))
-            end
-        end
-        result_types = (return_type === Nothing || return_type === Union{}) ? WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-
-        # Add function to module
-        actual_idx = add_function!(mod, param_types, result_types, locals, body)
-
-        # Export (Dict-free name deduplication)
-        export_name = name
-        count = 0
-        for (n, c) in export_name_counts
-            if n == name
-                count = c
-                break
-            end
-        end
-        if count > 0
-            export_name = "$(name)_$(count)"
-        end
-        found = false
-        for j in 1:length(export_name_counts)
-            if export_name_counts[j][1] == name
-                export_name_counts[j] = (name::String, count + 1)
-                found = true
-                break
-            end
-        end
-        if !found
-            push!(export_name_counts, (name::String, 1))
-        end
-        add_export!(mod, export_name, 0, actual_idx)
-    end
-
-    populate_type_constant_globals!(mod, type_registry)
-    return to_bytes_no_dict(mod)
-end
-
-# ============================================================================
-# ICtx Constructor Wrapper — TRUE-INT-002-impl
-# ============================================================================
-# Simple wrapper around InplaceCompilationContext constructor.
-# Avoids the kwarg constructor's Type{T} parameter that compile_from_codeinfo
-# can't handle. Takes code_info + mod + reg, creates ICtx with analysis passes.
-
-function create_ictx(code_info, arg_types::Tuple, return_type, mod::WasmModule, reg::TypeRegistry)::InplaceCompilationContext
-    InplaceCompilationContext(code_info, arg_types, return_type, mod, reg)
-end
-
-# ============================================================================
-# Minimal WASM Serializer — TRUE-INT-002
-# ============================================================================
-# Closure-free serializer for self-hosting MVP. Only writes sections needed
-# for a single i64→i64 function. The REAL codegen (generate_body) produces
-# the function body; this just frames it in the WASM binary format.
-
-"""
-    to_bytes_mvp(body::Vector{UInt8}, locals::Vector{WasmValType})::Vector{UInt8}
-
-Serialize a single i64→i64 function into a minimal valid WASM module.
-No closures, no WasmWriter, no callbacks — just direct byte construction.
-Uses the REAL function body from generate_body (the actual codegen output).
-"""
-function to_bytes_mvp(body::Vector{UInt8}, locals::Vector{WasmValType})::Vector{UInt8}
-    out = UInt8[]
-
-    # Magic number + version
-    append!(out, UInt8[0x00, 0x61, 0x73, 0x6d])  # \0asm
-    append!(out, UInt8[0x01, 0x00, 0x00, 0x00])  # version 1
-
-    # === Type Section (id=1): 1 functype [i64] → [i64] ===
-    type_payload = UInt8[]
-    append!(type_payload, encode_leb128_unsigned(1))   # 1 type
-    push!(type_payload, 0x60)                           # functype marker
-    append!(type_payload, encode_leb128_unsigned(1))   # 1 param
-    push!(type_payload, 0x7e)                           # i64
-    append!(type_payload, encode_leb128_unsigned(1))   # 1 result
-    push!(type_payload, 0x7e)                           # i64
-
-    push!(out, 0x01)  # section id: type
-    append!(out, encode_leb128_unsigned(length(type_payload)))
-    append!(out, type_payload)
-
-    # === Function Section (id=3): 1 function → type 0 ===
-    func_payload = UInt8[]
-    append!(func_payload, encode_leb128_unsigned(1))   # 1 function
-    append!(func_payload, encode_leb128_unsigned(0))   # type index 0
-
-    push!(out, 0x03)  # section id: function
-    append!(out, encode_leb128_unsigned(length(func_payload)))
-    append!(out, func_payload)
-
-    # === Export Section (id=7): export "f" → function 0 ===
-    export_payload = UInt8[]
-    append!(export_payload, encode_leb128_unsigned(1))   # 1 export
-    # name "f"
-    append!(export_payload, encode_leb128_unsigned(1))   # name length
-    push!(export_payload, UInt8('f'))                      # name bytes
-    push!(export_payload, 0x00)                            # export kind: func
-    append!(export_payload, encode_leb128_unsigned(0))   # function index 0
-
-    push!(out, 0x07)  # section id: export
-    append!(out, encode_leb128_unsigned(length(export_payload)))
-    append!(out, export_payload)
-
-    # === Code Section (id=10): 1 function body ===
-    # Build function body: locals + body bytes
-    func_body = UInt8[]
-
-    # Group locals by type
-    if isempty(locals)
-        append!(func_body, encode_leb128_unsigned(0))  # 0 local groups
-    else
-        # Group consecutive same-type locals
-        groups = Tuple{Int, UInt8}[]
-        current_count = 1
-        current_type = _wasm_valtype_byte(locals[1])
-        for i in 2:length(locals)
-            t = _wasm_valtype_byte(locals[i])
-            if t == current_type
-                current_count += 1
-            else
-                push!(groups, (current_count, current_type))
-                current_count = 1
-                current_type = t
-            end
-        end
-        push!(groups, (current_count, current_type))
-        append!(func_body, encode_leb128_unsigned(length(groups)))
-        for (count, typ) in groups
-            append!(func_body, encode_leb128_unsigned(count))
-            push!(func_body, typ)
-        end
-    end
-    append!(func_body, body)
-
-    # Wrap in code section
-    code_payload = UInt8[]
-    append!(code_payload, encode_leb128_unsigned(1))  # 1 function
-    append!(code_payload, encode_leb128_unsigned(length(func_body)))
-    append!(code_payload, func_body)
-
-    push!(out, 0x0a)  # section id: code
-    append!(out, encode_leb128_unsigned(length(code_payload)))
-    append!(out, code_payload)
-
-    return out
-end
-
-# Helper: convert WasmValType to its WASM byte encoding
-function _wasm_valtype_byte(t::WasmValType)::UInt8
-    t === I32 && return 0x7f
-    t === I64 && return 0x7e
-    t === F32 && return 0x7d
-    t === F64 && return 0x7c
-    return 0x6f  # externref fallback
-end
-
-# ============================================================================
-# Pre-Baked ICtx Constructor — TRUE-INT-002-impl2
-# ============================================================================
-# Uses ALL-POSITIONAL inner constructor with pre-computed analysis results.
-# No kwarg constructor, no analyze_* calls. For MVP: f(x::Int64)=x*x+1.
-# Pre-baked values computed from native Julia analysis at build time.
-
-"""
-    ictx_prebaked(code_info, mod::WasmModule, reg::TypeRegistry)::InplaceCompilationContext
-
-Create InplaceCompilationContext with pre-baked analysis results for f(x::Int64)=x*x+1.
-Uses ALL-POSITIONAL inner constructor — no kwarg constructor, no analyze_* calls.
-Pre-baked: ssa_types={1→Int64,2→Int64}, ssa_locals={1→1,2→2}, no phi, no loops.
-"""
-function ictx_prebaked(code_info, mod::WasmModule, reg::TypeRegistry)::InplaceCompilationContext
-    # Pre-baked ssa_types: SSA 1 → Int64, SSA 2 → Int64 (3 code entries)
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-
-    # Pre-baked ssa_locals: SSA 1 → local 1, SSA 2 → local 2
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-
-    # No phi nodes
-    phi_locals = IntKeyMap{Int}(3)
-
-    # No loops, 3 code entries
-    loop_headers = Bool[false, false, false]
-
-    # 2 extra locals (I64, I64) — for SSA values 1 and 2
-    locals = WasmValType[I64, I64]
-
-    # ALL-POSITIONAL inner constructor — 28 fields
-    InplaceCompilationContext(
-        code_info,                     # code_info::Any
-        (Int64,),                      # arg_types::Tuple
-        Int64,                         # return_type::Type
-        1,                             # n_params::Int
-        locals,                        # locals::Vector{WasmValType}
-        ssa_types,                     # ssa_types::IntKeyMap{Type}
-        ssa_locals,                    # ssa_locals::IntKeyMap{Int}
-        phi_locals,                    # phi_locals::IntKeyMap{Int}
-        loop_headers,                  # loop_headers::Vector{Bool}
-        mod,                           # mod::WasmModule
-        reg,                           # type_registry::TypeRegistry
-        nothing,                       # func_registry::Union{FunctionRegistry, Nothing}
-        UInt32(0),                     # func_idx::UInt32
-        nothing,                       # func_ref::Any
-        Int[],                         # global_args::Vector{Int}
-        false,                         # is_compiled_closure::Bool
-        nothing,                       # signal_ssa_getters::Nothing
-        nothing,                       # signal_ssa_setters::Nothing
-        nothing,                       # captured_signal_fields::Nothing
-        nothing,                       # dom_bindings::Nothing
-        Tuple{Tuple{Module, Symbol}, UInt32}[],  # module_globals
-        nothing,                       # scratch_locals::Nothing
-        nothing,                       # memoryref_offsets::Nothing
-        false,                         # last_stmt_was_stub::Bool
-        nothing,                       # slot_locals::Nothing
-        nothing,                       # dispatch_registry::Nothing
-        nothing                        # typeof_scratch_local::Nothing
-    )
-end
-
-"""
-    run_direct(code_info)::Vector{UInt8}
-
-Self-hosting entry point: takes code_info for f(x::Int64)=x*x+1,
-creates WasmModule + TypeRegistry + InplaceCompilationContext with pre-baked
-analysis, runs the REAL codegen (generate_body), and serializes to WASM bytes.
-"""
-function run_direct(code_info)::Vector{UInt8}
-    # Create module infrastructure — use new_wasm_module() wrapper instead of
-    # WasmModule() to avoid Type{T} dispatch that compile_invoke stubs as unreachable.
-    mod = new_wasm_module()
-    reg = TypeRegistry(Val(:minimal))
-
-    # INLINE ictx_prebaked body to avoid :call dispatch (which stubs as unreachable).
-    # Julia can't specialize ictx_prebaked(:call) when code_info::Any.
-    # Pre-baked analysis for f(x::Int64)=x*x+1: ssa_types={1→Int64,2→Int64}, ssa_locals={1→1,2→2}
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-    phi_locals = IntKeyMap{Int}(3)
-    loop_headers = Bool[false, false, false]
-    locals = WasmValType[I64, I64]
-
-    ctx = InplaceCompilationContext(
-        code_info, (Int64,), Int64, 1, locals,
-        ssa_types, ssa_locals, phi_locals, loop_headers,
-        mod, reg, nothing, UInt32(0), nothing,
-        Int[], false,
-        nothing, nothing, nothing, nothing,
-        Tuple{Tuple{Module, Symbol}, UInt32}[],
-        nothing, nothing,
-        false, nothing, nothing, nothing
-    )
-
-    # BYPASS generate_body — call components directly
-    code = ctx.code_info.code
-    blocks = analyze_blocks(code)
-    bytes = generate_structured(ctx, blocks)
-
-    # fix_* post-emission passes deleted (cleanup Loop 1) — the typed builder emits correct
-    # bytes up front. Strip any dead code after the function-end (same as generate_body).
-    bytes = strip_excess_after_function_end(bytes)
-
-    # Serialize to WASM binary
-    return to_bytes_mvp(bytes, ctx.locals)
-end
-
-# ============================================================================
-# Baked E2E Entry Point — TRUE-INT-002-impl2
-# ============================================================================
-# Bakes the CodeInfo for f(x::Int64)=x*x+1 as a Julia constant.
-# When compiled to WASM, Julia embeds CodeInfo as a WasmGC type constant global.
-# This avoids needing to construct CodeInfo from JS.
-
-const _baked_ci = let
-    f_test(x::Int64) = x * x + Int64(1)
-    Base.code_typed(f_test, (Int64,); optimize=true)[1][1]
-end
-
-# TRUE-INT-002-impl2-impl: Wrap in mutable Ref to prevent Julia from
-# constant-folding CodeInfo into function bodies (which adds 44KB of type registrations).
-const _baked_ci_ref = Ref{Any}(_baked_ci)
-
-"""
-    run_e2e_baked()::Vector{UInt8}
-
-Self-hosting E2E: builds CodeInfo for f(x::Int64)=x*x+1, then runs the REAL codegen
-pipeline inside WASM. ALL-IN-ONE function — everything happens in a single WASM call.
-"""
-function run_e2e_baked()::Vector{UInt8}
-    # Use the module-level constant
-    return run_direct(_baked_ci)
-end
-
-"""
-    run_e2e_ref()::Vector{UInt8}
-
-TRUE-INT-002-impl2-impl: Self-hosting E2E using Ref wrapper to prevent
-Julia from constant-folding CodeInfo (which adds ~44KB of type registrations
-that break validation in multi-function modules).
-"""
-function run_e2e_ref()::Vector{UInt8}
-    ci = _baked_ci_ref[]
-    return run_direct(ci)
-end
-
-"""
-    run_e2e_from_ci(ci)::Vector{UInt8}
-
-Self-hosting E2E: takes a pre-built CodeInfo/SimpleCodeInfo and runs the REAL codegen.
-For use when CodeInfo is passed from JS via constructors.
-"""
-function run_e2e_from_ci(ci)::Vector{UInt8}
-    return run_direct(ci)
-end
-
-# TRUE-INT-002-impl2-impl: Minimal struct to avoid embedding full CodeInfo as constant.
-# CodeInfo has 23 fields → massive WasmGC type registration → breaks validation.
-# SimpleIR has just the fields generate_structured actually reads.
-struct SimpleIR
-    code::Vector{Any}
-    ssavaluetypes::Vector{Any}
-end
-
-"""
-    run_e2e_hardcoded()::Vector{UInt8}
-
-TRUE-INT-002-impl2-impl: Self-hosting E2E with hardcoded IR for f(x::Int64)=x*x+1.
-Avoids embedding CodeInfo as constant (which adds ~44KB of type registrations and
-breaks validation). Instead, constructs the 3 IR statements inline using SimpleIR.
-"""
-function run_e2e_hardcoded()::Vector{UInt8}
-    # Construct IR for f(x::Int64)=x*x+1 — 3 statements:
-    # 1. mul_int(Argument(2), Argument(2)) → Int64
-    # 2. add_int(SSAValue(1), Int64(1)) → Int64
-    # 3. return SSAValue(2)
-    stmt1 = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
-    stmt2 = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
-    stmt3 = Core.ReturnNode(Core.SSAValue(2))
-    code = Any[stmt1, stmt2, stmt3]
-    ssa_types = Any[Int64, Int64, Any]
-
-    ci = SimpleIR(code, ssa_types)
-    return run_direct(ci)
-end
-
-"""
-    run_e2e_inlined()::Vector{UInt8}
-
-TRUE-INT-002-impl2-impl: Self-hosting E2E with run_direct body INLINED.
-Julia won't inline run_direct (517 stmts), so we copy its body here.
-This produces a single function where Julia inlines all small helpers.
-The _baked_ci constant is accessed directly (no parameter passing).
-"""
-function run_e2e_inlined()::Vector{UInt8}
-    code_info = _baked_ci
-
-    # === Body of run_direct, inlined ===
-
-    # Create module infrastructure
-    mod = new_wasm_module()
-    reg = TypeRegistry(Val(:minimal))
-
-    # Pre-baked analysis for f(x::Int64)=x*x+1
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-    phi_locals = IntKeyMap{Int}(3)
-    loop_headers = Bool[false, false, false]
-    locals = WasmValType[I64, I64]
-
-    ctx = InplaceCompilationContext(
-        code_info, (Int64,), Int64, 1, locals,
-        ssa_types, ssa_locals, phi_locals, loop_headers,
-        mod, reg, nothing, UInt32(0), nothing,
-        Int[], false,
-        nothing, nothing, nothing, nothing,
-        Tuple{Tuple{Module, Symbol}, UInt32}[],
-        nothing, nothing,
-        false, nothing, nothing, nothing
-    )
-
-    # BYPASS generate_body — call components directly
-    code = ctx.code_info.code
-    blocks = analyze_blocks(code)
-    bytes = generate_structured(ctx, blocks)
-
-    # fix_* post-emission passes deleted (cleanup Loop 1).
-    bytes = strip_excess_after_function_end(bytes)
-
-    # Serialize to WASM binary
-    return to_bytes_mvp(bytes, ctx.locals)
-end
-
-# ============================================================================
-# Byte Extraction — GAMMA-004
-# ============================================================================
-# WasmGC arrays are opaque to JavaScript. These accessor functions allow JS to
-# read individual bytes from a compiled Vector{UInt8} (the WASM binary output).
-
-"""
-    run_selfhost()::Vector{UInt8}
-
-TRUE self-hosting: zero-arg function with entire codegen pipeline inline.
-Constructs IR for f(x::Int64)=x*x+1 inline (no CodeInfo constant reference).
-All external calls (analyze_blocks, generate_structured, fix_*, to_bytes_mvp)
-are :invoke stubs that get wired in the multi-function module.
-"""
-function run_selfhost()::Vector{UInt8}
-    # 1. Setup module infrastructure
-    mod = new_wasm_module()
-    reg = TypeRegistry(Val(:minimal))
-
-    # 2. Construct IR for f(x::Int64)=x*x+1 — 3 statements
-    # Use explicit Vector construction to avoid Julia's tuple-based Any[a,b,c]
-    # which creates Tuple{Expr,Expr,ReturnNode} with dynamic getfield (unsupported in WasmGC)
-    code = Vector{Any}(undef, 3)
-    code[1] = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
-    code[2] = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
-    code[3] = Core.ReturnNode(Core.SSAValue(2))
-
-    # 3. Pre-baked analysis for f(x::Int64)=x*x+1
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-    phi_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    phi_locals = IntKeyMap{Int}(phi_locals_data)
-    loop_headers = Bool[false, false, false]
-    locals = WasmValType[I64, I64]
-
-    # 4. Create context — SimpleIR wraps the code vector
-    ci = SimpleIR(code, Any[Int64, Int64, Any])
-    ctx = InplaceCompilationContext(
-        ci, (Int64,), Int64, 1, locals,
-        ssa_types, ssa_locals, phi_locals, loop_headers,
-        mod, reg, nothing, UInt32(0), nothing,
-        Int[], false,
-        nothing, nothing, nothing, nothing,
-        Tuple{Tuple{Module, Symbol}, UInt32}[],
-        nothing, nothing,
-        false, nothing, nothing, nothing
-    )
-
-    # 5. Run codegen pipeline
-    blocks = analyze_blocks(code)
-    bytes = generate_structured(ctx, blocks)
-
-    # 6. fix_* post-emission passes deleted (cleanup Loop 1).
-    bytes = strip_excess_after_function_end(bytes)
-
-    # 7. Serialize to WASM binary
-    return to_bytes_mvp(bytes, ctx.locals)
-end
-
-"""
-TRUE self-hosting v2: Uses REAL WasmTarget compile_value for argument compilation
-and compile_statement for ReturnNode. For Expr :call statements with intrinsics,
-it uses compile_value for args and emits the intrinsic opcode + SSA local.set.
-
-Why this approach: compile_statement(::Expr, ...) has 25K stmts and fails WasmGC
-validation. But compile_value(::Argument/SSAValue/Int64, ...) validates at 24-47KB each,  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-and compile_statement(::ReturnNode, ...) validates at 40KB. The intrinsic opcode
-selection (mul_int → I64_MUL, add_int → I64_ADD) is the only manual part.
-
-Module: [run_selfhost_v2, compile_value(Arg), compile_value(SSAValue),  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-         compile_value(Int64), compile_statement(ReturnNode),  # god-fn seam: typed when the caller goes builder-native (M4 tail)
-         new_wasm_module, to_bytes_mvp, bytes_len, bytes_get]
-"""
-function run_selfhost_v2()::Vector{UInt8}
-    # 1. Setup module infrastructure
-    mod = new_wasm_module()
-    reg = TypeRegistry(Val(:minimal))
-
-    # 2. Construct IR for f(x::Int64)=x*x+1 — 3 statements
-    code = Vector{Any}(undef, 3)
-    code[1] = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
-    code[2] = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
-    code[3] = Core.ReturnNode(Core.SSAValue(2))
-
-    # 3. Pre-baked analysis for f(x::Int64)=x*x+1
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-    phi_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    phi_locals = IntKeyMap{Int}(phi_locals_data)
-    loop_headers = Bool[false, false, false]
-    locals = WasmValType[I64, I64]
-
-    # 4. Create context — SimpleIR wraps the code vector
-    ci = SimpleIR(code, Any[Int64, Int64, Any])
-    ctx = InplaceCompilationContext(
-        ci, (Int64,), Int64, 1, locals,
-        ssa_types, ssa_locals, phi_locals, loop_headers,
-        mod, reg, nothing, UInt32(0), nothing,
-        Int[], false,
-        nothing, nothing, nothing, nothing,
-        Tuple{Tuple{Module, Symbol}, UInt32}[],
-        nothing, nothing,
-        false, nothing, nothing, nothing
-    )
-
-    # 5. Compile f(x::Int64)=x*x+1 using REAL WasmTarget compile_value.
-    # compile_statement(::Expr) is 25K stmts and fails validation.
-    # Instead: compile_value for args (validates individually) + intrinsic opcode.
-    b = InstrBuilder(; func_name="run_selfhost_v2")
-
-    # Statement 1: mul_int(Arg(2), Arg(2)) → i64.mul
-    arg2 = Core.Argument(2)
-    emit_value!(b, arg2, ctx)  # REAL compile_value → local.get 0
-    emit_value!(b, arg2, ctx)  # REAL compile_value → local.get 0
-    num!(b, Opcode.I64_MUL)
-    local_set!(b, ctx.ssa_locals[1])
-
-    # Statement 2: add_int(SSA(1), Int64(1)) → i64.add
-    ssa1 = Core.SSAValue(1)
-    lit1 = Int64(1)
-    emit_value!(b, ssa1, ctx)   # REAL compile_value → local.get 1
-    emit_value!(b, lit1, ctx)   # REAL compile_value → i64.const 1
-    num!(b, Opcode.I64_ADD)
-    local_set!(b, ctx.ssa_locals[2])
-
-    # Statement 3: return SSA(2) — use REAL compile_statement for ReturnNode
-    ret_node = Core.ReturnNode(Core.SSAValue(2))
-    compile_statement!(b, ret_node, 3, ctx)   # THE visitor — tracked
-
-    end_block!(b)
-
-    # 6. Serialize to WASM binary (no fix passes — proven identical for MVP)
-    return to_bytes_mvp(builder_code(b), ctx.locals)
-end
-
-"""
-TRUE self-hosting FINAL: Real WasmTarget infrastructure (WasmModule, TypeRegistry,
-InplaceCompilationContext, to_bytes_mvp) executing in WASM to produce f(x::Int64)=x*x+1.
-
-Architecture: This function sets up the REAL compilation state (WasmModule, TypeRegistry,
-InplaceCompilationContext with pre-baked analysis), emits the bytecode for the 3 IR
-statements of f(x)=x*x+1, and serializes via the REAL to_bytes_mvp.
-
-The bytecode is emitted inline because compile_statement(::Any,...) is a dynamic dispatch
-(:call) that can't be resolved at compile time — Vector{Any} elements have type Any.
-The opcodes emitted are IDENTICAL to what compile_value/compile_call/compile_statement
-produce (verified: native output matches exactly).
-
-Module: [run_selfhost_final, to_bytes_mvp, new_wasm_module, bytes_len, bytes_get]
-5-function module validates at 51.6KB with wasm-tools.
-"""
-function run_selfhost_final()::Vector{UInt8}
-    # 1. Setup REAL module infrastructure
-    mod = new_wasm_module()
-    reg = TypeRegistry(Val(:minimal))
-
-    # 2. Construct IR for f(x::Int64)=x*x+1 — 3 statements
-    code = Vector{Any}(undef, 3)
-    code[1] = Expr(:call, Core.Intrinsics.mul_int, Core.Argument(2), Core.Argument(2))
-    code[2] = Expr(:call, Core.Intrinsics.add_int, Core.SSAValue(1), Int64(1))
-    code[3] = Core.ReturnNode(Core.SSAValue(2))
-
-    # 3. Pre-baked analysis for f(x::Int64)=x*x+1
-    ssa_types_data = Vector{Union{Nothing, Type}}(nothing, 3)
-    ssa_types_data[1] = Int64
-    ssa_types_data[2] = Int64
-    ssa_types = IntKeyMap{Type}(ssa_types_data)
-    ssa_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    ssa_locals_data[1] = 1
-    ssa_locals_data[2] = 2
-    ssa_locals = IntKeyMap{Int}(ssa_locals_data)
-    phi_locals_data = Vector{Union{Nothing, Int}}(nothing, 3)
-    phi_locals = IntKeyMap{Int}(phi_locals_data)
-    loop_headers = Bool[false, false, false]
-    locals = WasmValType[I64, I64]
-
-    # 4. Create REAL InplaceCompilationContext
-    ci = SimpleIR(code, Any[Int64, Int64, Any])
-    ctx = InplaceCompilationContext(
-        ci, (Int64,), Int64, 1, locals,
-        ssa_types, ssa_locals, phi_locals, loop_headers,
-        mod, reg, nothing, UInt32(0), nothing,
-        Int[], false,
-        nothing, nothing, nothing, nothing,
-        Tuple{Tuple{Module, Symbol}, UInt32}[],
-        nothing, nothing,
-        false, nothing, nothing, nothing
-    )
-
-    # 5. Emit bytecode for f(x::Int64) = x*x+1
-    # These are the EXACT bytes that compile_value/compile_call/compile_statement produce.
-    # compile_statement(::Any,...) can't be used because Vector{Any} elements are untyped.
-    b = InstrBuilder(; func_name="run_selfhost_final")
-
-    # Statement 1: mul_int(Argument(2), Argument(2)) → SSA[1]
-    # compile_value(Argument(2)) → local.get 0 (param index 0 = arg 2)
-    local_get!(b, 0)
-    local_get!(b, 0)
-    # compile_call intrinsic: mul_int on i64 → i64.mul
-    num!(b, Opcode.I64_MUL)
-    # local.set for SSA[1] → local index 1 (from ssa_locals)
-    local_set!(b, ctx.ssa_locals[1])
-
-    # Statement 2: add_int(SSAValue(1), Int64(1)) → SSA[2]
-    # compile_value(SSAValue(1)) → local.get 1
-    local_get!(b, ctx.ssa_locals[1])
-    # compile_value(Int64(1)) → i64.const 1
-    i64_const!(b, 1)
-    # compile_call intrinsic: add_int on i64 → i64.add
-    num!(b, Opcode.I64_ADD)
-    # local.set for SSA[2] → local index 2
-    local_set!(b, ctx.ssa_locals[2])
-
-    # Statement 3: return SSAValue(2)
-    # compile_value(SSAValue(2)) → local.get 2
-    local_get!(b, ctx.ssa_locals[2])
-    # return
-    return_!(b)
-    end_block!(b)
-
-    # 6. Serialize to WASM binary via REAL to_bytes_mvp_i64
-    # Specialized version that hardcodes [i64, i64] locals to avoid
-    # cross-function Vector{WasmValType} null dereference in WasmGC.
-    return to_bytes_mvp_i64(builder_code(b))
-end
-
-"""
-Specialized to_bytes_mvp for f(x::Int64)=x*x+1: hardcodes [i64]→[i64] functype
-and 2 i64 locals. Avoids cross-function Vector{WasmValType} issues in WasmGC.
-"""
-function to_bytes_mvp_i64(body::Vector{UInt8})::Vector{UInt8}
-    out = UInt8[]
-    # Magic + version
-    append!(out, UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
-    # Type section: [i64] → [i64]
-    append!(out, UInt8[0x01, 0x06, 0x01, 0x60, 0x01, 0x7e, 0x01, 0x7e])
-    # Function section: 1 function → type 0
-    append!(out, UInt8[0x03, 0x02, 0x01, 0x00])
-    # Export section: "f" → function 0
-    append!(out, UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00])
-    # Code section: 1 function with 1 local group (2x i64)
-    func_body = UInt8[]
-    push!(func_body, 0x01)  # 1 local group
-    push!(func_body, 0x02)  # 2 locals
-    push!(func_body, 0x7e)  # i64
-    append!(func_body, body)
-    # Code section wrapper
-    code_payload = UInt8[]
-    append!(code_payload, encode_leb128_unsigned(UInt32(1)))  # 1 function
-    append!(code_payload, encode_leb128_unsigned(UInt32(length(func_body))))
-    append!(code_payload, func_body)
-    push!(out, 0x0a)  # section id: code
-    append!(out, encode_leb128_unsigned(UInt32(length(code_payload))))
-    append!(out, code_payload)
-    return out
-end
-
-"""
-    wasm_bytes_length(v::Vector{UInt8})::Int32
-
-Return the length of a Vector{UInt8} as Int32. Used by JS glue to determine
-how many bytes to extract from the compiled WASM output.
-"""
-function wasm_bytes_length(v::Vector{UInt8})::Int32
-    return Int32(length(v))
-end
-
-"""
-    wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32
-
-Return the byte at 1-based index `i` as Int32. Used by JS glue to extract
-individual bytes from the compiled WASM output.
-"""
-function wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32
-    return Int32(v[i])
-end
-
-# ============================================================================
-# Self-Hosting Regression Suite (INT-003)
-# ============================================================================
-# 10 run_selfhost_* functions testing different code patterns.
-# Each emits inline bytecodes (same as compile_statement/compile_call produce)
-# and serializes via to_bytes_mvp_flex. All patterns are single-block (no branches).
-
-"""
-Flexible WASM binary serializer. All params/locals/results use the same type.
-  - body: bytecodes from inline emission
-  - n_params: number of function parameters (0, 1, or 2)
-  - n_locals: number of local variables
-  - type_byte: 0x7e for i64, 0x7c for f64
-"""
-function to_bytes_mvp_flex(body::Vector{UInt8}, n_params::Int32, n_locals::Int32, type_byte::Int32)::Vector{UInt8}
-    tb = UInt8(type_byte)
-    np = Int(n_params)
-    nl = Int(n_locals)
-    out = UInt8[]
-    # Magic + version
-    append!(out, UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
-    # Type section: [params] → [result]
-    type_payload = UInt8[]
-    push!(type_payload, 0x01)  # 1 type
-    push!(type_payload, 0x60)  # functype
-    push!(type_payload, UInt8(np))  # param count
-    for _ in 1:np
-        push!(type_payload, tb)
-    end
-    push!(type_payload, 0x01)  # 1 result
-    push!(type_payload, tb)
-    push!(out, 0x01)  # section id: type
-    append!(out, encode_leb128_unsigned(UInt32(length(type_payload))))
-    append!(out, type_payload)
-    # Function section: 1 function → type 0
-    append!(out, UInt8[0x03, 0x02, 0x01, 0x00])
-    # Export section: "f" → function 0
-    append!(out, UInt8[0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00])
-    # Code section
-    func_body = UInt8[]
-    if nl > 0
-        push!(func_body, 0x01)  # 1 local group
-        append!(func_body, encode_leb128_unsigned(UInt32(nl)))
-        push!(func_body, tb)
-    else
-        push!(func_body, 0x00)  # 0 local groups
-    end
-    append!(func_body, body)
-    code_payload = UInt8[]
-    append!(code_payload, encode_leb128_unsigned(UInt32(1)))  # 1 function
-    append!(code_payload, encode_leb128_unsigned(UInt32(length(func_body))))
-    append!(code_payload, func_body)
-    push!(out, 0x0a)  # section id: code
-    append!(out, encode_leb128_unsigned(UInt32(length(code_payload))))
-    append!(out, code_payload)
-    return out
-end
-
-# --- Test 1: identity — f(x::Int64)::Int64 = x ---
-function run_selfhost_identity()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_identity")
-    local_get!(b, 0)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
-end
-
-# --- Test 2: constant — f()::Int64 = 42 ---
-function run_selfhost_constant()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_constant")
-    i64_const!(b, 42)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(0), Int32(0), Int32(0x7e))
-end
-
-# --- Test 3: add_one — f(x::Int64)::Int64 = x + 1 ---
-function run_selfhost_add_one()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_add_one")
-    local_get!(b, 0)
-    i64_const!(b, 1)
-    num!(b, Opcode.I64_ADD)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
-end
-
-# --- Test 4: double — f(x::Int64)::Int64 = x + x ---
-function run_selfhost_double()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_double")
-    local_get!(b, 0)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_ADD)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
-end
-
-# --- Test 5: negate — f(x::Int64)::Int64 = 0 - x ---
-function run_selfhost_negate()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_negate")
-    i64_const!(b, 0)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_SUB)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(0), Int32(0x7e))
-end
-
-# --- Test 6: add — f(x::Int64, y::Int64)::Int64 = x + y ---
-function run_selfhost_add()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_add")
-    local_get!(b, 0)
-    local_get!(b, 1)
-    num!(b, Opcode.I64_ADD)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7e))
-end
-
-# --- Test 7: multiply — f(x::Int64, y::Int64)::Int64 = x * y ---
-function run_selfhost_multiply()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_multiply")
-    local_get!(b, 0)
-    local_get!(b, 1)
-    num!(b, Opcode.I64_MUL)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7e))
-end
-
-# --- Test 8: polynomial — f(x::Int64)::Int64 = x*x + x + 1 ---
-function run_selfhost_polynomial()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_polynomial")
-    # SSA[1] = x*x → local 1
-    local_get!(b, 0)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_MUL)
-    local_set!(b, 1)
-    # SSA[2] = SSA[1] + x → local 2
-    local_get!(b, 1)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_ADD)
-    local_set!(b, 2)
-    # SSA[3] = SSA[2] + 1 → return
-    local_get!(b, 2)
-    i64_const!(b, 1)
-    num!(b, Opcode.I64_ADD)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(2), Int32(0x7e))
-end
-
-# --- Test 9: cube — f(x::Int64)::Int64 = x * x * x ---
-function run_selfhost_cube()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_cube")
-    # SSA[1] = x*x → local 1
-    local_get!(b, 0)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_MUL)
-    local_set!(b, 1)
-    # SSA[2] = SSA[1] * x → return
-    local_get!(b, 1)
-    local_get!(b, 0)
-    num!(b, Opcode.I64_MUL)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(1), Int32(1), Int32(0x7e))
-end
-
-# --- Test 10: float_add — f(x::Float64, y::Float64)::Float64 = x + y ---
-function run_selfhost_float_add()::Vector{UInt8}
-    b = InstrBuilder(; func_name="run_selfhost_float_add")
-    local_get!(b, 0)
-    local_get!(b, 1)
-    num!(b, Opcode.F64_ADD)
-    return_!(b)
-    end_block!(b)
-    return to_bytes_mvp_flex(builder_code(b), Int32(2), Int32(0), Int32(0x7c))
-end
+# Browser byte-vector accessors. These are ordinary Julia functions compiled through
+# the canonical closed-world pipeline when an embedder requests them; they are not
+# a compiler or serializer path.
+wasm_bytes_length(v::Vector{UInt8})::Int32 = Int32(length(v))
+wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32 = Int32(v[i])
 
 # ============================================================================
 # CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)
@@ -4355,13 +1723,9 @@ function deserialize_ir_entries(json_str::String)
     return result
 end
 
-
-
-# P5-trim: trim-discovery wrapper — build the plan, activate the IR cache,
-# and run the standard pipeline with discovery handled (the legacy
-# discover_dependencies call inside is skipped via the pre-expanded list +
-# _TRIM_ACTIVE flag).
-const _TRIM_ACTIVE = Ref(false)
+# The sole module pipeline: collect one closed world, install its paired typed-IR
+# cache for the duration of codegen, then compile that immutable plan. Public
+# entry points may normalize inputs, but none may bypass this collector.
 function _compile_module_trim(functions::Vector; kwargs...)
     normalized = Any[]
     for entry in functions
@@ -4372,17 +1736,35 @@ function _compile_module_trim(functions::Vector; kwargs...)
             push!(normalized, entry)
         end
     end
-    plan, ir_cache = trim_compile_plan(normalized)
+    import_stubs = get(kwargs, :import_stubs, Any[])
+    external_entries = Any[(entry[1], Tuple(entry[3])) for entry in import_stubs]
+    root_bindings = get(kwargs, :root_bindings, Dict{String,RootBindings}())
+    for bindings in values(root_bindings), (f, arg_types) in bindings.bound_leaves
+        push!(external_entries, (f, arg_types))
+    end
+    plan, ir_cache = trim_compile_plan(normalized; external_entries)
     TRIM_IR_CACHE[] = ir_cache
-    TRIM_ENTRY_NAMES[] = Set{String}(String(e[3]) for e in normalized)
-    _TRIM_ACTIVE[] = true
     try
-        return compile_module(plan; discovery=:legacy, kwargs...)
+        return _compile_closed_world_plan(plan; kwargs...)
     finally
         TRIM_IR_CACHE[] = nothing
-        TRIM_ENTRY_NAMES[] = nothing
-        _TRIM_ACTIVE[] = false
     end
+end
+
+function compile_module(functions::Vector;
+                        existing_module::Union{WasmModule, Nothing}=nothing,
+                        import_stubs::Vector=[],
+                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                        link_roots::Union{Nothing,Function}=nothing,
+                        return_registries::Bool=false,
+                        optimize_ir::Bool=true,
+                        register_ir_types::Bool=false,
+                        discovery::Symbol=:trim)
+    discovery === :trim || throw(ArgumentError(
+        "only the closed-world compilation path is supported (discovery=:trim)"))
+    return _compile_module_trim(functions;
+        existing_module, import_stubs, return_registries,
+        root_bindings, link_roots, optimize_ir, register_ir_types)
 end
 
 """
@@ -4415,7 +1797,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
         # wasm arrays (an id here admits them as dispatch candidates whose
         # wrappers then have no struct to cast to — the _la_sub regression)
-        if isconcretetype(T) && isstructtype(T) && !(T <: Function) && T !== Core.Box &&
+        if isconcretetype(T) && isstructtype(T) &&
+           (!(T <: Function) || T in _ENROLLED_CALLABLE_TYPES[]) && T !== Core.Box &&
            !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
             push!(out, T)
         end
@@ -4435,4 +1818,18 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         end
     end
     return out
+end
+# Julia may discover several specialized functions with the same source-level name.
+# Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
+# ExportsBuilder, rejects duplicate names instead of silently repairing the request.
+function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+    final = name
+    if any(e -> e.name == final, mod.exports)
+        local k = 2
+        while any(e -> e.name == string(name, "_d", k), mod.exports)
+            k += 1
+        end
+        final = string(name, "_d", k)
+    end
+    return add_export!(mod, final, kind, idx)
 end

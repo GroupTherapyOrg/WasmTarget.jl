@@ -103,7 +103,7 @@ write("sin.wasm", bytes)""")
                 ),
                 H3(:class => "font-semibold mb-2 text-warm-900 dark:text-warm-100", "Binaryen-optimized"),
                 P(:class => "text-warm-600 dark:text-warm-400 text-sm leading-relaxed",
-                    "Optional ", Code(:class => "text-accent-500 font-mono text-xs", "wasm-opt"),
+                    "The bundled ", Code(:class => "text-accent-500 font-mono text-xs", "wasm-opt"),
                     " pass yields ~85% size reduction with zero behavioral regressions across the suite.")
             ),
             Div(:class => "border border-warm-200 dark:border-warm-800 rounded-lg p-6 bg-warm-100/50 dark:bg-warm-900/50",

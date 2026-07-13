@@ -7,19 +7,18 @@
 #     InstrIR.WasmInstr into `b.instrs` (the ir/ layer);
 #   - `builder_code` serializes `b.instrs` to bytes (the serialize/ layer) via the
 #     per-class `encode!` methods in instr_ir.jl.
-# One representation, no parallel byte path. When `strict`, a stack imbalance THROWS at
-# the emit site with Julia source context; during migration it collects so
-# partially-migrated functions still build, with the model staying live.
+# One representation, no parallel byte path. Every imbalance THROWS at the emit site
+# with Julia source context; validation is an invariant, not a mode.
 #
 # See dev/WASM_BUILDER_MIGRATION.md.
 
-export InstrBuilder, builder_code, builder_disasm, set_strict!, StackImbalanceError,
+export InstrBuilder, builder_code, builder_disasm, finish_function!, StackImbalanceError,
        set_context!, builder_diagnose, append_builder!
 
 """
     StackImbalanceError
 
-Thrown by an `InstrBuilder` in strict mode when an emit would unbalance/mistype the
+Thrown by an `InstrBuilder` when an emit would unbalance/mistype the
 operand stack — the build-time, source-located equivalent of `wasm-tools`'
 "values remaining on stack", but caught AT THE EMIT SITE with the offending Julia
 statement, the live operand-stack snapshot, and the byte offset. This is the
@@ -53,7 +52,6 @@ mutable struct InstrBuilder
     instrs::Vector{InstrIR.WasmInstr}   # the ir/ layer — serialized on demand
     v::WasmStackValidator
     locals::Vector{WasmValType}         # param + local types, indexed by local index
-    strict::Bool                        # throw on stack imbalance (migrated funcs) vs collect
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
     trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
@@ -66,29 +64,23 @@ end
 
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", strict::Bool=_wt_builder_strict(), mod=nothing)
+                      func_name::String="", mod=nothing)
     locals = WasmValType[p for p in param_types]
     # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
     # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
     # ref-flowing builders); `nothing` for numeric-only emitters that never push a
     # ConcreteRef, where the heap-kind branch is never reached.
-    v = WasmStackValidator(; enabled=true, func_name=func_name, mod=mod)
+    v = WasmStackValidator(; func_name=func_name, mod=mod)
     # Seed the outermost label as a :block whose results are the function results,
     # so end-of-function balance is checked against the declared results.
-    push!(v.labels, ValidatorLabel(:block, 0, WasmValType[r for r in result_types], true))
+    push!(v.labels, ValidatorLabel(:expression, 0, WasmValType[],
+                                   WasmValType[r for r in result_types], true))
     trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, strict, func_name, "", trace, nothing, WasmValType[])
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[])
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 function builder_code(b::InstrBuilder)::Vector{UInt8}
-    # march17 harvest: surface every collect-mode violation WITHOUT throwing —
-    # the burn-down list generator (strip after the flip).
-    if haskey(ENV, "WT_STRICT_HARVEST") && has_errors(b.v)
-        for e in b.v.errors
-            println(stderr, "HARVEST| ", b.func_name, " | ", first(e, 160))
-        end
-    end
     code = UInt8[]
     for i in eachindex(b.instrs)
         if !isassigned(b.instrs, i)
@@ -106,21 +98,6 @@ end
 builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
 _byte_len(b::InstrBuilder)::Int = length(builder_code(b))
 
-set_strict!(b::InstrBuilder, s::Bool) = (b.strict = s; b)
-
-"""
-    _wt_builder_strict() -> Bool
-
-Default strict-mode for emitters (parity M4 — dart wasm_builder instructions.dart:98:
-the builder is a type-checking abstract interpreter that THROWS on an ill-typed emit).
-**ON by default since 2026-07-01**, certified by a full capped `Pkg.test` + fuzz run under
-`WT_BUILDER_STRICT=1` (10 shards 2,681 + fuzz 293, zero failures). An ill-typed emission
-now fails AT THE EMIT SITE with the offending Julia statement + stack snapshot — valid by
-construction, beyond dart (whose checks are assert-gated). Escape hatch for debugging only:
-`WT_BUILDER_STRICT=0`. Builders constructed with an explicit per-builder
-opt-out (the remaining M4 burn-down list, ratchet R6) stay in collect mode until converted.
-"""
-_wt_builder_strict() = get(ENV, "WT_BUILDER_STRICT", "") != "0"
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
 set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
 
@@ -137,22 +114,15 @@ _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
     return _check!(b)
 end
 
-# Throw the collected validator errors (if strict) with rich source context, else collect.
+# Throw validator errors immediately with rich source context.
 @inline function _check!(b::InstrBuilder)
-    if b.strict && has_errors(b.v)
-        # STAGED (hotfix): underflows + frame errors throw; type mismatches collect
-        # while the corpus tail zeroes on wt-tag-run — the TOTAL flip relands with it.
-        # (Main went red when the total flip outran the corpus burn-down.)
-        local _uf = any(startswith(e, "UNDERFLOW") || occursin("height mismatch", e) for e in b.v.errors)
-        if _uf
-            msg = join(b.v.errors, "\n  ")
-            # march17: under WT_BUILDER_TRACE the throw carries the emit log's tail
-            if b.trace !== nothing && !isempty(b.trace)
-                msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
-            end
-            empty!(b.v.errors)
-            throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
+    if has_errors(b.v)
+        msg = join(b.v.errors, "\n  ")
+        if b.trace !== nothing && !isempty(b.trace)
+            msg *= "\n  trace tail:\n    " * join(b.trace[max(1, end-14):end], "\n    ")
         end
+        empty!(b.v.errors)
+        throw(StackImbalanceError(b.func_name, b.context, msg, _stack_snapshot(b), _byte_len(b)))
     end
     return b
 end
@@ -162,7 +132,7 @@ end
 
 Full human-readable post-mortem of a builder's state — the symbolic instruction tail,
 the operand-stack snapshot, the open control-flow labels (with their base heights/result
-types), reachability, the byte length, and any collected (non-strict) errors. Pins a
+types), reachability, the byte length, and any pending validator errors. Pins a
 codegen bug to an exact statement + stack shape with no wasm-tools round-trip.
 """
 function builder_diagnose(b::InstrBuilder)::String
@@ -285,33 +255,96 @@ nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
     (blocktype === 0x40 || blocktype isa Int) ? WasmValType[] :
     blocktype isa WasmValType ? WasmValType[blocktype] : WasmValType[]
 
-function block!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_block_start!(b.v, :block, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.Block(blocktype))
+function block!(b::InstrBuilder, blocktype=0x40;
+                inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+    label = validate_block_start!(b.v, :block, WasmValType[t for t in inputs],
+                                  _blocktype_results(blocktype, results))
+    _emit!(b, InstrIR.Block(blocktype)); return label
 end
-function loop!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_block_start!(b.v, :loop, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.Loop(blocktype))
+function loop!(b::InstrBuilder, blocktype=0x40;
+               inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+    label = validate_block_start!(b.v, :loop, WasmValType[t for t in inputs],
+                                  _blocktype_results(blocktype, results))
+    _emit!(b, InstrIR.Loop(blocktype)); return label
 end
-function if_!(b::InstrBuilder, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_if_start!(b.v, _blocktype_results(blocktype, results)); _emit!(b, InstrIR.If(blocktype))
+function if_!(b::InstrBuilder, blocktype=0x40;
+              inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+    label = validate_if_start!(b.v, WasmValType[t for t in inputs],
+                               _blocktype_results(blocktype, results))
+    _emit!(b, InstrIR.If(blocktype)); return label
 end
 else_!(b::InstrBuilder) = (validate_else!(b.v); _emit!(b, InstrIR.Else()))
 end_block!(b::InstrBuilder) = (validate_block_end!(b.v); _emit!(b, InstrIR.End()))
-br!(b::InstrBuilder, depth::Integer) = (validate_br!(b.v, Int(depth)); _emit!(b, InstrIR.Br(UInt32(depth))))
-br_if!(b::InstrBuilder, depth::Integer) = (validate_br_if!(b.v, Int(depth)); _emit!(b, InstrIR.BrIf(UInt32(depth))))
-function br_table!(b::InstrBuilder, targets::Vector{<:Integer}, default::Integer)
+
+"""Close the function label, rejecting any unclosed structured-control frames."""
+function finish_function!(b::InstrBuilder)
+    if length(b.v.labels) != 1
+        local frames = join((string(lbl.kind) for lbl in b.v.labels), " → ")
+        throw(StackImbalanceError(b.func_name, b.context,
+              "function finalization found $(length(b.v.labels) - 1) unclosed control frame(s): $frames",
+              _stack_snapshot(b), _byte_len(b)))
+    end
+    end_block!(b)
+    isempty(b.v.labels) || error("builder function label did not close")
+    # Independently audit the recorded IR structure. Fragment merges transfer
+    # already-validated instructions; this catches any validator/IR divergence
+    # before serialization (the final End closes the implicit function frame).
+    local depth = 0
+    for (i, ins) in enumerate(b.instrs)
+        if ins isa InstrIR.Block || ins isa InstrIR.Loop || ins isa InstrIR.If ||
+           ins isa InstrIR.TryTable
+            depth += 1
+        elseif ins isa InstrIR.End
+            depth -= 1
+            if depth < 0 && i != length(b.instrs)
+                throw(StackImbalanceError(b.func_name, b.context,
+                      "structured IR closes the function before instruction $i",
+                      _stack_snapshot(b), _byte_len(b)))
+            end
+        end
+    end
+    depth == -1 || throw(StackImbalanceError(b.func_name, b.context,
+          "structured IR has $(depth + 1) unclosed control frame(s) at function end",
+          _stack_snapshot(b), _byte_len(b)))
+    return b
+end
+_br_depth!(b::InstrBuilder, depth::Int) =
+    (validate_br!(b.v, depth); _emit!(b, InstrIR.Br(UInt32(depth))))
+_br_if_depth!(b::InstrBuilder, depth::Int) =
+    (validate_br_if!(b.v, depth); _emit!(b, InstrIR.BrIf(UInt32(depth))))
+function _label_depth(b::InstrBuilder, target::ControlLabel)::Int
+    i = findlast(l -> l.handle === target, b.v.labels)
+    if i === nothing
+        open_kinds = Symbol[l.handle.kind for l in b.v.labels]
+        throw(ArgumentError("branch target is not an open label: $(target.kind) " *
+                            "in $(b.func_name); open labels: $open_kinds"))
+    end
+    return length(b.v.labels) - i
+end
+br!(b::InstrBuilder, target::ControlLabel) = _br_depth!(b, _label_depth(b, target))
+br_if!(b::InstrBuilder, target::ControlLabel) = _br_if_depth!(b, _label_depth(b, target))
+function br_table!(b::InstrBuilder, targets::Vector{ControlLabel}, default::ControlLabel)
     if b.v.reachable; validate_pop!(b.v, I32); b.v.reachable = false; end
-    _emit!(b, InstrIR.BrTable(UInt32[UInt32(t) for t in targets], UInt32(default)))
+    _emit!(b, InstrIR.BrTable(UInt32[UInt32(_label_depth(b, t)) for t in targets],
+                              UInt32(_label_depth(b, default))))
 end
 return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
 # fullstrict: the module KNOWS every function's signature — derive it there; the
-# caller's claim is the fallback (imports + not-yet-pushed bodies resolve by index math).
+# caller's claim is only a fallback for a genuinely unresolved index.
 @inline function _true_call_sig(b::InstrBuilder, func_idx::Integer, params, results)
     local m = b.v.mod
     m === nothing && return (params, results)
-    local n_imp = 0
+    local function_imports = WasmImport[]
     for imp in m.imports
-        imp.kind == 0x00 && (n_imp += 1)
+        imp.kind == 0x00 && push!(function_imports, imp)
+    end
+    local n_imp = length(function_imports)
+    if 0 <= func_idx < n_imp
+        local imp = function_imports[Int(func_idx) + 1]
+        local ft = m.types[Int(imp.type_idx) + 1]
+        ft isa FuncType || return (params, results)
+        return (ft.params, ft.results)
     end
     local fi = Int(func_idx) - n_imp
     (fi >= 0 && fi < length(m.functions)) || return (params, results)
@@ -355,7 +388,7 @@ end
 # br_on_null: [(ref null ht)] -> [(ref ht)] on fallthrough; branches to `depth` with the
 # null stripped (dart2wasm br_on_null). On fallthrough the top becomes non-null; reachability
 # stays true (conditional). Validate the branch target like br_if! (without popping the value).
-function br_on_null!(b::InstrBuilder, depth::Integer)
+function _br_on_null_depth!(b::InstrBuilder, depth::Int)
     if b.v.reachable
         t = validate_pop_any!(b.v)
         nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
@@ -366,10 +399,14 @@ end
 
 # br_on_non_null: [(ref null ht)] -> [] on fallthrough; branches to `depth` carrying the
 # non-null ref (dart2wasm br_on_non_null). On fallthrough the ref is consumed; reachable stays.
-function br_on_non_null!(b::InstrBuilder, depth::Integer)
+function _br_on_non_null_depth!(b::InstrBuilder, depth::Int)
     b.v.reachable && validate_pop_any!(b.v)
     _emit!(b, InstrIR.BrOnNonNull(UInt32(depth)))
 end
+br_on_null!(b::InstrBuilder, target::ControlLabel) =
+    _br_on_null_depth!(b, _label_depth(b, target))
+br_on_non_null!(b::InstrBuilder, target::ControlLabel) =
+    _br_on_non_null_depth!(b, _label_depth(b, target))
 
 # ── Parametric: typed select ──────────────────────────────────────────────────────
 # select (typed, 0x1C): pop i32 condition, pop T, pop T, push T — same operand-stack
@@ -386,18 +423,60 @@ end
 # Catch-clause constructors a caller hands to `try_table!`. Label is the branch target
 # depth at the point of the try_table (dart2wasm passes a Label; here the caller resolves
 # it to a depth, exactly as it already does for br!/br_if!).
-catch_clause(tag::Integer, label::Integer)      = InstrIR.TryCatch(Opcode.CATCH,         UInt32(tag), UInt32(label))
-catch_ref_clause(tag::Integer, label::Integer)  = InstrIR.TryCatch(Opcode.CATCH_REF,     UInt32(tag), UInt32(label))
-catch_all_clause(label::Integer)                = InstrIR.TryCatch(Opcode.CATCH_ALL,     typemax(UInt32), UInt32(label))
-catch_all_ref_clause(label::Integer)            = InstrIR.TryCatch(Opcode.CATCH_ALL_REF, typemax(UInt32), UInt32(label))
+struct SymbolicTryCatch
+    opcode::UInt8
+    tag_idx::UInt32
+    target::ControlLabel
+end
+catch_clause(tag::Integer, label::ControlLabel) =
+    SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
+catch_ref_clause(tag::Integer, label::ControlLabel) =
+    SymbolicTryCatch(Opcode.CATCH_REF, UInt32(tag), label)
+catch_all_clause(label::ControlLabel) =
+    SymbolicTryCatch(Opcode.CATCH_ALL, typemax(UInt32), label)
+catch_all_ref_clause(label::ControlLabel) =
+    SymbolicTryCatch(Opcode.CATCH_ALL_REF, typemax(UInt32), label)
 
 # try_table: a block opener carrying catch clauses (dart2wasm `try_table`). Blocktype is a
 # void byte 0x40 or a WasmValType; `results` feeds the validator's end-balance check. The
 # catch handlers branch OUT of the try_table to their target labels (validated at br time),
 # so here we only start the block label — matching how block!/loop! work.
-function try_table!(b::InstrBuilder, catches::Vector{InstrIR.TryCatch}, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
-    validate_block_start!(b.v, :block, WasmValType[r for r in results])
-    _emit!(b, InstrIR.TryTable(blocktype, catches))
+function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+    for c in catches
+        c isa SymbolicTryCatch || throw(ArgumentError(
+            "try_table catches must retain symbolic ControlLabel targets"))
+        i = findlast(l -> l.handle === c.target, b.v.labels)
+        i === nothing && throw(ArgumentError("catch target is not an open label"))
+        target = b.v.labels[i]
+        expected = target.kind === :loop ? target.input_types : target.result_types
+        caught = WasmValType[]
+        if c.opcode === Opcode.CATCH || c.opcode === Opcode.CATCH_REF
+            Int(c.tag_idx) < length(b.v.mod.tags) ||
+                throw(ArgumentError("catch references unknown tag $(c.tag_idx)"))
+            tag = b.v.mod.tags[Int(c.tag_idx) + 1]
+            ft = b.v.mod.types[Int(tag.type_idx) + 1]
+            ft isa FuncType || throw(ArgumentError("catch tag type is not a function type"))
+            append!(caught, ft.params)
+        end
+        (c.opcode === Opcode.CATCH_REF || c.opcode === Opcode.CATCH_ALL_REF) &&
+            push!(caught, ExnRef)
+        length(caught) == length(expected) || throw(StackImbalanceError(
+            b.func_name, b.context,
+            "catch target expects $(length(expected)) values, caught $(length(caught))",
+            _stack_snapshot(b), _byte_len(b)))
+        for (actual, want) in zip(caught, expected)
+            wasm_subtype(actual, want, b.v.mod) || throw(StackImbalanceError(
+                b.func_name, b.context,
+                "catch target type mismatch: expected $want, caught $actual",
+                _stack_snapshot(b), _byte_len(b)))
+        end
+    end
+    encoded_catches = InstrIR.TryCatch[c isa SymbolicTryCatch ?
+        InstrIR.TryCatch(c.opcode, c.tag_idx, UInt32(_label_depth(b, c.target))) : c
+        for c in catches]
+    label = validate_block_start!(b.v, :try_table, WasmValType[],
+                                  WasmValType[r for r in results])
+    _emit!(b, InstrIR.TryTable(blocktype, encoded_catches)); return label
 end
 # throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
 function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])
@@ -410,7 +489,8 @@ end
 # throw_ref: pop the exnref operand, then unreachable (dart2wasm throw_ref).
 throw_ref!(b::InstrBuilder) = (b.v.reachable && validate_pop_any!(b.v); b.v.reachable = false; _emit!(b, InstrIR.ThrowRef()))
 # rethrow label: no stack change, then unreachable (dart2wasm rethrow_).
-rethrow_!(b::InstrBuilder, depth::Integer) = (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(depth))))
+rethrow_!(b::InstrBuilder, target::ControlLabel) =
+    (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(_label_depth(b, target)))))
 
 # ── Reference ───────────────────────────────────────────────────────────────────
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =

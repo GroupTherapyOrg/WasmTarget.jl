@@ -101,7 +101,7 @@
   },
   "Interactivity with HTML.jl#1#ede8009e-7f15-11ea-192a-a5c6135a9dcf": {
     "notebook": "Interactivity with HTML.jl",
-    "status": "golden_drift"
+    "status": "green"
   },
   "Interactivity with HTML.jl#2#5bd8b261-a89d-46a3-bb59-c95a1801c881": {
     "notebook": "Interactivity with HTML.jl",
@@ -365,7 +365,7 @@
   },
   "fractals.jl#3#ee4df211-020e-43d4-a41d-513fbd6f31b7": {
     "notebook": "fractals.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "fractals.jl#4#8899561d-42e7-4397-a649-8800461c6649": {
     "notebook": "fractals.jl",
@@ -381,7 +381,7 @@
   },
   "fractals.jl#6#4135244d-fb5a-4e8d-ad4b-c4046781b70c": {
     "notebook": "fractals.jl",
-    "status": "runtime_trap"
+    "status": "green"
   },
   "fractals.jl#6#b2a95d75-a254-4918-96d2-7ec5c2a60d8a": {
     "notebook": "fractals.jl",

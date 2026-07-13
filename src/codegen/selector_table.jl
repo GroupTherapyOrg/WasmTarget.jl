@@ -53,7 +53,7 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
             tids = Set{Int32}(e.type_ids[pos] for e in dt.entries)
             length(tids) > 1 && push!(varying, pos)
         end
-        1 <= length(varying) <= 2 || continue   # 3+-axis stays FNV (unseen in practice)
+        1 <= length(varying) <= 2 || continue   # 3+-axis is not selector-routable yet
         axis = varying[1]
         groups = Dict{Int,Vector{Int}}()          # classId(axis1) → entry indices
         for (i, e) in enumerate(dt.entries)
@@ -175,7 +175,7 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
             tb = InstrBuilder(copy(dt.slot_types), _tr_res; func_name="selector_trampoline", mod=mod)
             for j in 1:arity
                 local_get!(tb, UInt32(j - 1))
-            end
+            end   # (trampoline params ARE the slot types — no refinement needed)
             local_get!(tb, UInt32(c.axis2 - 1))
             ref_cast!(tb, Int64(_st_base_idx(dt_registry)), false)
             struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0), I32)
@@ -231,9 +231,14 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
     local _sc_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                     WasmValType[dt.result_wasm_type] : WasmValType[]
     b = InstrBuilder(copy(dt.slot_types), _sc_res; func_name="selector_caller", mod=mod)
-    # dispatch signature params are AnyRef: push params in order
+    # tag-run: push params, refining each to the sig's slot type (the struct-LUB
+    # slots are narrower than the caller's own declared params)
     for j in 1:arity
         local_get!(b, UInt32(j - 1))
+        local _st = dt.slot_types[j]
+        if _st isa ConcreteRef
+            ref_cast!(b, Int64(_st.type_idx), _st.nullable)
+        end
     end
     # receiver.classId (dart: struct.get topInfo.classId)
     local_get!(b, UInt32(axis - 1))
@@ -243,7 +248,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
         i32_const!(b, Int64(offset))
         num!(b, Opcode.I32_ADD)
     end
-    sig = FuncType(copy(dt.slot_types),   # march11: the per-slot LUB (was fill(AnyRef))
+    sig = FuncType(copy(dt.slot_types),   # march11: the per-slot LUB (was uniform AnyRef)
                    dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                        WasmValType[dt.result_wasm_type] : WasmValType[])
     call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx,

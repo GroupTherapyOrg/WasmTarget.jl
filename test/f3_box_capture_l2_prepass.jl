@@ -7,7 +7,7 @@
 # type the captured-box field as a typed Box{contents}. DORMANT: nothing reads the side-table yet
 # (byte-identical). Dynamic-contents boxes get NO entry → anyref fallback.
 
-@testset "F3 L2a: populate_box_field_types! pre-pass (dormant)" begin
+@testset "F3 L2a: populate_box_field_types! pre-pass" begin
     # counter: `s` is a mutated capture → Core.Box{Int64}; the foreach closure captures it.
     fcounter() = (s = 0; foreach(i -> (s += i), 1:5); s)
     ci = code_typed(fcounter, (); optimize = true)[1].first
