@@ -37,6 +37,44 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                  elide_closure_context, void_return)
 end
 
+"""Add a nullable mutable reference global for initialization by a linked root."""
+function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
+    b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
+    ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
+    return add_global_ref!(mod, type_idx, true, builder_code(b); nullable=true)
+end
+
+"""
+    add_root_global_initializer!(mod, registry, global_idx, root_idx) -> UInt32
+
+Create a module initializer that stores the result of a typed zero-argument
+compilation root into a previously declared mutable reference global. Frameworks
+use this for exact mutable initial values that cannot appear in a Wasm constant
+expression. The initializer joins WT's canonical module-start composition.
+"""
+function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
+                                      global_idx::Integer, root_idx::Integer)::UInt32
+    0 <= global_idx < length(mod.globals) ||
+        throw(ArgumentError("framework global index $global_idx is out of bounds"))
+    global_def = mod.globals[Int(global_idx) + 1]
+    global_def.mutable_ || throw(ArgumentError("framework global $global_idx is immutable"))
+    root_type = _function_type(mod, root_idx)
+    isempty(root_type.params) ||
+        throw(ArgumentError("framework initializer root $root_idx must take no parameters"))
+    length(root_type.results) == 1 ||
+        throw(ArgumentError("framework initializer root $root_idx must return one value"))
+    wasm_subtype(only(root_type.results), global_def.valtype, mod) ||
+        throw(ArgumentError("framework initializer root result is incompatible with global $global_idx"))
+    b = InstrBuilder(; func_name="framework_global_initializer", mod=mod)
+    call!(b, root_idx, WasmValType[], root_type.results)
+    global_set!(b, global_idx)
+    end_block!(b)
+    init_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[],
+                             builder_code(b))
+    push!(registry.module_init_functions, init_idx)
+    return init_idx
+end
+
 """The one Julia-signature → physical Wasm-signature derivation."""
 function function_wasm_signature(arg_types, return_type, global_args,
                                  mod::WasmModule, type_registry::TypeRegistry)

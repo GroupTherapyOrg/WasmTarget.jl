@@ -313,6 +313,15 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     registry.string_constant_globals === nothing && return nothing
     ncodeunits(s) > 64 && return nothing   # eager threshold (dart lazies large constants)
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
+    struct_idx, init = _string_constant_initializer!(mod, registry, s)
+    g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
+    registry.string_constant_globals[s] = g
+    return g
+end
+
+"""Build the canonical classed-string constant expression without adding a global."""
+function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
+                                       s::String)::Tuple{UInt32,Vector{UInt8}}
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     # constant initializer: classId; unassigned identityHash; byte array; struct.new
@@ -333,9 +342,20 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     append!(init, encode_leb128_signed(Int64(symbol_syntax_flags(s))))
     push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
     append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
-    g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
-    registry.string_constant_globals[s] = g
-    return g
+    return struct_idx, init
+end
+
+"""
+    add_string_global!(mod, registry, s; mutable=true) -> UInt32
+
+Add a global initialized with WT's canonical classed Julia `String`
+representation. This is the public framework boundary for stateful string
+globals; it shares the exact initializer used by interned string constants.
+"""
+function add_string_global!(mod::WasmModule, registry::TypeRegistry, s::String;
+                            mutable::Bool=true)::UInt32
+    struct_idx, init = _string_constant_initializer!(mod, registry, s)
+    return add_global_ref!(mod, struct_idx, mutable, init; nullable=false)
 end
 
 """

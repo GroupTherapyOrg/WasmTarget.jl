@@ -489,6 +489,9 @@ const LOCKS = [
                         "Declaratively bound invoke", "params, _ = _true_call_sig",
                         "emit_value!(bii, arg, ctx, expected",
                         "root entry call \$target_idx must have signature () -> ()",
+                        "add_root_global_initializer!",
+                        "registry.module_init_functions",
+                        "add_string_global!",
                         "the root linker cannot add imports after function indices are frozen",
                         "constant_root", "root-link fixture", "unknown_link", "bad_entry",
                         "linked_indices", "bindings.bound_leaves"]

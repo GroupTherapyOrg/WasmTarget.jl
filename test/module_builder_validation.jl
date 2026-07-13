@@ -29,6 +29,7 @@ function _mbv_constant_closure()
 end
 Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
 _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
+_mbv_string_init() = "framework-seed"
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -227,6 +228,19 @@ _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
             end)
         @test Set(keys(linked_indices[])) == Set(["linked_leaf", "linked_caller"])
         @test linker_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        initialized_global = Ref{UInt32}()
+        init_bytes = MBV.compile_multi(Any[(_mbv_string_init, (), "string_init")];
+            link_roots=(linked_mod, roots, registry) -> begin
+                string_type = MBV.get_string_struct_type!(linked_mod, registry)
+                initialized_global[] = MBV.add_uninitialized_ref_global!(
+                    linked_mod, string_type)
+                MBV.add_root_global_initializer!(linked_mod, registry,
+                    initialized_global[], roots["string_init"])
+                eager = MBV.add_string_global!(linked_mod, registry, "eager")
+                MBV.add_global_export!(linked_mod, "eager_string", eager)
+            end)
+        @test init_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
         @test_throws ArgumentError MBV.compile_multi(
             Any[(leaf, (Int64,), "bad_linker")];
             link_roots=(linked_mod, _, _) -> MBV.add_import!(linked_mod,
