@@ -1115,6 +1115,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         end
                     end
                 end
+            elseif stmt isa Core.SSAValue || stmt isa Core.Argument || stmt isa Core.SlotNumber
+                # Julia 1.13 may retain a bare alias as an SSA definition (not a
+                # PiNode), notably for captured closure fields on x86. A local-less
+                # alias is not proof that the fragment validator already owns its
+                # operand. Follow the alias to its real producer/slot so value
+                # emission has an explicit, architecture-independent stack effect.
+                emit_value!(b, stmt, ctx)
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
