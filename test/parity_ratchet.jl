@@ -479,6 +479,7 @@ const LOCKS = [
             required = ["captured_constants::Dict{Symbol,Any}",
                         "invoke_roots::Dict{Int,String}",
                         "invoke_arguments::Dict{Int,Vector{Int}}",
+                        "bound_leaves::Vector{Tuple{Any,Tuple}}",
                         "entry_calls::Vector{UInt32}",
                         "link_roots::Union{Nothing,Function}",
                         "root \$name binds closure fields twice",
@@ -490,7 +491,7 @@ const LOCKS = [
                         "root entry call \$target_idx must have signature () -> ()",
                         "the root linker cannot add imports after function indices are frozen",
                         "constant_root", "root-link fixture", "unknown_link", "bad_entry",
-                        "linked_indices"]
+                        "linked_indices", "bindings.bound_leaves"]
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
         end),
@@ -681,8 +682,11 @@ const LOCKS = [
             required = ["foldl(typejoin, returns)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
-                        "last_param isa Core.TypeofVararg",
-                        "runtime_type <: atypes[p]",
+                        "stmt0.head === :new",
+                        "entry.specTypes",
+                        "target_type <: atypes[p]",
+                        "concrete_args = Tuple{spec...}",
+                        "m = which(g, concrete_args)",
                         "Base.array_subpadding",
                         "Core.bitcast(T, bits)",
                         "% TargetBits",

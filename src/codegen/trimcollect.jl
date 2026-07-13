@@ -156,22 +156,35 @@ but reported far better).
 # CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
 # (then `_try_inline_typeid_dispatch` builds a runtime typeId switch over them).
 # Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
-function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
+function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
+                                         entry_mis::Vector{Any}=Any[])
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
-    # program's signatures/SSA types/allocations. Enumerating every method below an
+    # program's signatures or allocations. An inferred SSA type is not evidence that
+    # its class is instantiated (it may belong to a dead/native implementation path).
+    # Enumerating every method below an
     # abstract slot pulled unrelated BigFloat/MPFR code into integer-only modules and
     # forced the now-deleted trap-repair policy.
     runtime_types = Set{DataType}()
     observed_type_nodes = Set{Any}()
+    function contains_ffi_type(@nospecialize(T), visited=Set{Any}())
+        T in visited && return false
+        push!(visited, T)
+        T isa DataType || return false
+        T <: Ptr && return true
+        return any(p -> contains_ffi_type(p, visited), T.parameters)
+    end
     function observe_type!(@nospecialize(T))
         T in observed_type_nodes && return
         push!(observed_type_nodes, T)
         if T isa Union
             foreach(observe_type!, Base.uniontypes(T))
         elseif T isa DataType
-            isconcretetype(T) && push!(runtime_types, T)
+            # FFI is an explicit 0.5 scope boundary. A class whose representation
+            # contains Ptr cannot be a Wasm selector class; if it reaches codegen as
+            # a real value, the ordinary unsupported-feature diagnostic remains loud.
+            isconcretetype(T) && !contains_ffi_type(T) && push!(runtime_types, T)
             # Instantiated generic fields encode runtime classes in their type
             # arguments (for example DateFormat's Tuple of DatePart{'y'}/Delim
             # nodes). They are part of the closed component even when inference
@@ -182,15 +195,16 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
         end
         return
     end
+    # Explicit root arguments cross into the component and therefore exist at
+    # runtime even if their construction happened in the host.
+    for entry in entry_mis
+        sig = entry.specTypes
+        sig isa DataType && foreach(observe_type!, sig.parameters[2:end])
+    end
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j] isa Core.CodeInstance &&
          codeinfos[j + 1] isa Core.CodeInfo) || continue
-        local mi = codeinfos[j].def isa Core.MethodInstance ? codeinfos[j].def : codeinfos[j].def.def
-        local sig = mi.specTypes
-        sig isa DataType && foreach(observe_type!, sig.parameters)
         local src0 = codeinfos[j + 1]
-        local ss0 = src0.ssavaluetypes
-        ss0 isa Vector && foreach(t -> observe_type!(CC.widenconst(t)), ss0)
         for stmt0 in src0.code
             if stmt0 isa Expr && stmt0.head === :new && !isempty(stmt0.args)
                 local nt = stmt0.args[1]
@@ -313,57 +327,27 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any})
             absp = Int[j for j in 1:length(atypes) if !(atypes[j] isa DataType && isconcretetype(atypes[j]))]
             length(absp) == 1 || continue
             p = absp[1]
-            ms = collect(methods(g, Tuple{atypes...}))
-            # march13 (dart: ALL targetCount>1 dispatch through the table,
-            # dispatch_table.dart:401-403): the old ≤8 cap CIRCULARLY ABANDONED
-            # ≥9-method dynamic sites — it "left them to the dispatch table", but the
-            # table only builds from registered specializations, which only register
-            # through THIS discovery → nothing registered, no table, unreachable stub
-            # (the pinned two-arg megamorphic bug). Discovery now feeds BOTH mechanisms;
-            # the inline-vs-table split happens downstream by count (threshold=9).
-            isempty(ms) && continue
-            for m in ms
-                unwrapped_sig = Base.unwrap_unionall(m.sig)
-                unwrapped_sig isa DataType || continue
-                msig = collect(unwrapped_sig.parameters)
-                isempty(msig) && continue
-                last_param = msig[end]
-                is_vararg = last_param isa Core.TypeofVararg
-                fixed_args = length(msig) - 1 - (is_vararg ? 1 : 0)
-                (!is_vararg && length(msig) != length(atypes) + 1) && continue
-                (is_vararg && length(atypes) < fixed_args) && continue
-                declared = if p <= fixed_args
-                    msig[p + 1]
-                elseif is_vararg
-                    last_param.T
-                else
-                    continue
-                end
-                declared_bound = declared isa TypeVar ? declared.ub : declared
-                declared_bound isa Type || continue
-
-                # A generic method (`Any`, abstract, or TypeVar parameter) is still a
-                # selector target for every observed closed-world class admitted by
-                # both the call-site type and the method bound. Dart constructs the
-                # same target set from instantiated classes, not merely from concrete
-                # parameter annotations on source methods.
-                candidates = DataType[]
-                for runtime_type in runtime_types
-                    (runtime_type isa DataType && isconcretetype(runtime_type) &&
-                     isstructtype(runtime_type) && !(runtime_type <: Tuple) &&
-                     runtime_type !== String && runtime_type !== Symbol) || continue
-                    (runtime_type <: atypes[p] && runtime_type <: declared_bound) || continue
-                    push!(candidates, runtime_type)
-                end
-                for target_type in candidates
-                    spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
-                    ssig = Tuple{Core.Typeof(g), spec...}
-                    ssig <: m.sig || continue
-                    cmi = CC.specialize_method(m, ssig, Core.svec())
-                    cmi in seen && continue
-                    push!(seen, cmi)
-                    push!(out, cmi)
-                end
+            # Resolve each observed runtime class through Julia's concrete method
+            # dispatch. Iterating every abstractly-applicable method and then every
+            # runtime class formed a redundant method×class subtype cross-product,
+            # and could enroll shadowed methods that Julia would never call. Dart's
+            # selector rows likewise contain the concrete target selected for each
+            # instantiated class. Discovery still feeds both inline switches and
+            # dispatch tables; there is no target-count cap.
+            for target_type in runtime_types
+                (isconcretetype(target_type) && isstructtype(target_type) &&
+                 !(target_type <: Tuple) && target_type !== String &&
+                 target_type !== Symbol && target_type <: atypes[p]) || continue
+                spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
+                concrete_args = Tuple{spec...}
+                hasmethod(g, concrete_args) || continue
+                m = which(g, concrete_args)
+                ssig = Tuple{Core.Typeof(g), spec...}
+                ssig <: m.sig || continue
+                cmi = CC.specialize_method(m, ssig, Core.svec())
+                cmi in seen && continue
+                push!(seen, cmi)
+                push!(out, cmi)
             end
         end
     end
@@ -471,8 +455,14 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # `Function` argument). A closed world cannot defer that edge to codegen.
     # Enroll every explicit invoke to a fixpoint before selector discovery.
     base_mis = Set{Any}()
+    mi_key(mi) = (mi.def, mi.specTypes)
+    base_mi_keys = Set{Any}()
     for k in 1:2:length(codeinfos)
-        codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+        if codeinfos[k] isa Core.CodeInstance
+            mi = codeinfos[k].def
+            push!(base_mis, mi)
+            push!(base_mi_keys, mi_key(mi))
+        end
     end
     invoke_seen = union(copy(base_mis), external_leaves)
     superseded_invokes = Set{Any}()
@@ -490,15 +480,28 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         fresh_ci = Any[]
         fresh_wq = CC.CompilationQueue(; interp=fresh_interp)
         fresh_ilq = CC.CompilationQueue(; interp=fresh_interp)
-        append!(fresh_wq, mis)
+        added = false
+        for root_mi in mis
+            # Resolve in the partition's overlay method table. Reusing a native
+            # MethodInstance manufactures the wrong static-parameter environment
+            # when an overlay or UnionAll match participates, even when its printed
+            # `specTypes` happens to be identical.
+            matches = CC.findall(root_mi.specTypes,
+                CC.method_table(fresh_interp); limit=-1)
+            (matches === nothing || isempty(matches)) &&
+                error("no Wasm overlay match for closed-world root $(root_mi.specTypes)")
+            resolved_mi = CC.specialize_method(matches[1])
+            push!(fresh_wq, resolved_mi)
+        end
         CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq)
         CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq)
-        added = false
         for k in 1:2:length(fresh_ci)
-            (fresh_ci[k] isa Core.CodeInstance && fresh_ci[k + 1] isa Core.CodeInfo) || continue
+            (fresh_ci[k] isa Core.CodeInstance &&
+             fresh_ci[k + 1] isa Core.CodeInfo) || continue
             mi = fresh_ci[k].def
-            mi in base_mis && continue
+            mi_key(mi) in base_mi_keys && continue
             push!(base_mis, mi)
+            push!(base_mi_keys, mi_key(mi))
             push!(codeinfos, fresh_ci[k], fresh_ci[k + 1])
             added = true
         end
@@ -519,14 +522,19 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             codeinfos = _prune_external_leaf_subgraphs(
                 codeinfos, prune_roots, union(external_leaves, superseded_invokes))
             empty!(base_mis)
+            empty!(base_mi_keys)
             for k in 1:2:length(codeinfos)
-                codeinfos[k] isa Core.CodeInstance && push!(base_mis, codeinfos[k].def)
+                if codeinfos[k] isa Core.CodeInstance
+                    mi = codeinfos[k].def
+                    push!(base_mis, mi)
+                    push!(base_mi_keys, mi_key(mi))
+                end
             end
             pruned_superseded = length(superseded_invokes)
         end
 
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp)
-        extra = Any[mi for mi in extra if !(mi in base_mis)]
+        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries)
+        extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
         union!(_DYNAMIC_ROOT_MIS[], extra)
         for mi in extra
             local st = mi.specTypes

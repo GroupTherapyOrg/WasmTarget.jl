@@ -147,6 +147,8 @@ _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
         m = MBV.WasmModule()
         MBV.add_global!(m, MBV.I64, true, Int64(0))
         bindings = MBV.RootBindings(captured_globals=captured,
+                                    bound_leaves=[(getter, ()),
+                                                  (setter, (Int64,))],
                                     elide_closure_context=true,
                                     void_return=true)
         compiled = MBV.compile_module(Any[(handler, (), "handler")];

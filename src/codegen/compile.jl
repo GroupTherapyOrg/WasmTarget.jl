@@ -11,6 +11,7 @@ struct RootBindings
     invoke_imports::Dict{Int,UInt32}
     invoke_roots::Dict{Int,String}
     invoke_arguments::Dict{Int,Vector{Int}}
+    bound_leaves::Vector{Tuple{Any,Tuple}}
     entry_calls::Vector{UInt32}
     elide_closure_context::Bool
     void_return::Bool
@@ -22,6 +23,7 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       skip_stmts=Set{Int}(), invoke_imports=Dict{Int,UInt32}(),
                       invoke_roots=Dict{Int,String}(),
                       invoke_arguments=Dict{Int,Vector{Int}}(),
+                      bound_leaves=Tuple{Any,Tuple}[],
                       entry_calls=UInt32[],
                       elide_closure_context::Bool=false, void_return::Bool=false)
     RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
@@ -30,6 +32,7 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                  Set{Int}(skip_stmts), Dict{Int,UInt32}(invoke_imports),
                  Dict{Int,String}(invoke_roots),
                  Dict{Int,Vector{Int}}(k => Int[v...] for (k, v) in invoke_arguments),
+                 Tuple{Any,Tuple}[(f, Tuple(ts)) for (f, ts) in bound_leaves],
                  UInt32[entry_calls...],
                  elide_closure_context, void_return)
 end
@@ -1061,7 +1064,12 @@ function _compile_closed_world_plan(functions::Vector;
             ctx.entry_calls = bindings === nothing ? UInt32[] : copy(bindings.entry_calls)
             ctx.invoke_arguments = bindings === nothing ? Dict{Int,Vector{Int}}() :
                 deepcopy(bindings.invoke_arguments)
-            body = generate_body(ctx)
+            try
+                body = generate_body(ctx)
+            catch err
+                error("code generation failed for `$name` with Julia signature " *
+                      "$(Tuple(arg_types)): " * sprint(showerror, err))
+            end
             locals = ctx.locals
         end
 
@@ -1698,6 +1706,10 @@ function _compile_module_trim(functions::Vector; kwargs...)
     end
     import_stubs = get(kwargs, :import_stubs, Any[])
     external_entries = Any[(entry[1], Tuple(entry[3])) for entry in import_stubs]
+    root_bindings = get(kwargs, :root_bindings, Dict{String,RootBindings}())
+    for bindings in values(root_bindings), (f, arg_types) in bindings.bound_leaves
+        push!(external_entries, (f, arg_types))
+    end
     plan, ir_cache = trim_compile_plan(normalized; external_entries)
     TRIM_IR_CACHE[] = ir_cache
     try
