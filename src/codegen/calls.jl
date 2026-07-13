@@ -4404,9 +4404,30 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # aren't handled by a specific earlier handler (intrinsics, ===, _expr, etc.).
     is_expr_call = is_func(func, :_expr)
     is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
+    # Arithmetic over an escaping mutable capture reaches us as a local-backed
+    # `getfield(box, :contents)` SSA plus another operand. The numeric fallback
+    # below owns that operation and must load the locals; a collected Base method
+    # must not suppress both arguments. Keep ordinary arithmetic on the late
+    # cross-call route, since a local-less operand may itself be a dynamic call
+    # (the megamorphic accumulator) whose dispatch-table lowering must remain intact.
+    is_generic_arithmetic = func isa GlobalRef &&
+        func.name in (:+, :-, :*, :div, :rem, :mod)
+    is_materialized_generic_arithmetic = is_generic_arithmetic && all(args) do a
+        !(a isa Core.SSAValue) || haskey(ctx.ssa_locals, a.id) ||
+            haskey(ctx.phi_locals, a.id)
+    end
+    has_box_contents_operand = any(args) do a
+        a isa Core.SSAValue && 1 <= a.id <= length(ctx.code_info.code) || return false
+        local p = ctx.code_info.code[a.id]
+        p isa Expr && p.head === :call && length(p.args) >= 3 &&
+            is_func(p.args[1], :getfield) &&
+            (p.args[3] isa QuoteNode ? p.args[3].value : p.args[3]) === :contents
+    end
+    owns_captured_arithmetic = is_materialized_generic_arithmetic && has_box_contents_operand
     _skip_arg_prepush = is_expr_call
     if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
-            !is_numeric_intrinsic && !is_equality_comparison
+            !is_numeric_intrinsic && !is_equality_comparison &&
+            !owns_captured_arithmetic
         _called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
         if _called_func !== nothing
             _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
@@ -4478,8 +4499,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Also fire for the GENERIC arithmetic operators (+,-,*,div,rem,mod):
         # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
         # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
-        local _generic_arith = func isa GlobalRef &&
-            func.name in (:+, :-, :*, :div, :rem, :mod)
+        local _generic_arith = is_generic_arithmetic
         # parity(M10): when the SSA's REFINED type is already numeric (the join),
         # the LOAD (_narrow_generic_local!) is THE single unbox source — appending a
         # second unbox here double-converted. Only unbox when the type is truly erased.
