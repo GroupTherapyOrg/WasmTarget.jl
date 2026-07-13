@@ -8,11 +8,9 @@ on:
 jobs:
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Windows runs two shard processes at a time below, so allow its two
-    # batches to drain while keeping the tighter Unix bound.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 120 || 75 }}
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
+    runs-on: ${{ matrix.target.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,10 +18,18 @@ jobs:
           - '1.12'
           # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
           - '~1.13.0-0'
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        target:
+          # Unix runners have already proven the bounded local orchestrator.
+          - { os: ubuntu-latest, slice: all, shard: '', fuzz: '' }
+          - { os: macos-latest, slice: all, shard: '', fuzz: '' }
+          # On Windows, make each compiler shard and fuzz pass an independently
+          # bounded job. The local orchestrator buffers child logs and blocks on
+          # the first process, which hid the responsible shard until job timeout.
+          - { os: windows-latest, slice: shard-0, shard: '0,4', fuzz: '' }
+          - { os: windows-latest, slice: shard-1, shard: '1,4', fuzz: '' }
+          - { os: windows-latest, slice: shard-2, shard: '2,4', fuzz: '' }
+          - { os: windows-latest, slice: shard-3, shard: '3,4', fuzz: '' }
+          - { os: windows-latest, slice: fuzz, shard: '', fuzz: '1' }
     steps:
       - uses: actions/checkout@v4
 
@@ -55,9 +61,7 @@ jobs:
 
       - name: Run tests
         env:
-          # Four compiler shards plus fuzz exhausted the Windows runner's
-          # effective CPU/memory budget and repeatedly failed to drain the
-          # first batch. Keep the exact suite, but bound local concurrency.
-          WT_TEST_CONCURRENCY: ${{ runner.os == 'Windows' && '2' || '' }}
+          WT_SHARD: ${{ matrix.target.shard }}
+          WT_FUZZ: ${{ matrix.target.fuzz }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test()'
