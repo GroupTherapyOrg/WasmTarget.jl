@@ -1976,6 +1976,12 @@ end
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(string(expr), 80))   # march17: errors name the call
+    # A call may consume values stack-threaded by the enclosing statement fragment.
+    # Preserve that tracked input across this second fragment boundary just as
+    # compile_statement! preserves the parent builder's input. Without it, Julia
+    # 1.13 escaping-closure arithmetic emits valid operand bytes but the validator
+    # sees an empty fragment stack and reports a false underflow.
+    isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
     _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
