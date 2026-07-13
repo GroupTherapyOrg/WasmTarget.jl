@@ -1117,6 +1117,26 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
 end
 
 """
+Resolve a dispatch-only candidate only when the call site's recovered Julia
+types prove the candidate's complete signature exactly. This is the late
+devirtualization counterpart to `get_function`: candidates remain invisible
+to ordinary/fuzzy cross-call lookup and to abstract sites.
+"""
+function get_exact_candidate(registry::FunctionRegistry, func_ref, arg_types::Tuple;
+                             expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo,Nothing}
+    all(t -> t isa Type && isconcretetype(t), arg_types) || return nothing
+    infos = get_func_ref_infos(registry, func_ref)
+    infos === nothing && return nothing
+    _ret_ok(info) = expected_return === nothing || expected_return === Any ||
+                    info.return_type === Any ||
+                    info.return_type <: expected_return || expected_return <: info.return_type
+    for info in infos
+        info.is_candidate && info.arg_types == arg_types && _ret_ok(info) && return info
+    end
+    return nothing
+end
+
+"""
 Check if a function reference is registered (for by_ref linear scan).
 """
 function has_func_ref(registry::FunctionRegistry, func_ref)::Bool

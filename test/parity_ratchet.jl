@@ -110,7 +110,7 @@ const METRICS = [
                           exclude_line=nothing)),
     "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
         () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
-    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory — per-object identity, documented floor] + funnel fallbacks)",
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
@@ -497,6 +497,23 @@ const LOCKS = [
                         "linked_indices", "bindings.bound_leaves"]
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
+        end),
+    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup",
+        () -> begin
+            box_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
+            required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
+                        "_capture_joins", "if isempty(absp)",
+                        "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
+                        "function get_exact_candidate", "all(t -> t isa Type && isconcretetype(t), arg_types)",
+                        "info.is_candidate && info.arg_types == arg_types",
+                        "infos = FunctionInfo[i for i in infos if !i.is_candidate]",
+                        "_target = get_exact_candidate", "target_info = get_exact_candidate",
+                        "boxed_vector_capture", "vmod isa Vector{UInt8}"]
+            count(p -> !occursin(p, box_src * trim_src * types_src * calls_src * test_src), required)
         end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin

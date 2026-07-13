@@ -714,15 +714,15 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
         # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
         # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
-        if !isempty(ctx.arg_types)
-            _sbT = ctx.arg_types[1]
+        _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
+        if _sbT isa DataType && isstructtype(_sbT)
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
-                argtypes=ctx.arg_types[2:end], self_shift=1))
+                argtypes=ctx.arg_types, self_shift=1))
         end
-        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
-            _selfT = ctx.arg_types[1]
+        if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
+            _selfT = _sbT
             _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
             _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
                   _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
@@ -961,15 +961,15 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
         # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
         # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
-        if !isempty(ctx.arg_types)
-            _sbT = ctx.arg_types[1]
+        _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
+        if _sbT isa DataType && isstructtype(_sbT)
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
-                argtypes=ctx.arg_types[2:end], self_shift=1))
+                argtypes=ctx.arg_types, self_shift=1))
         end
-        if !isempty(ctx.arg_types) && ctx.type_registry.box_contents_types !== nothing
-            _selfT = ctx.arg_types[1]
+        if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
+            _selfT = _sbT
             _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
             _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
                   _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing

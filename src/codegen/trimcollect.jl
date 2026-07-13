@@ -260,6 +260,33 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
         ssat = src.ssavaluetypes
+        # Capture typing is a closed-world fact, not merely a codegen hint. Feed
+        # the same optimistic-and-verified proof used for local representation
+        # into dependency discovery, so a call erased by Core.Box inference can
+        # enroll its exact MethodInstance before function indices are frozen.
+        local _capture_joins = Dict{Int,Type}()
+        if !isempty(hparams)
+            local _selfT = hparams[1]
+            if _selfT isa DataType && isstructtype(_selfT)
+                merge!(_capture_joins, f3_self_box_joins(
+                    src.code, ssat, _selfT;
+                    argtypes=Tuple(hparams[2:end]), self_shift=1))
+            end
+        end
+        local _call_type = function(a)
+            if a isa Core.SSAValue && haskey(_capture_joins, a.id)
+                return _capture_joins[a.id]
+            elseif a isa Core.SSAValue
+                return (ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any
+            elseif a isa Core.Argument
+                return (a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any
+            elseif a isa GlobalRef && isdefined(a.mod, a.name)
+                return Core.Typeof(getfield(a.mod, a.name))
+            elseif a isa GlobalRef
+                return Any
+            end
+            return Core.Typeof(a)
+        end
         # Optimized IR often folds `%new(closure, captures...)` into a constant
         # tuple followed by getfield. The concrete closure types still inhabit SSA
         # types, so collect from that semantic source as well as explicit :new.
@@ -308,23 +335,29 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             atypes = Any[]
             bad = false
             for a in cargs
-                t = if a isa Core.SSAValue
-                    (ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any
-                elseif a isa Core.Argument
-                    (a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any
-                elseif a isa GlobalRef && isdefined(a.mod, a.name)
-                    Core.Typeof(getfield(a.mod, a.name))
-                elseif a isa GlobalRef
-                    Any
-                else
-                    Core.Typeof(a)
-                end
+                t = _call_type(a)
                 t isa Type || (bad = true; break)
                 push!(atypes, t)
             end
             bad && continue
-            # Exactly one abstract dispatch position.
+            # A formerly-erased call whose complete signature is now proven is
+            # monomorphic. Enroll exactly Julia's selected method; `seen` keeps
+            # ordinary already-collected concrete calls a no-op here.
             absp = Int[j for j in 1:length(atypes) if !(atypes[j] isa DataType && isconcretetype(atypes[j]))]
+            if isempty(absp)
+                local concrete_args = Tuple(atypes)
+                hasmethod(g, concrete_args) || continue
+                local m = which(g, concrete_args)
+                local ssig = Tuple{Core.Typeof(g), atypes...}
+                ssig <: m.sig || continue
+                local cmi = CC.specialize_method(m, ssig, Core.svec())
+                if !(cmi in seen)
+                    push!(seen, cmi)
+                    push!(out, cmi)
+                end
+                continue
+            end
+            # Otherwise exactly one abstract position may use a runtime selector.
             length(absp) == 1 || continue
             p = absp[1]
             # Resolve each observed runtime class through Julia's concrete method
@@ -458,7 +491,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     mi_key(mi) = (mi.def, mi.specTypes)
     base_mi_keys = Set{Any}()
     for k in 1:2:length(codeinfos)
-        if codeinfos[k] isa Core.CodeInstance
+        if k + 1 <= length(codeinfos) && codeinfos[k] isa Core.CodeInstance &&
+           codeinfos[k + 1] isa Core.CodeInfo
             mi = codeinfos[k].def
             push!(base_mis, mi)
             push!(base_mi_keys, mi_key(mi))
@@ -491,6 +525,12 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             (matches === nothing || isempty(matches)) &&
                 error("no Wasm overlay match for closed-world root $(root_mi.specTypes)")
             resolved_mi = CC.specialize_method(matches[1])
+            # Candidate discovery initially selects with Julia dispatch, then
+            # collection canonicalizes through the Wasm overlay table. Preserve
+            # the canonical MI as a selector root too: identity-only reachability
+            # pruning must not discard the overlay body merely because its native
+            # precursor has the same signature but a different Method object.
+            root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
             push!(fresh_wq, resolved_mi)
         end
         CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq)

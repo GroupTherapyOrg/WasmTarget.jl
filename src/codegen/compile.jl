@@ -599,24 +599,19 @@ function _compile_closed_world_plan(functions::Vector;
         functions = filter(entry -> !(entry isa Tuple && entry[1] in import_stub_funcs), functions)
     end
 
-    # Create shared module and registries (or use existing module)
+    # SOUNDNESS: reset every per-module task-local cache for every compilation.
+    # A framework-supplied `existing_module` is still a new component and must not
+    # inherit type/function indices or callable identities from the previous one.
+    clear_io_imports!()
+    clear_rng_globals!()
+    clear_perf_now!()
+    clear_char_array_type!()
+    clear_utf8_to_js_func!()
+
+    # Create shared module and registries (or use the framework's predeclared module).
     if existing_module !== nothing
         mod = existing_module
     else
-        # SOUNDNESS: reset all per-module task-local caches BEFORE building a fresh
-        # module. These are cleared on the success path at end-of-module (below), but
-        # NOT in a finally — so a PRIOR compile that threw before reaching the clears
-        # leaks a stale type/func index into this fresh module. The PI pipeline compiles
-        # many cells in one task with many throwing compiles, so the stale
-        # `_CHAR_ARRAY_TYPE_IDX` (i16-char-array index) got baked into this module's
-        # `utf8_to_js` helper as `array.new_default <stale>`, where that slot is now the
-        # `fromCharCodeArray` *func* type → "expected array type at index N, found (func …)".
-        # Clearing at the start of every fresh-module build makes each compile leak-proof.
-        clear_io_imports!()
-        clear_rng_globals!()
-        clear_perf_now!()
-        clear_char_array_type!()
-        clear_utf8_to_js_func!()
         mod = WasmModule()
     end
     type_registry = TypeRegistry()

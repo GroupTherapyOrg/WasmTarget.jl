@@ -419,8 +419,26 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         fldn === :contents && push!(contents_reads, i)
     end
     isempty(contents_reads) && return out
-    cand = nothing
+    # A concrete write to the captured box is the strongest dart-style capture
+    # type evidence. This covers non-numeric captures (for example a Vector built
+    # and assigned before its first read) without guessing from consumers.
+    direct_types = Type[]
+    for stmt in code
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 4) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :setfield!) || continue
+        (stmt.args[2] isa Core.SSAValue && stmt.args[2].id in box_reads) || continue
+        fldn = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fldn === :contents || continue
+        vt = _opT(stmt.args[4])
+        vt isa Type && vt !== Any && vt !== Union{} && push!(direct_types, vt)
+    end
+    cand = isempty(direct_types) ? nothing : foldl(typejoin, direct_types)
+    (cand isa DataType && isconcretetype(cand)) || (cand = nothing)
+    # When no definite concrete write exists, retain the proven numeric consumer
+    # inference used for accumulator captures.
     for (i, stmt) in enumerate(code)
+        cand === nothing || break
         (stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)) || continue
         _cargs = stmt.head === :invoke ? stmt.args[2:end] : stmt.args
         any(a -> a isa Core.SSAValue && a.id in contents_reads, _cargs[2:end]) || continue
@@ -432,7 +450,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
             end
         end
     end
-    (cand isa Type && _f3_is_numeric_jl(cand)) || return out
+    (cand isa Type && cand !== Any && cand !== Union{}) || return out
     seeds = Dict{Int,Type}(b => cand for b in box_reads)
     _spec = argtypes === nothing ? nothing :
             (self_shift == 1 ? Any[selfT; argtypes...] : Any[argtypes...])
@@ -448,7 +466,7 @@ function f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift:
         _saw_write = true
         v = stmt.args[4]
         vt = v isa Core.SSAValue ? get(joins, v.id, _ssat(v.id)) : _opT(v)
-        (_f3_is_numeric_jl(vt) && vt <: cand) || return Dict{Int,Type}()
+        (vt isa Type && vt <: cand) || return Dict{Int,Type}()
     end
     # The BOX-READ ids are Core.Box VALUES, never numerics — they must not appear in
     # the join output (they'd re-type the box itself and break every consumer).

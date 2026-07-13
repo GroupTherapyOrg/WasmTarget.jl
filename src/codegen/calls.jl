@@ -4408,6 +4408,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if _target === nothing && typeof(_called_func) <: Function && isconcretetype(typeof(_called_func))
                 _target = get_function(ctx.func_registry, _called_func, (typeof(_called_func), _call_arg_types...))
             end
+            # Keep argument ownership aligned with late exact-candidate
+            # devirtualization. A proven candidate is a cross-call too, so only
+            # its typed call arm may emit the arguments.
+            _target === nothing &&
+                (_target = get_exact_candidate(ctx.func_registry, _called_func, _call_arg_types))
             _skip_arg_prepush = _target !== nothing
         end
     end
@@ -6076,6 +6081,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 closure_arg_types = (typeof(called_func), call_arg_types...)
                 target_info = get_function(ctx.func_registry, called_func, closure_arg_types;
                                            expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
+            end
+
+            # A candidate discovered for closed-world dynamic dispatch is not a
+            # normal cross-call target. If later value analysis recovers every
+            # erased argument to a concrete Julia type, however, the exact
+            # candidate signature is a proof of a monomorphic call. Devirtualize
+            # only that exact signature; abstract and subtype-fuzzy sites still
+            # go through the typeId selector (or reject loudly).
+            if target_info === nothing
+                target_info = get_exact_candidate(
+                    ctx.func_registry, called_func, call_arg_types;
+                    expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
             end
 
             # WASMTARGET dynamic dispatch: a polymorphic call (exactly one abstract/Any

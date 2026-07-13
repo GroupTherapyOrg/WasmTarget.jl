@@ -1703,6 +1703,16 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         type_idx = info.wasm_type_idx
 
         local undefined_fields = Symbol[fn for fn in fieldnames(T) if !isdefined(val, fn)]
+        if T === Core.Box && undefined_fields == Symbol[:contents]
+            # Julia's unassigned captured variable is represented by an actual
+            # Core.Box whose contents field is undefined. The nullable Any field's
+            # null is the runtime undefined-reference sentinel consumed by the
+            # existing isdefined/throw_undef_if_not lowering—not a fabricated value.
+            emit_struct_prefix!(b, ctx.type_registry, T, info)
+            ref_null!(b, AnyRef)
+            struct_new!(b, type_idx)
+            return b
+        end
         isempty(undefined_fields) || throw(WasmCompileError(WasmDiagnostic(
             :unsupported_type, string(nameof(T)),
             "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values",
