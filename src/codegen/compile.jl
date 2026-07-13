@@ -1097,12 +1097,11 @@ function _compile_closed_world_plan(functions::Vector;
             ctx.entry_calls = bindings === nothing ? UInt32[] : copy(bindings.entry_calls)
             ctx.invoke_arguments = bindings === nothing ? Dict{Int,Vector{Int}}() :
                 deepcopy(bindings.invoke_arguments)
-            try
-                body = generate_body(ctx)
-            catch err
-                error("code generation failed for `$name` with Julia signature " *
-                      "$(Tuple(arg_types)): " * sprint(showerror, err))
-            end
+            # Preserve structured compiler/validation errors and their complete
+            # diagnostic ledgers. The context already carries the root function
+            # and source location; converting failures to ErrorException here
+            # erased the machine-readable contract used by framework callers.
+            body = generate_body(ctx)
             locals = ctx.locals
         end
 

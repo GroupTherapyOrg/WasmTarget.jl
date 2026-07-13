@@ -507,6 +507,7 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
                         "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
+                        "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
                         "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
                         "info.is_candidate && info.arg_types == arg_types",
@@ -514,6 +515,25 @@ const LOCKS = [
                         "_target = get_exact_candidate", "target_info = get_exact_candidate",
                         "boxed_vector_capture", "vmod isa Vector{UInt8}"]
             count(p -> !occursin(p, box_src * trim_src * types_src * calls_src * test_src), required)
+        end),
+    "L94_codegen_errors_keep_structured_ledgers" => ("the closed-world planner propagates WasmCompileError and validation errors without catch-all conversion to ErrorException, preserving caller-facing diagnostic ledgers",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            test_src = read(joinpath(ROOT, "test", "diagnostics_sink.jl"), String)
+            forbidden = ["code generation failed for", "sprint(showerror, err)"]
+            required = ["body = generate_body(ctx)",
+                        "err isa WasmTarget.WasmCompileError", "err.diag in err.all",
+                        "DIAGNOSTICS_SINK[] === nothing"]
+            count(p -> occursin(p, compile_src), forbidden) +
+            count(p -> !occursin(p, compile_src * test_src), required)
+        end),
+    "L95_type_object_specializations_match_runtime_representation" => ("transitive Type{T} specializations collapse to an already-collected representation-class specialization only under identical method identity, while singleton precision remains available when dispatch requires it",
+        () -> begin
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["_canonical_type_object_arg", "collected_method_specs",
+                        "!haskey(entry_keys, mi)", "canonical_args != arg_types",
+                        "(mi.def, canonical_sig) in collected_method_specs"]
+            count(p -> !occursin(p, trim_src), required)
         end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin

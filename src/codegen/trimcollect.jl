@@ -31,6 +31,18 @@
         (T isa DataType && T <: Type && length(T.parameters) == 1 &&
          !(T.parameters[1] isa TypeVar)))
 
+@inline function _canonical_type_object_arg(@nospecialize(T), @nospecialize(formal))
+    if T isa DataType && T <: Type && length(T.parameters) == 1 &&
+       !(T.parameters[1] isa TypeVar)
+        # `Core.Typeof(value)` intentionally preserves Type{value} singleton
+        # precision; the Wasm runtime representation class is ordinary
+        # `typeof(value)` (DataType, UnionAll, ...).
+        runtime_class = typeof(T.parameters[1])
+        formal === runtime_class && T <: formal && return formal
+    end
+    return T
+end
+
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                       superseded::Set{Any}, protected::Set{Any}=Set{Any}())
@@ -93,6 +105,29 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                         matches = CC.findall(ftype, lookup_table; limit=-1)
                         if matches !== nothing && !isempty(matches)
                             match = matches[1]
+                            # A Type{T} call-site value sometimes selects a method
+                            # declared on its representation class (DataType,
+                            # UnionAll, ...). Preserve singleton precision when it
+                            # affects dispatch/inference (mapreduce_empty), but do
+                            # not manufacture a narrower specialization when the
+                            # selected method's exact formal is the representation
+                            # class. Re-resolve to prove method identity.
+                            msig = Base.unwrap_unionall(match.method.sig)
+                            if msig isa DataType && msig <: Tuple &&
+                               length(msig.parameters) == length(arg_types) + 1
+                                canonical_args = Any[
+                                    _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
+                                    for j in eachindex(arg_types)]
+                                canonical_ftype = Tuple{Core.Typeof(f), canonical_args...}
+                                if canonical_ftype != ftype
+                                    canonical_matches = CC.findall(canonical_ftype, lookup_table; limit=-1)
+                                    if canonical_matches !== nothing && !isempty(canonical_matches) &&
+                                       canonical_matches[1].method === match.method
+                                        ftype = canonical_ftype
+                                        match = canonical_matches[1]
+                                    end
+                                end
+                            end
                             # Re-specialization must be idempotent: Compiler may
                             # return a fresh MethodInstance object for the same
                             # overlay method/signature, which would make the joint
@@ -663,6 +698,14 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
 
     functions = Any[]
     ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
+    collected_method_specs = Set{Any}()
+    for j in 1:2:length(codeinfos)
+        j + 1 <= length(codeinfos) || continue
+        codeinfos[j] isa Core.CodeInstance || continue
+        codeinfos[j + 1] isa Core.CodeInfo || continue
+        cmi = codeinfos[j].def isa Core.MethodInstance ? codeinfos[j].def : codeinfos[j].def.def
+        push!(collected_method_specs, (cmi.def, cmi.specTypes))
+    end
     # Functions pulled in only by dispatch-candidate discovery are registered as
     # candidates rather than ordinary direct-call targets.
     dispatch_candidates = Set{Any}()
@@ -705,6 +748,27 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             continue
         end
         arg_types = Tuple(sig.parameters[2:end])
+        # Inference may additionally collect `f(::Type{T})` for a method whose
+        # declared formal is the type object's runtime representation class
+        # (`DataType`, `UnionAll`, ...). If the same collection already contains
+        # that canonical specialization, the singleton copy is redundant and
+        # can expose constant-specific inlining that the Wasm ABI cannot
+        # distinguish. Keep explicit Type{T} roots, but collapse transitive copies
+        # only when method identity + canonical spec are both present.
+        if !haskey(entry_keys, mi)
+            local msig = Base.unwrap_unionall(mi.def.sig)
+            if msig isa DataType && msig <: Tuple &&
+               length(msig.parameters) == length(arg_types) + 1
+                local canonical_args = Tuple(
+                    _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
+                    for j in eachindex(arg_types))
+                local canonical_sig = Tuple{sig.parameters[1], canonical_args...}
+                if canonical_args != arg_types &&
+                   (mi.def, canonical_sig) in collected_method_specs
+                    continue
+                end
+            end
+        end
         # An unspecialized `Vararg{T}` is not a physical Wasm parameter. Calls
         # with a known arity are represented by their concrete specialization;
         # intrinsic/error constructors are lowered at the call site. Never let

@@ -141,6 +141,9 @@ _mbv_string_init() = "framework-seed"
         @test MBV._closed_world_exact_type(Type{Float64})
         @test !MBV._closed_world_exact_type(Type)
         @test !MBV._closed_world_exact_type(Function)
+        @test MBV._canonical_type_object_arg(Type{Int64}, DataType) === DataType
+        @test MBV._canonical_type_object_arg(Type{Float64}, Any) === Type{Float64}
+        @test MBV._canonical_type_object_arg(Type{Float64}, Type) === Type{Float64}
     end
 
     @testset "closure roots use declared global substitutions" begin
