@@ -1701,9 +1701,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         target_idx = ctx.invoke_imports[idx]
         bii = _ctx_builder(ctx, "compile_invoke")
         params, _ = _true_call_sig(bii, target_idx, WasmValType[], WasmValType[])
-        length(args) == length(params) || throw(ArgumentError(
-            "bound invoke $idx supplies $(length(args)) arguments to a $(length(params))-parameter target"))
-        for (arg, expected) in zip(args, params)
+        selected = get(ctx.invoke_arguments, idx, collect(eachindex(args)))
+        all(i -> 1 <= i <= length(args), selected) || throw(ArgumentError(
+            "bound invoke $idx has an out-of-range argument projection"))
+        projected_args = Any[args[i] for i in selected]
+        length(projected_args) == length(params) || throw(ArgumentError(
+            "bound invoke $idx supplies $(length(projected_args)) arguments to a $(length(params))-parameter target"))
+        for (arg, expected) in zip(projected_args, params)
             jt = _invoke_arg_static_type(arg, ctx)
             emit_value!(bii, arg, ctx, expected;
                         from_julia=(jt isa Type && isconcretetype(jt)) ? jt : nothing)

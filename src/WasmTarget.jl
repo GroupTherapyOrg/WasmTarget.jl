@@ -147,6 +147,11 @@ captured fields with globals declared in that module or exact Julia constants.
 Constants go through the canonical value-materialization pipeline. Context
 elision is fail-closed: every closure field must have exactly one explicit
 substitution.
+
+Framework runtime adapters that must reference compiled roots may use
+`link_roots(mod, root_indices, type_registry)`. It runs once after every root
+has a typed placeholder and before root bodies are emitted; adding late imports
+is rejected because it would invalidate all function indices.
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
@@ -155,6 +160,7 @@ function compile_multi(functions::Vector; optimize=false,
                        existing_module::Union{WasmModule,Nothing}=nothing,
                        import_stubs::Vector=Any[],
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                       link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
@@ -162,7 +168,8 @@ function compile_multi(functions::Vector; optimize=false,
         compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types,
                        discovery=discovery, existing_module=existing_module,
-                       import_stubs=import_stubs, root_bindings=root_bindings)
+                       import_stubs=import_stubs, root_bindings=root_bindings,
+                       link_roots=link_roots)
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end

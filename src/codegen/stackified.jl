@@ -426,6 +426,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # exception exists in the flow path.
     b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
     _seed_builder_locals!(b, ctx)
+    for target_idx in ctx.entry_calls
+        params, results = _true_call_sig(b, target_idx, WasmValType[], WasmValType[])
+        isempty(params) && isempty(results) || throw(ArgumentError(
+            "root entry call $target_idx must have signature () -> ()"))
+        call!(b, target_idx, WasmValType[], WasmValType[])
+    end
 
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions

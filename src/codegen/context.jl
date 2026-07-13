@@ -63,6 +63,8 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # instead of normal compilation. Maps SSA index -> WASM import function index.
     # Used by Therapy.jl to wire js() calls as WASM imports (Leptos pattern).
     invoke_imports::Dict{Int, UInt32}
+    invoke_arguments::Dict{Int, Vector{Int}} # explicit source-argument projection per bound invoke
+    entry_calls::Vector{UInt32} # typed zero-argument runtime adapters before root body
     # Diagnostics accumulated during compilation (see diagnostics.jl).
     diagnostics::Vector{WasmDiagnostic}
     # march15: per-try-region exception payload locals (dart binds each catch's
@@ -115,6 +117,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         nothing,                # PURE-9063: typeof scratch local (allocated on demand)
         skip_stmts,             # Skip statements (Therapy.jl js() interop)
         invoke_imports,         # Invoke imports (Therapy.jl js() as WASM imports)
+        Dict{Int,Vector{Int}}(), # bound-invoke argument projections (assigned by plan)
+        UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}()        # march15: exn_region_locals
     )

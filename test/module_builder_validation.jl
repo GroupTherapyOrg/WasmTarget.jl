@@ -203,10 +203,41 @@ _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
             root_bindings=Dict("caller" => linked))
         @test linked_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 
+        entry_module = MBV.WasmModule()
+        entry_idx = MBV.add_function!(entry_module, MBV.WasmValType[],
+            MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        with_entry = MBV.RootBindings(
+            captured_constants=Dict(:offset => Int64(7)),
+            entry_calls=UInt32[entry_idx], elide_closure_context=true)
+        entry_bytes = MBV.compile_multi(
+            Any[(constant_root, (Int64,), "entry_root")];
+            existing_module=entry_module,
+            root_bindings=Dict("entry_root" => with_entry))
+        @test entry_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+
+        linked_indices = Ref{Dict{String,UInt32}}()
+        linker_bytes = MBV.compile_multi(Any[
+            (leaf, (Int64,), "linked_leaf"), (caller, (Int64,), "linked_caller")];
+            link_roots=(linked_mod, roots, registry) -> begin
+                linked_indices[] = copy(roots)
+                @test registry isa MBV.TypeRegistry
+                @test linked_mod isa MBV.WasmModule
+            end)
+        @test Set(keys(linked_indices[])) == Set(["linked_leaf", "linked_caller"])
+        @test linker_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+        @test_throws ArgumentError MBV.compile_multi(
+            Any[(leaf, (Int64,), "bad_linker")];
+            link_roots=(linked_mod, _, _) -> MBV.add_import!(linked_mod,
+                "late", "forbidden", MBV.WasmValType[], MBV.WasmValType[]))
+
         unknown_link = MBV.RootBindings(invoke_roots=Dict(invoke_site => "missing"))
         @test_throws ArgumentError MBV.compile_module(
             Any[(caller, (Int64,), "caller")];
             root_bindings=Dict("caller" => unknown_link))
+        bad_entry = MBV.RootBindings(entry_calls=UInt32[99])
+        @test_throws ArgumentError MBV.compile_module(
+            Any[(_mbv_unsigned_i128, (Int128,), "bad_entry")];
+            root_bindings=Dict("bad_entry" => bad_entry))
     end
 
     @testset "symbolic control labels" begin

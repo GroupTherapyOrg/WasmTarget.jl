@@ -478,13 +478,21 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
             required = ["captured_constants::Dict{Symbol,Any}",
                         "invoke_roots::Dict{Int,String}",
+                        "invoke_arguments::Dict{Int,Vector{Int}}",
+                        "entry_calls::Vector{UInt32}",
+                        "link_roots::Union{Nothing,Function}",
                         "root \$name binds closure fields twice",
                         "invokes unknown compilation roots",
+                        "selects arguments for unbound invoke sites",
                         "static_wasm_type(_captured_value, ctx)",
                         "Declaratively bound invoke", "params, _ = _true_call_sig",
                         "emit_value!(bii, arg, ctx, expected",
-                        "constant_root", "root-link fixture", "unknown_link"]
-            count(p -> !occursin(p, compile_src * calls_src * invoke_src * test_src), required)
+                        "root entry call \$target_idx must have signature () -> ()",
+                        "the root linker cannot add imports after function indices are frozen",
+                        "constant_root", "root-link fixture", "unknown_link", "bad_entry",
+                        "linked_indices"]
+            stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
+            count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
         end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin

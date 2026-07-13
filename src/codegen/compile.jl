@@ -10,6 +10,8 @@ struct RootBindings
     skip_stmts::Set{Int}
     invoke_imports::Dict{Int,UInt32}
     invoke_roots::Dict{Int,String}
+    invoke_arguments::Dict{Int,Vector{Int}}
+    entry_calls::Vector{UInt32}
     elide_closure_context::Bool
     void_return::Bool
 end
@@ -19,12 +21,16 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
                       skip_stmts=Set{Int}(), invoke_imports=Dict{Int,UInt32}(),
                       invoke_roots=Dict{Int,String}(),
+                      invoke_arguments=Dict{Int,Vector{Int}}(),
+                      entry_calls=UInt32[],
                       elide_closure_context::Bool=false, void_return::Bool=false)
     RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
                  Dict{Symbol,Any}(captured_constants),
                  Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
                  Set{Int}(skip_stmts), Dict{Int,UInt32}(invoke_imports),
                  Dict{Int,String}(invoke_roots),
+                 Dict{Int,Vector{Int}}(k => Int[v...] for (k, v) in invoke_arguments),
+                 UInt32[entry_calls...],
                  elide_closure_context, void_return)
 end
 
@@ -534,6 +540,7 @@ function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                        link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false
@@ -635,6 +642,16 @@ function _compile_closed_world_plan(functions::Vector;
                                   Set(keys(bindings.invoke_roots)))
         isempty(overlap_sites) || throw(ArgumentError(
             "root $root_name binds invoke sites twice: $(sort!(collect(overlap_sites)))"))
+        unknown_argument_sites = setdiff(Set(keys(bindings.invoke_arguments)),
+            union(Set(keys(bindings.invoke_imports)), Set(keys(bindings.invoke_roots))))
+        isempty(unknown_argument_sites) || throw(ArgumentError(
+            "root $root_name selects arguments for unbound invoke sites: " *
+            "$(sort!(collect(unknown_argument_sites)))"))
+        for target_idx in bindings.entry_calls
+            Int(target_idx) < n_imported_functions + length(mod.functions) ||
+                throw(ArgumentError(
+                    "root $root_name entry call references missing function $target_idx"))
+        end
     end
 
     # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
@@ -962,6 +979,16 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
+    if link_roots !== nothing
+        imports_before_link = length(mod.imports)
+        root_indices = Dict{String,UInt32}(
+            name => UInt32(n_imports + n_existing + i - 1)
+            for (i, (_, _, name, _, _, _, _)) in enumerate(function_data))
+        link_roots(mod, root_indices, type_registry)
+        length(mod.imports) == imports_before_link || throw(ArgumentError(
+            "the root linker cannot add imports after function indices are frozen"))
+    end
+
 
 
     # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
@@ -1031,6 +1058,9 @@ function _compile_closed_world_plan(functions::Vector;
                                         Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}() : bindings.dom_bindings,
                                     skip_stmts=bindings === nothing ? Set{Int}() : bindings.skip_stmts,
                                     invoke_imports=_bound_invokes)
+            ctx.entry_calls = bindings === nothing ? UInt32[] : copy(bindings.entry_calls)
+            ctx.invoke_arguments = bindings === nothing ? Dict{Int,Vector{Int}}() :
+                deepcopy(bindings.invoke_arguments)
             body = generate_body(ctx)
             locals = ctx.locals
         end
@@ -1681,6 +1711,7 @@ function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                        link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
@@ -1689,7 +1720,7 @@ function compile_module(functions::Vector;
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, optimize_ir, register_ir_types)
+        root_bindings, link_roots, optimize_ir, register_ir_types)
 end
 
 """
