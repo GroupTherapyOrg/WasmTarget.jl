@@ -7,10 +7,10 @@ on:
 
 jobs:
   test:
-    # a hung worker must SELF-KILL, not sit on GitHub's 6-hour default —
-    # the normal lane is ~30-45 min; 75 is generous headroom (2026-07-05:
-    # a wedged Windows run sat 3h19m before manual intervention)
-    timeout-minutes: 75
+    # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
+    # Windows runs two shard processes at a time below, so allow its two
+    # batches to drain while keeping the tighter Unix bound.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 120 || 75 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -54,5 +54,10 @@ jobs:
           '
 
       - name: Run tests
+        env:
+          # Four compiler shards plus fuzz exhausted the Windows runner's
+          # effective CPU/memory budget and repeatedly failed to drain the
+          # first batch. Keep the exact suite, but bound local concurrency.
+          WT_TEST_CONCURRENCY: ${{ runner.os == 'Windows' && '2' || '' }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test()'
