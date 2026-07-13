@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.5.1](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.5.0...v0.5.1) (2026-07-13)
+
+
+### Features
+
+* **builder:** complete the emit API — select/ref.test/ref.i31/i31.get/array.copy/array.fill ([45fcd8c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/45fcd8ceb3220560ef0f853c22f11b63d3b22f26))
+* **builder:** InstrBuilder — dart2wasm-style typed instruction emitter (Phase 0 foundation) ([c1f59f6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/c1f59f62dc72f0d5f52b3356396c2b852a119052))
+* **builder:** rich source-located diagnostics — the precision bug-finder ([ea4404a](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/ea4404a381bd6b32f66cb9b4ad64bae18e34174b))
+* caller-facing diagnostics ledger — compile(...; diagnostics_sink=...) + WasmCompileError.all ([399ad9c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/399ad9cfc63961f5df55a54e9a023b9ca547f35e))
+* caller-facing diagnostics ledger (diagnostics_sink + WasmCompileError.all) ([0b40aaa](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0b40aaa92e3862c9c44d32d3c92525a88f76d1b0))
+* **codegen:** extensible is_struct_type carve-out registry — unblocks vector ODESolution ([c3a4457](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/c3a4457ea3cb35467618c7530db03959b682d91a))
+* initialize framework state through typed roots ([319d50a](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/319d50aad1a981b648ba0646d7e0f560981bb173))
+* interactive in-browser examples + memo dep auto-discovery + faster CI ([#64](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/64)) ([bfc9c8e](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/bfc9c8e8c7b9fff149fa028709165a18ac75abae))
+* link typed framework adapters to canonical roots ([0b1018d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0b1018da9c664a726397f7b3c97a271c2e24ff1f))
+* **parity:** the 2026-07-04 certification census — 15 dims scored, ~55% structural parity (was ~25-30%) ([dd98983](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/dd98983e01ced4be3e83057f71823179ea245b56))
+* **sciml:** ForwardDiff integration - first SciML library, 100% in-scope ([#62](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/62)) ([800e7e6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/800e7e63cb07a0340fddad89363d726999782b57))
+* **sciml:** parameterized ODEs — overlay 4-arg ODEProblem(f,u0,tspan,p) ([961e714](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/961e714ae0af37277cf49dfd37a799fc85e51b9d))
+* **sciml:** WasmTargetSimpleDiffEqExt — ODEProblem/solve overlays + carve-out registration ([963b5f0](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/963b5f0e49736369364fde02fc737de362593148))
+* **staticarrays:** WasmTargetStaticArraysExt — SVector via carve-out + construct_type overlay ([1c88540](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1c8854057ca14541f90b198cf89c58aceff5c968))
+
+
+### Bug Fixes
+
+* **1.13-rc1 + windows:** actual-type egal guards · array-rep union join · path-safe ratchet ([10977c2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/10977c2c1461a2597347bd78dac0f58d33374bb7))
+* **1.13-rc1:** element-wise builder transfer — works around a Julia 1.13.0-rc1 append! UNDEF-tail bug ([cf0898c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cf0898c85c4da037f6ebdf5f13f976b8f75c7837))
+* **1.13:** route every io/print + N-way string-concat consumer through the M9 funnel ([39a4537](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/39a45372fb2e1b0269852cec110e3a9fb67ed040))
+* align closed-world roots with runtime classes ([100b29f](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/100b29fc43931cb55e52487aabb2935f762a11bb))
+* **builder:** declare string intrinsic scratch locals ([8a21b85](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/8a21b85f5ccf8305cc66949ae82a240ae29ea1fd))
+* **builder:** pass unterminated global initializer expressions ([668a339](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/668a339d9269a72ccec3572df6eeb72b4156c0fb))
+* **ci:** docs build — update the cached General registry ([119f77d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/119f77d85a29596550a4f6f0230d73ffc4bc1784))
+* **ci:** docs build — update the cached General registry, not just add it ([7983c26](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/7983c26e33ae2981223c6e88c86a229ab7019b53))
+* **codegen:** project MemoryRef memory without offset ([b0915fc](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/b0915fc4a3a3d92d84e96e8a8337b2e1eec4d9a4))
+* **codegen:** scoped type-level concrete-eval fold — close the cor cluster ([63f197d](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/63f197daf525f7de7a335a5b96010f14a19a038c))
+* **dev:** gate watchdog threshold 12→25 min — cold precompile false-positive ([87cc686](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/87cc6864cb08651e7fcfb3efa00389295f64e853))
+* **dev:** the gate runs in an ISOLATED WORKTREE — dev continues on the main tree (the pipeline mechanics) ([5721b8c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5721b8c2ba89d67a0acee8a7684b241c1fadcfcc))
+* discover constant-folded runtime selector classes ([d5b28cd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/d5b28cd5204a89eb7a0b72f8132394f525b4b832))
+* **docs:** use registered Therapy 0.2.0 + WasmMakie as normal deps ([0adcb57](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0adcb577c78756665e7fb05f729959e43907ce2b))
+* emit local-less SSA aliases from their producer ([16facdc](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/16facdccae3cfc3d13232b24b4e55e9245a8fdb4))
+* **flow:** root-fix multivar if/else phi-merge miscompile — route multi-phi to stackifier ([70deff2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/70deff25a4144ff34e070c415554132756de7755))
+* **march11:** the slot_types FIELD actually lands (the edit had searched without saving) ([cba4ae4](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cba4ae49eed1afcab0ba884031fd22e7757edcda))
+* **march12:** the sizeof site's stale trailing convert removed — the wrap already lands the array ([5a16ac1](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5a16ac14b576207b7f52d0d4a22256b2f4b066df))
+* **march13:** the forwarder chase handles the ::T-annotation phi join (M8.3 gate catch) + tuple dedup at table build ([96e8010](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/96e8010f76af24384a3a3b35921009626038ac80))
+* **march16:** the vestigial discovery-conversion edits reverted (trimcollect owns type-keying); the unwrap arm gated on ACTUAL wrapping (vtable globals present) ([6e7fdd6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/6e7fdd6bf713cf1215ee172d2bd0d6e121a5178e))
+* **march4:** emit_int128_sle!/ule! builder forms — the sweep's latent UndefVar (fuzz-caught) ([d78a1b2](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/d78a1b2b3fe5be2905c58e6cf748fe66cc67f1f9))
+* **march5, F2:** exclude Memory/MemoryRef from the closed-world collector — the _la_sub regression ([3862ba9](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3862ba9ae07379813734768b284ee04ccc61f8ec))
+* **march5, F2:** the closed world COLLECTS, never registers — and the isa bug's SECOND root falls ([9af563c](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/9af563c5e9818da3470fab82c7a417af588d182f))
+* **march7:** interned Char fields use Julia's LEFT-PACKED bits, not the codepoint (gate-caught) ([98126bd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/98126bdd6d8adfa5aa1dadeea1629aea46295267))
+* **march7:** the ensureConstant funnel gains a LAYOUT GUARD — emit only when the registered struct layout matches ([c10f1d7](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/c10f1d702e06dd8655b75d715dde9e0dd1d6b1e2))
+* **march8:** the Nothing decide-before-emit keeps the SEMANTIC SPLIT — null for concrete refs, the BoxedNothing singleton for generic refs ([b4f2bbf](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/b4f2bbf1fccd68cbaaec679f3465b2783000d034))
+* normalize crossing terminal control-flow tails ([eaa7531](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/eaa7531b45b9ba6c8c3b6f095266aa1d2a48a68e))
+* preserve exact type-object representation contracts ([394e034](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/394e03467a8c17bff2b407af16d29e82fd6a5328))
+* preserve stack inputs across call fragments ([e95a928](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/e95a928298001aa0edd3d64d7557bfd37425284c))
+* **ratchet:** R15 scoped to values.jl (the lazy creator's segment site is dart-shaped); two marker citations de-jargoned (R11 monotone holds) ([712c7dd](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/712c7ddd2307dfee25b5e978f640f4e720bfbeb4))
+* reconstruct concrete vararg source tuples ([1ffc4f6](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1ffc4f693074c5f30cb279991e82f9a56c4ac1d3))
+* retain captured arithmetic operand ownership ([f14c8bf](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f14c8bfee8a2abb2d2e5926d4d1483cbf743ae1f))
+* retain exact captured-value dependencies ([4ec1a8a](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/4ec1a8a1a907ad342d969e4e2f85dd16706187c8))
+* serialize Binaryen workers on Windows ([f7ca3d0](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f7ca3d06c37bb1093badbdc2954b28d0a5598a90))
+* skip js() interop intrinsic in closure dep auto-discovery (0.3.19 regression) ([#66](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/66)) ([6510a24](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/6510a24917241798f186f3003c9b17b840a38732))
+* skip js() interop intrinsic in closure dep auto-discovery (0.3.19 regression). DarkModeToggle stays signal-backed. ([f4198d3](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f4198d38754839a2132c61f461dd172eba2c5fe3))
+* specialize explicit overlay invokes from concrete SSA types ([5daa1cb](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/5daa1cb02e7fa2b7b89a2147926d7cc3375ac05b))
+* specialize singleton type-object invoke arguments ([65fff02](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/65fff02dda234082635aad6f873fb5ef2ddc2a85))
+* **stackifier:** a loop closes at its LAST back-edge source — multi-continue loops miscompiled ([0018e90](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/0018e90c3934bdd0480c9d2b6645cd6a5ee17436))
+* **step5:** the DAG resolver is nothing-safe for bare registries (the autodiscovery probe path) ([f9502b4](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/f9502b4fffcc5276482658383e83d85e3b57c0c9))
+* **try:** route throw-arm-past-the-leave shapes to THE stackified try driver (silent wrong value) ([1debe19](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/1debe19a4a268a253249a2fc5da10c8d67f5edb7))
+* unify framework roots and closed-world reachability ([fde49f8](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/fde49f82d1e317dde86f43a4b55642009ee577b0))
+
+
+### Reverts
+
+* **march13:** the tracked-type sink was too blunt — the stack top isn't always the stored value (25 smoke errors) ([3872af5](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/3872af5738058071ed18591a4d12385039eb563d))
+
 ## [0.5.0](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.4.12...v0.5.0) (2026-07-11)
 
 ### Features
