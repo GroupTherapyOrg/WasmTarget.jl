@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.5.2...v0.5.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* discard framework root results without trapping ([#118](https://github.com/GroupTherapyOrg/WasmTarget.jl/issues/118)) ([cadb908](https://github.com/GroupTherapyOrg/WasmTarget.jl/commit/cadb908093efee3b08a065f50930d3337916391d))
+
 ## [0.5.2](https://github.com/GroupTherapyOrg/WasmTarget.jl/compare/v0.5.1...v0.5.2) (2026-07-13)
 
 
