@@ -756,6 +756,20 @@ ref.null / extern-box. Else if the value type cannot satisfy the return type →
 `return`. Byte-identical to the inlined blocks it replaces.
 """
 function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)
+    # Framework roots may deliberately erase a Julia result (`void_return=true`).
+    # The typed IR still contains `return %value`; evaluate that value for its
+    # side effects, discard its physical result when present, and return void.
+    # Treating Nothing like an ordinary value made a valid setter-returning
+    # handler end in `drop; unreachable`, so its surrounding reactive batch
+    # never reached the flush/presentation boundary.
+    if ctx.return_type === Nothing
+        # The discard is still a typed consumer: route through THE wrap funnel
+        # with the value's static physical representation, then drop it.
+        emit_value!(b, val, ctx, static_wasm_type(val, ctx))
+        drop!(b)
+        return_!(b)
+        return b
+    end
     # parity(M2): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
     # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
     # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an

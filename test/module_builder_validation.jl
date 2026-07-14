@@ -29,6 +29,7 @@ function _mbv_constant_closure()
 end
 Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
 _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
+_mbv_void_numeric_root(x::Int64) = x + Int64(1)
 _mbv_string_init() = "framework-seed"
 Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = print(io, '\\', c)
 Base.@noinline _mbv_host_print(x::Int64) = print(x)
@@ -193,6 +194,15 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         ft = compiled.types[Int(fn.type_idx) + 1]
         @test isempty(ft.params)
         @test isempty(ft.results)
+        void_module = MBV.compile_module(Any[(_mbv_void_numeric_root, (Int64,), "void_numeric")];
+            root_bindings=Dict("void_numeric" => MBV.RootBindings(void_return=true)))
+        mktempdir() do dir
+            wasm = joinpath(dir, "void-root.wasm")
+            write(wasm, MBV.to_bytes(void_module))
+            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1])).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
+            proc = run(ignorestatus(`node -e $probe $wasm`))
+            @test proc.exitcode == 0
+        end
 
         partial = MBV.RootBindings(captured_globals=Dict([first(captured)]),
                                    elide_closure_context=true)
