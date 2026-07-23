@@ -1,5 +1,5 @@
 # ============================================================================
-# parity_ratchet.jl — the M0 enforcement harness (dev/PARITY_MASTER.md §2-§3).
+# parity_ratchet.jl — structural enforcement for dev/PARITY_MASTER.md.
 #
 # Makes "clean up as you go" MECHANICAL: every structural-disease metric from the
 # 2026-07-01 census is counted here with a precise pattern and compared against the
@@ -89,7 +89,7 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
     return n
 end
 
-# ---- METRIC DEFINITIONS (ids match dev/PARITY_MASTER.md §2) -----------------
+# ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
@@ -104,7 +104,7 @@ const METRICS = [
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl"])),
     # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
-    # see dev/PARITY_MASTER.md § MARCHES 6-10 for each metric's anchor census) ──
+    # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
     "R12_try_drivers" => ("shape-specialized try/catch drivers (march 6 → 1: dart's ONE visitTryCatch)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
@@ -1238,7 +1238,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     current_m = Dict{String,Int}()
     current_l = Dict{String,Int}()
 
-    println("── parity ratchet (dev/PARITY_MASTER.md §3) ──")
+    println("── parity ratchet (dev/PARITY_MASTER.md) ──")
     for (id, (desc, thunk)) in METRICS
         c = thunk()
         current_m[id] = c

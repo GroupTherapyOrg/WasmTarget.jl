@@ -1,4 +1,4 @@
-# Parity Loop C — F31 + F-i31 backfills (dev/PARITY_LEDGER.md).
+# Parity Loop C — F31 + F-i31 backfills (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
 #
 # F31  — heterogeneous-Union VALUE extraction. Before: a live numeric/ref arm flowing into a
 #        tagged-union phi-local was dummied to `ref.null` (the value was lost → reading it

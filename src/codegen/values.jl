@@ -392,7 +392,8 @@ end
 
 The single coercion funnel (dart2wasm `translator.dart convertType`). Given a value of wasm
 type `from` already on the stack, emit the ops to coerce it to `to`. Byte-identical extraction
-of the coercion body that was copy-pasted across ~21 sites (PARITY_LEDGER B1):
+of the coercion body that was copy-pasted across ~21 sites
+(dev/HISTORY.md#uniform-values-objects-and-class-hierarchy):
 
   * `from === to` OR `wasm_subtype(from,to)` (upcast) ⇒ emit NOTHING.
   * ref→ref: extern↔any bridge / `ref.as_non_null` (nullability-only narrowing, P9) /
@@ -569,7 +570,7 @@ convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext) =
 convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext) = b
 
 # ============================================================================
-# Single-source classId box/unbox/discriminate (Loop B funnel — dev/LOOP_B_DESIGN.md).
+# Single-source classId box/unbox/discriminate (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
 # dart2wasm's convertType boxing: a dynamic value is a {classId:i32@0, value@1} struct
 # subtyping the Top struct ($JlBase); type-tests read classId off the box. These are the
 # ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41

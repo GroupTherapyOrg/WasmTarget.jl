@@ -145,18 +145,18 @@ _wt_shard0() && include("apply_iterate_soundness.jl")
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
-# for every case the deleted passes addressed). See dev/cleanup_ledger.md.
+# for every case the deleted passes addressed). See dev/HISTORY.md#typed-builder-and-cleanup-campaigns.
 _wt_shard0() && include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
 _wt_shard0() && include("cleanup_loop1_backfills.jl")
 # Parity Loop A: the WasmGC subtype lattice (wasm_subtype) — supertype-chain + nullability aware,
-# mirroring dart2wasm HeapType.isSubtypeOf. See dev/PARITY_LEDGER.md (F4/P2/B6).
+# mirroring dart2wasm HeapType.isSubtypeOf. See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
 _wt_shard0() && include("test_wasm_subtype_lattice.jl")
 # Parity Loop C: F31 heterogeneous-Union value extraction + F-i31 full-width int box (the
 # phi-store now CONSTRUCTS the tagged-union struct instead of dummying to ref.null, and ints
-# are boxed full-width, not via lossy i31). See dev/PARITY_LEDGER.md.
+# are boxed full-width, not via lossy i31). See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
 _wt_shard0() && include("f31_union_value_backfills.jl")
 # Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
-# a single i64 op on a 128-bit value was invalid wasm). See dev/PARITY_LEDGER.md.
+# a single i64 op on a 128-bit value was invalid wasm). See dev/HISTORY.md#parity-method.
 _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
@@ -164,13 +164,13 @@ _wt_shard0() && include("sort_comparator_backfills.jl")
 # CFG normalization: shared non-returning bounds-error tails may cross natural
 # loop regions and must be duplicated through the canonical statement compiler.
 _wt_shard0() && include("crossing_terminal_taildup.jl")
-# F3 sub-loop L0 (dev/F3_LOOP.md): Core.Box contents-type inference.
+# F3 sub-loop L0 (dev/HISTORY.md#closures-and-dynamic-dispatch): Core.Box contents-type inference.
 _wt_shard0() && include("f3_box_capture_l0.jl")
-# F3 sub-loop L1 (dev/F3_LOOP.md): specialized mutable Box{contents} struct registry.
+# F3 sub-loop L1 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized mutable Box{contents} struct registry.
 _wt_shard0() && include("f3_box_capture_l1.jl")
-# F3 sub-loop L2a (dev/F3_LOOP.md): cross-function box-field-type pre-pass.
+# F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch): cross-function box-field-type pre-pass.
 _wt_shard0() && include("f3_box_capture_l2_prepass.jl")
-# F3 sub-loop L2b (dev/F3_LOOP.md): value-type propagation past Box{Any} erasure.
+# F3 sub-loop L2b (dev/HISTORY.md#closures-and-dynamic-dispatch): value-type propagation past Box{Any} erasure.
 _wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
 # Loop C value channel: general numeric value-type propagation (Any-but-really-i64).
 _wt_shard0() && include("value_channel_propagate.jl")
@@ -188,7 +188,7 @@ _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
 _wt_shard0() && include("no_fabricated_values.jl")
-# PARITY RATCHET (dev/PARITY_MASTER.md §3): structural-disease counts may only DECREASE;
+# PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()
     ENV["WT_RATCHET_INCLUDED"] = "1"

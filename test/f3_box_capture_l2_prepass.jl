@@ -1,4 +1,4 @@
-# F3 sub-loop L2a (dev/F3_LOOP.md) — cross-function pre-pass that maps a capturing closure type
+# F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch) — cross-function pre-pass that maps a capturing closure type
 # to the WASM contents type of the Core.Box it captures (registry.box_contents_types).
 #
 # populate_box_field_types!(mod, reg, code, ssa_types) scans an enclosing fn's typed IR: for each

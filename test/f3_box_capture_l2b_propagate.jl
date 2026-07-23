@@ -1,4 +1,4 @@
-# F3 sub-loop L2b (dev/F3_LOOP.md) — value-type propagation past Julia's Box{Any} erasure.
+# F3 sub-loop L2b (dev/HISTORY.md#closures-and-dynamic-dispatch) — value-type propagation past Julia's Box{Any} erasure.
 #
 # f3_box_value_types(code, ssa_types) forward-propagates concrete types from each %new(Core.Box)
 # with concrete contents: box-reads (getfield(box,:contents), inferred Any) → the contents type;

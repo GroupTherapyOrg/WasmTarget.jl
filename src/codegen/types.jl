@@ -76,7 +76,7 @@ mutable struct TypeRegistry
     string_hash_func_idx::Union{Nothing, UInt32}
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
-    # F3 (dev/F3_LOOP.md): specialized Core.Box struct types, keyed by contents WASM type.
+    # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
     box_types::Union{Nothing, Dict{WasmValType, UInt32}}
@@ -1441,7 +1441,7 @@ end
 """
     get_box_type!(mod, registry, contents_wasm_type) -> UInt32
 
-F3 (dev/F3_LOOP.md): get/create the specialized `Core.Box` struct for a box whose contents have
+F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): get/create the specialized `Core.Box` struct for a box whose contents have
 concrete wasm type `contents_wasm_type` — `(struct (field \$typeId i32) (field \$contents (mut T)))`.
 The contents field is MUTABLE (a captured variable is written via `struct.set`), so a `Box{i64}` is
 a DIFFERENT struct than the immutable `{typeId,value}` numeric box. Cached in `registry.box_types`

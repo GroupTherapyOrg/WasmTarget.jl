@@ -10,7 +10,7 @@
 # One representation, no parallel byte path. Every imbalance THROWS at the emit site
 # with Julia source context; validation is an invariant, not a mode.
 #
-# See dev/WASM_BUILDER_MIGRATION.md.
+# See dev/HISTORY.md#typed-builder-and-cleanup-campaigns.
 
 export InstrBuilder, builder_code, builder_disasm, finish_function!, StackImbalanceError,
        set_context!, builder_diagnose, append_builder!

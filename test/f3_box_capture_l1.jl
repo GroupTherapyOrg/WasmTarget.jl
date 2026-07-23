@@ -1,4 +1,4 @@
-# F3 sub-loop L1 (dev/F3_LOOP.md) — specialized mutable Box{contents} struct registry.
+# F3 sub-loop L1 (dev/HISTORY.md#closures-and-dynamic-dispatch) — specialized mutable Box{contents} struct registry.
 #
 # get_box_type!(mod, reg, contents_wasm_type) returns a cached struct
 # `(struct (field $typeId i32) (field $contents (mut T)))` keyed by the contents wasm type — the

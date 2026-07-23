@@ -1,7 +1,7 @@
 # Loop-1 cleanup backfill regressions.
 #
 # Each of the 7 fix_* post-emission byte-rewrite passes is being DELETED (proven dead by the
-# WT_NEUTRALIZE=all probe + full-suite run — see dev/cleanup_ledger.md). These tests PIN the
+# WT_NEUTRALIZE=all probe + full-suite run — see dev/HISTORY.md#typed-builder-and-cleanup-campaigns. These tests PIN the
 # migrated typed-InstrBuilder emitters that now produce correct bytes up front, so the case
 # each pass used to compensate for can never silently regress after the pass is gone.
 #

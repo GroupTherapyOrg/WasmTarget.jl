@@ -459,7 +459,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     elseif stmt isa Expr
         # march4 Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
-        # to _sf's tracked state cluster-by-cluster (dev/MARCH4_STATEMENT_PLAN.md).
+        # to _sf's tracked state cluster-by-cluster (dev/HISTORY.md#exceptions-and-structured-control-flow).
         local _sf = _ctx_builder(ctx, "compile_statement.frag")
         set_context!(_sf, first(string(stmt), 80))   # march17: errors name the stmt
         # march17: statements legitimately consume values earlier statements left on

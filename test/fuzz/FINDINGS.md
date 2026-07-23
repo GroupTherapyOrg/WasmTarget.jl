@@ -53,7 +53,7 @@ boxed ints via `ref.i31` (31-bit) → any int ≥ 2^30 was SILENTLY TRUNCATED (v
 `typemax(Int64)` → -1, `2^31` → 0, `3e9` → 852516352). Floats were already boxed full-width into
 the `{typeId,value}` numeric box; ints were not. **ROOT FIX:** box ALL numerics full-width into
 the numeric box in `emit_wrap_union_value` + read them back symmetrically in
-`emit_unwrap_union_value` (the i31-vs-struct split named in PARITY_LEDGER F31). Loop B's numeric
+`emit_unwrap_union_value` (see dev/HISTORY.md#uniform-values-objects-and-class-hierarchy). Loop B's numeric
 `Union{Int,Float}` AnyRef path was already full-width (unaffected). Verified faithful across the
 full Int64 range native-vs-wasm. Migration corpus BYTE-IDENTICAL (no corpus fn used tagged-union
 ints). Regression guard: `test/f31_union_value_backfills.jl` (CI-wired, shard 0). **Flag for Dale:

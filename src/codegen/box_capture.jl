@@ -1,4 +1,4 @@
-# F3 — dart2wasm-aligned mutable closure capture (`Core.Box`). See dev/F3_LOOP.md.
+# F3 — dart2wasm-aligned mutable closure capture (`Core.Box`). See dev/HISTORY.md#closures-and-dynamic-dispatch.
 #
 # THE PURE PRINCIPLE (dart2wasm, closures.dart:1102-1115): a captured cell is typed by the
 # VARIABLE'S OWN TYPE (`translateTypeOfLocalVariable`) — `int`→`i64` field, `dynamic`→top type
@@ -136,7 +136,7 @@ CodeInstance; write types via `return_type` past the `Any`-erasure). Returns the
 the join unifies to one concrete `DataType`, else `nothing` (`Union`/abstract/`Any` ⇒ the box is
 genuinely dynamic ⇒ anyref-boxed, dart2wasm's top-type field). Mirrors dart2wasm typing a context
 field by the variable's own type — reconstructing what Julia erased. F3 L0; not yet wired
-(byte-identical). See dev/F3_LOOP.md.
+(byte-identical). See dev/HISTORY.md#closures-and-dynamic-dispatch.
 """
 function box_contents_type(code, ssa_types, box_id::Int)::Union{Type,Nothing}
     # 1) enclosing init write(s)
@@ -224,7 +224,7 @@ computed result type (`return_type` with propagated operand types). Returns ssa_
 type for box-DERIVED values (the getfield result, the `s+i` arithmetic) — these are inferred `Any`
 by Julia (the dynamic `+`) but compute at a concrete width, so without this they get anyref locals
 the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
-it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/F3_LOOP.md.
+it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/HISTORY.md#closures-and-dynamic-dispatch.
 """
 function f3_box_value_types(code, ssa_types; extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(), spectypes=nothing)::Dict{Int,Type}
     out = Dict{Int,Type}()
@@ -516,7 +516,7 @@ types the captured-box field as a typed `Box{contents}` instead of anyref. Dynam
 (`box_contents_type` ⇒ `nothing`) get NO entry → anyref fallback (current behavior, no regression).
 
 The context value-channel proof invokes this before local typing, and closure registration reads
-the side table when choosing its captured-cell field type. See dev/F3_LOOP.md.
+the side table when choosing its captured-cell field type. See dev/HISTORY.md#closures-and-dynamic-dispatch.
 """
 function populate_box_field_types!(mod, registry, code, ssa_types)
     registry.box_contents_types === nothing && return registry.box_contents_types

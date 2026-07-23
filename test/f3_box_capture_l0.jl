@@ -1,4 +1,4 @@
-# F3 sub-loop L0 (dev/F3_LOOP.md) — unit tests for the PURE Core.Box contents-type inference.
+# F3 sub-loop L0 (dev/HISTORY.md#closures-and-dynamic-dispatch) — unit tests for the PURE Core.Box contents-type inference.
 #
 # `box_contents_type` computes the captured variable's REAL type = the join of the enclosing init
 # and every closure write's COMPUTED result type (closure bodies via the invoke CodeInstance; write

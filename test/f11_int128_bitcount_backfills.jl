@@ -1,4 +1,4 @@
-# Parity Loop 0 — F11 backfills (dev/PARITY_LEDGER.md): Int128 bit-counting intrinsics.
+# Parity Loop 0 — F11 backfills (dev/HISTORY.md#parity-method): Int128 bit-counting intrinsics.
 #
 # cttz_int / ctpop_int / not_int ignored the is_128bit flag and emitted a single i64 op on a
 # 128-bit (two-limb struct) value → wasm-tools rejected the module (invalid). Added

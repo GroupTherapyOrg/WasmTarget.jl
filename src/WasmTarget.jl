@@ -26,7 +26,7 @@ include("codegen/structs.jl")
 include("codegen/closures.jl")   # march16: the closure layouter consumers
 include("codegen/unions.jl")
 include("codegen/int128.jl")
-include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/F3_LOOP.md)
+include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/HISTORY.md#closures-and-dynamic-dispatch)
 include("codegen/context.jl")
 include("codegen/generate.jl")
 include("codegen/flow.jl")

@@ -2,16 +2,24 @@
 
 Status: **GREEN — strict builder/codegen parity within the declared scope**
 
-Audit date: 2026-07-11
+> **Bounded revalidation (2026-07-22).** Builder emission, closure/vtable layout,
+> selector dispatch, and current locks were rechecked against WasmTarget `3a93ae24` and
+> a pinned upstream dart-lang/sdk checkout at
+> `898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`. The parity ratchet passes and CI for that
+> exact WasmTarget revision is green
+> ([run 29357985108](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/29357985108)).
+> This is a validation delta, not a relabelled full certification run.
 
-WasmTarget implementation commit audited: `e6114f8d4d5156ddbe8df762d6494758bdb36307`
+Original full source/full-suite audit date: 2026-07-11
 
-Dart architectural oracle: dart-lang/sdk `upstream/main` at
+Original WasmTarget implementation commit audited: `e6114f8d4d5156ddbe8df762d6494758bdb36307`
+
+Original Dart architectural oracle: dart-lang/sdk `upstream/main` at
 `594947b79dc1af3df7e80546ad2e6a37dec7a727`
 
-This is a fresh source audit of the revisions above. It does not inherit claims from an
-older certificate. A green row requires all three of: current source correspondence, a
-machine-enforced parity lock, and current executable evidence.
+The table below is the original fresh source audit of the original revisions above. It
+does not inherit claims from an older certificate. At those revisions a green row required
+all three of: source correspondence, a machine-enforced parity lock, and executable evidence.
 
 ## Certified scope
 
@@ -26,9 +34,9 @@ repair is certified or permitted.
 
 ## Fresh source-to-source audit
 
-| Invariant | Current dart2wasm oracle | Current WasmTarget implementation | Machine evidence | Result |
+| Invariant | Audited dart2wasm oracle | Audited WasmTarget implementation | Machine evidence | Result |
 |---|---|---|---|---|
-| Typed instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart`: `InstructionsBuilder`, `_verifyTypes`, `_stackTypes` | `src/builder/instr_builder.jl` and `validator.jl`: every typed emission updates and checks the operand stack | L6, L13, module-builder tests | ✅ |
+| Typed instruction builder | `pkg/wasm_builder/lib/src/builder/instructions.dart`: `InstructionsBuilder`, `_verifyTypes`, `_stackTypes` | `src/builder/instr_builder.jl` and `validator.jl`: live production emission updates and checks the operand stack | L6, L13, module-builder tests | ✅ |
 | Symbolic control labels | dart `Label`, `Block`, `Loop`, `_labelIndex`; branch APIs accept `Label` | `ControlLabel` identity is returned by block/loop/if/try-table; codegen retains it; `_label_depth` exists only at serialization | L87; stale/numeric-label rejection and catch-target tests | ✅ |
 | Definite local/control validation | dart tracks label base heights, reachability, target types, and local initialization | validator tracks entry height, input/output types, reachability, branch/catch arity and subtyping; partial primitive initialization requires CFG must-proof | L6, L74, L79, L87 | ✅ |
 | Typed expression channel | dart wraps expressions against an expected representation and retains produced types | `emit_value!` uses the builder-tracked produced type and the sink's physical expected type | L4, L9, L18, L35; R17=29 | ✅ |
@@ -47,8 +55,10 @@ repair is certified or permitted.
 
 ## Machine-enforced locks
 
-`test/parity_ratchet.jl` and `dev/parity_baseline.toml` lock every certified invariant.
-At the audited commit every committed lock (L1–L32 and L34–L88; L33 is unused) is zero.
+`test/parity_ratchet.jl` and `dev/parity_baseline.toml` provide committed structural
+regression patterns for every certified row.
+At the original audited commit every committed lock through L88 (except unused L33) was
+zero. At the 2026-07-22 validation, every current committed lock through L96 remains zero.
 Key final locks added by the fresh audit:
 
 - L84: numeric boxing requires an exact concrete Julia class;
@@ -56,6 +66,11 @@ Key final locks added by the fresh audit:
 - L86: SSA/Pi aliases of Julia `nothing` retain null semantics before conversion;
 - L87: all builder/codegen branches and try-table catches retain symbolic label identity;
 - L88: constant fields retain their exact runtime Julia classes and undefined captures reject.
+
+The later locks L89–L96 preserve erased-boundscheck CFG edges, crossing-region
+normalization/rejection, declarative framework roots, exact runtime predicates and bottom
+edges, exact recovered-capture closed-world edges, structured diagnostic ledgers,
+representation-correct `Type{T}` specialization, and explicit-IO semantics.
 
 The ratchets also hold at R2=0 raw byte bridges, R16=0 external conversion ladders,
 R18=0 all-Any dispatch signatures, R3=127 pre-emission static-type queries, R5=82
@@ -89,8 +104,9 @@ the independent source correspondence and locks above.
 
 ## Certification conclusion
 
-For the declared scope, the current WasmTarget builder and code-generation architecture
-are certified structurally aligned with the current dart2wasm oracle. Unsupported
-excluded features remain explicit gaps, not hidden compatibility paths. Any future change
+For the declared scope and original audited revisions, the WasmTarget builder and
+code-generation architecture was certified structurally aligned with the pinned dart2wasm
+oracle. The bounded 2026-07-22 revalidation found no regression in the rechecked areas.
+Unsupported excluded features remain explicit gaps, not hidden compatibility paths. Any future change
 that reintroduces multiple compilation routes, numeric-depth branch APIs, value repair,
 typeless boxing, silent fallback, or validation bypass must break a committed lock.
