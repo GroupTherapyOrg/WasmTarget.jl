@@ -75,12 +75,16 @@ end
 function export_variant(stage, delivery, output_dir; single_file)
     spec = SPECS[stage]
     mkpath(output_dir)
-    materialized = materialize_notebook(
+    source_notebook = materialize_notebook(
         spec.template,
-        joinpath(output_dir, "$(spec.stem).jl"),
+        joinpath(output_dir, ".source-$(spec.stem).jl"),
         NOTEBOOK_ENVIRONMENT,
         [spec.source],
     )
+    materialized = joinpath(output_dir, "$(spec.stem).jl")
+    cp(source_notebook, materialized; force=true)
+    read(materialized) == read(source_notebook) ||
+        error("$stage execution copy differs before Snapshot export")
     html = Snapshot.export_notebook(
         materialized;
         output_dir,
@@ -111,8 +115,11 @@ function export_variant(stage, delivery, output_dir; single_file)
     return Dict(
         "profile" => spec.profile,
         "html" => "$prefix/$(basename(html))",
-        "notebook" => "$prefix/$(basename(materialized))",
-        "notebook_sha256" => bytes2hex(sha256(read(materialized))),
+        "notebook" => "$prefix/$(basename(source_notebook))",
+        "notebook_sha256" => bytes2hex(sha256(read(source_notebook))),
+        "exported_notebook" => "$prefix/$(basename(materialized))",
+        "exported_notebook_sha256" =>
+            bytes2hex(sha256(read(materialized))),
         "report" => single_file ?
                     "embedded" :
                     "$prefix/$(spec.stem).islands/report.json",

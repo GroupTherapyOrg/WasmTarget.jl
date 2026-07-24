@@ -232,6 +232,16 @@ function validate_materialized_notebook(variant, export_root, stage)
         bytes2hex(sha256(read(notebook))) == variant["notebook_sha256"],
         "$stage materialized notebook digest mismatch",
     )
+    exported_notebook = safe_file(
+        export_root,
+        variant["exported_notebook"],
+        "$stage post-export notebook",
+    )
+    require(
+        bytes2hex(sha256(read(exported_notebook))) ==
+            variant["exported_notebook_sha256"],
+        "$stage post-export notebook digest mismatch",
+    )
     mktempdir() do temp
         reconstructed = materialize_notebook(
             spec.template,
