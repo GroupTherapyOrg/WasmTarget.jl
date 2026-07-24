@@ -90,8 +90,10 @@ end
     summary = verifier_summary()
     @test summary["pass"] === true
     @test summary["promotion_node"] == "v$(CONFIG["versions"]["node"])"
-    @test summary["promotion_wasm_tools"] ==
-          "wasm-tools $(CONFIG["versions"]["wasm_tools"])"
+    @test is_wasm_tools_version(
+        summary["promotion_wasm_tools"],
+        CONFIG["versions"]["wasm_tools"],
+    )
     @test summary["promotion_julia"] == CONFIG["versions"]["julia"]
     @test Set(summary["platforms"]) == Set(["linux", "macos", "windows"])
     digests = summary["module_digests_by_platform"]
