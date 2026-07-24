@@ -188,6 +188,7 @@ _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
 _wt_shard0() && include("no_fabricated_values.jl")
+_wt_shard0() && include("nullable_nothing_identity.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()
@@ -209,6 +210,26 @@ mutable struct TestCounter; value::Int64; end
 mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
 struct TestPoint2D; x::Float64; y::Float64; end
 struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
+
+function _p74_append_self_refs(n::Int64)::Int64
+    values = TestCounter[]
+    for i in Int64(1):n
+        push!(values, TestCounter(10i))
+    end
+    alias = values
+    original = copy(values)
+    append!(values, values)
+    all_identity = alias === values && length(values) == 2length(original)
+    checksum = Int64(0)
+    for i in eachindex(original)
+        all_identity &=
+            values[i] === original[i] &&
+            values[i + length(original)] === original[i]
+        checksum += values[i].value + values[i + length(original)].value
+    end
+    return checksum * 2 + Int64(all_identity)
+end
+
 # WASMTARGET-FUZZ: structs with 128-bit fields — register as int128 struct ref
 # (guards the _register_struct_type_impl! Int128/UInt128 field branch).
 struct _WTI128Box; x::Int128; n::Int64; end
@@ -8030,6 +8051,20 @@ console.log(JSON.stringify({
 
             _p74_append_large(v::Vector{Int64})::Vector{Int64} = (append!(v, collect(Int64, 100:110)); v)
             @test compare_julia_wasm_vec(_p74_append_large, Int64[1, 2, 3]).pass
+
+            # `append!(v, v)` must snapshot the source length and contents before
+            # replacing the destination storage. Iterating `v` while repeatedly
+            # pushing into that same vector never terminates.
+            _p74_append_self(v::Vector{Int64})::Vector{Int64} = (append!(v, v); v)
+            @test compare_julia_wasm_vec(_p74_append_self, Int64[]).pass
+            @test compare_julia_wasm_vec(_p74_append_self, Int64[1]).pass
+            @test compare_julia_wasm_vec(_p74_append_self, Int64[1, 2, 3]).pass
+            @test compare_julia_wasm_vec(_p74_append_self, collect(Int64, 1:20)).pass
+
+            @test compare_julia_wasm(_p74_append_self_refs, Int64(0)).pass
+            @test compare_julia_wasm(_p74_append_self_refs, Int64(1)).pass
+            @test compare_julia_wasm(_p74_append_self_refs, Int64(3)).pass
+            @test compare_julia_wasm(_p74_append_self_refs, Int64(17)).pass
         end
 
         # --- prepend! ---

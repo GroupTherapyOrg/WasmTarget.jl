@@ -1,0 +1,233 @@
+schema = 1
+profile = "moi-runtime-prerequisites-v1"
+status = "experimental"
+
+[versions]
+julia = "1.12.6"
+jump = "1.31.1"
+math_opt_interface = "1.51.2"
+node = "24.18.0"
+nodejs_24_jll = "24.18.0+0"
+wasm_tools = "1.244.0"
+playwright = "1.59.1"
+binaryen_jll = "0.130.0+0"
+chromium = "147.0.7727.15"
+firefox = "148.0.2"
+
+[property]
+seed = "5356272339283694413"
+float_inputs = 76
+integer_inputs = 73
+float_input_ledger_sha256 = "4f4b468972584460296ecd7fa8739259e22ef1b3b44862a38867fcc8f72a9f14"
+integer_input_ledger_sha256 = "4b7d206dc0ff61c92ae8ed8eb840dd2bf6ad07271946a5a169ccedabc666e1aa"
+counterexample_policy = "Each scalar input tuple is itself the durable minimal counterexample."
+
+[gates]
+native_oracle = true
+raw_wasm = true
+optimize_size = true
+optimize_speed = true
+unexpected_skip_is_failure = true
+independent_validation = true
+
+[budgets]
+child_wall_seconds = 150
+suite_wall_seconds = 660
+child_output_bytes_hard = 8388608
+compile_wall_threshold_seconds = 120
+raw_wasm_bytes_hard = 52428800
+optimized_wasm_bytes_hard = 15728640
+snapshot_export_wall_seconds = 240
+browser_wall_seconds = 420
+
+[resource.f1_browser]
+evidence_kind = "bounded_lifecycle_topology_proxy"
+same_page_rounds = 2
+fresh_pages = 2
+wasm_compile_calls_per_page = 1
+wasm_instantiate_calls_per_page = 1
+split_wasm_requests_per_page = 1
+single_file_wasm_requests_per_page = 0
+
+[promotion]
+required_evidence = ["core_moi_prerequisites", "snapshot_browser_moi_prerequisites"]
+same_wasmtarget_sha = true
+same_snapshot_sha = true
+
+[tiers.moi_values]
+status = "candidate"
+claim = "The listed scalar MOI value-construction and evaluation canaries compile and execute with native parity over fixed boundary values and a reproducible bounded random domain."
+property_evidence = "76 finite Float64 inputs per case: 12 boundary values plus 64 fixed-seed samples."
+browser_evidence = "All listed prerequisite cases must update in Chromium and Firefox as split HTTP and embedded single-file exports, with an authoritative full-island report."
+cases = [
+    "moi_affine_value",
+    "moi_quadratic_value",
+    "moi_set_value",
+]
+
+[tiers.runtime_collections]
+status = "candidate"
+claim = "The listed concrete OrderedDict mutation and iteration canary compiles and executes with native parity over fixed boundary values and a reproducible bounded random domain."
+property_evidence = "73 Int64 inputs: 9 boundary values plus 64 fixed-seed samples."
+cases = ["ordered_dict_value"]
+browser_evidence = "The OrderedDict prerequisite is rendered and asserted by the same Snapshot browser gate."
+
+[tiers.moi_model]
+status = "blocked"
+claim = "No public claim."
+blocker = "The staged prerequisites below are not yet certified; an earlier discovery probe historically stalled in closed-world type registration."
+
+[tiers.runtime_shapes]
+status = "planned"
+profile = "moi-storage-runtime-shapes-v1"
+claim = "Umbrella dependency track only. Its independently promoted subprofiles are authoritative; this aggregate is not itself a public capability."
+source_policy = "Every isolating canary must record its exact pinned MOI source and downstream operation; passing local lookalikes alone is insufficient."
+scope = [
+    "nullable concrete layouts used by pinned MOI storage",
+    "pinned MOI-derived three-parallel-vector lifecycle: aligned growth with -Inf/+Inf no-bound sentinels, indexed mask mutation and exact fractional bound mutation, tombstone deletion, filtered enumeration, structural copy, shrink, and empty",
+    "supplemental Vector wrapper-alias and surviving mutable-element identity across backing replacement; shallow element identity under structural copy",
+    "String-to-index name maps",
+    "bounded Dict{Symbol,Any} extension storage",
+    "nested type-keyed dictionaries",
+    "full OrderedDict insert, update, delete, reinsert, and iteration lifecycle",
+    "singleton function fields used by CleverDict defaults plus separately sourced ephemeral captured-closure patterns",
+    "KeyError and ErrorException paths with bounded closed-world exception dispatch",
+    "same-instance sustained allocation pressure",
+]
+exclusions = [
+    "actual CleverDict or VariablesContainer support",
+    "actual MOI.Utilities.Model support",
+    "general garbage-collector support",
+    "append! conversion-failure partial mutation and exception transport; F1b certifies successful convertible inputs only",
+    "WeakRef, finalizer, removed-element reclamation, physical backing identity, or physical capacity guarantees",
+    "treating generic deleteat!/insert!/pop!/pushfirst!/popfirst!/self-append stress as actual VariablesContainer deletion semantics",
+]
+
+[tiers.runtime_shapes_f1a_nullable_layouts]
+status = "promotion_pending"
+profile = "moi-runtime-nullable-layouts-v1"
+claim = "Candidate only: the pinned MOI-derived nullable objective-layout prerequisite has native/raw/-Os/-O3 exact parity locally and core semantic ledgers on Linux and macOS. It is not promoted until same-SHA Windows, Snapshot split/single-file Chromium/Firefox, bounded lifecycle/topology proxy, and linked promotion evidence are green."
+cases = ["f1_nullable_objective_layout"]
+exclusions = [
+    "actual ObjectiveContainer support",
+    "general allocation or garbage-collector support",
+]
+required_evidence = [
+    "three_platform_core_semantics",
+    "snapshot_split_and_single_file_chromium_firefox",
+    "bounded_repeated_instance_and_fresh_instance_lifecycle_topology_proxy",
+    "same_sha_promotion",
+]
+
+[tiers.runtime_shapes_f1b_parallel_vectors]
+status = "promotion_pending"
+profile = "moi-runtime-parallel-vectors-v1"
+claim = "Candidate only: the pinned MOI-derived three-parallel-vector lifecycle and supplemental ordinary-Vector identity stress have native/raw/-Os/-O3 exact parity locally and core semantic ledgers on Linux and macOS. This is not VariablesContainer support and is not promoted until same-SHA Windows, Snapshot split/single-file Chromium/Firefox, bounded lifecycle/topology proxy, and linked promotion evidence are green."
+cases = [
+    "f1_parallel_variable_layout",
+    "f1_vector_reference_lifecycle",
+]
+exclusions = [
+    "actual VariablesContainer support",
+    "general allocation or garbage-collector support",
+    "append! conversion-failure exception semantics",
+]
+required_evidence = [
+    "three_platform_core_semantics",
+    "snapshot_split_and_single_file_chromium_firefox",
+    "bounded_repeated_instance_and_fresh_instance_lifecycle_topology_proxy",
+    "same_sha_promotion",
+]
+
+[tiers.runtime_shapes_dictionary_track]
+status = "planned"
+profile = "moi-runtime-dictionaries-v1"
+claim = "No public claim until independently promoted. This track is required by objective/constraint stores and model composition, but it does not block VariablesContainer."
+scope = [
+    "runtime-built and constant Dict layouts",
+    "MOI index, String, Symbol, Type, Tuple{Type}, and Tuple{Type,Type} keys",
+    "Dict{Symbol,Any} and nested OrderedDict values",
+    "collision, rehash, update, delete, reinsert, iteration, copy, and empty semantics",
+    "lazy duplicate-name sentinel maps and invalidation/rebuild",
+    "CleverDict dense-to-sparse transition and LinearIndex rebuild",
+]
+
+[tiers.moi_variable_bound_algebra]
+status = "planned"
+profile = "moi-variable-bound-algebra-v1"
+claim = "No public claim until promoted."
+scope = [
+    "actual VariableIndex and ConstraintIndex value and type vocabulary consumed by VariablesContainer{Float64}",
+    "the nine pinned Float64 variable scalar-set families: EqualTo, GreaterThan, LessThan, Interval, Integer, ZeroOne, Semicontinuous, Semiinteger, and Parameter",
+    "the exact pinned MOI Utilities flag, dynamic type, lower/upper extraction, no-bound sentinel, and set reconstruction methods",
+    "bitwise Float64 storage and reconstruction evidence for signed zero, infinities, and two certified quiet-NaN sign/payload encodings; signaling NaNs are unclaimed",
+]
+exclusions = [
+    "VariablesContainer mutation, validity, deletion, duplicate-bound, and Parameter lifecycle support; direct construction here is passive carrier/storage/reconstruction evidence only",
+    "Parameter add_constrained_variable, ordinary-add prohibition, and deletion lifecycle",
+    "numeric parameterizations other than Float64",
+    "mathematical validation of bound ordering, finiteness, or Semiinteger endpoint integrality; these remain model/solver-layer concerns",
+    "general scalar affine or quadratic algebra already covered by the separate T0 prerequisite",
+    "dynamic open-world abstract function/set dispatch",
+]
+
+[tiers.variables_container]
+status = "blocked"
+profile = "moi-variables-container-v1"
+claim = "No public claim."
+blocker = "Requires promoted F1a nullable-layout, F1b parallel-vector, and MOI variable-bound algebra profiles. Dictionary/CleverDict work is on a separate dependency branch and does not block this vector-backed container."
+scope = [
+    "actual vector-backed VariablesContainer success lifecycle",
+    "add/list/delete/validity and variable/bound mask transitions",
+]
+
+[tiers.variables_container_errors]
+status = "blocked"
+profile = "moi-variables-container-errors-v1"
+claim = "No public claim."
+blocker = "Requires the promoted VariablesContainer success lifecycle plus typed exception transport and mutation-atomicity evidence."
+scope = [
+    "duplicate-bound errors",
+    "invalid and out-of-range indices",
+    "mismatched function/set requests",
+    "correct-or-loud failure without partial mutation",
+]
+
+[tiers.objective_constraint_storage]
+status = "blocked"
+profile = "moi-objective-constraint-storage-v1"
+claim = "No public claim."
+blocker = "Requires promoted VariablesContainer storage, the relevant MOI algebra profile, and the independently promoted dictionary/CleverDict dependency branch."
+scope = [
+    "actual ObjectiveContainer lifecycle",
+    "minimal affine VectorOfConstraints and StructOfConstraints",
+    "actual CleverDict dense-to-sparse transition and LinearIndex rebuild",
+]
+
+[tiers.narrow_utilities_model]
+status = "blocked"
+profile = "moi-narrow-utilities-model-v1"
+claim = "No public claim."
+blocker = "Requires independently promoted variable, objective, and constraint stores."
+scope = [
+    "a narrow GenericModel composed only from independently certified stores",
+    "declared name maps, extension dictionary, list/query/delete/empty/copy operations",
+]
+
+[tiers.full_utilities_model]
+status = "blocked"
+profile = "moi-full-utilities-model-pressure-v1"
+claim = "No public claim."
+blocker = "Requires the promoted narrow GenericModel profile."
+scope = [
+    "the generated all-function/all-set default MOI.Utilities.Model breadth and pressure gate",
+]
+
+[tiers.jump_model]
+status = "blocked"
+claim = "No public claim."
+blocker = "Depends on certified MOI model storage and package-scale dispatch."
+
+[tiers.optimizer]
+status = "unsupported"
+claim = "No solver support is claimed."

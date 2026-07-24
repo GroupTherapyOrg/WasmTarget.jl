@@ -1319,9 +1319,21 @@ end
 end
 
 @overlay WASM_METHOD_TABLE function Base.append!(v::Vector{T}, w::AbstractVector) where T
-    for x in w
-        push!(v, x)
+    n = length(v)
+    nw = length(w)
+    new_v = similar(v, n + nw)
+    i = 1
+    while i <= n
+        new_v[i] = v[i]
+        i += 1
     end
+    i = 1
+    while i <= nw
+        new_v[n + i] = w[i]
+        i += 1
+    end
+    setfield!(v, :ref, getfield(new_v, :ref))
+    setfield!(v, :size, getfield(new_v, :size))
     return v
 end
 
