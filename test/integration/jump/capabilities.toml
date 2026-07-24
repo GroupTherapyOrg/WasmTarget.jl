@@ -74,7 +74,8 @@ claim = "No public claim until promoted."
 source_policy = "Every isolating canary must record its exact pinned MOI source and downstream operation; passing local lookalikes alone is insufficient."
 scope = [
     "nullable concrete layouts used by pinned MOI storage",
-    "parallel-vector lifecycle and retained-reference behavior",
+    "pinned MOI-derived three-parallel-vector lifecycle: aligned growth with -Inf/+Inf no-bound sentinels, indexed mask mutation and exact fractional bound mutation, tombstone deletion, filtered enumeration, structural copy, shrink, and empty",
+    "supplemental Vector wrapper-alias and surviving mutable-element identity across backing replacement; shallow element identity under structural copy",
     "String-to-index name maps",
     "bounded Dict{Symbol,Any} extension storage",
     "nested type-keyed dictionaries",
@@ -87,6 +88,9 @@ exclusions = [
     "actual CleverDict or VariablesContainer support",
     "actual MOI.Utilities.Model support",
     "general garbage-collector support",
+    "append! conversion-failure partial mutation and exception transport; F1b certifies successful convertible inputs only",
+    "WeakRef, finalizer, removed-element reclamation, physical backing identity, or physical capacity guarantees",
+    "treating generic deleteat!/insert!/pop!/pushfirst!/popfirst!/self-append stress as actual VariablesContainer deletion semantics",
 ]
 
 [tiers.moi_algebra]

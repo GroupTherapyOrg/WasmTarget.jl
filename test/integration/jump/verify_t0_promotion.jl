@@ -25,6 +25,7 @@ const REQUIRED_GATES = Set([
     "independent_validation",
 ])
 const REQUIRED_RUNS = Set(["raw", "size", "speed"])
+const EXPECTED_CORE_CASE_PROFILE = "t0"
 const EXPECTED_CASE_IDS = sort!([
     "moi_affine_value",
     "moi_quadratic_value",
@@ -420,6 +421,7 @@ function validate_core(result, result_path)
             "core used a dirty WasmTarget checkout",
         )
         expected_contract = Dict(
+            "profile" => EXPECTED_CORE_CASE_PROFILE,
             "case_ids" => EXPECTED_CASE_IDS,
             "canary_sha256" => bytes2hex(sha256(read(CANARY_SOURCE))),
             "functions" => source_functions,

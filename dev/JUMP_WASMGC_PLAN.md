@@ -230,6 +230,58 @@ MOI storage stack. The required initial surface is:
 The allocation corpus may establish bounded behavior for the named workload; it
 must not be worded as general garbage-collector support.
 
+#### F1b: pinned parallel-vector lifecycle
+
+F1b is an isolating prerequisite, not an actual `VariablesContainer` claim.
+Its MOI-derived canary mirrors the pinned 1.51.2 topology in
+`Utilities/variables_container.jl`: one `Vector{UInt16}` mask and parallel
+`Vector{Float64}` lower/upper stores. It covers aligned push/growth, indexed
+mask and exact fractional-bound mutation, the actual `-Inf`/`Inf` no-bound
+sentinels, tombstone deletion, filtered enumeration, structural copy
+independence, shrink/empty, and explicitly initialized regrowth. It must not
+inspect freshly grown `undef` slots.
+
+A separate supplemental canary covers Julia `Vector{mutable Leaf}` mechanics:
+the same wrapper alias observes backing replacements; surviving elements retain
+identity and bidirectional mutation; and `copy` creates a distinct wrapper
+while shallow-copying element identity. Here “retained-reference behavior”
+means wrapper identity and surviving-element identity only. Weak references,
+finalizers, physical backing identity/capacity, and reclamation of removed
+elements remain out of scope and must fail loudly if exposed as claims.
+
+MOI variable deletion marks `_DELETED_VARIABLE`; it does not compact these
+parallel vectors with `deleteat!`. Any `deleteat!`, `insert!`, `pop!`,
+`pushfirst!`, `popfirst!`, or self-`append!` case in F1b is therefore labelled
+as a generic `Vector` runtime stressor rather than MOI lifecycle evidence.
+Self-aliasing mutation follows native Julia, not Dart: `append!(v, v)` must
+duplicate the original sequence once or be rejected loudly before mutation.
+F1b certifies successful, convertible `append!` inputs only. Native Julia's
+partial mutation when a later element conversion throws, plus exception
+transport generally, remains an explicit obligation of the later exception
+corpus and must not be inferred from this tranche.
+
+Promotion uses a committed, hard-coded native oracle spanning empty, singleton,
+head/middle/tail, and allocation boundaries on both sides of 16, including at
+least `0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33`. The exact same exported
+functions run natively and as raw, `-Os`, and `-O3` Wasm, including retained
+module execution and three-platform semantic ledgers. Snapshot must consume
+those functions rather than reimplementing them.
+
+The pinned dart2wasm structural oracle for this tranche is
+`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`:
+
+| Reused/adapted mechanism | Julia-specific authority | Explicitly inapplicable |
+|---|---|---|
+| Logical length separated from Wasm array backing; allocate/copy/replace growth and mutation; iterator retaining the wrapper | Julia `Vector` length, aliasing, shallow-copy, `undef`, and self-mutation semantics are determined only by native Julia differentials | Dart growth factors, `Object?` checks, `ConcurrentModificationError`, factory specialization, and rejection of self-add |
+| Reference slots are explicit WasmGC array elements | Surviving Julia element identity and wrapper alias stability | Dart's null-clearing removal is not evidence of Julia GC reclamation |
+
+The corresponding Dart sources are `sdk/lib/_internal/wasm/common/list.dart`
+(logical length/backing, mutation, growth, iteration) and
+`sdk/lib/_wasm/wasm_types.dart` (Wasm array intrinsics). F1b also guards a
+WasmTarget implementation detail: allocation currently reserves at least 16
+physical slots while mutation uses exact reallocate-and-copy paths. Public
+length and iteration must never expose that physical tail.
+
 `try`/`rethrow` first enter the pinned authoritative path in
 `CachingOptimizer`; `finally` first enters in later bridge behavior. They are
 therefore F4-or-later obligations, not invented F1 storage prerequisites.

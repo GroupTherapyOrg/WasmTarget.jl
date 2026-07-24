@@ -33,6 +33,20 @@ const CASE_SOURCE, CASES, PROPERTY_SEED, PROPERTY_RANDOM_SAMPLES =
             nothing,
             0,
         )
+    elseif CASE_PROFILE == "moi-storage-vector-lifecycle-v1"
+        source = joinpath(
+            @__DIR__,
+            "canaries",
+            "f1",
+            "01_parallel_vector_lifecycle.jl",
+        )
+        include(source)
+        (
+            source,
+            JumpF1ParallelVectorCanaries.CASES,
+            nothing,
+            0,
+        )
     else
         error("unknown JuMP certification profile: $CASE_PROFILE")
     end
@@ -301,6 +315,9 @@ function run_case(name::String)
 end
 
 function failure_result(name, error, backtrace, source_provenance)
+    rendered_error = sprint() do io
+        showerror(io, error, backtrace)
+    end
     return Dict(
         "schema" => 1,
         "case" => name,
@@ -308,7 +325,7 @@ function failure_result(name, error, backtrace, source_provenance)
         "phase" => CURRENT_PHASE[],
         "provenance" => source_provenance,
         "error_type" => string(typeof(error)),
-        "error" => sprint(showerror, error, backtrace=backtrace),
+        "error" => rendered_error,
     )
 end
 
