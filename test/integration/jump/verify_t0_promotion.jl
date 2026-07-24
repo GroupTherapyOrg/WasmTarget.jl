@@ -2,8 +2,15 @@ using Base64
 using JSON
 using SHA
 using TOML
+using WasmTarget
 
 length(ARGS) == 1 || error("usage: verify_t0_promotion.jl ARTIFACT_ROOT")
+include(joinpath(@__DIR__, "..", "..", "utils.jl"))
+include(joinpath(@__DIR__, "canaries", "00_moi_values.jl"))
+include(joinpath(@__DIR__, "evidence_utils.jl"))
+using .JumpCertificationEvidence
+using .JumpMOIValueCanaries
+
 const ARTIFACT_ROOT = abspath(only(ARGS))
 const CONFIG = TOML.parsefile(joinpath(@__DIR__, "capabilities.toml"))
 const EXPECTED_OSES = Set(["linux", "macos", "windows"])
@@ -119,16 +126,10 @@ function function_contract(path)
     return contracts
 end
 
-function canonical_ledger(result)
+function canonical_semantic_ledger(result)
     ledgers = Pair{String,String}[]
     for case in result["results"]
         lines = String["case=$(case["case"])"]
-        for run in ("raw", "size", "speed")
-            push!(
-                lines,
-                "module.$run=$(case["compile"]["module_sha256"][run])",
-            )
-        end
         for (index, variant) in enumerate(case["variants"])
             push!(lines, "variant.$index.args=$(JSON.json(variant["args"]))")
             push!(lines, "variant.$index.native=$(JSON.json(variant["native"]))")
@@ -147,6 +148,43 @@ function canonical_ledger(result)
     end
     sort!(ledgers; by=first)
     return join(("$(pair.first)=$(pair.second)" for pair in ledgers), "\n")
+end
+
+function module_digest_ledger(result)
+    return Dict(
+        case["case"] => Dict(
+            run => case["compile"]["module_sha256"][run]
+            for run in sort!(collect(REQUIRED_RUNS))
+        )
+        for case in result["results"]
+    )
+end
+
+function independent_node_version()
+    invocation = WasmRunner._NODE
+    invocation === nothing && fail("Node runtime is unavailable to promotion")
+    executable = first(invocation.exec)
+    return strip(read(`$executable --version`, String))
+end
+
+function independent_wasm_tools()
+    executable = Sys.which("wasm-tools")
+    executable === nothing && fail("wasm-tools is unavailable to promotion")
+    version = strip(read(`$executable --version`, String))
+    require(
+        is_wasm_tools_version(version, CONFIG["versions"]["wasm_tools"]),
+        "promotion used wrong wasm-tools version: $version",
+    )
+    return (executable=executable, version=version)
+end
+
+function require_clean_verifier_checkout()
+    tracked = read(
+        `git -C $ROOT status --porcelain --untracked-files=no`,
+        String,
+    )
+    isempty(tracked) ||
+        fail("promotion verifier checkout has tracked modifications")
 end
 
 function path_is_within(path, root)
@@ -226,6 +264,7 @@ function validate_core(result, result_path)
             "retained module file ledger is incomplete",
         )
         artifact_root = realpath(dirname(result_path))
+        retained_modules = Dict{String,Vector{UInt8}}()
         for run in REQUIRED_RUNS
             relative = module_files[run]
             relative isa AbstractString && !isabspath(relative) ||
@@ -243,6 +282,7 @@ function validate_core(result, result_path)
                 "retained $run module resolves outside its artifact",
             )
             bytes = read(resolved_module_path)
+            retained_modules[run] = bytes
             require(
                 length(bytes) >= 8 && bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d],
                 "retained $run module has invalid Wasm magic",
@@ -268,17 +308,27 @@ function validate_core(result, result_path)
                 ),
                 "retained $run module size differs from its execution ledger",
             )
-            wasm_tools = Sys.which("wasm-tools")
-            require(wasm_tools !== nothing, "wasm-tools is unavailable")
             require(
                 success(pipeline(
-                    ignorestatus(`$wasm_tools validate $resolved_module_path`),
+                    ignorestatus(
+                        `$(PROMOTION_WASM_TOOLS.executable) validate $resolved_module_path`,
+                    ),
                     stdout=devnull,
                     stderr=devnull,
                 )),
                 "retained $run module failed independent validation",
             )
         end
+        require(
+            WasmTarget.optimize(retained_modules["raw"]; level=:size) ==
+            retained_modules["size"],
+            "retained size module is not the pinned optimizer output of raw",
+        )
+        require(
+            WasmTarget.optimize(retained_modules["raw"]; level=:speed) ==
+            retained_modules["speed"],
+            "retained speed module is not the pinned optimizer output of raw",
+        )
         input_digest = bytes2hex(sha256(JSON.json([
             variant["args"] for variant in case["variants"]
         ])))
@@ -290,6 +340,20 @@ function validate_core(result, result_path)
         for variant in case["variants"]
             require(length(variant["args"]) == 1, "non-scalar T0 input")
             require(Set(keys(variant["runs"])) == REQUIRED_RUNS, "variant run missing")
+            fresh_native = try
+                JumpMOIValueCanaries.CASES[case["case"]].f(
+                    variant["args"]...,
+                )
+            catch error
+                fail(
+                    "fresh native oracle failed for $(case["case"]): " *
+                    sprint(showerror, error),
+                )
+            end
+            require(
+                variant["native"] == fresh_native,
+                "recorded native result diverges from fresh committed oracle",
+            )
             require(
                 all(run -> run["pass"] === true, values(variant["runs"])),
                 "variant diverged from native",
@@ -302,6 +366,25 @@ function validate_core(result, result_path)
                 ),
                 "claimed pass does not match actual/native values",
             )
+            for run in REQUIRED_RUNS
+                actual = try
+                    run_wasm_with_imports(
+                        retained_modules[run],
+                        case["case"],
+                        Dict("Math" => Dict("pow" => "Math.pow")),
+                        variant["args"]...,
+                    )
+                catch error
+                    fail(
+                        "independent execution failed for " *
+                        "$(case["case"]) $run: $(sprint(showerror, error))",
+                    )
+                end
+                require(
+                    actual == fresh_native,
+                    "retained $(case["case"]) $run module diverges from fresh native",
+                )
+            end
         end
 
         provenance = case["provenance"]
@@ -315,11 +398,10 @@ function validate_core(result, result_path)
             provenance["node"]["version"] == "v$(versions["node"])",
             "wrong Node version",
         )
-        require(
-            provenance["wasm_tools"]["version"] ==
-            "wasm-tools $(versions["wasm_tools"])",
-            "wrong wasm-tools version",
-        )
+        require(is_wasm_tools_version(
+            provenance["wasm_tools"]["version"],
+            versions["wasm_tools"],
+        ), "wrong wasm-tools version")
         require(
             provenance["binaryen_jll"] == versions["binaryen_jll"],
             "wrong Binaryen_jll version",
@@ -371,7 +453,8 @@ function validate_core(result, result_path)
         arch=arch,
         manifest=manifest,
         sha=sha,
-        ledger=canonical_ledger(result),
+        semantic_ledger=canonical_semantic_ledger(result),
+        module_digests=module_digest_ledger(result),
     )
 end
 
@@ -544,11 +627,10 @@ function validate_browser(result, result_path, exports_path, exports)
         browser_runtime["playwright"] == versions["playwright"],
         "wrong Playwright",
     )
-    require(
-        result["validator"]["version"] ==
-        "wasm-tools $(versions["wasm_tools"])",
-        "wrong browser validator",
-    )
+    require(is_wasm_tools_version(
+        result["validator"]["version"],
+        versions["wasm_tools"],
+    ), "wrong browser validator")
     require(
         result["wasmtarget"]["sha"] == result["wt_sha"] &&
         result["wasmtarget"]["dirty"] === false,
@@ -678,10 +760,21 @@ require(
 )
 
 expected_wt_sha = checkout_sha()
-expected_core_manifest = bytes2hex(sha256(read(CORE_MANIFEST)))
-expected_snapshot_manifest = bytes2hex(sha256(read(SNAPSHOT_MANIFEST)))
+expected_core_manifest = canonical_text_sha256(CORE_MANIFEST)
+expected_snapshot_manifest = canonical_text_sha256(SNAPSHOT_MANIFEST)
 expected_snapshot_entry = manifest_entry(SNAPSHOT_MANIFEST, "Snapshot")
 expected_binaryen_entry = manifest_entry(SNAPSHOT_MANIFEST, "Binaryen_jll")
+require(
+    string(VERSION) == CONFIG["versions"]["julia"],
+    "promotion used wrong Julia version: $VERSION",
+)
+require_clean_verifier_checkout()
+verifier_node = independent_node_version()
+require(
+    verifier_node == "v$(CONFIG["versions"]["node"])",
+    "promotion used wrong Node version: $verifier_node",
+)
+const PROMOTION_WASM_TOOLS = independent_wasm_tools()
 
 core_files = evidence_files("jump-certification.json")
 browser_files = evidence_files("jump-snapshot-browser.json")
@@ -760,9 +853,16 @@ for path in browser_files
         "Snapshot evidence does not match the committed Binaryen_jll",
     )
 end
-ledger = only_value(
-    (item.ledger for item in core),
-    "cross-platform property ledger",
+semantic_ledger = only_value(
+    (item.semantic_ledger for item in core),
+    "cross-platform semantic property ledger",
+)
+module_digests = Dict(
+    item.os => Dict(
+        "arch" => item.arch,
+        "cases" => item.module_digests,
+    )
+    for item in core
 )
 
 summary = Dict(
@@ -775,6 +875,17 @@ summary = Dict(
     "core_manifest_sha256" => core_manifest,
     "snapshot_tree" => snapshot_tree,
     "snapshot_manifest_sha256" => snapshot_manifest,
-    "property_ledger_sha256" => bytes2hex(sha256(ledger)),
+    # The semantic ledger is required to be identical across platforms. Module
+    # bytes remain byte-exact, independently validated evidence within each
+    # platform artifact, but are reported rather than conflated with behavioral
+    # parity: Julia's platform-specific type metadata and identity hashes can
+    # legitimately produce different valid Wasm encodings.
+    "semantic_property_ledger_sha256" =>
+        bytes2hex(sha256(semantic_ledger)),
+    "module_digests_by_platform" => module_digests,
+    "promotion_node" => verifier_node,
+    "promotion_wasm_tools" => PROMOTION_WASM_TOOLS.version,
+    "promotion_julia" => string(VERSION),
 )
+WasmRunner.shutdown_pool!()
 println(JSON.json(summary, 2))

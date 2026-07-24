@@ -92,6 +92,15 @@ Each tier adds all of the following before promotion:
 9. a dart2wasm comparison documenting which production mechanism is reused,
    adapted, or deliberately inapplicable.
 
+Every retained module is byte-hashed, independently validated, and executed
+against its native oracle. Cross-platform promotion compares the complete
+semantic input/result ledger, not raw module identity: Julia may emit
+platform-specific type metadata and identity hashes while preserving the same
+validated behavior. Same-platform and cross-platform reproducible builds are a
+separate visible compiler property. They may be promoted only by their own
+fresh-process and multi-platform gates and are never inferred from behavioral
+parity.
+
 Solver stages add an independent mathematical oracle. Native-vs-Wasm agreement
 is necessary but cannot certify a solver against itself. Evidence includes
 known optima, primal and dual feasibility residuals, objective consistency,
@@ -119,20 +128,32 @@ F0  Certification substrate
     pins/provenance, phase telemetry, watchdogs, failure taxonomy,
     raw/-Os/-O3, browser engines, claim manifest
  |
-F1  Julia runtime prerequisites
-    concrete structs and required collections, closures, exceptions,
-    repeated-allocation/GC stress
+F1  MOI-derived Julia runtime shapes
+    exact concrete layouts, collections, closure topologies, exceptions,
+    dispatch limits, and repeated-allocation stress extracted from the pinned
+    MOI storage call graph but certified in isolating canaries
  |
 F2  MOI algebra vocabulary
     indices, declared Function/Set pairs, exact value semantics
  |
-F3a Minimal MOI storage
-    add/list/get/delete variables and one affine constraint family
+F3a VariablesContainer
+    first actual MOI storage gate: vector-backed variable/bound storage,
+    add/list/delete/validity, mask transitions, and duplicate-bound errors
  |
-F3b Expanded storage matrix
-    profile-driven function/set increments, each independently certifiable
+F3b Objective + constraint stores
+    actual ObjectiveContainer and the minimal affine StructOfConstraints /
+    VectorOfConstraints slice; real CleverDict lifecycle enters here
  |
-F4  Attributes, copy/cache, lifecycle invalidation
+F3c Narrow MOI.Utilities.GenericModel
+    compose only the independently certified stores; name maps, ext dictionary,
+    list/query/delete/empty/copy within the declared profile
+ |
+F3d Full default MOI.Utilities.Model pressure gate
+    instantiate the generated all-function/all-set default model only after the
+    narrow aggregate works; this is a breadth/pressure gate, not a prerequisite
+ |
+F4  Expanded storage, index maps, attributes, copy/cache, invalidation
+    DoubleDict and each additional function/set family independently certified
  |
 F5  MockOptimizer state machine
     optimize, statuses, result counts, primal/dual/objective queries,
@@ -186,6 +207,49 @@ C0 backend-specific callback/reentrancy profiles
 
 SciML remains later than the first real JuMP solver milestone. It does not
 expand any JuMP profile merely by sharing compiler mechanisms.
+
+### F1–F3 diagnostic boundary
+
+F1 is intentionally neither a toy-runtime suite nor a claim that MOI storage
+works. Its cases must cite the pinned MOI source file, line, downstream type,
+and operation that require each shape. They then isolate those exact shapes so
+that a failure identifies a compiler/runtime mechanism rather than the entire
+MOI storage stack. The required initial surface is:
+
+- nested concrete mutable and immutable layouts plus
+  `Union{Nothing,T}` field mutation;
+- `Vector` growth, deletion, iteration, copy, and retained-reference behavior;
+- the exact downstream dictionary key/value shapes, including MOI indices,
+  strings, symbols, tuple/type keys, and nested dictionaries;
+- actual `OrderedDict` lifecycle and ordering semantics;
+- singleton function fields matching the pinned `CleverDict` defaults, plus
+  separately source-derived ephemeral captured-closure patterns;
+- `KeyError`/`ErrorException`, bounded one- and two-axis closed-world exception
+  dispatch, and sustained same-instance allocation pressure.
+
+The allocation corpus may establish bounded behavior for the named workload; it
+must not be worded as general garbage-collector support.
+
+`try`/`rethrow` first enter the pinned authoritative path in
+`CachingOptimizer`; `finally` first enters in later bridge behavior. They are
+therefore F4-or-later obligations, not invented F1 storage prerequisites.
+Typed duplicate-bound exceptions belong to the real `VariablesContainer`
+lifecycle in F3a.
+
+Actual `VariablesContainer`, `VectorOfConstraints`/`CleverDict`, and
+`MOI.Utilities.Model` may run under short watchdogs during F1 as discovery
+probes. A probe failure records the earliest phase and blocker; a surprising
+probe success does not move the claim into F1 or replace the tier's independent
+evidence. F2 then proves the real MOI method bodies and algebra needed by
+storage. F3a is the first authoritative actual-storage claim and covers the
+current pinned `VariablesContainer`, whose representation is three vectors
+(`Vector{UInt16}` plus lower/upper coefficient vectors)—not `CleverDict`. F3b
+adds the objective and constraint stores; `CleverDict` first enters the
+authoritative path through `VectorOfConstraints`. F3c claims only a narrow
+`GenericModel` composed from independently certified stores. F3d then exercises
+the generated all-function/all-set default `MOI.Utilities.Model` as a separate
+breadth and pressure gate. The full default model is never a prerequisite that
+can obscure smaller independently useful wins.
 
 ## dart2wasm parity rubric
 

@@ -6,8 +6,10 @@ using WasmTarget
 
 include(joinpath(@__DIR__, "..", "..", "utils.jl"))
 include(joinpath(@__DIR__, "canaries", "00_moi_values.jl"))
+include(joinpath(@__DIR__, "evidence_utils.jl"))
 
 using .JumpMOIValueCanaries
+using .JumpCertificationEvidence
 
 const CONFIG = TOML.parsefile(joinpath(@__DIR__, "capabilities.toml"))
 const RESULT_PREFIX = "WT_JUMP_CERT_RESULT="
@@ -122,7 +124,10 @@ function provenance()
             package_version(Base.UUID("b8f27783-ece8-5eb3-8dc8-9495eed66fee")),
         "binaryen_jll" =>
             package_version(Base.UUID("a54ac8ab-712d-5a0e-8e11-9296c0d3c20e")),
-        "manifest_sha256" => bytes2hex(SHA.sha256(read(manifest))),
+        # Pkg writes native line endings when it refreshes a manifest. Hash
+        # the canonical Git text so one committed environment has one identity
+        # on Windows, macOS, and Linux.
+        "manifest_sha256" => canonical_text_sha256(manifest),
         "source_contract" => Dict(
             "case_ids" => CASE_IDS,
             "canary_sha256" => bytes2hex(SHA.sha256(read(canary))),

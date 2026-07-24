@@ -5,9 +5,17 @@ using TOML
 
 length(ARGS) == 1 ||
     error("usage: test_promotion_rejections.jl ARTIFACT_ROOT")
+include(joinpath(@__DIR__, "evidence_utils.jl"))
+using .JumpCertificationEvidence
+
 const SOURCE_ROOT = abspath(only(ARGS))
 const VERIFIER = joinpath(@__DIR__, "verify_t0_promotion.jl")
 const CONFIG = TOML.parsefile(joinpath(@__DIR__, "capabilities.toml"))
+const REQUIRED_CASES = vcat(
+    CONFIG["tiers"]["moi_values"]["cases"],
+    CONFIG["tiers"]["runtime_collections"]["cases"],
+)
+const REQUIRED_RUNS = ["raw", "size", "speed"]
 
 function evidence_files(root, filename)
     files = String[]
@@ -30,6 +38,25 @@ function verifier_succeeds(mutate=(root -> nothing))
         mutate(root)
         cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(@__DIR__) $VERIFIER $root`
         return success(pipeline(ignorestatus(cmd), stdout=devnull, stderr=devnull))
+    end
+end
+
+function verifier_failure(mutate)
+    copied_fixture() do root
+        mutate(root)
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(@__DIR__) $VERIFIER $root`
+        output = IOBuffer()
+        process = run(
+            pipeline(ignorestatus(cmd), stdout=output, stderr=output),
+        )
+        return (success=success(process), output=String(take!(output)))
+    end
+end
+
+function verifier_summary()
+    copied_fixture() do root
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(@__DIR__) $VERIFIER $root`
+        return JSON.parse(read(cmd, String))
     end
 end
 
@@ -59,9 +86,68 @@ function unsigned_leb128(value::Integer)
     end
 end
 
-@test verifier_succeeds()
+@testset "promotion retains platform-specific artifacts" begin
+    summary = verifier_summary()
+    @test summary["pass"] === true
+    @test summary["promotion_node"] == "v$(CONFIG["versions"]["node"])"
+    @test summary["promotion_wasm_tools"] ==
+          "wasm-tools $(CONFIG["versions"]["wasm_tools"])"
+    @test summary["promotion_julia"] == CONFIG["versions"]["julia"]
+    @test Set(summary["platforms"]) == Set(["linux", "macos", "windows"])
+    digests = summary["module_digests_by_platform"]
+    @test Set(keys(digests)) == Set(["linux", "macos", "windows"])
+    for platform in values(digests)
+        @test Set(keys(platform["cases"])) == Set(REQUIRED_CASES)
+        @test all(
+            Set(keys(variants)) == Set(REQUIRED_RUNS)
+            for variants in values(platform["cases"])
+        )
+        @test all(
+            occursin(r"^[0-9a-f]{64}$", digest)
+            for variants in values(platform["cases"])
+            for digest in values(variants)
+        )
+    end
+end
+
+@testset "canonical text evidence" begin
+    mktempdir() do root
+        lf = joinpath(root, "lf")
+        crlf = joinpath(root, "crlf")
+        changed = joinpath(root, "changed")
+        lone_cr = joinpath(root, "lone-cr")
+        write(lf, "a = 1\nb = 2\n")
+        write(crlf, "a = 1\r\nb = 2\r\n")
+        write(changed, "a = 1\nb = 3\n")
+        write(lone_cr, "a = 1\rb = 2\n")
+        @test canonical_text_sha256(lf) == canonical_text_sha256(crlf)
+        @test canonical_text_sha256(lf) != canonical_text_sha256(changed)
+        @test_throws ErrorException canonical_text_sha256(lone_cr)
+    end
+end
 
 @testset "promotion rejects forged evidence" begin
+    fresh_oracle_forgery = verifier_failure() do root
+        for path in evidence_files(root, "jump-certification.json")
+            document = JSON.parsefile(path)
+            case = first(filter(
+                item -> item["case"] == "moi_affine_value",
+                document["results"],
+            ))
+            variant = first(case["variants"])
+            variant["native"] = 123456.0
+            for run in values(variant["runs"])
+                run["actual"] = 123456.0
+            end
+            write(path, JSON.json(document))
+        end
+    end
+    @test fresh_oracle_forgery.success === false
+    @test occursin(
+        "recorded native result diverges from fresh committed oracle",
+        fresh_oracle_forgery.output,
+    )
+
     @test !verifier_succeeds() do root
         files = evidence_files(root, "jump-certification.json")
         first_doc = JSON.parsefile(files[1])
@@ -76,6 +162,27 @@ end
     @test !verifier_succeeds() do root
         mutate_json(root, "jump-snapshot-browser.json", 1) do document
             document["browser_runtime"]["node"] = "v0.0.0"
+        end
+    end
+
+    # Build metadata may be retained, but it cannot disguise a different
+    # semantic wasm-tools version.
+    @test !verifier_succeeds() do root
+        mutate_json(root, "jump-certification.json", 1) do document
+            for case in document["results"]
+                case["provenance"]["wasm_tools"]["version"] =
+                    "wasm-tools 1.245.0 (forged)"
+            end
+        end
+    end
+
+    # Metadata is accepted only in wasm-tools' current commit/date format.
+    @test !verifier_succeeds() do root
+        mutate_json(root, "jump-certification.json", 1) do document
+            for case in document["results"]
+                case["provenance"]["wasm_tools"]["version"] =
+                    "wasm-tools $(CONFIG["versions"]["wasm_tools"]) (unbounded metadata)"
+            end
         end
     end
 
@@ -180,6 +287,41 @@ end
         open(module_path, "a") do io
             write(io, UInt8[0xde, 0xad, 0xbe, 0xef])
         end
+    end
+
+    # Optimization variants are derived evidence, not self-reported labels.
+    # Even a self-consistent byte/digest/size relabel must fail the independent
+    # pinned-optimizer derivation check.
+    @test !verifier_succeeds() do root
+        certification_path =
+            first(evidence_files(root, "jump-certification.json"))
+        certification = JSON.parsefile(certification_path)
+        case = first(filter(
+            item -> item["case"] == "moi_affine_value",
+            certification["results"],
+        ))
+        artifact_root = dirname(certification_path)
+        raw_path = joinpath(
+            artifact_root,
+            case["compile"]["module_files"]["raw"],
+        )
+        size_path = joinpath(
+            artifact_root,
+            case["compile"]["module_files"]["size"],
+        )
+        raw = read(raw_path)
+        size = read(size_path)
+        write(raw_path, size)
+        write(size_path, raw)
+        case["compile"]["module_sha256"]["raw"] =
+            bytes2hex(sha256(size))
+        case["compile"]["module_sha256"]["size"] =
+            bytes2hex(sha256(raw))
+        for variant in case["variants"]
+            variant["runs"]["raw"]["wasm_bytes"] = length(size)
+            variant["runs"]["size"]["wasm_bytes"] = length(raw)
+        end
+        write(certification_path, JSON.json(certification))
     end
 
     # A symlink cannot redirect a retained-module ledger to bytes outside the

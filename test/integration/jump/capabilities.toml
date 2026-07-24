@@ -65,7 +65,78 @@ browser_evidence = "The OrderedDict prerequisite is rendered and asserted by the
 [tiers.moi_model]
 status = "blocked"
 claim = "No public claim."
-blocker = "MOI.Utilities.Model compilation stalls in closed-world type registration."
+blocker = "The staged prerequisites below are not yet certified; an earlier discovery probe historically stalled in closed-world type registration."
+
+[tiers.runtime_shapes]
+status = "planned"
+profile = "moi-storage-runtime-shapes-v1"
+claim = "No public claim until promoted."
+source_policy = "Every isolating canary must record its exact pinned MOI source and downstream operation; passing local lookalikes alone is insufficient."
+scope = [
+    "nullable concrete layouts used by pinned MOI storage",
+    "parallel-vector lifecycle and retained-reference behavior",
+    "String-to-index name maps",
+    "bounded Dict{Symbol,Any} extension storage",
+    "nested type-keyed dictionaries",
+    "full OrderedDict insert, update, delete, reinsert, and iteration lifecycle",
+    "singleton function fields used by CleverDict defaults plus separately sourced ephemeral captured-closure patterns",
+    "KeyError and ErrorException paths with bounded closed-world exception dispatch",
+    "same-instance sustained allocation pressure",
+]
+exclusions = [
+    "actual CleverDict or VariablesContainer support",
+    "actual MOI.Utilities.Model support",
+    "general garbage-collector support",
+]
+
+[tiers.moi_algebra]
+status = "planned"
+profile = "moi-algebra-v1"
+claim = "No public claim until promoted."
+scope = [
+    "declared scalar affine and quadratic term/function operations",
+    "declared set and modification vocabulary required by storage",
+]
+
+[tiers.variables_container]
+status = "blocked"
+profile = "moi-variables-container-v1"
+claim = "No public claim."
+blocker = "Requires promoted runtime-shapes and MOI-algebra profiles."
+scope = [
+    "actual vector-backed VariablesContainer lifecycle",
+    "variable and bound mask transitions and duplicate-bound errors",
+]
+
+[tiers.objective_constraint_storage]
+status = "blocked"
+profile = "moi-objective-constraint-storage-v1"
+claim = "No public claim."
+blocker = "Requires promoted VariablesContainer storage and MOI algebra."
+scope = [
+    "actual ObjectiveContainer lifecycle",
+    "minimal affine VectorOfConstraints and StructOfConstraints",
+    "actual CleverDict dense-to-sparse transition and LinearIndex rebuild",
+]
+
+[tiers.narrow_utilities_model]
+status = "blocked"
+profile = "moi-narrow-utilities-model-v1"
+claim = "No public claim."
+blocker = "Requires independently promoted variable, objective, and constraint stores."
+scope = [
+    "a narrow GenericModel composed only from independently certified stores",
+    "declared name maps, extension dictionary, list/query/delete/empty/copy operations",
+]
+
+[tiers.full_utilities_model]
+status = "blocked"
+profile = "moi-full-utilities-model-pressure-v1"
+claim = "No public claim."
+blocker = "Requires the promoted narrow GenericModel profile."
+scope = [
+    "the generated all-function/all-set default MOI.Utilities.Model breadth and pressure gate",
+]
 
 [tiers.jump_model]
 status = "blocked"

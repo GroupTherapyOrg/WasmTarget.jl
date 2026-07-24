@@ -6,6 +6,9 @@ using Snapshot
 using TOML
 using WasmTarget
 
+include(joinpath(@__DIR__, "evidence_utils.jl"))
+using .JumpCertificationEvidence
+
 const ROOT = @__DIR__
 const NOTEBOOK = joinpath(ROOT, "notebooks", "00_moi_values.jl")
 const CANARY_SOURCE = joinpath(ROOT, "canaries", "00_moi_values.jl")
@@ -298,7 +301,9 @@ function main()
         ),
         "wasmtarget" => git_provenance(pathof(WasmTarget)),
         "snapshot" => snapshot,
-        "manifest_sha256" => bytes2hex(sha256(read(manifest_path))),
+        # Pkg may refresh a manifest with native line endings. Preserve the
+        # committed environment's cross-platform text identity.
+        "manifest_sha256" => canonical_text_sha256(manifest_path),
         "validator" => Dict(
             "path" => wasm_tools,
             "version" => strip(read(`$wasm_tools --version`, String)),

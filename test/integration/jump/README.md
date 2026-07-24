@@ -66,7 +66,15 @@ assignment, before the Node runtime watchdog could help.
 The retained `raw.wasm`, size-optimized, and speed-optimized modules are part of
 the promotion authority: the cross-platform verifier checks their paths,
 digests, Wasm headers, and independently validates their bytes with the pinned
-`wasm-tools` release instead of trusting JSON summaries alone.
+`wasm-tools` release instead of trusting JSON summaries alone. It also
+re-derives both optimized modules from the retained raw module, freshly
+evaluates the committed native Julia canary for every retained input, and
+re-executes every retained module against that oracle with the pinned Node
+runtime.
+Each platform therefore retains its exact module-digest ledger. Cross-platform
+promotion compares the complete input/native/raw/size/speed semantic ledger,
+not byte-identical module encodings; reproducible module identity is a separate
+compiler property with its own fresh-process and multi-platform evidence gate.
 
 Run the browser artifact locally with:
 
