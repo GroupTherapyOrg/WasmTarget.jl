@@ -43,7 +43,7 @@ end
 function embedded_assets(html)
     source = read(html, String)
     matches = collect(eachmatch(
-        r"""atob\("([A-Za-z0-9+/=]+)"\).*?__snapshotEmbeddedAssets"""s,
+        r"""<script id="snapshot-embedded-assets">\(\(\)=>\{const b=atob\("([A-Za-z0-9+/=]+)"\),u=Uint8Array\.from\(b,c=>c\.charCodeAt\(0\)\);window\.__snapshotEmbeddedAssets=""",
         source,
     ))
     length(matches) == 1 ||

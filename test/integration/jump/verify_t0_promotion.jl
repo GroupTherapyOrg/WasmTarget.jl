@@ -462,11 +462,15 @@ end
 
 function embedded_report_bytes(html_path)
     source = read(html_path, String)
-    match_result = match(
-        r"""atob\("([A-Za-z0-9+/=]+)"\).*?__snapshotEmbeddedAssets"""s,
+    matches = collect(eachmatch(
+        r"""<script id="snapshot-embedded-assets">\(\(\)=>\{const b=atob\("([A-Za-z0-9+/=]+)"\),u=Uint8Array\.from\(b,c=>c\.charCodeAt\(0\)\);window\.__snapshotEmbeddedAssets=""",
         source,
+    ))
+    require(
+        length(matches) == 1,
+        "portable export must have exactly one canonical embedded registry",
     )
-    require(match_result !== nothing, "portable export has no embedded registry")
+    match_result = only(matches)
     files = JSON.parse(String(base64decode(only(match_result.captures))))
     report_key = only(filter(key -> endswith(key, "report.json"), keys(files)))
     return base64decode(files[report_key])

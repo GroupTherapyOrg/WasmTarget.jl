@@ -37,7 +37,7 @@ function verifier_succeeds(mutate=(root -> nothing))
     end
 end
 
-function mutate_json(root, filename, mutate; index=1)
+function mutate_json(mutate, root, filename; index=1)
     path = evidence_files(root, filename)[index]
     document = JSON.parsefile(path)
     mutate(document)
@@ -53,10 +53,10 @@ function first_variant(root, stage, delivery)
     return (exports, dirname(exports), document[stage][delivery])
 end
 
-function rewrite_portable_registry(path, mutate)
+function rewrite_portable_registry(mutate, path)
     source = read(path, String)
     pattern =
-        r"""atob\("([A-Za-z0-9+/=]+)"\).*?__snapshotEmbeddedAssets"""s
+        r"""<script id="snapshot-embedded-assets">\(\(\)=>\{const b=atob\("([A-Za-z0-9+/=]+)"\),u=Uint8Array\.from\(b,c=>c\.charCodeAt\(0\)\);window\.__snapshotEmbeddedAssets="""
     matches = collect(eachmatch(pattern, source))
     @assert length(matches) == 1
     encoded = only(only(matches).captures)
@@ -134,15 +134,11 @@ end
         _, export_root, variant = first_variant(root, "f1b", "portable")
         path = joinpath(export_root, variant["html"])
         source = read(path, String)
-        registry = only(collect(eachmatch(
-            r"""atob\("([A-Za-z0-9+/=]+)"\).*?__snapshotEmbeddedAssets"""s,
+        registry_script = only(collect(eachmatch(
+            r"""<script id="snapshot-embedded-assets">.*?</script>"""s,
             source,
         )))
-        write(
-            path,
-            source * "\n<script>atob(\"$(only(registry.captures))\");" *
-            "globalThis.__snapshotEmbeddedAssets = {};</script>\n",
-        )
+        write(path, source * "\n" * registry_script.match * "\n")
     end
 
     @test !verifier_succeeds() do root
