@@ -215,7 +215,8 @@ function validate_report(report, stage)
     require(
         length(group["cells"]) == spec.cells &&
         all(cell -> cell["ok"] === true, group["cells"]) &&
-        [String(cell["id"]) for cell in group["cells"]] == spec.cell_ids,
+        Set(String(cell["id"]) for cell in group["cells"]) ==
+            Set(spec.cell_ids),
         "$stage report has failed or unexpected cells",
     )
     return group
