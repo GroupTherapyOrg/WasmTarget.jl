@@ -1,3 +1,4 @@
+using JSON
 using Test
 
 include(joinpath(@__DIR__, "run_browser_t0.jl"))
