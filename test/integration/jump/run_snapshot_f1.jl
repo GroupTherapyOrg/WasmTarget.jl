@@ -61,7 +61,9 @@ function validate_wasm(bytes, output_dir)
     wasm_tools = Sys.which("wasm-tools")
     wasm_tools === nothing &&
         error("wasm-tools is required for independent Snapshot validation")
-    path = joinpath(output_dir, ".retained-group.wasm")
+    evidence_dir = joinpath(output_dir, "evidence")
+    mkpath(evidence_dir)
+    path = joinpath(evidence_dir, "retained-group.wasm")
     write(path, bytes)
     proc = run(ignorestatus(`$wasm_tools validate $path`))
     success(proc) || error("wasm-tools rejected retained Snapshot module")
@@ -75,9 +77,11 @@ end
 function export_variant(stage, delivery, output_dir; single_file)
     spec = SPECS[stage]
     mkpath(output_dir)
+    evidence_dir = joinpath(output_dir, "evidence")
+    mkpath(evidence_dir)
     source_notebook = materialize_notebook(
         spec.template,
-        joinpath(output_dir, ".source-$(spec.stem).jl"),
+        joinpath(evidence_dir, "materialized-source.jl"),
         NOTEBOOK_ENVIRONMENT,
         [spec.source],
     )
@@ -115,7 +119,8 @@ function export_variant(stage, delivery, output_dir; single_file)
     return Dict(
         "profile" => spec.profile,
         "html" => "$prefix/$(basename(html))",
-        "notebook" => "$prefix/$(basename(source_notebook))",
+        "notebook" =>
+            "$prefix/evidence/$(basename(source_notebook))",
         "notebook_sha256" => bytes2hex(sha256(read(source_notebook))),
         "exported_notebook" => "$prefix/$(basename(materialized))",
         "exported_notebook_sha256" =>
@@ -124,7 +129,7 @@ function export_variant(stage, delivery, output_dir; single_file)
                     "embedded" :
                     "$prefix/$(spec.stem).islands/report.json",
         "report_sha256" => bytes2hex(sha256(report_bytes)),
-        "wasm" => "$prefix/$(basename(retained.path))",
+        "wasm" => "$prefix/evidence/$(basename(retained.path))",
         "delivered_wasm" => delivered_wasm_path,
         "wasm_sha256" => retained.sha256,
         "wasm_bytes" => retained.bytes,

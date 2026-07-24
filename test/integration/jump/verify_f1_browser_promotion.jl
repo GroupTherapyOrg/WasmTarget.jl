@@ -110,8 +110,13 @@ function safe_file(root, relative, label)
         !isabspath(rel) && !startswith(rel, ".."),
         "$label path escapes its export",
     )
+    components = splitpath(rel)
+    require(
+        all(component -> !startswith(component, "."), components),
+        "$label path contains a hidden component",
+    )
     current = root
-    for component in splitpath(rel)
+    for component in components
         current = joinpath(current, component)
         require(!islink(current), "$label path contains a symlink")
     end

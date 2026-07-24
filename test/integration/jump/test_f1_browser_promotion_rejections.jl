@@ -70,8 +70,21 @@ function write_json(path, document)
     write(path, JSON.json(document))
 end
 
+function remove_hidden_entries(root)
+    for (dir, dirs, files) in walkdir(root; topdown=false)
+        for name in files
+            startswith(name, ".") && rm(joinpath(dir, name))
+        end
+        for name in dirs
+            startswith(name, ".") &&
+                rm(joinpath(dir, name); recursive=true, force=true)
+        end
+    end
+end
+
 @testset "F1 browser promotion accepts authentic evidence" begin
     @test verifier_succeeds()
+    @test verifier_succeeds(remove_hidden_entries)
 end
 
 @testset "F1 browser promotion rejects forged or substituted evidence" begin
@@ -149,6 +162,11 @@ end
     end
 
     @test !verifier_succeeds() do root
+        _, export_root, variant = first_variant(root, "f1b", "split")
+        rm(joinpath(export_root, variant["notebook"]))
+    end
+
+    @test !verifier_succeeds() do root
         mutate_json(root, "jump-snapshot-f1-browser.json") do document
             instance = document["evidence"][1]["instances"][1]
             push!(instance["console_errors"], "forged hidden error")
@@ -194,6 +212,23 @@ end
         bytes = read(path)
         bytes[end] ⊻= 0x01
         write(path, bytes)
+    end
+
+    @test !verifier_succeeds() do root
+        _, export_root, variant = first_variant(root, "f1a", "split")
+        rm(joinpath(export_root, variant["wasm"]))
+    end
+
+    @test !verifier_succeeds() do root
+        exports_path, export_root, variant =
+            first_variant(root, "f1a", "split")
+        source = joinpath(export_root, variant["notebook"])
+        hidden = joinpath(dirname(source), ".materialized-source.jl")
+        cp(source, hidden)
+        document = JSON.parsefile(exports_path)
+        document["f1a"]["split"]["notebook"] =
+            relpath(hidden, export_root)
+        write_json(exports_path, document)
     end
 
     @test !verifier_succeeds() do root
