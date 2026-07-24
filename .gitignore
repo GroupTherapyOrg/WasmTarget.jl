@@ -4,6 +4,7 @@
 docs/dist/
 docs/build/
 Manifest.toml
+!test/integration/jump/Manifest.toml
 
 # Node
 node_modules/

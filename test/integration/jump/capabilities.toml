@@ -1,0 +1,52 @@
+schema = 1
+profile = "jump-wasmgc"
+status = "experimental"
+
+[versions]
+julia = "1.12"
+jump = "1.31.1"
+math_opt_interface = "1.51.2"
+
+[gates]
+native_oracle = true
+raw_wasm = true
+optimize_size = true
+optimize_speed = true
+unexpected_skip_is_failure = true
+independent_validation = true
+
+[budgets]
+child_wall_seconds = 150
+suite_wall_seconds = 660
+child_output_bytes_hard = 8388608
+compile_wall_threshold_seconds = 120
+raw_wasm_bytes_hard = 52428800
+optimized_wasm_bytes_hard = 15728640
+
+[tiers.moi_values]
+status = "candidate"
+claim = "The listed scalar MOI value-construction and evaluation canaries compile and execute with native parity."
+cases = [
+    "moi_affine_value",
+    "moi_quadratic_value",
+    "moi_set_value",
+]
+
+[tiers.runtime_collections]
+status = "candidate"
+claim = "The listed concrete OrderedDict mutation and iteration canary compiles and executes with native parity."
+cases = ["ordered_dict_value"]
+
+[tiers.moi_model]
+status = "blocked"
+claim = "No public claim."
+blocker = "MOI.Utilities.Model compilation stalls in closed-world type registration."
+
+[tiers.jump_model]
+status = "blocked"
+claim = "No public claim."
+blocker = "Depends on certified MOI model storage and package-scale dispatch."
+
+[tiers.optimizer]
+status = "unsupported"
+claim = "No solver support is claimed."

@@ -20,6 +20,51 @@ defaults:
   run:
     shell: bash
 jobs:
+  jump-certification:
+    timeout-minutes: 25
+    name: JuMP T0 certification (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: WasmTarget.jl
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+      - name: Instantiate exact certification environment
+        working-directory: WasmTarget.jl
+        run: julia --startup-file=no --project=test/integration/jump -e 'import Pkg; Pkg.instantiate()'
+      - name: Native/raw/-Os/-O3 certification
+        working-directory: WasmTarget.jl
+        env:
+          WT_VALIDATE: '1'
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/run_certification.jl \
+            | tee "$RUNNER_TEMP/jump-certification.json"
+      - name: Hard-watchdog process-tree regression
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/test_timeout_cleanup.jl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jump-t0-${{ matrix.os }}
+          path: ${{ runner.temp }}/jump-certification.json
+          if-no-files-found: error
+
   downstream:
     timeout-minutes: 60   # hang guard (see ci.yml note)
     name: ${{ matrix.pkg }} (downstream)
