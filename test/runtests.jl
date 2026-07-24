@@ -188,6 +188,7 @@ _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
 _wt_shard0() && include("no_fabricated_values.jl")
+_wt_shard0() && include("nullable_nothing_identity.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()

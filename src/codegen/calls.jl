@@ -3874,8 +3874,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         arg1_is_nothing = is_nothing_value(args[1], ctx)
         arg2_is_nothing = is_nothing_value(args[2], ctx)
 
+        # A nullable SSA may be physically represented as a typed null reference
+        # while still being provably `nothing` through its defining statement.
+        # Handle the semantic-constant case before selecting the "other" operand:
+        # when both operands are proven nothing there is no non-nothing reference
+        # to inspect, regardless of either operand's widened Union type.
+        if arg1_is_nothing && arg2_is_nothing
+            local _nnb = _ctx_builder(ctx, "compile_call")
+            i32_const!(_nnb, is_func(func, :(!==)) ? 0 : 1)
+            append_builder!(fb, _nnb)
+            return append_builder!(b, fb)
+        end
+
         if (arg1_is_nothing && is_ref_type_or_union(arg2_type)) ||
            (arg2_is_nothing && is_ref_type_or_union(arg1_type))
+            # Exactly one operand is semantically nothing here.
             # Compile the non-nothing ref argument (typed channel)
             local _nv_b = _compile_value_b(arg1_is_nothing ? args[2] : args[1], ctx)
             local _nv_ty = isempty(_nv_b.v.stack) ? nothing : _nv_b.v.stack[end]

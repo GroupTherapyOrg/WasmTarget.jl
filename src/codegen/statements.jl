@@ -444,16 +444,23 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             :unsupported_global, string(stmt), "GlobalRef is not defined in its source module",
             nothing, nothing)))
         val = getfield(stmt.mod, stmt.name)
-        local _gv_b = _compile_value_b(val, ctx)
-        append_builder!(b, _gv_b)
-        if haskey(ctx.ssa_locals, idx) && !isempty(_gv_b.v.stack)
+        if haskey(ctx.ssa_locals, idx)
             local_idx = ctx.ssa_locals[idx]
             local_array_idx = local_idx - ctx.n_params + 1
             1 <= local_array_idx <= length(ctx.locals) || error(
                 "GlobalRef SSA local has no declared Wasm type")
-            coerce_stack_top!(b, ctx.locals[local_array_idx], ctx;
-                              from_julia=get(ctx.ssa_types, idx, typeof(val)))
+            # A materialized global is a typed storage boundary. Emit through the
+            # expected-aware value chokepoint so a literal `nothing` entering a
+            # nullable reference local becomes `ref.null`, while live concrete
+            # globals retain their concrete source type for boxing/upcasting.
+            # Never reinterpret a generic numeric zero as null in convert_type!.
+            emit_value!(b, val, ctx, ctx.locals[local_array_idx];
+                        from_julia=typeof(val))
             local_set!(b, local_idx)
+        else
+            # Preserve generic stack materialization when no SSA local owns the
+            # value; the eventual consumer remains responsible for its boundary.
+            append_builder!(b, _compile_value_b(val, ctx))
         end
 
     elseif stmt isa Expr
