@@ -157,12 +157,16 @@ status = "planned"
 profile = "moi-variable-bound-algebra-v1"
 claim = "No public claim until promoted."
 scope = [
-    "actual VariableIndex and ConstraintIndex value and type vocabulary used on the VariablesContainer path",
-    "the nine pinned variable scalar-set families: EqualTo, GreaterThan, LessThan, Interval, Integer, ZeroOne, Semicontinuous, Semiinteger, and Parameter",
-    "exact bound extraction and reconstruction, flag/type dispatch, and explicit signed-zero, infinity, and NaN policy",
+    "actual VariableIndex and ConstraintIndex value and type vocabulary consumed by VariablesContainer{Float64}",
+    "the nine pinned Float64 variable scalar-set families: EqualTo, GreaterThan, LessThan, Interval, Integer, ZeroOne, Semicontinuous, Semiinteger, and Parameter",
+    "the exact pinned MOI Utilities flag, dynamic type, lower/upper extraction, no-bound sentinel, and set reconstruction methods",
+    "bitwise Float64 storage and reconstruction evidence for signed zero, infinities, and two certified quiet-NaN sign/payload encodings; signaling NaNs are unclaimed",
 ]
 exclusions = [
-    "actual VariablesContainer support",
+    "VariablesContainer mutation, validity, deletion, duplicate-bound, and Parameter lifecycle support; direct construction here is passive carrier/storage/reconstruction evidence only",
+    "Parameter add_constrained_variable, ordinary-add prohibition, and deletion lifecycle",
+    "numeric parameterizations other than Float64",
+    "mathematical validation of bound ordering, finiteness, or Semiinteger endpoint integrality; these remain model/solver-layer concerns",
     "general scalar affine or quadratic algebra already covered by the separate T0 prerequisite",
     "dynamic open-world abstract function/set dispatch",
 ]

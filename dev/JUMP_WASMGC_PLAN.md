@@ -197,14 +197,27 @@ verifier must all close. The existing T0 Snapshot gate covers only T0 and
 cannot be cited for F1a or F1b.
 
 The next MOI execution tranche after that evidence closure is **F2a**, the
-actual pinned variable-bound vocabulary on the direct `VariablesContainer`
-path: `VariableIndex`, `ConstraintIndex`, and the nine scalar-set families
-`EqualTo`, `GreaterThan`, `LessThan`, `Interval`, `Integer`, `ZeroOne`,
-`Semicontinuous`, `Semiinteger`, and `Parameter`. It certifies exact extraction,
-reconstruction, flag/type dispatch, signed zero, infinities, and an explicit
-NaN policy. It does not claim `VariablesContainer`, duplicate-bound behavior,
-dictionaries, general affine/quadratic algebra, or open-world abstract
-dispatch.
+actual pinned variable-bound vocabulary consumed by
+`VariablesContainer{Float64}`: `VariableIndex`, `ConstraintIndex`, and the
+nine scalar-set families `EqualTo`, `GreaterThan`, `LessThan`, `Interval`,
+`Integer`, `ZeroOne`, `Semicontinuous`, `Semiinteger`, and `Parameter`. It calls
+the exact pinned MOI Utilities flag, type, bound-extraction, no-bound-sentinel,
+and set-reconstruction methods rather than locally equivalent helpers. It also
+certifies the closed-world dynamic `Type` and parametric
+`ConstraintIndex{VariableIndex,S}` shapes consumed by the later container.
+Numeric evidence uses bitwise `Float64` ledgers so signed zero, infinities, and
+the two certified quiet-NaN sign/payload encodings cannot be erased by `==` or
+JSON number encoding; signaling NaNs remain unclaimed. It does not claim
+arbitrary numeric parameterizations,
+the container's mutation, validity, deletion, duplicate-bound, or `Parameter`
+lifecycle; dictionaries; general affine/quadratic algebra; or open-world
+abstract dispatch. Direct construction in this tranche is only passive
+carrier/storage/reconstruction evidence for the exact pinned layouts. It is not
+evidence for the container lifecycle that F3a must certify independently.
+F2a also does not validate mathematical set semantics such as bound ordering,
+finiteness, or `Semiinteger` endpoint integrality; those are model/solver-layer
+concerns. Reversed and fractional endpoint cases deliberately prove that this
+passive representation does not invent validation absent from pinned MOI.
 
 An actual `VariablesContainer` may run concurrently under a hard watchdog as a
 discovery probe. Probe success or failure can revise prerequisites, but cannot

@@ -2,7 +2,7 @@ module JumpCertificationEvidence
 
 using SHA
 
-export canonical_text_sha256, is_wasm_tools_version
+export canonical_text_sha256, has_independent_oracle, is_wasm_tools_version
 
 """
 Hash committed text independent of Git's native-line-ending checkout, while
@@ -13,6 +13,17 @@ function canonical_text_sha256(path)
     occursin('\r', canonical) &&
         error("text provenance contains an unsupported lone carriage return")
     return bytes2hex(sha256(codeunits(canonical)))
+end
+
+"""
+Return whether a certification case has an independent authored result oracle.
+
+T0 is the deliberately narrow native-differential baseline. Every later
+profile must carry explicit expected results; a native-result digest alone
+cannot distinguish shared native/Wasm bugs from correct behavior.
+"""
+function has_independent_oracle(case, profile)
+    return hasproperty(case, :expected) || profile == "t0"
 end
 
 """

@@ -47,6 +47,20 @@ const CASE_SOURCE, CASES, PROPERTY_SEED, PROPERTY_RANDOM_SAMPLES =
             nothing,
             0,
         )
+    elseif CASE_PROFILE == "moi-variable-bound-algebra-v1"
+        source = joinpath(
+            @__DIR__,
+            "canaries",
+            "f2",
+            "00_variable_bound_algebra.jl",
+        )
+        include(source)
+        (
+            source,
+            JumpF2VariableBoundCanaries.CASES,
+            nothing,
+            0,
+        )
     else
         error("unknown JuMP certification profile: $CASE_PROFILE")
     end
@@ -142,9 +156,26 @@ function command_provenance(executable::AbstractString, version_args...)
     return Dict("path" => path, "version" => version)
 end
 
+function source_contract()
+    contract = Dict{String,Any}(
+        "profile" => CASE_PROFILE,
+        "case_ids" => CASE_IDS,
+        "canary_sha256" => bytes2hex(SHA.sha256(read(CASE_SOURCE))),
+        "functions" => function_contract(CASE_SOURCE),
+    )
+    if CASE_PROFILE == "moi-variable-bound-algebra-v1"
+        audit_path = joinpath(@__DIR__, "dart2wasm", "F2a.md")
+        contract["dart2wasm"] = Dict(
+            "revision" => "898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e",
+            "path" => "test/integration/jump/dart2wasm/F2a.md",
+            "canonical_sha256" => canonical_text_sha256(audit_path),
+        )
+    end
+    return contract
+end
+
 function provenance()
     manifest = joinpath(@__DIR__, "Manifest.toml")
-    canary = CASE_SOURCE
     return Dict(
         "julia" => string(VERSION),
         "os" => canonical_os(),
@@ -164,12 +195,7 @@ function provenance()
         # the canonical Git text so one committed environment has one identity
         # on Windows, macOS, and Linux.
         "manifest_sha256" => canonical_text_sha256(manifest),
-        "source_contract" => Dict(
-            "profile" => CASE_PROFILE,
-            "case_ids" => CASE_IDS,
-            "canary_sha256" => bytes2hex(SHA.sha256(read(canary))),
-            "functions" => function_contract(canary),
-        ),
+        "source_contract" => source_contract(),
         "node" => node_provenance(),
         "wasm_tools" => command_provenance("wasm-tools", "--version"),
         "independent_validation" => get(ENV, "WT_VALIDATE", "") == "1",
@@ -238,12 +264,14 @@ function run_case(name::String)
     func_name = string(nameof(case.f))
     imports = Dict("Math" => Dict("pow" => "Math.pow"))
     variants = Any[]
+    native_ledger = Any[]
     all_pass = all(values(budget_checks))
     WasmRunner.runner_available() ||
         error("Node runtime unavailable; certification cannot skip execution")
     for args in case.inputs
         CURRENT_PHASE[] = "native_oracle"
         native = case.f(args...)
+        push!(native_ledger, Any[collect(args), native])
         if hasproperty(case, :expected)
             expected = case.expected[args]
             native == expected ||
@@ -270,6 +298,34 @@ function run_case(name::String)
             "runs" => runs,
         ))
     end
+    # A digest of values produced by the native implementation detects drift,
+    # but it is not an independent semantic oracle: native and Wasm can agree
+    # on the same bug. Every post-T0 certification case must therefore carry
+    # explicitly authored expected results. T0 remains the intentionally
+    # narrower, legacy native-differential baseline.
+    oracle_checked = has_independent_oracle(case, CASE_PROFILE)
+    oracle_checked ||
+        error(
+            "certification profile $CASE_PROFILE requires an independent " *
+            "expected-result oracle for case $name",
+        )
+    committed_oracle = if hasproperty(case, :expected_ledger_sha256)
+        actual_ledger_sha256 =
+            bytes2hex(sha256(JSON.json(native_ledger)))
+        actual_ledger_sha256 == case.expected_ledger_sha256 ||
+            error(
+                "committed oracle ledger mismatch for $name: expected " *
+                "$(case.expected_ledger_sha256), got $actual_ledger_sha256",
+            )
+        Dict(
+            "kind" => "ordered_native_ledger_sha256",
+            "expected_sha256" => case.expected_ledger_sha256,
+            "actual_sha256" => actual_ledger_sha256,
+            "pass" => true,
+        )
+    else
+        nothing
+    end
     return Dict(
         "schema" => 1,
         "evidence_kind" => "executed_native_differential",
@@ -277,10 +333,16 @@ function run_case(name::String)
         "case" => name,
         "source_provenance" =>
             hasproperty(case, :provenance) ? case.provenance : nothing,
+        "committed_oracle" => committed_oracle,
         "pass" => all_pass,
         "phase" => "complete",
         "gates" => Dict(
-            "native_oracle" => true,
+            # Later certification profiles require a committed semantic
+            # expectation because native-vs-Wasm agreement (or a digest of
+            # native results) can preserve the same bug on both sides. T0
+            # predates this policy and remains explicitly a bounded
+            # native-differential baseline.
+            "native_oracle" => oracle_checked,
             "raw_wasm" => all(v -> v["runs"]["raw"]["pass"], variants),
             "optimize_size" =>
                 all(v -> v["runs"]["size"]["pass"], variants),
