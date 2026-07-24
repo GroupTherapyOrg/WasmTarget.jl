@@ -75,6 +75,7 @@ function run_child(
     artifact_root=nothing,
     ready_path=nothing,
     startup_deadline_seconds=30.0,
+    case_profile="t0",
 )
     out_path, out_io = mktemp()
     err_path, err_io = mktemp()
@@ -93,6 +94,7 @@ function run_child(
             `$(Base.julia_cmd()) --startup-file=no --project=$ROOT -e $bootstrap $(joinpath(ROOT, "run_case.jl")) $case_name`,
             "WT_VALIDATE" => "1",
             "WT_JUMP_MODULE_ROOT" => child_artifact_root,
+            "WT_JUMP_CASE_PROFILE" => case_profile,
         )
         proc = run(pipeline(ignorestatus(cmd), stdout=out_io, stderr=err_io); wait=false)
         status = wait_for_child(

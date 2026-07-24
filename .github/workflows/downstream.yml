@@ -20,6 +20,93 @@ defaults:
   run:
     shell: bash
 jobs:
+  jump-f1-nullable-layouts:
+    timeout-minutes: 25
+    name: MOI F1a nullable layouts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: WasmTarget.jl
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1.12.6'
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+      - uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2
+        with:
+          tool: wasm-tools@1.244.0
+      - name: Instantiate exact certification environment
+        working-directory: WasmTarget.jl
+        run: julia --startup-file=no --project=test/integration/jump -e 'import Pkg; Pkg.instantiate()'
+      - name: Execute F1a native/raw/-Os/-O3 certification
+        working-directory: WasmTarget.jl
+        env:
+          WT_VALIDATE: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/jump-f1a"
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/run_f1_certification.jl \
+            "$RUNNER_TEMP/jump-f1a" \
+            | tee "$RUNNER_TEMP/jump-f1a/run.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: jump-f1a-${{ matrix.os }}
+          path: ${{ runner.temp }}/jump-f1a
+          if-no-files-found: error
+
+  jump-f1a-promotion-evidence:
+    timeout-minutes: 15
+    name: MOI F1a cross-platform promotion evidence
+    needs: [jump-f1-nullable-layouts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: WasmTarget.jl
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1.12.6'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+      - uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2
+        with:
+          tool: wasm-tools@1.244.0
+      - name: Instantiate exact certification environment
+        working-directory: WasmTarget.jl
+        run: julia --startup-file=no --project=test/integration/jump -e 'import Pkg; Pkg.instantiate()'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: jump-f1a-*
+          path: ${{ runner.temp }}/jump-f1a-artifacts
+      - name: Enforce cross-platform F1a evidence
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/verify_f1a_promotion.jl \
+            "$RUNNER_TEMP/jump-f1a-artifacts" \
+            | tee "$RUNNER_TEMP/jump-f1a-promotion.json"
+      - name: Prove compile-only and forged evidence are rejected
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/test_f1a_promotion_rejections.jl \
+            "$RUNNER_TEMP/jump-f1a-artifacts"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: jump-f1a-promotion-evidence
+          path: ${{ runner.temp }}/jump-f1a-promotion.json
+          if-no-files-found: error
+
   jump-certification:
     timeout-minutes: 25
     name: MOI/runtime prerequisites (${{ matrix.os }})

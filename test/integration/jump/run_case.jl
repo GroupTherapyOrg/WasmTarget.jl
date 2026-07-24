@@ -5,16 +5,38 @@ using TOML
 using WasmTarget
 
 include(joinpath(@__DIR__, "..", "..", "utils.jl"))
-include(joinpath(@__DIR__, "canaries", "00_moi_values.jl"))
 include(joinpath(@__DIR__, "evidence_utils.jl"))
 
-using .JumpMOIValueCanaries
 using .JumpCertificationEvidence
 
 const CONFIG = TOML.parsefile(joinpath(@__DIR__, "capabilities.toml"))
 const RESULT_PREFIX = "WT_JUMP_CERT_RESULT="
 const CURRENT_PHASE = Ref("startup")
-const CASE_IDS = sort!(collect(keys(JumpMOIValueCanaries.CASES)))
+const CASE_PROFILE = get(ENV, "WT_JUMP_CASE_PROFILE", "t0")
+const CASE_SOURCE, CASES, PROPERTY_SEED, PROPERTY_RANDOM_SAMPLES =
+    if CASE_PROFILE == "t0"
+        source = joinpath(@__DIR__, "canaries", "00_moi_values.jl")
+        include(source)
+        (
+            source,
+            JumpMOIValueCanaries.CASES,
+            JumpMOIValueCanaries.PROPERTY_SEED,
+            JumpMOIValueCanaries.PROPERTY_RANDOM_SAMPLES,
+        )
+    elseif CASE_PROFILE == "moi-storage-runtime-shapes-v1"
+        source =
+            joinpath(@__DIR__, "canaries", "f1", "00_nullable_layouts.jl")
+        include(source)
+        (
+            source,
+            JumpF1NullableLayoutCanaries.CASES,
+            nothing,
+            0,
+        )
+    else
+        error("unknown JuMP certification profile: $CASE_PROFILE")
+    end
+const CASE_IDS = sort!(collect(keys(CASES)))
 
 canonical_os() =
     Sys.iswindows() ? "windows" :
@@ -108,7 +130,7 @@ end
 
 function provenance()
     manifest = joinpath(@__DIR__, "Manifest.toml")
-    canary = joinpath(@__DIR__, "canaries", "00_moi_values.jl")
+    canary = CASE_SOURCE
     return Dict(
         "julia" => string(VERSION),
         "os" => canonical_os(),
@@ -129,6 +151,7 @@ function provenance()
         # on Windows, macOS, and Linux.
         "manifest_sha256" => canonical_text_sha256(manifest),
         "source_contract" => Dict(
+            "profile" => CASE_PROFILE,
             "case_ids" => CASE_IDS,
             "canary_sha256" => bytes2hex(SHA.sha256(read(canary))),
             "functions" => function_contract(canary),
@@ -160,9 +183,9 @@ function timed(f)
 end
 
 function run_case(name::String)
-    haskey(JumpMOIValueCanaries.CASES, name) ||
+    haskey(CASES, name) ||
         error("unknown JuMP certification case: $name")
-    case = JumpMOIValueCanaries.CASES[name]
+    case = CASES[name]
     isempty(case.inputs) && error("case $name has no inputs")
     arg_types = Tuple(map(typeof, first(case.inputs)))
     all(input -> Tuple(map(typeof, input)) == arg_types, case.inputs) ||
@@ -207,6 +230,11 @@ function run_case(name::String)
     for args in case.inputs
         CURRENT_PHASE[] = "native_oracle"
         native = case.f(args...)
+        if hasproperty(case, :expected)
+            expected = case.expected[args]
+            native == expected ||
+                error("committed oracle mismatch for $name at $args: expected $expected, got $native")
+        end
         runs = Dict{String,Any}()
         for (label, bytes) in modules
             CURRENT_PHASE[] = "execute_$label"
@@ -230,7 +258,11 @@ function run_case(name::String)
     end
     return Dict(
         "schema" => 1,
+        "evidence_kind" => "executed_native_differential",
+        "profile" => CASE_PROFILE,
         "case" => name,
+        "source_provenance" =>
+            hasproperty(case, :provenance) ? case.provenance : nothing,
         "pass" => all_pass,
         "phase" => "complete",
         "gates" => Dict(
@@ -259,9 +291,8 @@ function run_case(name::String)
         "budgets" => budget_checks,
         "property" => Dict(
             "kind" => string(case.property),
-            "seed" => string(JumpMOIValueCanaries.PROPERTY_SEED),
-            "random_samples" =>
-                JumpMOIValueCanaries.PROPERTY_RANDOM_SAMPLES,
+            "seed" => PROPERTY_SEED === nothing ? nothing : string(PROPERTY_SEED),
+            "random_samples" => PROPERTY_RANDOM_SAMPLES,
             "executed_inputs" => length(case.inputs),
             "bounded" => true,
         ),
