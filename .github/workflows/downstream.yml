@@ -63,9 +63,9 @@ jobs:
           if-no-files-found: error
 
   jump-f1b-promotion-evidence:
-    timeout-minutes: 15
+    timeout-minutes: 25
     name: MOI F1b cross-platform promotion evidence
-    needs: [jump-f1b-vector-lifecycle]
+    needs: [jump-f1b-vector-lifecycle, jump-snapshot-browser]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -87,6 +87,10 @@ jobs:
         with:
           pattern: jump-f1b-*-latest
           path: ${{ runner.temp }}/jump-f1b-artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: jump-snapshot-browser-*
+          path: ${{ runner.temp }}/jump-f1-browser-artifacts
       - name: Enforce cross-platform F1b evidence
         working-directory: WasmTarget.jl
         run: |
@@ -100,6 +104,12 @@ jobs:
           julia --startup-file=no --project=test/integration/jump \
             test/integration/jump/test_f1b_promotion_rejections.jl \
             "$RUNNER_TEMP/jump-f1b-artifacts"
+      - name: Enforce exhaustive cross-platform F1 browser evidence
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/verify_f1_browser_promotion.jl \
+            "$RUNNER_TEMP/jump-f1-browser-artifacts"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -150,9 +160,9 @@ jobs:
           if-no-files-found: error
 
   jump-f1a-promotion-evidence:
-    timeout-minutes: 15
+    timeout-minutes: 25
     name: MOI F1a cross-platform promotion evidence
-    needs: [jump-f1-nullable-layouts]
+    needs: [jump-f1-nullable-layouts, jump-snapshot-browser]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -174,6 +184,10 @@ jobs:
         with:
           pattern: jump-f1a-*-latest
           path: ${{ runner.temp }}/jump-f1a-artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: jump-snapshot-browser-*
+          path: ${{ runner.temp }}/jump-f1-browser-artifacts
       - name: Enforce cross-platform F1a evidence
         working-directory: WasmTarget.jl
         run: |
@@ -187,6 +201,18 @@ jobs:
           julia --startup-file=no --project=test/integration/jump \
             test/integration/jump/test_f1a_promotion_rejections.jl \
             "$RUNNER_TEMP/jump-f1a-artifacts"
+      - name: Enforce exhaustive cross-platform F1 browser evidence
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/verify_f1_browser_promotion.jl \
+            "$RUNNER_TEMP/jump-f1-browser-artifacts"
+      - name: Prove forged F1 browser evidence is rejected
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/test_f1_browser_promotion_rejections.jl \
+            "$RUNNER_TEMP/jump-f1-browser-artifacts"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -242,7 +268,10 @@ jobs:
           if-no-files-found: error
 
   jump-snapshot-browser:
-    timeout-minutes: 30
+    # Browser installation, T0, four isolated F1 exports, the exhaustive
+    # two-engine corpus, and watchdogs have independent inner deadlines whose
+    # legitimate aggregate exceeds 30 minutes on a cold runner.
+    timeout-minutes: 60
     name: MOI/runtime Snapshot (${{ matrix.os }}, Chromium + Firefox)
     runs-on: ${{ matrix.os }}
     strategy:
@@ -296,6 +325,22 @@ jobs:
             test/integration/jump/run_browser_t0.jl \
             "$RUNNER_TEMP/jump-snapshot-t0" \
             | tee "$RUNNER_TEMP/jump-snapshot-browser.json"
+      - name: Export split and single-file F1 notebooks
+        working-directory: WasmTarget.jl
+        env:
+          WT_VALIDATE: '1'
+        run: |
+          julia --startup-file=no --project=test/integration/jump/snapshot \
+            test/integration/jump/run_snapshot_f1.jl \
+            "$RUNNER_TEMP/jump-snapshot-f1" \
+            | tee "$RUNNER_TEMP/jump-snapshot-f1-export.log"
+      - name: Exercise the exhaustive F1 corpus in Chromium and Firefox
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/run_browser_f1.jl \
+            "$RUNNER_TEMP/jump-snapshot-f1" \
+            | tee "$RUNNER_TEMP/jump-snapshot-f1/jump-snapshot-f1-browser.json"
       - name: Hard-watchdog browser process-tree regression
         working-directory: WasmTarget.jl
         run: |
@@ -314,6 +359,14 @@ jobs:
             ${{ runner.temp }}/jump-snapshot-t0
             ${{ runner.temp }}/jump-snapshot-export.log
             ${{ runner.temp }}/jump-snapshot-browser.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: jump-snapshot-browser-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/jump-snapshot-f1
+            ${{ runner.temp }}/jump-snapshot-f1-export.log
           if-no-files-found: error
 
   jump-t0-promotion-evidence:

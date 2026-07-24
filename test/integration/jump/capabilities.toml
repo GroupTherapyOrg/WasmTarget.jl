@@ -7,6 +7,7 @@ julia = "1.12.6"
 jump = "1.31.1"
 math_opt_interface = "1.51.2"
 node = "24.18.0"
+nodejs_24_jll = "24.18.0+0"
 wasm_tools = "1.244.0"
 playwright = "1.59.1"
 binaryen_jll = "0.130.0+0"
@@ -37,7 +38,16 @@ compile_wall_threshold_seconds = 120
 raw_wasm_bytes_hard = 52428800
 optimized_wasm_bytes_hard = 15728640
 snapshot_export_wall_seconds = 240
-browser_wall_seconds = 180
+browser_wall_seconds = 420
+
+[resource.f1_browser]
+evidence_kind = "bounded_lifecycle_topology_proxy"
+same_page_rounds = 2
+fresh_pages = 2
+wasm_compile_calls_per_page = 1
+wasm_instantiate_calls_per_page = 1
+split_wasm_requests_per_page = 1
+single_file_wasm_requests_per_page = 0
 
 [promotion]
 required_evidence = ["core_moi_prerequisites", "snapshot_browser_moi_prerequisites"]
@@ -70,7 +80,7 @@ blocker = "The staged prerequisites below are not yet certified; an earlier disc
 [tiers.runtime_shapes]
 status = "planned"
 profile = "moi-storage-runtime-shapes-v1"
-claim = "No public claim until promoted."
+claim = "Umbrella dependency track only. Its independently promoted subprofiles are authoritative; this aggregate is not itself a public capability."
 source_policy = "Every isolating canary must record its exact pinned MOI source and downstream operation; passing local lookalikes alone is insufficient."
 scope = [
     "nullable concrete layouts used by pinned MOI storage",
@@ -93,30 +103,97 @@ exclusions = [
     "treating generic deleteat!/insert!/pop!/pushfirst!/popfirst!/self-append stress as actual VariablesContainer deletion semantics",
 ]
 
-[tiers.moi_algebra]
+[tiers.runtime_shapes_f1a_nullable_layouts]
+status = "promotion_pending"
+profile = "moi-runtime-nullable-layouts-v1"
+claim = "Candidate only: the pinned MOI-derived nullable objective-layout prerequisite has native/raw/-Os/-O3 exact parity locally and core semantic ledgers on Linux and macOS. It is not promoted until same-SHA Windows, Snapshot split/single-file Chromium/Firefox, bounded lifecycle/topology proxy, and linked promotion evidence are green."
+cases = ["f1_nullable_objective_layout"]
+exclusions = [
+    "actual ObjectiveContainer support",
+    "general allocation or garbage-collector support",
+]
+required_evidence = [
+    "three_platform_core_semantics",
+    "snapshot_split_and_single_file_chromium_firefox",
+    "bounded_repeated_instance_and_fresh_instance_lifecycle_topology_proxy",
+    "same_sha_promotion",
+]
+
+[tiers.runtime_shapes_f1b_parallel_vectors]
+status = "promotion_pending"
+profile = "moi-runtime-parallel-vectors-v1"
+claim = "Candidate only: the pinned MOI-derived three-parallel-vector lifecycle and supplemental ordinary-Vector identity stress have native/raw/-Os/-O3 exact parity locally and core semantic ledgers on Linux and macOS. This is not VariablesContainer support and is not promoted until same-SHA Windows, Snapshot split/single-file Chromium/Firefox, bounded lifecycle/topology proxy, and linked promotion evidence are green."
+cases = [
+    "f1_parallel_variable_layout",
+    "f1_vector_reference_lifecycle",
+]
+exclusions = [
+    "actual VariablesContainer support",
+    "general allocation or garbage-collector support",
+    "append! conversion-failure exception semantics",
+]
+required_evidence = [
+    "three_platform_core_semantics",
+    "snapshot_split_and_single_file_chromium_firefox",
+    "bounded_repeated_instance_and_fresh_instance_lifecycle_topology_proxy",
+    "same_sha_promotion",
+]
+
+[tiers.runtime_shapes_dictionary_track]
 status = "planned"
-profile = "moi-algebra-v1"
+profile = "moi-runtime-dictionaries-v1"
+claim = "No public claim until independently promoted. This track is required by objective/constraint stores and model composition, but it does not block VariablesContainer."
+scope = [
+    "runtime-built and constant Dict layouts",
+    "MOI index, String, Symbol, Type, Tuple{Type}, and Tuple{Type,Type} keys",
+    "Dict{Symbol,Any} and nested OrderedDict values",
+    "collision, rehash, update, delete, reinsert, iteration, copy, and empty semantics",
+    "lazy duplicate-name sentinel maps and invalidation/rebuild",
+    "CleverDict dense-to-sparse transition and LinearIndex rebuild",
+]
+
+[tiers.moi_variable_bound_algebra]
+status = "planned"
+profile = "moi-variable-bound-algebra-v1"
 claim = "No public claim until promoted."
 scope = [
-    "declared scalar affine and quadratic term/function operations",
-    "declared set and modification vocabulary required by storage",
+    "actual VariableIndex and ConstraintIndex value and type vocabulary used on the VariablesContainer path",
+    "the nine pinned variable scalar-set families: EqualTo, GreaterThan, LessThan, Interval, Integer, ZeroOne, Semicontinuous, Semiinteger, and Parameter",
+    "exact bound extraction and reconstruction, flag/type dispatch, and explicit signed-zero, infinity, and NaN policy",
+]
+exclusions = [
+    "actual VariablesContainer support",
+    "general scalar affine or quadratic algebra already covered by the separate T0 prerequisite",
+    "dynamic open-world abstract function/set dispatch",
 ]
 
 [tiers.variables_container]
 status = "blocked"
 profile = "moi-variables-container-v1"
 claim = "No public claim."
-blocker = "Requires promoted runtime-shapes and MOI-algebra profiles."
+blocker = "Requires promoted F1a nullable-layout, F1b parallel-vector, and MOI variable-bound algebra profiles. Dictionary/CleverDict work is on a separate dependency branch and does not block this vector-backed container."
 scope = [
-    "actual vector-backed VariablesContainer lifecycle",
-    "variable and bound mask transitions and duplicate-bound errors",
+    "actual vector-backed VariablesContainer success lifecycle",
+    "add/list/delete/validity and variable/bound mask transitions",
+]
+
+[tiers.variables_container_errors]
+status = "blocked"
+profile = "moi-variables-container-errors-v1"
+claim = "No public claim."
+blocker = "Requires the promoted VariablesContainer success lifecycle plus typed exception transport and mutation-atomicity evidence."
+scope = [
+    "duplicate-bound errors",
+    "invalid and out-of-range indices",
+    "mismatched function/set requests",
+    "correct-or-loud failure without partial mutation",
 ]
 
 [tiers.objective_constraint_storage]
 status = "blocked"
 profile = "moi-objective-constraint-storage-v1"
 claim = "No public claim."
-blocker = "Requires promoted VariablesContainer storage and MOI algebra."
+blocker = "Requires promoted VariablesContainer storage, the relevant MOI algebra profile, and the independently promoted dictionary/CleverDict dependency branch."
 scope = [
     "actual ObjectiveContainer lifecycle",
     "minimal affine VectorOfConstraints and StructOfConstraints",

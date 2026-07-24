@@ -7,7 +7,9 @@ using TOML
 using WasmTarget
 
 include(joinpath(@__DIR__, "evidence_utils.jl"))
+include(joinpath(@__DIR__, "snapshot_certification_support.jl"))
 using .JumpCertificationEvidence
+using .JumpSnapshotCertificationSupport
 
 const ROOT = @__DIR__
 const NOTEBOOK = joinpath(ROOT, "notebooks", "00_moi_values.jl")
@@ -25,81 +27,11 @@ const CASE_IDS = sort!([
     "ordered_dict_value",
 ])
 
-canonical_os() =
-    Sys.iswindows() ? "windows" :
-    Sys.isapple() ? "macos" :
-    Sys.islinux() ? "linux" : "unsupported"
-
-canonical_arch() =
-    Sys.ARCH === :x86_64 ? "x86_64" :
-    Sys.ARCH === :aarch64 ? "aarch64" : string(Sys.ARCH)
-
-function assert_full_island(report)
-    length(report) == 1 ||
-        error("expected one bond group, found $(length(report))")
-    group = only(report)
-    group["judgement"] == "island" ||
-        error("expected a full island, got $(group["judgement"])")
-    isempty(group["reasons"]) ||
-        error("unexpected island reasons: $(group["reasons"])")
-    all(cell -> cell["ok"] === true, group["cells"]) ||
-        error("one or more notebook cells failed island compilation")
-    return group
-end
-
-function embedded_report(html)
-    source = read(html, String)
-    match_result = match(
-        r"""atob\("([A-Za-z0-9+/=]+)"\).*?__snapshotEmbeddedAssets"""s,
-        source,
+assert_environment_provenance() =
+    JumpSnapshotCertificationSupport.assert_environment_provenance(
+        ENVIRONMENT,
+        ROOT,
     )
-    match_result === nothing &&
-        error("single-file export has no embedded asset registry")
-    files = JSON.parse(String(base64decode(only(match_result.captures))))
-    report_key = only(filter(key -> endswith(key, "report.json"), keys(files)))
-    bytes = base64decode(files[report_key])
-    return (report=JSON.parse(String(copy(bytes))), bytes=bytes)
-end
-
-function package_provenance(name)
-    dependency = only(filter(
-        dependency -> dependency.second.name == name,
-        collect(Pkg.dependencies()),
-    )).second
-    return Dict(
-        "name" => name,
-        "version" => string(dependency.version),
-        "source" => dependency.source,
-        "tree_hash" => isnothing(dependency.tree_hash) ?
-                       nothing : string(dependency.tree_hash),
-    )
-end
-
-function assert_environment_provenance()
-    dependencies = TOML.parsefile(joinpath(ENVIRONMENT, "Manifest.toml"))["deps"]
-    snapshot_manifest = only(dependencies["Snapshot"])
-    snapshot = package_provenance("Snapshot")
-    snapshot["tree_hash"] == snapshot_manifest["git-tree-sha1"] ||
-        error("loaded Snapshot tree does not match the pinned manifest")
-
-    expected_wt_root = realpath(joinpath(ROOT, "..", "..", ".."))
-    loaded_wt_root = realpath(dirname(dirname(pathof(WasmTarget))))
-    loaded_wt_root == expected_wt_root ||
-        error(
-            "Snapshot certification loaded WasmTarget from $loaded_wt_root, " *
-            "expected $expected_wt_root",
-        )
-    return snapshot
-end
-
-function git_provenance(path)
-    root = dirname(dirname(path))
-    return Dict(
-        "sha" => strip(read(`git -C $root rev-parse HEAD`, String)),
-        "dirty" =>
-            !isempty(strip(read(`git -C $root status --porcelain`, String))),
-    )
-end
 
 function export_variant(output_dir; single_file, negative=false)
     mkpath(output_dir)
@@ -162,28 +94,6 @@ function export_variant(output_dir; single_file, negative=false)
     )
 end
 
-function terminate_process(proc)
-    process_exited(proc) && return true
-    pid = getpid(proc)
-    try
-        if Sys.iswindows()
-            run(ignorestatus(`taskkill /PID $pid /T /F`))
-        else
-            ccall(:kill, Cint, (Cint, Cint), -pid, 15)
-        end
-    catch
-    end
-    timedwait(() -> process_exited(proc), 5.0)
-    if !process_exited(proc) && !Sys.iswindows()
-        try
-            ccall(:kill, Cint, (Cint, Cint), -pid, 9)
-        catch
-        end
-        timedwait(() -> process_exited(proc), 5.0)
-    end
-    return process_exited(proc)
-end
-
 function run_variant_child(
     name,
     output_dir;
@@ -191,71 +101,16 @@ function run_variant_child(
     ready_path=nothing,
     startup_deadline_seconds=30.0,
 )
-    result_path = joinpath(dirname(output_dir), ".$name-result.json")
-    out_path, out_io = mktemp()
-    err_path, err_io = mktemp()
-    try
-        bootstrap = """
-        if !Sys.iswindows()
-            ccall(:setsid, Cint, ()) == -1 &&
-                error("failed to create Snapshot export process group")
-        end
-        include(popfirst!(ARGS))
-        child_main()
-        """
-        cmd = addenv(
-            `$(Base.julia_cmd()) --startup-file=no --project=$ENVIRONMENT -e $bootstrap $(@__FILE__) --child $name $output_dir $result_path`,
-            "WT_JUMP_PROCESS_GROUP" => "1",
-            "WT_VALIDATE" => "1",
-        )
-        proc = run(pipeline(ignorestatus(cmd), stdout=out_io, stderr=err_io); wait=false)
-        startup_started = time()
-        started = ready_path === nothing ? startup_started : nothing
-        failure = nothing
-        while !process_exited(proc)
-            if ready_path !== nothing && started === nothing
-                if isfile(ready_path) && filesize(ready_path) > 0
-                    started = time()
-                elseif time() - startup_started > startup_deadline_seconds
-                    failure = "startup_timeout"
-                    break
-                end
-            elseif time() - started > deadline_seconds
-                failure = "timeout"
-                break
-            end
-            bytes = (isfile(out_path) ? filesize(out_path) : 0) +
-                    (isfile(err_path) ? filesize(err_path) : 0)
-            if bytes > OUTPUT_LIMIT_BYTES
-                failure = "output_limit"
-                break
-            end
-            sleep(0.1)
-        end
-        failure === nothing || begin
-            cleanup_ok = terminate_process(proc)
-            error(
-                "Snapshot $name export failed closed: $failure; " *
-                "cleanup_ok=$cleanup_ok",
-            )
-        end
-        if !success(proc)
-            stderr = read(err_path, String)
-            error(
-                "Snapshot $name export exited $(proc.exitcode): " *
-                last(stderr, min(length(stderr), 8192)),
-            )
-        end
-        isfile(result_path) ||
-            error("Snapshot $name export produced no structured result")
-        return JSON.parsefile(result_path)
-    finally
-        close(out_io)
-        close(err_io)
-        rm(out_path; force=true)
-        rm(err_path; force=true)
-        rm(result_path; force=true)
-    end
+    return run_export_child(
+        @__FILE__,
+        name,
+        output_dir;
+        environment=ENVIRONMENT,
+        deadline_seconds,
+        output_limit_bytes=OUTPUT_LIMIT_BYTES,
+        ready_path,
+        startup_deadline_seconds,
+    )
 end
 
 function child_main()

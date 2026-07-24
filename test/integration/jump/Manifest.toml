@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "e9bda73c4eb4296f15e3de297ecdee22606efd21"
+project_hash = "74f19bc0d4edbda190b67b39f737645c246fabeb"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -190,6 +190,12 @@ deps = ["OpenLibm_jll"]
 git-tree-sha1 = "dbd2e8cd2c1c27f0b584f6661b4309609c5a685e"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
 version = "1.1.4"
+
+[[deps.NodeJS_24_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "61ae7c625c6db1a2a21aa48a9a4104b971643a70"
+uuid = "30a2228f-09fe-513d-9563-0d10bd40449a"
+version = "24.18.0+0"
 
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]

@@ -123,37 +123,45 @@ is not evidence that a `JuMP.Model`, JuMP macro, optimizer, or solver works.
 Its maximum safe claim is that the listed MOI scalar operations and one
 `OrderedDict` prerequisite execute with the recorded native/Wasm parity.
 
+The opening audit's linear F1 → F2 → F3 hypothesis was too coarse. The pinned
+`VariablesContainer` is vector-backed and does not require dictionaries or
+`CleverDict`; those mechanisms first become authoritative on the
+objective/constraint and model-composition branches. The current dependency
+DAG is:
+
 ```text
 F0  Certification substrate
     pins/provenance, phase telemetry, watchdogs, failure taxonomy,
     raw/-Os/-O3, browser engines, claim manifest
  |
-F1  MOI-derived Julia runtime shapes
-    exact concrete layouts, collections, closure topologies, exceptions,
-    dispatch limits, and repeated-allocation stress extracted from the pinned
-    MOI storage call graph but certified in isolating canaries
+ +--> F1a nullable concrete layouts -----------+
+ |                                            |
+ +--> F1b parallel-vector lifecycle -----------+--> F2a variable-bound
+ |                                            |    algebra/dispatch
+ |                                            |          |
+ |                                            +----------+--> F3a-success
+ |                                                           actual
+ |                                                           VariablesContainer
+ |                                                                 |
+ |                         typed exceptions + atomicity ------------+--> F3a-errors
  |
-F2  MOI algebra vocabulary
-    indices, declared Function/Set pairs, exact value semantics
- |
-F3a VariablesContainer
-    first actual MOI storage gate: vector-backed variable/bound storage,
-    add/list/delete/validity, mask transitions, and duplicate-bound errors
- |
-F3b Objective + constraint stores
-    actual ObjectiveContainer and the minimal affine StructOfConstraints /
-    VectorOfConstraints slice; real CleverDict lifecycle enters here
- |
-F3c Narrow MOI.Utilities.GenericModel
-    compose only the independently certified stores; name maps, ext dictionary,
-    list/query/delete/empty/copy within the declared profile
- |
-F3d Full default MOI.Utilities.Model pressure gate
-    instantiate the generated all-function/all-set default model only after the
-    narrow aggregate works; this is a breadth/pressure gate, not a prerequisite
- |
-F4  Expanded storage, index maps, attributes, copy/cache, invalidation
-    DoubleDict and each additional function/set family independently certified
+ +--> F1c dictionaries, OrderedDict, closures, allocation
+       |                  |
+       |                  +--> name maps/ext storage
+       +--> CleverDict --------+
+                               |
+F2b declared affine/constraint algebra
+       |                       |
+       +-----------------------+--> F3b objective + constraint stores
+                                         |
+F3a-success ------------------------------+
+                                         |
+                                         +--> F3c narrow GenericModel
+                                                |
+                                                +--> F3d full default
+                                                     Utilities.Model pressure
+
+F3c/F3d + expanded attributes/copy/cache/invalidation
  |
 F5  MockOptimizer state machine
     optimize, statuses, result counts, primal/dual/objective queries,
@@ -179,6 +187,30 @@ F10 Pure-Julia production-solver track
     SparseMatrixCSC prerequisite -> Tulip profile ->
     selected Clarabel cones and pure-Wasm QDLDL
 ```
+
+F1a and F1b currently have locally green native/raw/`-Os`/`-O3` evidence and
+Linux/macOS core ledgers on the active candidate SHA. They remain
+**promotion-pending**, not promoted: the Windows ledger, profile-specific
+Snapshot directory/single-file interactions in Chromium and Firefox, bounded
+same-instance/fresh-instance lifecycle/topology proxies, and a same-SHA promotion
+verifier must all close. The existing T0 Snapshot gate covers only T0 and
+cannot be cited for F1a or F1b.
+
+The next MOI execution tranche after that evidence closure is **F2a**, the
+actual pinned variable-bound vocabulary on the direct `VariablesContainer`
+path: `VariableIndex`, `ConstraintIndex`, and the nine scalar-set families
+`EqualTo`, `GreaterThan`, `LessThan`, `Interval`, `Integer`, `ZeroOne`,
+`Semicontinuous`, `Semiinteger`, and `Parameter`. It certifies exact extraction,
+reconstruction, flag/type dispatch, signed zero, infinities, and an explicit
+NaN policy. It does not claim `VariablesContainer`, duplicate-bound behavior,
+dictionaries, general affine/quadratic algebra, or open-world abstract
+dispatch.
+
+An actual `VariablesContainer` may run concurrently under a hard watchdog as a
+discovery probe. Probe success or failure can revise prerequisites, but cannot
+promote F3a. F3a itself is split into a success lifecycle followed by an error
+and atomicity profile so typed duplicate-bound and invalid-index paths are
+never silently omitted or allowed to obscure the first useful storage win.
 
 The first JuMP frontend browser promotion must exercise a workflow rather than
 a scalar output: construct a `JuMP.Model`; add variables, constraints, and an
