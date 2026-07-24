@@ -22,26 +22,26 @@ defaults:
 jobs:
   jump-certification:
     timeout-minutes: 25
-    name: JuMP T0 certification (${{ matrix.os }})
+    name: MOI/runtime prerequisites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: WasmTarget.jl
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
         with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
-      - uses: actions/setup-node@v4
+          version: '1.12.6'
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
-      - uses: taiki-e/install-action@v2
+          node-version: '24.18.0'
+      - uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2
         with:
-          tool: wasm-tools
+          tool: wasm-tools@1.244.0
       - name: Instantiate exact certification environment
         working-directory: WasmTarget.jl
         run: julia --startup-file=no --project=test/integration/jump -e 'import Pkg; Pkg.instantiate()'
@@ -50,19 +50,137 @@ jobs:
         env:
           WT_VALIDATE: '1'
         run: |
+          mkdir -p "$RUNNER_TEMP/jump-core-t0"
           julia --startup-file=no --project=test/integration/jump \
             test/integration/jump/run_certification.jl \
-            | tee "$RUNNER_TEMP/jump-certification.json"
+            "$RUNNER_TEMP/jump-core-t0" \
+            | tee "$RUNNER_TEMP/jump-core-t0/jump-certification.json"
       - name: Hard-watchdog process-tree regression
         working-directory: WasmTarget.jl
         run: |
           julia --startup-file=no --project=test/integration/jump \
             test/integration/jump/test_timeout_cleanup.jl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: jump-t0-${{ matrix.os }}
-          path: ${{ runner.temp }}/jump-certification.json
+          path: ${{ runner.temp }}/jump-core-t0
+          if-no-files-found: error
+
+  jump-snapshot-browser:
+    timeout-minutes: 30
+    name: MOI/runtime Snapshot (${{ matrix.os }}, Chromium + Firefox)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: WasmTarget.jl
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1.12.6'
+      - uses: julia-actions/cache@d10a6fd8f31b12404a54613ebad242900567f2b9 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+      - uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2
+        with:
+          tool: wasm-tools@1.244.0
+      - name: Instantiate pinned Snapshot certification environment
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump/snapshot \
+            -e 'import Pkg; Pkg.instantiate()'
+      - name: Install pinned browser harness
+        if: runner.os == 'Linux'
+        working-directory: WasmTarget.jl/test/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox
+      - name: Install pinned browser harness
+        if: runner.os != 'Linux'
+        working-directory: WasmTarget.jl/test/browser
+        run: |
+          npm ci
+          npx playwright install chromium firefox
+      - name: Export split and single-file T0 notebooks
+        working-directory: WasmTarget.jl
+        env:
+          WT_VALIDATE: '1'
+        run: |
+          julia --startup-file=no --project=test/integration/jump/snapshot \
+            test/integration/jump/run_snapshot_t0.jl \
+            "$RUNNER_TEMP/jump-snapshot-t0" \
+            | tee "$RUNNER_TEMP/jump-snapshot-export.log"
+      - name: Exercise every export in Chromium and Firefox
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/run_browser_t0.jl \
+            "$RUNNER_TEMP/jump-snapshot-t0" \
+            | tee "$RUNNER_TEMP/jump-snapshot-browser.json"
+      - name: Hard-watchdog browser process-tree regression
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/test_browser_timeout_cleanup.jl
+      - name: Hard-watchdog Snapshot export process-tree regression
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump/snapshot \
+            test/integration/jump/test_snapshot_timeout_cleanup.jl
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: jump-t0-snapshot-browser-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/jump-snapshot-t0
+            ${{ runner.temp }}/jump-snapshot-export.log
+            ${{ runner.temp }}/jump-snapshot-browser.json
+          if-no-files-found: error
+
+  jump-t0-promotion-evidence:
+    timeout-minutes: 10
+    name: MOI/runtime prerequisite promotion
+    needs: [jump-certification, jump-snapshot-browser]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: WasmTarget.jl
+      - uses: julia-actions/setup-julia@4c0cb0fce8556fdb04a90347310e5db8b1f98fb9 # v2
+        with:
+          version: '1.12.6'
+      - uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2
+        with:
+          tool: wasm-tools@1.244.0
+      - name: Instantiate exact certification environment
+        working-directory: WasmTarget.jl
+        run: julia --startup-file=no --project=test/integration/jump -e 'import Pkg; Pkg.instantiate()'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: jump-t0-*
+          path: artifacts
+      - name: Enforce cross-platform prerequisite evidence linkage
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/verify_t0_promotion.jl \
+            ../artifacts \
+            | tee "$RUNNER_TEMP/jump-t0-promotion.json"
+      - name: Prove forged prerequisite evidence is rejected
+        working-directory: WasmTarget.jl
+        run: |
+          julia --startup-file=no --project=test/integration/jump \
+            test/integration/jump/test_promotion_rejections.jl \
+            ../artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jump-t0-promotion-evidence
+          path: ${{ runner.temp }}/jump-t0-promotion.json
           if-no-files-found: error
 
   downstream:

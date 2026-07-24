@@ -1,8 +1,161 @@
+### A Pluto.jl notebook ###
+# v0.20.28
+
+using Markdown
+using InteractiveUtils
+
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    return quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
+# ╔═╡ 0a000001-0000-4000-8000-000000000001
+using PlutoUI
+
+# ╔═╡ 0a000002-0000-4000-8000-000000000002
+using MathOptInterface
+
+# ╔═╡ 0a000003-0000-4000-8000-000000000013
+using OrderedCollections
+
+# ╔═╡ 0a000003-0000-4000-8000-000000000003
+const MOI = MathOptInterface;
+
+# ╔═╡ 0a000004-0000-4000-8000-000000000004
+md"""
+# MOI values in WebAssembly
+
+This is deliberately narrow prerequisite evidence for future JuMP support. The
+controls below exercise concrete MathOptInterface value types and one required
+collection; they do **not** claim that a JuMP model, model storage, optimizer,
+or solver works.
+"""
+
+# ╔═╡ 0a000005-0000-4000-8000-000000000005
+@bind x Slider(-8.0:0.25:8.0; default=1.5, show_value=true)
+
+# ╔═╡ 0a000006-0000-4000-8000-000000000006
+function moi_affine_value(x::Float64)::Float64
+    v1 = MOI.VariableIndex(1)
+    v2 = MOI.VariableIndex(2)
+    terms = MOI.ScalarAffineTerm{Float64}[
+        MOI.ScalarAffineTerm(2.0, v1),
+        MOI.ScalarAffineTerm(-0.5, v2),
+    ]
+    f = MOI.ScalarAffineFunction(terms, 3.0)
+    return MOI.Utilities.eval_variables(v -> x + Float64(v.value), f)
+end;
+
+# ╔═╡ 0a000007-0000-4000-8000-000000000007
+function moi_quadratic_value(x::Float64)::Float64
+    v1 = MOI.VariableIndex(1)
+    v2 = MOI.VariableIndex(2)
+    qterms = MOI.ScalarQuadraticTerm{Float64}[
+        MOI.ScalarQuadraticTerm(2.0, v1, v1),
+        MOI.ScalarQuadraticTerm(-1.0, v1, v2),
+    ]
+    aterms = MOI.ScalarAffineTerm{Float64}[
+        MOI.ScalarAffineTerm(0.25, v2),
+    ]
+    f = MOI.ScalarQuadraticFunction(qterms, aterms, 1.5)
+    return MOI.Utilities.eval_variables(v -> x + Float64(v.value), f)
+end;
+
+# ╔═╡ 0a000007-0000-4000-8000-000000000017
+function moi_set_value(x::Float64)::Float64
+    lower = MOI.GreaterThan(-2.0)
+    upper = MOI.LessThan(5.0)
+    equal = MOI.EqualTo(1.25)
+    interval = MOI.Interval(-3.0, 7.0)
+    return x + lower.lower + upper.upper + equal.value +
+           interval.lower + interval.upper
+end;
+
+# ╔═╡ 0a000007-0000-4000-8000-000000000027
+function ordered_dict_value(x::Int64)::Int64
+    d = OrderedDict{Int64,Int64}()
+    d[3] = x
+    d[1] = x + 2
+    d[2] = x - 1
+    delete!(d, 1)
+    total = Int64(0)
+    for (k, v) in d
+        total += 10k + v
+    end
+    return total
+end;
+
+# ╔═╡ 0a000008-0000-4000-8000-000000000008
+affine = moi_affine_value(Float64(x))
+
+# ╔═╡ 0a000009-0000-4000-8000-000000000009
+quadratic = moi_quadratic_value(Float64(x))
+
+# ╔═╡ 0a000009-0000-4000-8000-000000000019
+set_result = moi_set_value(Float64(x))
+
+# ╔═╡ 0a000009-0000-4000-8000-000000000029
+ordered_result = ordered_dict_value(round(Int64, 4 * Float64(x)))
+
+# ╔═╡ 0a000010-0000-4000-8000-000000000010
+HTML("""
+<table>
+  <thead><tr><th>Certified case</th><th>Browser result</th></tr></thead>
+  <tbody>
+    <tr><td><code>moi_affine_value</code></td><td><strong data-wt-jump-case="moi_affine_value">$(round(affine; digits=3))</strong></td></tr>
+    <tr><td><code>moi_quadratic_value</code></td><td><strong data-wt-jump-case="moi_quadratic_value">$(round(quadratic; digits=3))</strong></td></tr>
+    <tr><td><code>moi_set_value</code></td><td><strong data-wt-jump-case="moi_set_value">$(round(set_result; digits=3))</strong></td></tr>
+    <tr><td><code>ordered_dict_value</code></td><td><strong data-wt-jump-case="ordered_dict_value">$(ordered_result)</strong></td></tr>
+  </tbody>
+</table>
+""")
+
+# ╔═╡ 0a000011-0000-4000-8000-000000000011
+md"""
+## What this proves
+
+The displayed values recompute in the browser from a WasmGC island. The
+corresponding certification suite also checks fixed boundary values and a
+fixed-seed bounded random domain against native Julia in raw, size-optimized,
+and speed-optimized modules.
+"""
+
+# ╔═╡ 00000000-0000-0000-0000-000000000001
+PLUTO_PROJECT_TOML_CONTENTS = """
+[deps]
+MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+
+[compat]
+MathOptInterface = "~1.51.2"
+OrderedCollections = "~1.8.2"
+PlutoUI = "~0.7.83"
+"""
+
+# ╔═╡ 00000000-0000-0000-0000-000000000002
+PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "e9bda73c4eb4296f15e3de297ecdee22606efd21"
+project_hash = "80ab854f19be8acad73ea40328881a112780d7ad"
+
+[[deps.AbstractPlutoDingetjes]]
+git-tree-sha1 = "6c3913f4e9bdf6ba3c08041a446fb1332716cbc2"
+uuid = "6e696c72-6542-2067-7265-42206c756150"
+version = "1.4.0"
+
+[[deps.ArgTools]]
+uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
+version = "1.1.2"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -11,12 +164,6 @@ version = "1.11.0"
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
-
-[[deps.Binaryen_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "e249aa8bb57ada48a924e5bb02d141369c691a58"
-uuid = "a54ac8ab-712d-5a0e-8e11-9296c0d3c20e"
-version = "0.130.0+0"
 
 [[deps.Bzip2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -35,6 +182,16 @@ deps = ["TranscodingStreams", "Zlib_jll"]
 git-tree-sha1 = "962834c22b66e32aa10f7611c08c8ca4e20749a9"
 uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
 version = "0.7.8"
+
+[[deps.ColorTypes]]
+deps = ["FixedPointNumbers", "Random"]
+git-tree-sha1 = "67e11ee83a43eb71ddc950302c53bf33f0690dfe"
+uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
+version = "0.12.1"
+weakdeps = ["StyledStrings"]
+
+    [deps.ColorTypes.extensions]
+    StyledStringsExt = "StyledStrings"
 
 [[deps.CommonSubexpressions]]
 deps = ["MacroTools"]
@@ -69,6 +226,21 @@ git-tree-sha1 = "7442a5dfe1ebb773c29cc2962a8980f47221d76c"
 uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 version = "0.9.5"
 
+[[deps.Downloads]]
+deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
+uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+version = "1.7.0"
+
+[[deps.FileWatching]]
+uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+version = "1.11.0"
+
+[[deps.FixedPointNumbers]]
+deps = ["Random", "Statistics"]
+git-tree-sha1 = "59af96b98217c6ef4ae0dfe065ac7c20831d1a84"
+uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
+version = "0.8.6"
+
 [[deps.ForwardDiff]]
 deps = ["CommonSubexpressions", "DiffResults", "DiffRules", "LinearAlgebra", "LogExpFunctions", "NaNMath", "Preferences", "Printf", "Random", "SpecialFunctions"]
 git-tree-sha1 = "2c5d0b0e12088cde2cf84afb2784415b1ea3dfee"
@@ -80,6 +252,24 @@ version = "1.4.1"
 
     [deps.ForwardDiff.weakdeps]
     StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[[deps.Hyperscript]]
+deps = ["Test"]
+git-tree-sha1 = "179267cfa5e712760cd43dcae385d7ea90cc25a4"
+uuid = "47d2ed2b-36de-50cf-bf87-49c2cf4b8b91"
+version = "0.0.5"
+
+[[deps.HypertextLiteral]]
+deps = ["Tricks"]
+git-tree-sha1 = "d1a86724f81bcd184a38fd284ce183ec067d71a0"
+uuid = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
+version = "1.0.0"
+
+[[deps.IOCapture]]
+deps = ["Logging", "Random"]
+git-tree-sha1 = "0ee181ec08df7d7c911901ea38baf16f755114dc"
+uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
+version = "1.0.0"
 
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
@@ -109,22 +299,25 @@ version = "1.6.1"
     [deps.JSON.weakdeps]
     ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
 
-[[deps.JuMP]]
-deps = ["LinearAlgebra", "MacroTools", "MathOptInterface", "MutableArithmetics", "OrderedCollections", "PrecompileTools", "Printf", "SparseArrays"]
-git-tree-sha1 = "614b22ff014355192982b1f9a12c61298ce6a908"
-uuid = "4076af6c-e467-56ae-b986-b466b2749572"
-version = "1.31.1"
-
-    [deps.JuMP.extensions]
-    JuMPDimensionalDataExt = "DimensionalData"
-
-    [deps.JuMP.weakdeps]
-    DimensionalData = "0703355e-b756-11e9-17c0-8b28908087d0"
-
 [[deps.JuliaSyntaxHighlighting]]
 deps = ["StyledStrings"]
 uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
 version = "1.12.0"
+
+[[deps.LibCURL]]
+deps = ["LibCURL_jll", "MozillaCACerts_jll"]
+uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
+version = "0.6.4"
+
+[[deps.LibCURL_jll]]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
+uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
+version = "8.15.0+0"
+
+[[deps.LibSSH2_jll]]
+deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
+uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
+version = "1.11.3+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -155,6 +348,11 @@ version = "1.0.1"
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
 
+[[deps.MIMEs]]
+git-tree-sha1 = "c64d943587f7187e751162b3b84445bbbd79f691"
+uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
+version = "1.1.0"
+
 [[deps.MacroTools]]
 git-tree-sha1 = "1e0228a030642014fe5cfe68c2c0a818f9e3f522"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
@@ -179,6 +377,10 @@ version = "1.51.2"
     BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
     CliqueTrees = "60701a23-6482-424a-84db-faee86b9b1f8"
 
+[[deps.MozillaCACerts_jll]]
+uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
+version = "2025.11.4"
+
 [[deps.MutableArithmetics]]
 deps = ["LinearAlgebra", "SparseArrays", "Test"]
 git-tree-sha1 = "dc5b2c4c111c46bc79ac4405eeb563523b39c004"
@@ -191,6 +393,10 @@ git-tree-sha1 = "dbd2e8cd2c1c27f0b584f6661b4309609c5a685e"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
 version = "1.1.4"
 
+[[deps.NetworkOptions]]
+uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
+version = "1.3.0"
+
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
@@ -200,6 +406,11 @@ version = "0.3.29+0"
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
 version = "0.8.7+0"
+
+[[deps.OpenSSL_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
+version = "3.5.4+0"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl"]
@@ -217,6 +428,12 @@ deps = ["Dates", "PrecompileTools", "UUIDs"]
 git-tree-sha1 = "32a4e09c5f29402573d673901778a0e03b0807b9"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
 version = "2.8.6"
+
+[[deps.PlutoUI]]
+deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "Downloads", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
+git-tree-sha1 = "e189d0623e7ce9c37389bac17e80aac3b0302e75"
+uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+version = "0.7.83"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
@@ -239,6 +456,11 @@ version = "1.11.0"
 deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 version = "1.11.0"
+
+[[deps.Reexport]]
+git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
+uuid = "189a3867-3050-52da-a836-e630ba90ab69"
+version = "1.2.2"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -269,6 +491,16 @@ version = "2.8.0"
 git-tree-sha1 = "6ab403037779dae8c514bad259f32a447262455a"
 uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
 version = "1.4.4"
+
+[[deps.Statistics]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "ae3bb1eb3bba077cd276bc5cfc337cc65c3075c0"
+uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+version = "1.11.1"
+weakdeps = ["SparseArrays"]
+
+    [deps.Statistics.extensions]
+    SparseArraysExt = ["SparseArrays"]
 
 [[deps.StructUtils]]
 deps = ["Dates", "UUIDs"]
@@ -310,6 +542,16 @@ git-tree-sha1 = "0c45878dcfdcfa8480052b6ab162cdd138781742"
 uuid = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
 version = "0.11.3"
 
+[[deps.Tricks]]
+git-tree-sha1 = "311349fd1c93a31f783f977a71e8b062a57d4101"
+uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
+version = "0.1.13"
+
+[[deps.URIs]]
+git-tree-sha1 = "bef26fb046d031353ef97a82e3fdb6afe7f21b1a"
+uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
+version = "1.6.1"
+
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
 uuid = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
@@ -318,35 +560,6 @@ version = "1.11.0"
 [[deps.Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 version = "1.11.0"
-
-[[deps.WasmTarget]]
-deps = ["Binaryen_jll", "JSON", "PrecompileTools"]
-path = "../../.."
-uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
-version = "0.5.3"
-
-    [deps.WasmTarget.extensions]
-    WasmTargetDatesExt = "Dates"
-    WasmTargetForwardDiffExt = "ForwardDiff"
-    WasmTargetLinearAlgebraExt = "LinearAlgebra"
-    WasmTargetRandomExt = ["Random", "SHA"]
-    WasmTargetSimpleDiffEqExt = ["SimpleDiffEq", "SciMLBase", "DiffEqBase", "LinearAlgebra"]
-    WasmTargetSparseArraysExt = "SparseArrays"
-    WasmTargetStaticArraysExt = "StaticArrays"
-    WasmTargetStatisticsExt = "Statistics"
-
-    [deps.WasmTarget.weakdeps]
-    Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-    DiffEqBase = "2b5f629d-d688-5b77-993f-72d75c75574e"
-    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
-    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-    Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-    SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
-    SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-    SimpleDiffEq = "05bca326-078c-5bf0-a5bf-ce7c7982d7fd"
-    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-    Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
@@ -357,3 +570,29 @@ version = "1.3.1+2"
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
 version = "5.15.0+0"
+
+[[deps.nghttp2_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
+version = "1.64.0+1"
+"""
+
+# ╔═╡ Cell order:
+# ╠═0a000001-0000-4000-8000-000000000001
+# ╠═0a000002-0000-4000-8000-000000000002
+# ╠═0a000003-0000-4000-8000-000000000003
+# ╠═0a000003-0000-4000-8000-000000000013
+# ╟─0a000004-0000-4000-8000-000000000004
+# ╠═0a000005-0000-4000-8000-000000000005
+# ╠═0a000006-0000-4000-8000-000000000006
+# ╠═0a000007-0000-4000-8000-000000000007
+# ╠═0a000007-0000-4000-8000-000000000017
+# ╠═0a000007-0000-4000-8000-000000000027
+# ╠═0a000008-0000-4000-8000-000000000008
+# ╠═0a000009-0000-4000-8000-000000000009
+# ╠═0a000009-0000-4000-8000-000000000019
+# ╠═0a000009-0000-4000-8000-000000000029
+# ╟─0a000010-0000-4000-8000-000000000010
+# ╟─0a000011-0000-4000-8000-000000000011
+# ╟─00000000-0000-0000-0000-000000000001
+# ╟─00000000-0000-0000-0000-000000000002

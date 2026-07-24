@@ -17,7 +17,12 @@ mktemp() do pid_path, io
     close(io)
     ENV["WT_JUMP_TIMEOUT_FIXTURE_PID_FILE"] = pid_path
     try
-        result = run_child("__timeout_fixture__", 2.0)
+        result = run_child(
+            "__timeout_fixture__",
+            1.0;
+            ready_path=pid_path,
+            startup_deadline_seconds=30.0,
+        )
         @test result["pass"] === false
         @test result["failure"] == "child_timeout"
         @test result["cleanup_ok"] === true

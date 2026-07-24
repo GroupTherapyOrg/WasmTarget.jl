@@ -12,10 +12,16 @@ using .JumpMOIValueCanaries
 const CONFIG = TOML.parsefile(joinpath(@__DIR__, "capabilities.toml"))
 const RESULT_PREFIX = "WT_JUMP_CERT_RESULT="
 const CURRENT_PHASE = Ref("startup")
+const CASE_IDS = sort!(collect(keys(JumpMOIValueCanaries.CASES)))
 
-if get(ENV, "WT_JUMP_PROCESS_GROUP", "") == "1" && !Sys.iswindows()
-    ccall(:setsid, Cint, ())
-end
+canonical_os() =
+    Sys.iswindows() ? "windows" :
+    Sys.isapple() ? "macos" :
+    Sys.islinux() ? "linux" : "unsupported"
+
+canonical_arch() =
+    Sys.ARCH === :x86_64 ? "x86_64" :
+    Sys.ARCH === :aarch64 ? "aarch64" : string(Sys.ARCH)
 
 function package_version(uuid::Base.UUID)
     dependency = get(Pkg.dependencies(), uuid, nothing)
@@ -26,12 +32,50 @@ end
 function git_provenance(path::AbstractString)
     root = dirname(dirname(path))
     try
-        sha = strip(read(`git -C $root rev-parse HEAD`, String))
-        dirty = !isempty(strip(read(`git -C $root status --porcelain`, String)))
+        sha = strip(read(pipeline(
+            `git -C $root rev-parse HEAD`;
+            stderr=devnull,
+        ), String))
+        dirty = !isempty(strip(read(pipeline(
+            `git -C $root status --porcelain`;
+            stderr=devnull,
+        ), String)))
         return Dict("sha" => sha, "dirty" => dirty)
     catch
         return Dict("sha" => nothing, "dirty" => nothing)
     end
+end
+
+function function_name(signature)
+    signature isa Symbol && return string(signature)
+    signature isa Expr || return nothing
+    if signature.head == :call
+        return string(first(signature.args))
+    elseif signature.head == :(::)
+        return function_name(first(signature.args))
+    elseif signature.head == :where
+        return function_name(first(signature.args))
+    end
+    return nothing
+end
+
+function function_contract(path)
+    contracts = Dict{String,String}()
+    function visit(node)
+        node isa Expr || return
+        if node.head == :function
+            name = function_name(first(node.args))
+            if name in CASE_IDS
+                normalized = deepcopy(node)
+                Base.remove_linenums!(normalized)
+                contracts[name] =
+                    bytes2hex(sha256(sprint(show, normalized)))
+            end
+        end
+        foreach(visit, node.args)
+    end
+    visit(Meta.parseall(read(path, String)))
+    return contracts
 end
 
 function node_provenance()
@@ -62,8 +106,11 @@ end
 
 function provenance()
     manifest = joinpath(@__DIR__, "Manifest.toml")
+    canary = joinpath(@__DIR__, "canaries", "00_moi_values.jl")
     return Dict(
         "julia" => string(VERSION),
+        "os" => canonical_os(),
+        "canonical_arch" => canonical_arch(),
         "kernel" => string(Sys.KERNEL),
         "arch" => string(Sys.ARCH),
         "wasmtarget" => merge(
@@ -76,10 +123,29 @@ function provenance()
         "binaryen_jll" =>
             package_version(Base.UUID("a54ac8ab-712d-5a0e-8e11-9296c0d3c20e")),
         "manifest_sha256" => bytes2hex(SHA.sha256(read(manifest))),
+        "source_contract" => Dict(
+            "case_ids" => CASE_IDS,
+            "canary_sha256" => bytes2hex(SHA.sha256(read(canary))),
+            "functions" => function_contract(canary),
+        ),
         "node" => node_provenance(),
         "wasm_tools" => command_provenance("wasm-tools", "--version"),
         "independent_validation" => get(ENV, "WT_VALIDATE", "") == "1",
     )
+end
+
+function retain_modules(name, modules)
+    root = get(ENV, "WT_JUMP_MODULE_ROOT", "")
+    isempty(root) && error("WT_JUMP_MODULE_ROOT is required")
+    relative = Dict{String,String}()
+    for (label, bytes) in modules
+        relative_path = joinpath("modules", name, "$label.wasm")
+        path = joinpath(root, relative_path)
+        mkpath(dirname(path))
+        write(path, bytes)
+        relative[label] = replace(relative_path, '\\' => '/')
+    end
+    return relative
 end
 
 function timed(f)
@@ -126,6 +192,7 @@ function run_case(name::String)
         ("size", size_wasm),
         ("speed", speed_wasm),
     )
+    module_files = retain_modules(name, modules)
     func_name = string(nameof(case.f))
     imports = Dict("Math" => Dict("pow" => "Math.pow"))
     variants = Any[]
@@ -178,8 +245,21 @@ function run_case(name::String)
             "raw_seconds" => compile_seconds,
             "size_optimize_seconds" => size_optimize_seconds,
             "speed_optimize_seconds" => speed_optimize_seconds,
+            "module_sha256" => Dict(
+                label => bytes2hex(SHA.sha256(bytes))
+                for (label, bytes) in modules
+            ),
+            "module_files" => module_files,
         ),
         "budgets" => budget_checks,
+        "property" => Dict(
+            "kind" => string(case.property),
+            "seed" => string(JumpMOIValueCanaries.PROPERTY_SEED),
+            "random_samples" =>
+                JumpMOIValueCanaries.PROPERTY_RANDOM_SAMPLES,
+            "executed_inputs" => length(case.inputs),
+            "bounded" => true,
+        ),
         "variants" => variants,
     )
 end

@@ -2,8 +2,54 @@ module JumpMOIValueCanaries
 
 using MathOptInterface
 using OrderedCollections
+using Random
 
 const MOI = MathOptInterface
+const PROPERTY_SEED = UInt64(0x4a554d505741534d)
+const PROPERTY_RANDOM_SAMPLES = 64
+
+function bounded_float_inputs()
+    rng = Xoshiro(PROPERTY_SEED)
+    boundaries = Float64[
+        -1.0e6,
+        -1.0e3,
+        -10.0,
+        -1.0,
+        -eps(Float64),
+        -0.0,
+        0.0,
+        eps(Float64),
+        1.0,
+        10.0,
+        1.0e3,
+        1.0e6,
+    ]
+    randoms = [
+        Float64(rand(rng, -1_000_000:1_000_000)) / 64.0
+        for _ in 1:PROPERTY_RANDOM_SAMPLES
+    ]
+    return [(x,) for x in unique(vcat(boundaries, randoms))]
+end
+
+function bounded_int_inputs()
+    rng = Xoshiro(PROPERTY_SEED ⊻ UInt64(0x6f726465726564))
+    boundaries = Int64[
+        -1_000_000,
+        -1_000,
+        -10,
+        -1,
+        0,
+        1,
+        10,
+        1_000,
+        1_000_000,
+    ]
+    randoms = Int64[
+        rand(rng, -1_000_000:1_000_000)
+        for _ in 1:PROPERTY_RANDOM_SAMPLES
+    ]
+    return [(x,) for x in unique(vcat(boundaries, randoms))]
+end
 
 function moi_affine_value(x::Float64)::Float64
     v1 = MOI.VariableIndex(1)
@@ -53,10 +99,26 @@ function ordered_dict_value(x::Int64)::Int64
 end
 
 const CASES = Dict{String,NamedTuple}(
-    "moi_affine_value" => (f=moi_affine_value, inputs=[(-4.0,), (0.0,), (3.5,)]),
-    "moi_quadratic_value" => (f=moi_quadratic_value, inputs=[(-2.0,), (0.5,), (4.0,)]),
-    "moi_set_value" => (f=moi_set_value, inputs=[(-3.0,), (0.0,), (8.0,)]),
-    "ordered_dict_value" => (f=ordered_dict_value, inputs=[(-7,), (0,), (12,)]),
+    "moi_affine_value" => (
+        f=moi_affine_value,
+        inputs=bounded_float_inputs(),
+        property=:bounded_deterministic,
+    ),
+    "moi_quadratic_value" => (
+        f=moi_quadratic_value,
+        inputs=bounded_float_inputs(),
+        property=:bounded_deterministic,
+    ),
+    "moi_set_value" => (
+        f=moi_set_value,
+        inputs=bounded_float_inputs(),
+        property=:bounded_deterministic,
+    ),
+    "ordered_dict_value" => (
+        f=ordered_dict_value,
+        inputs=bounded_int_inputs(),
+        property=:bounded_deterministic,
+    ),
 )
 
 end

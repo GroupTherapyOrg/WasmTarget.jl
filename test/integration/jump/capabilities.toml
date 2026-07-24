@@ -1,11 +1,25 @@
 schema = 1
-profile = "jump-wasmgc"
+profile = "moi-runtime-prerequisites-v1"
 status = "experimental"
 
 [versions]
-julia = "1.12"
+julia = "1.12.6"
 jump = "1.31.1"
 math_opt_interface = "1.51.2"
+node = "24.18.0"
+wasm_tools = "1.244.0"
+playwright = "1.59.1"
+binaryen_jll = "0.130.0+0"
+chromium = "147.0.7727.15"
+firefox = "148.0.2"
+
+[property]
+seed = "5356272339283694413"
+float_inputs = 76
+integer_inputs = 73
+float_input_ledger_sha256 = "4f4b468972584460296ecd7fa8739259e22ef1b3b44862a38867fcc8f72a9f14"
+integer_input_ledger_sha256 = "4b7d206dc0ff61c92ae8ed8eb840dd2bf6ad07271946a5a169ccedabc666e1aa"
+counterexample_policy = "Each scalar input tuple is itself the durable minimal counterexample."
 
 [gates]
 native_oracle = true
@@ -22,10 +36,19 @@ child_output_bytes_hard = 8388608
 compile_wall_threshold_seconds = 120
 raw_wasm_bytes_hard = 52428800
 optimized_wasm_bytes_hard = 15728640
+snapshot_export_wall_seconds = 240
+browser_wall_seconds = 180
+
+[promotion]
+required_evidence = ["core_moi_prerequisites", "snapshot_browser_moi_prerequisites"]
+same_wasmtarget_sha = true
+same_snapshot_sha = true
 
 [tiers.moi_values]
 status = "candidate"
-claim = "The listed scalar MOI value-construction and evaluation canaries compile and execute with native parity."
+claim = "The listed scalar MOI value-construction and evaluation canaries compile and execute with native parity over fixed boundary values and a reproducible bounded random domain."
+property_evidence = "76 finite Float64 inputs per case: 12 boundary values plus 64 fixed-seed samples."
+browser_evidence = "All listed prerequisite cases must update in Chromium and Firefox as split HTTP and embedded single-file exports, with an authoritative full-island report."
 cases = [
     "moi_affine_value",
     "moi_quadratic_value",
@@ -34,8 +57,10 @@ cases = [
 
 [tiers.runtime_collections]
 status = "candidate"
-claim = "The listed concrete OrderedDict mutation and iteration canary compiles and executes with native parity."
+claim = "The listed concrete OrderedDict mutation and iteration canary compiles and executes with native parity over fixed boundary values and a reproducible bounded random domain."
+property_evidence = "73 Int64 inputs: 9 boundary values plus 64 fixed-seed samples."
 cases = ["ordered_dict_value"]
+browser_evidence = "The OrderedDict prerequisite is rendered and asserted by the same Snapshot browser gate."
 
 [tiers.moi_model]
 status = "blocked"

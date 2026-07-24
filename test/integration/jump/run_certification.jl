@@ -35,14 +35,31 @@ function terminate_process(proc)
             ccall(:kill, Cint, (Cint, Cint), -pid, 9)
         catch
         end
+        timedwait(() -> process_exited(proc), 5.0)
     end
     return process_exited(proc)
 end
 
-function wait_for_child(proc, out_path, err_path, deadline_seconds)
-    started = time()
+function wait_for_child(
+    proc,
+    out_path,
+    err_path,
+    deadline_seconds;
+    ready_path=nothing,
+    startup_deadline_seconds=30.0,
+)
+    startup_started = time()
+    started = ready_path === nothing ? startup_started : nothing
     while !process_exited(proc)
-        time() - started > deadline_seconds && return :timed_out
+        if ready_path !== nothing && started === nothing
+            if isfile(ready_path) && filesize(ready_path) > 0
+                started = time()
+            elseif time() - startup_started > startup_deadline_seconds
+                return :startup_timed_out
+            end
+        elseif time() - started > deadline_seconds
+            return :timed_out
+        end
         output_bytes =
             (isfile(out_path) ? filesize(out_path) : 0) +
             (isfile(err_path) ? filesize(err_path) : 0)
@@ -52,14 +69,30 @@ function wait_for_child(proc, out_path, err_path, deadline_seconds)
     return :exited
 end
 
-function run_child(case_name::String, deadline_seconds::Float64)
+function run_child(
+    case_name::String,
+    deadline_seconds::Float64;
+    artifact_root=nothing,
+    ready_path=nothing,
+    startup_deadline_seconds=30.0,
+)
     out_path, out_io = mktemp()
     err_path, err_io = mktemp()
+    temporary_artifact_root = artifact_root === nothing
+    child_artifact_root =
+        temporary_artifact_root ? mktempdir() : abspath(artifact_root)
     try
+        bootstrap = """
+        if !Sys.iswindows()
+            ccall(:setsid, Cint, ()) == -1 &&
+                error("failed to create JuMP certification process group")
+        end
+        include(popfirst!(ARGS))
+        """
         cmd = addenv(
-            `$(Base.julia_cmd()) --startup-file=no --project=$ROOT $(joinpath(ROOT, "run_case.jl")) $case_name`,
-            "WT_JUMP_PROCESS_GROUP" => "1",
+            `$(Base.julia_cmd()) --startup-file=no --project=$ROOT -e $bootstrap $(joinpath(ROOT, "run_case.jl")) $case_name`,
             "WT_VALIDATE" => "1",
+            "WT_JUMP_MODULE_ROOT" => child_artifact_root,
         )
         proc = run(pipeline(ignorestatus(cmd), stdout=out_io, stderr=err_io); wait=false)
         status = wait_for_child(
@@ -67,6 +100,8 @@ function run_child(case_name::String, deadline_seconds::Float64)
             out_path,
             err_path,
             min(DEADLINE_SECONDS, deadline_seconds),
+            ready_path=ready_path,
+            startup_deadline_seconds=startup_deadline_seconds,
         )
         cleanup_ok = true
         if status !== :exited
@@ -83,6 +118,7 @@ function run_child(case_name::String, deadline_seconds::Float64)
                 "pass" => false,
                 "failure" =>
                     status === :timed_out ? "child_timeout" :
+                    status === :startup_timed_out ? "child_startup_timeout" :
                     "child_output_limit",
                 "deadline_seconds" => min(DEADLINE_SECONDS, deadline_seconds),
                 "cleanup_ok" => cleanup_ok,
@@ -147,6 +183,8 @@ function run_child(case_name::String, deadline_seconds::Float64)
         isopen(err_io) && close(err_io)
         rm(out_path; force=true)
         rm(err_path; force=true)
+        temporary_artifact_root &&
+            rm(child_artifact_root; recursive=true, force=true)
     end
 end
 
@@ -154,6 +192,10 @@ CONFIG["schema"] == 1 || error("unsupported capability schema")
 all(gate -> get(CONFIG["gates"], gate, false) === true, REQUIRED_GATES) ||
     error("all certification gates must be explicitly enabled")
 function main()
+    length(ARGS) == 1 ||
+        error("usage: run_certification.jl ARTIFACT_ROOT")
+    artifact_root = abspath(only(ARGS))
+    mkpath(artifact_root)
     candidate_tiers = sort(filter(
         pair -> get(pair.second, "status", "") == "candidate",
         collect(CONFIG["tiers"]),
@@ -177,7 +219,11 @@ function main()
                 "failure" => "suite_timeout",
             ))
         else
-            push!(results, run_child(case, remaining))
+            push!(results, run_child(
+                case,
+                remaining;
+                artifact_root=artifact_root,
+            ))
         end
     end
     summary = Dict(
