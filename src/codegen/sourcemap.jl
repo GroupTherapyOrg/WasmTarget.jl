@@ -237,7 +237,7 @@ function compile_with_sourcemap(f, arg_types::Tuple;
 
     if optimize !== false
         level = optimize === true ? :size : optimize
-        bytes = optimize(bytes; level=level)
+        bytes = WasmTarget.optimize(bytes; level=level)
     end
 
     # Update mappings with approximate Wasm offsets
@@ -273,7 +273,7 @@ function compile_multi_with_sourcemap(functions::Vector;
 
     if optimize !== false
         level = optimize === true ? :size : optimize
-        bytes = optimize(bytes; level=level)
+        bytes = WasmTarget.optimize(bytes; level=level)
     end
 
     # Update mappings
