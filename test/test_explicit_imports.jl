@@ -2,10 +2,15 @@
 # names it pulls in (`using Foo: a, b`) or access them qualified
 # (`Foo.a`). Catches what Aqua doesn't — import hygiene.
 using ExplicitImports
+using Logging
 using Test
 using WasmTarget
 
+# ExplicitImports' parser warns (with megabyte-sized state dumps) when it hits
+# its recursion limit on very large files like codegen/calls.jl — harmless for
+# the analysis, ruinous for CI logs. Only Error-and-above passes through.
 @testset "ExplicitImports" begin
+    with_logger(SimpleLogger(stderr, Logging.Error)) do
     test_explicit_imports(WasmTarget;
         # Dual/Tag/partials are the ForwardDiff internals the Dual-seed
         # overlay is built on; @overlay is the method-table mechanism itself.
@@ -23,4 +28,5 @@ using WasmTarget
         # carry the actual import hygiene.
         all_qualified_accesses_are_public=false,
     )
+    end
 end
