@@ -4548,25 +4548,28 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # parity(M11.2): THE INTRINSICS TABLE ROUTE (dart intrinsics.dart) — one
     # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
-    # emit here; the chain below keeps only what the table can't express
-    # (128-bit, checked-overflow, unary, ===, conversions) and shrinks with M11.
+    # emit here via `emit_intrinsic_binop!` (the ONE production caller — see
+    # intrinsics_table.jl); the chain below keeps only what the table can't
+    # express (128-bit, checked-overflow, unary, ===, conversions) and shrinks
+    # with M11.
     local _it_name = func isa GlobalRef ? func.name :
                      (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
     if _it_name !== nothing && !is_128bit
         # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
         local _it_w = arg_type === Float64 ? F64 :
                       arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
-        local _it_e = get(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name), nothing)
-        if _it_e !== nothing
+        if haskey(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name))
             # Comparisons observe FULL register width — narrow pairs (Int8/Int16 on
             # i32) normalise first (sign-extend for signed/equality, mask for
             # unsigned; P2-batch13/14 semantics carried into the table route).
+            # This is the callers' wrap channel that `emit_intrinsic_binop!`'s
+            # contract assumes (operands already at their table types).
             if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int)
                 _emit_normalise_narrow_pair!(fb, ctx, true, _julia_int_width(arg_type, is_32bit))
             elseif is_32bit && _it_name in (:ult_int, :ule_int)
                 _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
             end
-            _op1!(_it_e.opcode)
+            local _it_result = emit_intrinsic_binop!(fb, _it_w, _it_w, _it_name)
             # march13 (the rebox link): a numeric intrinsic whose SSA LOCAL is
             # ref-typed (the boxed accumulator: Any-joined phi) must REBOX its
             # result — keyed on the REAL local type, never inference (the sink's
@@ -4575,12 +4578,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if _rbx_li !== nothing
                 local _rbx_off = _rbx_li - ctx.n_params
                 if _rbx_off >= 0 && _rbx_off < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off + 1]) &&
-                   _it_e.result in (I32, I64, F32, F64)
+                   _it_result in (I32, I64, F32, F64)
                     (arg_type isa Type && isconcretetype(arg_type)) ||
                         record_unsupported!(ctx, :unsupported_type,
                             "intrinsic result boxing lacks a concrete Julia source type";
                             idx=idx, detail=expr)
-                    emit_classid_box!(fb, ctx, _it_e.result, arg_type)
+                    emit_classid_box!(fb, ctx, _it_result, arg_type)
                 end
             end
             return append_builder!(b, fb)
