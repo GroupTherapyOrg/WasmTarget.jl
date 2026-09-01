@@ -6,5 +6,19 @@ using Test
 using WasmTarget
 
 @testset "ExplicitImports" begin
-    test_explicit_imports(WasmTarget)
+    test_explicit_imports(WasmTarget;
+        all_explicit_imports_are_public=(ignore=(Symbol("@overlay"),),),
+        no_stale_explicit_imports=(ignore=(:wasmopt,),),  # Used in command interpolation in optimize()
+        all_qualified_accesses_via_owners=(ignore=(
+            # Compiler.* refers to Core.Compiler/Base.Compiler internals
+            :Const, :findall, :specialize_method, :getdebugidx,
+        ),),
+        # A wasm compiler reaches Core.Compiler / Base internals (CodeInfo,
+        # IRShow, Ryu, the generic LinearAlgebra kernels, …) by design —
+        # nearly every "non-public qualified access" in this package is
+        # deliberate, so the check carries no signal here and its allowlist
+        # would only grow with each new lowering. The six enabled checks
+        # carry the actual import hygiene.
+        all_qualified_accesses_are_public=false,
+    )
 end
