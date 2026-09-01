@@ -66,5 +66,9 @@ jobs:
         env:
           WT_SHARD: ${{ matrix.target.shard }}
           WT_FUZZ: ${{ matrix.target.fuzz }}
+          # wasm-tools validation of every compiled module (module bytes are
+          # platform-independent, so Unix coverage validates the corpus;
+          # Windows stays off to protect its 45-minute shard budget).
+          WT_VALIDATE: ${{ matrix.target.os == 'windows-latest' && '' || '1' }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test()'
