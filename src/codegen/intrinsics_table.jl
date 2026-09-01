@@ -5,8 +5,10 @@
 # dart's model: a DECLARATIVE map (lhsType → rhsType → opName → emitter callback),
 # consulted by ONE dispatch point. WT's disease: 121 scattered `is_func` chains in
 # calls.jl selecting opcodes per site. This table replaces the numeric core; the
-# chains route through `emit_intrinsic_binop!` / `emit_intrinsic_unop!` and die
-# family-by-family through M11.2-.4.
+# calls.jl binary-op arm routes through `emit_intrinsic_binop!` — its ONE
+# production caller — ahead of the legacy `is_func` chain, which keeps only
+# what the table can't yet express and dies family-by-family through M11.2-.4.
+# Unary ops are not migrated yet; no `emit_intrinsic_unop!` exists.
 #
 # An emitter is `(b::InstrBuilder) -> WasmValType` — it assumes its operands are
 # already on the stack AT THEIR TABLE TYPES (the callers' wrap channel guarantees
