@@ -30,7 +30,7 @@
 module WasmTargetStaticArraysExt
 
 using WasmTarget
-using StaticArrays
+using StaticArrays: StaticArrays, SArray
 using Base.Experimental: @overlay
 
 const WMT = WasmTarget.WASM_METHOD_TABLE

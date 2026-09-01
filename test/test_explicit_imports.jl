@@ -7,7 +7,9 @@ using WasmTarget
 
 @testset "ExplicitImports" begin
     test_explicit_imports(WasmTarget;
-        all_explicit_imports_are_public=(ignore=(Symbol("@overlay"),),),
+        # Dual/Tag/partials are the ForwardDiff internals the Dual-seed
+        # overlay is built on; @overlay is the method-table mechanism itself.
+        all_explicit_imports_are_public=(ignore=(Symbol("@overlay"), :Dual, :Tag, :partials),),
         no_stale_explicit_imports=(ignore=(:wasmopt,),),  # Used in command interpolation in optimize()
         all_qualified_accesses_via_owners=(ignore=(
             # Compiler.* refers to Core.Compiler/Base.Compiler internals

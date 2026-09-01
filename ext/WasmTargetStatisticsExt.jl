@@ -7,7 +7,7 @@
 module WasmTargetStatisticsExt
 
 using WasmTarget
-using Statistics
+using Statistics: Statistics
 using Base.Experimental: @overlay
 
 # 2-arg `cor(x, y)` carries an `x === y → 1.0` fast path whose result is
