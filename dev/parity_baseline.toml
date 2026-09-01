@@ -96,19 +96,21 @@ L93_recovered_capture_calls_are_exact_closed_world_edges = 0
 L94_codegen_errors_keep_structured_ledgers = 0
 L95_type_object_specializations_match_runtime_representation = 0
 L96_explicit_io_never_becomes_host_console = 0
+L97_planner_entries_are_closed = 0
+L98_single_external_link_road = 0
+L99_emit_raw_bridges_extinct = 0
+L100_try_drivers_unified = 0
+L101_catch_all_clauses_extinct = 0
+L102_convert_ladders_unified = 0
+L103_anyref_dispatch_extinct = 0
 L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
 R11_patch_markers = 454
-R12_try_drivers = 0
-R13_catch_all_clauses = 0
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
-R16_external_convert_ladders = 0
 R17_unwrapped_value_emissions = 29
-R18_anyref_dispatch_sigs = 0
-R2_emit_raw_bridges = 0
 R3_infer_value_type = 127
 R5_julia_type_reguess = 82
 R7_raw_coercion_ops = 109
