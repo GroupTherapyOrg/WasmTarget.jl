@@ -154,8 +154,7 @@ struct RawBytes <: WasmInstr; bytes::Vector{UInt8}; end
 end # module InstrIR
 
 # ── serialize layer (dart2wasm serialize/) + printTo, by multiple dispatch ─────────
-import .InstrIR: WasmInstr,
-    I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, SelectWithType,
+import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, SelectWithType,
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, BrTable, Return, Call, CallIndirect,
     CallRef, BrOnNull, BrOnNonNull,
