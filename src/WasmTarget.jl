@@ -111,7 +111,7 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
         return bytes
     end
     level = optimize === true ? :size : optimize
-    return optimize(bytes; level=level, validate=validate)
+    return WasmTarget.optimize(bytes; level=level, validate=validate)
 end
 
 # Convenience method for single argument type
@@ -179,7 +179,7 @@ function compile_multi(functions::Vector; optimize=false,
         bytes = to_bytes(mod)
         if optimize !== false
             level = optimize === true ? :size : optimize
-            bytes = optimize(bytes; level=level, validate=validate)
+            bytes = WasmTarget.optimize(bytes; level=level, validate=validate)
         else
             validate && validate_wasm_bytes(bytes; label="compiled module")
         end
@@ -192,7 +192,7 @@ function compile_multi(functions::Vector; optimize=false,
             return bytes
         end
         level = optimize === true ? :size : optimize
-        return optimize(bytes; level=level, validate=validate)
+        return WasmTarget.optimize(bytes; level=level, validate=validate)
     end
 end
 
@@ -216,7 +216,7 @@ function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
     bytes = to_bytes(mod)
     optimize === false && return bytes
     level = optimize === true ? :size : optimize
-    return optimize(bytes; level=level)
+    return WasmTarget.optimize(bytes; level=level)
 end
 
 # ============================================================================
@@ -279,7 +279,7 @@ function compile_with_base(functions::Vector;
 
         if optimize !== false
             level = optimize === true ? :size : optimize
-            return optimize(merged_bytes; level=level)
+            return WasmTarget.optimize(merged_bytes; level=level)
         end
         return merged_bytes
     end

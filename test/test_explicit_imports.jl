@@ -27,6 +27,11 @@ using WasmTarget
         # would only grow with each new lowering. The six enabled checks
         # carry the actual import hygiene.
         all_qualified_accesses_are_public=false,
+        # WasmTarget.optimize(bytes; …) inside compile/compile_multi/… is
+        # LOAD-BEARING qualification, not style: those functions take an
+        # `optimize` kwarg that shadows the function name, so the bare call
+        # would invoke a Bool (a real shard-0 miscompile caught 2026-09-01).
+        no_self_qualified_accesses=(ignore=(:optimize,),),
     )
     end
 end
