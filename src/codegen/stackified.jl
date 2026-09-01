@@ -1063,9 +1063,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # PURE-6024 debug: trace function name for debugging.
     # P2-batch21: ctx has no func_name field — use func_ref (the function object),
     # otherwise WT_DBG_FN can never match and the traces below are unreachable.
-    _debug_fn_name = try string(ctx.func_ref) catch; "" end
-    _debug_stackified = contains(_debug_fn_name, "parse_int_literal") ||
-        (haskey(ENV, "WT_DBG_FN") && !isempty(ENV["WT_DBG_FN"]) && contains(_debug_fn_name, ENV["WT_DBG_FN"]))
+    _debug_fn_pattern = get(ENV, "WT_DBG_FN", "")
+    _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
     if _debug_stackified
         @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
     end
