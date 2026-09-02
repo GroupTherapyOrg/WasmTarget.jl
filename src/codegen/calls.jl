@@ -641,7 +641,7 @@ function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector
 end
 
 """
-    _compile_call_checked_narrow!(fb, ctx, func, arg_type, is_32bit)
+    _compile_call_checked_narrow!(fb, ctx, op, arg_type, is_32bit)
 
 Extracted handler for checked_s{add,sub,mul}_int / checked_u{add,sub,mul}_int
 when the JULIA operand width is < 32 bits (Int8/UInt8/Int16/UInt16). The
@@ -654,15 +654,17 @@ i32 on normalised inputs; flag = result fails the sign/zero-extend round-trip
 at the JULIA width; value = wrapped result. A pure move of the arm that used
 to gate the head of the `is_func` ladder (was a combined `if is_32bit &&
 _julia_int_width(...) < 32 && (is_func(...) || ...)`, checked before any of
-checked_sadd/ssub/smul_int's own branches).
+checked_sadd/ssub/smul_int's own branches). `op` is the ALREADY-DISPATCHED
+CHECKED_OPS key (R19: a data test against the Symbol the registry looked up
+by, not a re-derivation via `is_func`).
 """
 function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
-                                       func, arg_type, is_32bit::Bool)::Nothing
+                                       op::Symbol, arg_type, is_32bit::Bool)::Nothing
     local _ncw = _julia_int_width(arg_type, is_32bit)
-    local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
-                       is_func(func, :checked_smul_int)
-    local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
-                   (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
+    local _nc_signed = op === :checked_sadd_int || op === :checked_ssub_int ||
+                       op === :checked_smul_int
+    local _nc_op = (op === :checked_sadd_int || op === :checked_uadd_int) ? Opcode.I32_ADD :
+                   (op === :checked_ssub_int || op === :checked_usub_int) ? Opcode.I32_SUB :
                    Opcode.I32_MUL
     _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
     local _nc_r = UInt32(allocate_local!(ctx, I32))
@@ -695,7 +697,7 @@ function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilatio
 end
 
 """
-    _compile_call_checked_add!(fbref, ctx, func, is_128bit, is_32bit, idx)
+    _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx)
 
 Extracted handler for checked_sadd_int / checked_uadd_int (register-width
 path — narrow width routes through `_compile_call_checked_narrow!` instead).
@@ -704,17 +706,18 @@ detection: ((a ^ result) & (b ^ result)) has sign bit set. `fbref` is a
 `Ref{InstrBuilder}` (not a plain `fb`) because the is_128bit branch REPLACES
 the builder with a fresh stub-only one — exactly as the original inline `fb =
 _ctx_builder(...)` reassignment did (a plain argument can only be appended
-to, not swapped out from under the caller).
+to, not swapped out from under the caller). `op` is the ALREADY-DISPATCHED
+CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
 """
 function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
-                                    func, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
     if is_128bit
         local _cadd128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_cadd128, ctx)
         emit_unsupported_stub!(ctx, _cadd128, :unsupported_method,
             "128-bit checked addition (Int128/UInt128)"; idx=idx)
         fbref[] = _cadd128
     else
-        is_signed = is_func(func, :checked_sadd_int)
+        is_signed = op === :checked_sadd_int
         local_type = is_32bit ? I32 : I64
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
@@ -773,23 +776,24 @@ function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
 end
 
 """
-    _compile_call_checked_sub!(fbref, ctx, func, is_128bit, is_32bit, idx)
+    _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx)
 
 Extracted handler for checked_ssub_int / checked_usub_int (register-width
 path — narrow width routes through `_compile_call_checked_narrow!` instead).
 checked_ssub_int(a, b) -> Tuple{T, Bool}. Signed overflow: ((a ^ b) & (a ^
 result)) has sign bit set. Same `Ref{InstrBuilder}` reassignment need as
-`_compile_call_checked_add!` — see its docstring.
+`_compile_call_checked_add!` — see its docstring. `op` is the ALREADY-
+DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
 """
 function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
-                                    func, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
     if is_128bit
         local _csub128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_csub128, ctx)
         emit_unsupported_stub!(ctx, _csub128, :unsupported_method,
             "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
         fbref[] = _csub128
     else
-        is_signed = is_func(func, :checked_ssub_int)
+        is_signed = op === :checked_ssub_int
         local_type = is_32bit ? I32 : I64
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
@@ -847,12 +851,13 @@ function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
 end
 
 """
-    _compile_call_checked!(fbref, ctx, func, args, is_128bit, is_32bit, arg_type, idx) -> WasmValType
+    _compile_call_checked!(fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx) -> WasmValType
 
 THE checked-overflow dispatch — CHECKED_OPS's single implementation (all 6
-keys forward here; op identity is re-derived via `is_func`, mirroring the
-original ladder's own repeated `is_func(func, :checked_..._int)` tests rather
-than trusting a symbol-equality shortcut). Narrow Julia widths route through
+keys forward here). `op` is the Symbol CHECKED_OPS was already keyed and
+dispatched on (R19: a data test against that Symbol, never a re-derivation
+via `is_func` — the Dict lookup in `emit_julia_numeric!` is the one place op
+identity is decided). Narrow Julia widths route through
 `_compile_call_checked_narrow!` first (checked BEFORE add/sub/mul dispatch,
 exactly as the original combined `if` guard did); mul goes through the
 pre-existing `_compile_call_checked_mul` unchanged (its is_128bit branch
@@ -860,16 +865,16 @@ stubs on the EXISTING builder, unlike add/sub's fresh-builder discard — a
 pre-existing asymmetry, preserved as-is, not unified).
 """
 function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
-                                func, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
+                                op::Symbol, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
     local _narrow = is_32bit && _julia_int_width(arg_type, is_32bit) < 32
     if _narrow
-        _compile_call_checked_narrow!(fbref[], ctx, func, arg_type, is_32bit)
-    elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
-        _compile_call_checked_mul(func, args, fbref[], ctx, is_128bit, is_32bit)
-    elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
-        _compile_call_checked_add!(fbref, ctx, func, is_128bit, is_32bit, idx)
+        _compile_call_checked_narrow!(fbref[], ctx, op, arg_type, is_32bit)
+    elseif op === :checked_smul_int || op === :checked_umul_int
+        _compile_call_checked_mul(op, args, fbref[], ctx, is_128bit, is_32bit)
+    elseif op === :checked_sadd_int || op === :checked_uadd_int
+        _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx)
     else
-        _compile_call_checked_sub!(fbref, ctx, func, is_128bit, is_32bit, idx)
+        _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx)
     end
     local _tt = (_narrow || is_32bit) ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
     return ConcreteRef(UInt32(ctx.type_registry.structs[_tt].wasm_type_idx), true)
@@ -1006,12 +1011,13 @@ function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
 end
 
 """
-    _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
+    _compile_call_checked_mul(op, args, fb, ctx, is_128bit, is_32bit)
 
-Extracted handler for checked_smul_int / checked_umul_int.
-Modifies `bytes` in-place.
+Extracted handler for checked_smul_int / checked_umul_int. `op` is the
+ALREADY-DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via
+`is_func`. Modifies `bytes` in-place.
 """
-function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
     if is_128bit
         # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
         # (natively returns a value, so a silent trap would diverge).
@@ -1019,7 +1025,7 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
                                "128-bit checked multiply (Int128/UInt128)")
     else
-        is_signed = is_func(func, :checked_smul_int)
+        is_signed = op === :checked_smul_int
         local_type = is_32bit ? I32 : I64
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
@@ -2016,18 +2022,6 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         i32_const!(bld, 0)
     end
     append_builder!(fb, bld)
-    return nothing
-end
-
-"""
-    _compile_call_symbol(args, fb, ctx)
-
-Extracted handler for Symbol(x) conversion.
-Modifies `bytes` in-place.
-"""
-function _compile_call_symbol(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
-    # Compile the argument — it's already a string array in WasmGC
-    append_builder!(fb, _compile_value_b(args[1], ctx))
     return nothing
 end
 
@@ -3866,13 +3860,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # These are compile-time type parameters, not runtime values
     # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
     # (they get compiled to i32 type tags and compared)
-    # Skip arg-pushing for Core._expr — its handler manages its own args
     # Skip arg-pushing for cross-call candidates — the cross-call handler
     # at line ~20714 pushes args with type bridging. Pre-pushing here causes duplicate
     # args on the stack (e.g., setindex! gets 6 args instead of 3).
     # Cross-call candidates are GlobalRef functions found in the func_registry that
-    # aren't handled by a specific earlier handler (intrinsics, ===, _expr, etc.).
-    is_expr_call = is_func(func, :_expr)
+    # aren't handled by a specific earlier handler (intrinsics, ===, etc.) — Core._expr
+    # never reaches this point at all: THE identity-keyed builtin funnel (builtins.jl)
+    # claims it, self-contained args and all, before the ladder above even starts.
     is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
     # Arithmetic over an escaping mutable capture reaches us as a local-backed
     # `getfield(box, :contents)` SSA plus another operand. The numeric fallback
@@ -3894,7 +3888,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             (p.args[3] isa QuoteNode ? p.args[3].value : p.args[3]) === :contents
     end
     owns_captured_arithmetic = is_materialized_generic_arithmetic && has_box_contents_operand
-    _skip_arg_prepush = is_expr_call
+    _skip_arg_prepush = false
     if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
             !is_numeric_intrinsic && !is_equality_comparison &&
             !owns_captured_arithmetic
@@ -3913,12 +3907,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _skip_arg_prepush = _target !== nothing
         end
     end
-    # Reorder muladd_float args for correct WASM stack order.
+    # THE single callee-identity extraction (GlobalRef name / Core.IntrinsicFunction
+    # Symbol) — the intrinsics-table route and the quarantine-tier registry route
+    # below reuse this SAME local instead of re-deriving it a second time, so the
+    # muladd/fma reorder gate right below and their eventual FMA_OPS dispatch can
+    # never disagree about which call this is (R19: a data test against `_it_name`,
+    # never a fresh `is_func` probe).
+    local _it_name = func isa GlobalRef ? func.name :
+                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+
+    # Reorder muladd_float/fma_float args for correct WASM stack order.
     # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
     # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
     # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
     _push_args = args
-    if (is_func(func, :muladd_float) || is_func(func, :fma_float)) && length(args) == 3
+    if (_it_name === :muladd_float || _it_name === :fma_float) && length(args) == 3
         _push_args = Any[args[3], args[1], args[2]]
     end
     for arg in _push_args
@@ -4021,9 +4024,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # emit here via `emit_intrinsic_binop!` (the ONE production caller — see
     # intrinsics_table.jl); the chain below keeps only what the table can't
     # express (128-bit, checked-overflow, unary, ===, conversions) and shrinks
-    # with M11.
-    local _it_name = func isa GlobalRef ? func.name :
-                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+    # with M11. (`_it_name` is already in scope — hoisted above, ahead of the
+    # muladd/fma arg-reorder gate, so there is only ONE extraction site.)
     if _it_name !== nothing && !is_128bit
         # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
         local _it_w = arg_type === Float64 ? F64 :
@@ -4115,7 +4117,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # and never reaches here).
     if _it_name !== nothing
         local _jnfbref = Ref(fb)
-        local _jn_result = emit_julia_numeric!(_jnfbref, ctx, _it_name, func, args, arg_type,
+        local _jn_result = emit_julia_numeric!(_jnfbref, ctx, _it_name, args, arg_type,
                                                is_128bit, is_32bit, idx)
         if _jn_result !== nothing
             fb = _jnfbref[]
@@ -4800,16 +4802,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             ctx.last_stmt_was_stub = true
         end
 
-    # Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
-    # The argument is already compiled as a string array — just pass through.
-    elseif is_func(func, :Symbol) && func isa GlobalRef && length(args) == 1
-        _compile_call_symbol(args, fb, ctx)
-
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
-    # Skip cross-call lookup for Core._expr — it's a builtin that has a
-    # special handler below (line ~19900). Without this guard, get_function returns
-    # nothing (builtins aren't in the function registry) and emits unreachable.
-    elseif func isa GlobalRef && ctx.func_registry !== nothing && !is_func(func, :_expr)
+    # Core._expr never reaches here — THE identity-keyed builtin funnel
+    # (builtins.jl) claims it long before this ladder starts.
+    elseif func isa GlobalRef && ctx.func_registry !== nothing
         # Try to find this function in our registry
         called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
 
@@ -5166,89 +5162,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         else
             error("NamedTuple constructor requires exactly one tuple argument, got $(length(args)) args")
-        end
-
-    # Special case for Core._expr — creates an Expr(head::Symbol, args::Vector{Any})
-    # IR pattern: Core._expr(:head, arg1, arg2, ...) with 1+ args
-    # head is the first arg (Symbol), remaining args become the Expr.args Vector{Any}
-    elseif is_func(func, :_expr)
-        # Register Expr type if not already registered
-        if !haskey(ctx.type_registry.structs, Expr)
-            register_struct_type!(ctx.mod, ctx.type_registry, Expr)
-        end
-
-        if haskey(ctx.type_registry.structs, Expr)
-            expr_info = ctx.type_registry.structs[Expr]
-
-            # Ensure Vector{Any} is registered (for the args field)
-            if !haskey(ctx.type_registry.structs, Vector{Any})
-                register_vector_type!(ctx.mod, ctx.type_registry, Vector{Any})
-            end
-            vec_any_info = ctx.type_registry.structs[Vector{Any}]
-
-            # Ensure Tuple{Int64} is registered (for Vector size field)
-            if !haskey(ctx.type_registry.structs, Tuple{Int64})
-                register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Int64})
-            end
-            size_tuple_info = ctx.type_registry.structs[Tuple{Int64}]
-
-            # Get array type for Any (externref array)
-            any_array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Any)
-            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-            # args[1] is the head (Symbol), args[2:end] are the Expr.args elements
-            head_arg = args[1]
-            expr_args = args[2:end]
-            n_expr_args = length(expr_args)
-
-            # Locals-first approach: compile each piece into a local, then assemble.
-
-            # Step 1: Compile head (Symbol = array<i32>) → local
-            # parity(class_info.dart:18 FieldIndex): the head Symbol is a CLASSED string value
-            head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
-                emit_value!(fb, head_arg, ctx, static_wasm_type(head_arg, ctx))
-                local_set!(fb, head_local)
-
-            # Step 2: Create data array (array<anyref>) → local
-            # Any maps to the registered array element type. Every element flows
-            # through the typed boxing/conversion chokepoint.
-            wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
-            if n_expr_args == 0
-                    i32_const!(fb, 0)
-                    array_new_default!(fb, any_array_type_idx)
-            else
-                # Push each arg, then array_new_fixed
-                for ea in expr_args
-                    emit_value!(fb, ea, ctx, wasm_elem_type)
-                end
-                    array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
-            end
-            data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
-                local_set!(fb, data_arr_local)
-
-                # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
-                emit_struct_prefix!(fb, ctx.type_registry, Tuple{Int64}, size_tuple_info)
-                i64_const!(fb, Int64(n_expr_args))
-                struct_new!(fb, size_tuple_info.wasm_type_idx)   # mod-resolved fields
-            size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
-            let ib = _sub_builder(fb, ctx, "compile_call", 1)   # the size tuple
-                local_set!(ib, size_local)
-
-                # Step 4: Assemble Expr struct
-                emit_struct_prefix!(ib, ctx.type_registry, Expr, expr_info)
-                # Push head (Expr field 1)
-                local_get!(ib, head_local)
-                # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
-                emit_struct_prefix!(ib, ctx.type_registry, Vector{Any}, vec_any_info)
-                local_get!(ib, data_arr_local)
-                local_get!(ib, size_local)
-                struct_new!(ib, vec_any_info.wasm_type_idx)   # mod-resolved fields
-                # struct.new Expr with (typeId, head, vector)
-                struct_new!(ib, expr_info.wasm_type_idx)   # mod-resolved fields
-                append_builder!(fb, ib)
-            end
-
-            return append_builder!(b, fb)
         end
 
     else
