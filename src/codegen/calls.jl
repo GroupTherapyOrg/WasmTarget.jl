@@ -1962,7 +1962,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
             # Boxed externref — test each numeric box type that is a subtype of check_type
             local _boxes = UInt32[]
-            for (wt, box_idx) in ctx.type_registry.numeric_boxes
+            for (wt, box_idx) in ordered_pairs(ctx.type_registry.numeric_boxes, string)
                 local _jt2 = get(_wasm_julia, wt, nothing)
                 _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
             end
