@@ -184,6 +184,48 @@ const METRICS = [
     "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
                           roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl"])),
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
+        () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
+    "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
+        () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
+    "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
+        () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
+    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (phase 3/5: migrate to tables and registries; file-agnostic so an arm cannot hide by moving)",
+        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
+    "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+ arms in statements.jl compile_foreigncall! dispatch",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> occursin(r"(_fc_sym|fname|cfn) === :\w+", line) && !_iscomment(line),
+                  split(stmt_src, '\n'))
+        end),
+    "R22_table_covered_ladder_arms" => ("is_func(func, :key) arms for keys in every INTRINSIC_* dict",
+        () -> begin
+            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
+            keys_set = Set{Symbol}()
+            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
+                    occursin("table residue", line) || (n += 1)
+                end
+            end
+            n
+        end),
+    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
+                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl"])),
     "R11_patch_markers" => ("patch-tag comment sediment PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- (monotone down via root-fixes)",
         () -> begin  # markers live IN comments, so count comment lines too
             n = 0
