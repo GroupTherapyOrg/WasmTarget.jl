@@ -134,52 +134,34 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         ensure_exception_global!(ctx.mod)
     end
     # ========================================================================
-    # STEP 0: BOUNDSCHECK PATTERN DETECTION
+    # STEP 0: FOLD THE ALWAYS-TAKEN BOUNDSCHECK BRANCHES
     # ========================================================================
-    # We emit i32.const 0 for boundscheck, so GotoIfNot following boundscheck
-    # ALWAYS jumps (since NOT 0 = TRUE). Track these patterns to skip dead code.
-
+    # An explicit `boundscheck false` (inside @inbounds) feeding a GotoIfNot is
+    # a branch that always jumps; boundscheck=true falls through to the check
+    # and its catchable throw_boundserror, which must stay live. Only the
+    # branch is folded here — which code is dead follows from REACHABILITY
+    # over the folded CFG (below), never from the text between the jump and
+    # its target: Julia's inlined reductions place the live loop inside that
+    # span, entered by an unrelated edge (reduce(max, 1:n) compiled to a
+    # function that returned an unset local on 1.13).
+    # Every edge of the folded CFG is realized exactly once; a block is
+    # dropped only when no path from the entry reaches it.
     boundscheck_jumps = Set{Int}()  # Statement indices of GotoIfNot that always jump
     dead_regions = Set{Int}()       # Statement indices that are dead code
-    dead_blocks = Set{Int}()        # Block indices that are entirely dead
+    dead_blocks = Set{Int}()        # Block indices unreachable from the entry
 
     for i in 1:length(code)
-        stmt = code[i]
-        # Boundscheck now compiles to its REAL value (true unless
-        # @inbounds), so the always-jump/dead-region carving below — which
-        # assumed we emit 0 — only applies to an explicit `false` (inside
-        # @inbounds). For boundscheck=true the GotoIfNot falls through to the
-        # check + catchable throw_boundserror, and that path must stay live.
         # parity(code_generator.dart:77 typeContext): classification via the NIR boundary
-        # (frontend/nir.jl) instead of raw Expr.head/.args — NirBoundscheck's `flag` is
-        # `nothing` unless the arg was a literal Bool, so `flag === false` is exactly
-        # `stmt.head === :boundscheck && length(stmt.args) >= 1 && stmt.args[1] === false`.
+        # (frontend/nir.jl) — NirBoundscheck's `flag` is `nothing` unless the arg was a
+        # literal Bool, so `flag === false` is exactly `Expr(:boundscheck, false)`.
         if (nstmt = ctx.nir[i].node) isa NirBoundscheck && nstmt.flag === false
             if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
                 goto_stmt = code[i + 1]::Core.GotoIfNot
                 if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
                     push!(boundscheck_jumps, i + 1)
                     push!(dead_regions, i)
-                    target = goto_stmt.dest
-                    for j in (i + 2):(target - 1)
-                        push!(dead_regions, j)
-                    end
                 end
             end
-        end
-    end
-
-    # Mark blocks as dead if all their statements are in dead regions
-    for (block_idx, block) in enumerate(blocks)
-        all_dead = true
-        for i in block.start_idx:block.end_idx
-            if !(i in dead_regions) && !(i in boundscheck_jumps)
-                all_dead = false
-                break
-            end
-        end
-        if all_dead
-            push!(dead_blocks, block_idx)
         end
     end
 
@@ -193,28 +175,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         for i in block.start_idx:block.end_idx
             stmt_to_block[i] = block_idx
         end
-    end
-
-    # Normalize edges through blocks erased by an explicit `@inbounds`
-    # boundscheck. Those blocks still carry the Julia CFG's control transfer;
-    # dropping the nodes without forwarding their edges disconnects the graph
-    # and invalidates dominators/loop ownership.
-    function resolve_through_dead_boundscheck(dest_block::Int)::Union{Int, Nothing}
-        visited = Set{Int}()
-        current = dest_block
-        while current !== nothing && current in dead_blocks && !(current in visited)
-            push!(visited, current)
-            blk = blocks[current]
-            t = blk.terminator
-            if t isa Core.GotoIfNot && blk.end_idx in boundscheck_jumps
-                current = get(stmt_to_block, t.dest, nothing)
-            elseif t isa Core.GotoNode
-                current = get(stmt_to_block, t.label, nothing)
-            else
-                return nothing
-            end
-        end
-        return current !== nothing && !(current in dead_blocks) ? current : nothing
     end
 
     # (successor edges for regions are added after the terminator walk below)
@@ -239,53 +199,33 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         predecessors[i] = Int[]
     end
 
+    # The folded CFG: every block's edges as Julia's IR has them, except that
+    # an always-taken boundscheck branch keeps only its target edge.
     for (block_idx, block) in enumerate(blocks)
-        # Skip dead blocks entirely - don't add edges to/from them
-        if block_idx in dead_blocks
-            continue
-        end
-
         term = block.terminator
         if term isa Core.GotoIfNot
-            # Check if this is a boundscheck-based always-jump
             term_idx = block.end_idx
             if term_idx in boundscheck_jumps
-                # This GotoIfNot ALWAYS jumps (boundscheck is 0, NOT 0 = TRUE)
-                # Only add the jump target as successor, NOT the fall-through
                 dest_block = get(stmt_to_block, term.dest, nothing)
-                if dest_block !== nothing && dest_block in dead_blocks
-                    dest_block = resolve_through_dead_boundscheck(dest_block)
-                end
-                if dest_block !== nothing && !(dest_block in dead_blocks)
+                if dest_block !== nothing
                     push!(successors[block_idx], dest_block)
                     push!(predecessors[dest_block], block_idx)
                 end
             else
-                # Real conditional: two successors
                 dest_block = get(stmt_to_block, term.dest, nothing)
                 fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
 
-                if dest_block !== nothing && dest_block in dead_blocks
-                    dest_block = resolve_through_dead_boundscheck(dest_block)
-                end
-                if fall_through_block !== nothing && fall_through_block in dead_blocks
-                    fall_through_block = resolve_through_dead_boundscheck(fall_through_block)
-                end
-
-                if fall_through_block !== nothing && fall_through_block <= length(blocks) && !(fall_through_block in dead_blocks)
+                if fall_through_block !== nothing && fall_through_block <= length(blocks)
                     push!(successors[block_idx], fall_through_block)
                     push!(predecessors[fall_through_block], block_idx)
                 end
-                if dest_block !== nothing && !(dest_block in dead_blocks)
+                if dest_block !== nothing
                     push!(successors[block_idx], dest_block)
                     push!(predecessors[dest_block], block_idx)
                 end
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
-            if dest_block !== nothing && dest_block in dead_blocks
-                dest_block = resolve_through_dead_boundscheck(dest_block)
-            end
             if dest_block !== nothing
                 push!(successors[block_idx], dest_block)
                 push!(predecessors[dest_block], block_idx)
@@ -296,13 +236,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Fall through to next block
             if block_idx < length(blocks)
                 next_block = block_idx + 1
-                if next_block in dead_blocks
-                    next_block = resolve_through_dead_boundscheck(next_block)
-                end
-                if next_block !== nothing
-                    push!(successors[block_idx], next_block)
-                    push!(predecessors[next_block], block_idx)
-                end
+                push!(successors[block_idx], next_block)
+                push!(predecessors[next_block], block_idx)
             end
         end
     end
@@ -320,6 +255,30 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if eb < length(blocks) && !((eb + 1) in successors[eb])
             push!(successors[eb], eb + 1)
             push!(predecessors[eb + 1], eb)
+        end
+    end
+
+    # Dead code = unreachable from the entry over the folded CFG. Its blocks
+    # lose their edges and their statements are never emitted.
+    if !isempty(blocks)
+        reached = Set{Int}()
+        worklist = Int[1]
+        while !isempty(worklist)
+            bi = pop!(worklist)
+            bi in reached && continue
+            push!(reached, bi)
+            append!(worklist, successors[bi])
+        end
+        for bi in eachindex(blocks)
+            bi in reached && continue
+            push!(dead_blocks, bi)
+            for i in blocks[bi].start_idx:blocks[bi].end_idx
+                push!(dead_regions, i)
+            end
+        end
+        for bi in eachindex(blocks)
+            filter!(x -> !(x in dead_blocks), successors[bi])
+            filter!(x -> !(x in dead_blocks), predecessors[bi])
         end
     end
 
@@ -459,27 +418,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Boundscheck jumps ALWAYS go to dest, so it's like an unconditional jump
                 # Only record it as non-trivial if it's not immediate fall-through
                 dest_block = get(stmt_to_block, term.dest, nothing)
-                if dest_block !== nothing && dest_block in dead_blocks
-                    dest_block = resolve_through_dead_boundscheck(dest_block)
-                end
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             else
                 # Real conditional - the false branch destination
                 dest_block = get(stmt_to_block, term.dest, nothing)
-                if dest_block !== nothing && dest_block in dead_blocks
-                    dest_block = resolve_through_dead_boundscheck(dest_block)
-                end
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             end
         elseif term isa Core.GotoNode
             dest_block = get(stmt_to_block, term.label, nothing)
-            if dest_block !== nothing && dest_block in dead_blocks
-                dest_block = resolve_through_dead_boundscheck(dest_block)
-            end
             if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                 push!(non_trivial_targets, dest_block)
             end
@@ -1383,10 +1333,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         elseif term isa Core.GotoIfNot
             dest_block = get(stmt_to_block, term.dest, nothing)
 
-            # Resolve through dead boundscheck blocks to find real target
-            if dest_block !== nothing && dest_block in dead_blocks
-                dest_block = resolve_through_dead_boundscheck(dest_block)
-            end
 
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
@@ -1481,11 +1427,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             dest_block = get(stmt_to_block, term.label, nothing)
             terminator_idx = block.end_idx
 
-            # Resolve through dead boundscheck blocks to find real target.
-            # Same resolution as non_trivial_targets computation.
-            if dest_block !== nothing && dest_block in dead_blocks
-                dest_block = resolve_through_dead_boundscheck(dest_block)
-            end
 
             # Set all phi values before jumping
             # Pass the actual target statement to find phi nodes (might be inside the block)

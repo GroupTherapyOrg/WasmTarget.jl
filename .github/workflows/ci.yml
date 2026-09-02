@@ -62,6 +62,17 @@ jobs:
             Pkg.instantiate()
           '
 
+      # The inner-loop lanes, on both Julia versions: the differential smoke
+      # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
+      # saw it), the structural ratchet, and — on 1.12, whose typed IR the
+      # baseline records — byte identity of the probe corpus.
+      - name: Inner-loop lanes
+        if: matrix.target.slice == 'all'
+        run: |
+          julia --project=. test/smoke.jl
+          julia --project=. test/parity_ratchet.jl
+          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; fi
+
       - name: Run tests
         env:
           WT_SHARD: ${{ matrix.target.shard }}
