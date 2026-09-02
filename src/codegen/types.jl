@@ -2135,6 +2135,38 @@ single source consumers migrate onto as those rework.
 derive_nullability(@nospecialize(T))::Bool =
     T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
 
+"""
+    translate_external_type(T, mod, registry) -> WasmValType
+
+The host-boundary type translator: what a Julia type may become on the parameter or
+result of an import/export function signature. `parity(translator.dart:1239
+translateExternalType, :1266 translateExternalStorageType)`: dart restricts the
+interop boundary to wasm func/extern/array refs, its low-level `WasmArray<T>`
+intrinsic, and non-nullable primitive builtins — everything else (ordinary boxed
+objects included) widens to the `anyref` top type, so Binaryen's `--closed-world`
+mode never has to reason about an internal recursive-group struct ref crossing the
+boundary. WT has no Julia-level marker types for most of dart's `dart:_wasm`
+intrinsic classes (`WasmFuncRef`/`WasmArrayRef`/`WasmArray<T>` are never spelled as
+a Julia parameter type) — the one exception is `JSValue` (`julia_to_wasm_type`'s own
+"JS values are held as externref" case), WT's existing Julia-level marker for an
+opaque host reference, mirroring dart's `cls == wasmExternRefClass` arm; `AnyRef` is
+WT's `anyref`. This is total — it never throws. dart's only throw in this family
+(`translateExternalStorageType`'s "Wasm numeric types can't be nullable") fires for
+a nullable low-level wasm marker type, which likewise has no Julia-side analogue to
+reach it.
+"""
+function translate_external_type(T, mod::WasmModule, registry::TypeRegistry)::WasmValType
+    T === JSValue && return ExternRef
+    if !derive_nullability(T) &&
+       (T === Bool || T === Char ||
+        T === Int8 || T === UInt8 || T === Int16 || T === UInt16 ||
+        T === Int32 || T === UInt32 || T === Int64 || T === UInt64 || T === Int ||
+        T === Float32 || T === Float64)
+        return julia_to_wasm_type(T)
+    end
+    return AnyRef
+end
+
 function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     # Vararg is a type modifier (Core.TypeofVararg), not a proper Julia type — never `<: Type`.
     # Use ExternRef for locals to avoid externref↔anyref mismatches (Any→ExternRef, and

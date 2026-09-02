@@ -526,6 +526,53 @@ function _ir_call_has_explicit_io(stmt::Expr, code_info::Core.CodeInfo)::Bool
 end
 
 """
+    _check_import_stub_external_types!(mod, registry, name, arg_types, wasm_idx, return_type)
+
+Validate an `import_stubs` entry against dart2wasm's host-boundary restriction
+(`translate_external_type`, `parity(translator.dart:1239 translateExternalType)`).
+The host declares the import's REAL wasm signature directly via `add_import!`; the
+Julia stub's `arg_types`/`return_type` are a SEPARATE declaration used only for
+call-site resolution (`register_function!` below) — nothing previously checked
+that the two agree. Because call-site coercion derives its target wasm type from
+these SAME Julia types (never from the import's actual declared signature), any
+divergence produces invalid wasm bytes at the call site with no diagnostic naming
+the parameter — this closes that gap at registration time, loudly, before any
+call is compiled. Every current caller (WasmMakie/Snapshot canvas providers:
+`Float64`/`Int64` only) already agrees with `translate_external_type` byte-for-byte.
+Skipped when `wasm_idx` is not an import index (defensive; `import_stubs` entries
+are host imports by contract).
+"""
+function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegistry,
+                                             name::AbstractString, arg_types::Tuple,
+                                             wasm_idx::Integer, return_type::Type)
+    Int(wasm_idx) < num_imported_funcs(mod) || return nothing
+    ft = _function_type(mod, Int(wasm_idx))
+    required_params = WasmValType[translate_external_type(T, mod, registry) for T in arg_types]
+    if length(required_params) != length(ft.params)
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" declares $(length(ft.params)) wasm parameter(s) but the " *
+            "Julia stub signature $(arg_types) has $(length(required_params)) — the host " *
+            "boundary signature and the call-site Julia arg types must agree in arity",
+            nothing, arg_types)))
+    end
+    for (i, (required, declared, T)) in enumerate(zip(required_params, ft.params, arg_types))
+        required == declared || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" parameter $(i) (::$(T)) crosses the host boundary as " *
+            "$(declared) but dart2wasm's external-type restriction (translateExternalType, " *
+            "translator.dart:1239) requires $(required) for this Julia type",
+            nothing, T)))
+    end
+    required_results = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+                        WasmValType[translate_external_type(return_type, mod, registry)]
+    required_results == ft.results || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+        "import \"$(name)\" returns $(ft.results) but dart2wasm's external-type " *
+        "restriction (translateExternalType, translator.dart:1239) requires $(required_results) " *
+        "for return type ::$(return_type)",
+        nothing, return_type)))
+    return nothing
+end
+
+"""
     compile_module(functions::Vector) -> WasmModule
 
 Compile multiple Julia functions into a single WebAssembly module.
@@ -591,6 +638,7 @@ function _compile_closed_world_plan(functions::Vector;
     # This enables compiled functions to call imports via cross-function call resolution.
     for entry in import_stubs
         func_ref, name, arg_types, wasm_idx, return_type = entry
+        _check_import_stub_external_types!(mod, type_registry, name, arg_types, wasm_idx, return_type)
         register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
     end
 
