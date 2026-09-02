@@ -1976,8 +1976,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # DFS range check for anyref/structref polymorphic values
             # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
             local _range = get_type_range(ctx.type_registry, check_type)
-            if _range !== nothing
-                local _low, _high = _range
+            # The DFS range OR the lazily recorded extra ids (the model's IsaWT in
+            # dev/formal/ClassIdDispatch.tla): an ancestor with no early descendant has no
+            # range but still owns the extras ensure_type_id! recorded on it.
+            local _extras = ctx.type_registry.type_extra_ids === nothing ? Int32[] :
+                get(ctx.type_registry.type_extra_ids, check_type isa DataType && !isempty(check_type.parameters) ? check_type.name.wrapper : check_type, Int32[])
+            if _range !== nothing || !isempty(_extras)
                 local _base_idx = ctx.type_registry.base_struct_idx
                 # Guard against JlType hierarchy refs.
                 # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
@@ -1994,13 +1998,11 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local_get!(bld, _isa_guard_local)
                 emit_typeof!(bld, _base_idx)
                 # dart's 3-instruction unsigned window via THE single range discriminator
-                # (was tee + ge_s/le_s/and with a temp local).
-                emit_classid_ranges!(bld, ctx, _low, _high,
-                    ctx.type_registry.type_extra_ids === nothing ? Int32[] :
-                    get(ctx.type_registry.type_extra_ids, check_type isa DataType && !isempty(check_type.parameters) ? check_type.name.wrapper : check_type, Int32[]))
+                # (was tee + ge_s/le_s/and with a temp local); extras-only when no range.
+                emit_classid_ranges!(bld, ctx, _range, _extras)
                 end_block!(bld)
             else
-                # No DFS range for this abstract type — return false
+                # Neither a DFS range nor a lazily numbered subtype — return false
                 drop!(bld)
                 i32_const!(bld, 0)
             end

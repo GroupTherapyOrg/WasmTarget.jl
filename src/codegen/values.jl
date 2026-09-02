@@ -703,6 +703,33 @@ function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
     return b
 end
 
+emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                     range::Tuple{<:Integer,<:Integer}, extras::Vector{Int32}) =
+    emit_classid_ranges!(b, ctx, range[1], range[2], extras)
+
+"""The extras-only check: an abstract type with NO DFS range (no descendant was in the
+closed world when assign_type_ids! ran) whose subtypes were numbered lazily. dart never
+has this case (one ClassIdNumbering pass, class_info.dart:831); WT's lazy path records the
+id on every ancestor (ensure_type_id!), and this is where a range-less ancestor reads it.
+typeId on the stack; result i32."""
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                              ::Nothing, extras::Vector{Int32})
+    if isempty(extras)
+        drop!(b)
+        i32_const!(b, 0)
+        return b
+    end
+    sc = allocate_local!(ctx, I32)
+    local_tee!(b, sc)
+    for (i, x) in enumerate(extras)
+        i > 1 && local_get!(b, UInt32(sc))
+        i32_const!(b, Int64(x))
+        num!(b, Opcode.I32_EQ)
+        i > 1 && num!(b, Opcode.I32_OR)
+    end
+    return b
+end
+
 """
     emit_isa_classid!(b, ctx, box_idx, check_type)
 

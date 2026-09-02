@@ -86,26 +86,33 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
     isempty(packable) && return
     # dart's first-fit packing (sort weight desc; callCount folded into weight when known)
     sort!(packable; by=t -> -t[3])
-    # helper: first-fit one row-set into the shared layout, returns its offset
+    # helper: first-fit one row-set into the shared layout, returns its offset.
+    # parity(quarantine: dart packs only the rows themselves, dispatch_table.dart:405-458,
+    # because static typing guarantees a virtual call's receiver has the member,
+    # code_generator.dart:2028 _virtualCall; a Julia dynamic call can carry a receiver
+    # with NO method, which must reach MethodError, never another row): the row set
+    # claims its WHOLE span [offset+min, offset+max]. Holes inside the span stay null
+    # funcrefs, so a classId with no row traps on call_indirect instead of indexing a
+    # same-signature cell that first-fit packing gave another selector (the model's
+    # Span(cids) in dev/formal/ClassIdDispatch.tla).
     function _fit!(table, cids, first_available, is_first)
-        offset = is_first ? 0 : first_available - cids[1]
+        lo, hi = cids[1], cids[end]   # cids sorted ascending
+        offset = is_first ? 0 : first_available - lo
         while true
             fits = true
-            for cid in cids
-                entry = offset + cid
-                entry < 0 && (fits = false; break)
-                entry >= length(table) && break
-                table[entry + 1] !== nothing && (fits = false; break)
+            for pos in (offset + lo):(offset + hi)
+                pos < 0 && (fits = false; break)
+                pos >= length(table) && break
+                table[pos + 1] !== nothing && (fits = false; break)
             end
             fits && break
             offset += 1
         end
-        for cid in cids
-            pos = offset + cid
+        for pos in (offset + lo):(offset + hi)
             while length(table) <= pos
                 push!(table, nothing)
             end
-            table[pos + 1] = 0   # occupied
+            table[pos + 1] = 0   # occupied: a row, or a reserved hole that stays null
         end
         return offset
     end
@@ -155,6 +162,44 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
     return
 end
 
+"""Level-1 classId span `(lo, hi)` of a packed selector — every row and cascade slot."""
+function _selector_span(dt_registry, func_ref)::Tuple{Int,Int}
+    offset = dt_registry.selector_offset[func_ref]
+    poss = Int[p for (p, _) in dt_registry.selector_positions[func_ref]]
+    for c in get(dt_registry.selector_cascades, func_ref, [])
+        push!(poss, c.l1_pos)
+    end
+    return (minimum(poss) - offset, maximum(poss) - offset)
+end
+
+"""Level-2 classId span `(lo, hi)` of one cascade group."""
+function _cascade_span(c)::Tuple{Int,Int}
+    poss = Int[p for (p, _) in c.rows2]
+    return (minimum(poss) - c.offset2, maximum(poss) - c.offset2)
+end
+
+"""
+    emit_classid_span_guard!(b, sc, lo, hi)
+
+parity(quarantine: dart's virtual call indexes the table unguarded, code_generator.dart:2028
+_virtualCall, because the receiver statically has the member; a Julia dynamic call's
+receiver may have NO method, and its classId would otherwise index another selector's
+cell): with the receiver's classId on the stack, keep it in local `sc`, trap unless
+`lo <= classId <= hi` (THE single range discriminator, dart's unsigned window), and leave
+the classId back on the stack for the offset add.
+"""
+function emit_classid_span_guard!(b::InstrBuilder, sc::Integer, lo::Integer, hi::Integer)
+    builder_set_local_type!(b, Int(sc), I32)
+    local_tee!(b, UInt32(sc))
+    emit_classid_range_check!(b, lo, hi)
+    num!(b, Opcode.I32_EQZ)
+    if_!(b)
+    unreachable!(b)   # structural trap: MethodError — no row for this receiver class
+    end_block!(b)
+    local_get!(b, UInt32(sc))
+    return b
+end
+
 """
     fill_selector_table_elements!(mod, dt_registry)
 
@@ -183,6 +228,9 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
             local_get!(tb, UInt32(c.axis2 - 1))
             ref_cast!(tb, Int64(_st_base_idx(dt_registry)), false)
             struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0), I32)
+            # the level-2 span guard (a classId outside it has no row in this group)
+            local lo2, hi2 = _cascade_span(c)
+            emit_classid_span_guard!(tb, arity, lo2, hi2)   # first extra local
             if c.offset2 != 0
                 i32_const!(tb, Int64(c.offset2))
                 num!(tb, Opcode.I32_ADD)
@@ -192,7 +240,7 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
             call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
                            copy(dt.slot_types), res)
             end_block!(tb)
-            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[], builder_code(tb))
+            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[I32], builder_code(tb))
             push!(entries, (c.l1_pos, tramp_idx))
             for (pos2, entry_i) in c.rows2
                 push!(entries, (pos2, dt.entries[entry_i].wrapper_idx))
@@ -248,6 +296,10 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
     local_get!(b, UInt32(axis - 1))
     ref_cast!(b, Int64(base_struct_idx), false)
     struct_get!(b, UInt32(base_struct_idx), UInt32(0), I32)
+    # the span guard: a classId outside [lo, hi] has no row (MethodError → trap)
+    local lo, hi = _selector_span(dt_registry, dt.func_ref)
+    locals = WasmValType[I32]            # first extra local: the guarded classId
+    emit_classid_span_guard!(b, n_params, lo, hi)
     if offset != 0
         i32_const!(b, Int64(offset))
         num!(b, Opcode.I32_ADD)
@@ -259,7 +311,6 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
                    sig.params, sig.results)
     # Result seam: the caller's DECLARED result may be anyref (dynamic-call inference)
     # while the selector signature is typed — box through the ONE producer.
-    locals = WasmValType[]
     declared = julia_to_wasm_type(caller_return_type)
     if _wt_is_ref(declared) && dt.result_wasm_type in (I32, I64, F32, F64) &&
        mod !== nothing && type_registry !== nothing
@@ -269,7 +320,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
             # the ONE box shape (emit_classid_box!): save value · classId · value · struct.new
             box_idx = get_numeric_box_type!(mod, type_registry, dt.result_wasm_type)
             tid = ensure_type_id!(type_registry, jt)
-            scratch = UInt32(n_params)   # first extra local
+            scratch = UInt32(n_params + 1)   # second extra local (after the classId)
             push!(locals, dt.result_wasm_type)
             builder_set_local_type!(b, Int(scratch), dt.result_wasm_type)
             local_set!(b, scratch)

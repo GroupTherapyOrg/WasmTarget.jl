@@ -412,6 +412,7 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
 IDs start at 1 (0 is reserved for unknown/unassigned).
 """
 function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
+    # formal(dev/formal/ClassIdDispatch.tla): sorted-children DFS gives nested, sibling-disjoint ranges and a numbering that is a function of the closed world; only the lazy ensure_type_id! path makes ids history-dependent
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
     for (T, info) in registered_structs(registry)
