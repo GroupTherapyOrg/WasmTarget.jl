@@ -256,7 +256,11 @@ constant lost its entries on insert (`4bf09c1b`); the host's world counter was b
 binaries (`4a823f9f`, one `WASM_WORLD_AGE`); the stackifier declared everything between an
 `@inbounds` jump and its target dead, which dropped the live loop of `reduce(max, 1:n)` on Julia
 1.13 (`b9f4d229`, dead = unreachable in the folded CFG, **L89 re-pinned**); CI had never run the
-smoke lane, which is why that miscompile was invisible — it runs it now.
+smoke lane, which is why that miscompile was invisible — it runs it now; and the first CI run of
+the probe lane on x64 showed every binary differing from its aarch64 twin — identity-keyed
+registries walked in address order and the host's `DataType.hash` baked into every type object
+(`2defe2ee`, program-ordered walks and a program-derived hash, **L117**; the corpus is now
+byte-identical across architectures, which is what a verifiable artifact needs).
 
 ### Phase 9 — Close
 
