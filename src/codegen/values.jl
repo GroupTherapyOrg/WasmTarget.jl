@@ -707,6 +707,17 @@ emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
                      range::Tuple{<:Integer,<:Integer}, extras::Vector{Int32}) =
     emit_classid_ranges!(b, ctx, range[1], range[2], extras)
 
+"""isa's classId test for a non-concrete type over the closed world: the exact id set
+(concrete_class_ids), emitted as dart's range window when it is contiguous and as an
+OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32."""
+function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
+    isempty(ids) && return emit_classid_ranges!(b, ctx, nothing, ids)
+    if ids[end] - ids[1] + 1 == length(ids)
+        return emit_classid_range_check!(b, ids[1], ids[end])
+    end
+    return emit_classid_ranges!(b, ctx, nothing, ids)
+end
+
 """The extras-only check: an abstract type with NO DFS range (no descendant was in the
 closed world when assign_type_ids! ran) whose subtypes were numbered lazily. dart never
 has this case (one ClassIdNumbering pass, class_info.dart:831); WT's lazy path records the

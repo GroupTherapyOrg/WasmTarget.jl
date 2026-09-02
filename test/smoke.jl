@@ -135,6 +135,17 @@ _g("dicts", Any[
     ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
     # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
     ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
+])
+
+# ---- isa / typeassert against parametric abstracts on Any-typed values ---
+# AbstractVector = AbstractArray{T,1}: a DFS range keyed by the base could not answer
+# it (constant false), and its wasm type reached the matrix registrar (illegal cast).
+@noinline _smoke_anyvec(n::Int64) = n > 0 ? Any[1.0, 2.0] : Any[Float64[1.0, 2.0], "s", Int64[3]]
+_g("abstract_isa", Any[
+    ("isa_abstractvector", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(0)),
+    ("isa_abstractarray", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractArray && (c += 1); end; c), Int64(0)),
+    ("isa_abstractvector_none", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(1)),
+    ("typeassert_abstractvector", (n::Int64) -> (v = _smoke_anyvec(n)[1]::AbstractVector; v isa Vector{Float64} ? length(v)::Int : -1), Int64(0)),
     ("dict_str_const_lookup", () -> _SMOKE_HASH_DS["bb"]),
 ])
 const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
