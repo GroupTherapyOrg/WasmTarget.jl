@@ -661,7 +661,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         pvb = _ctx_builder(ctx, "compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin
-            if get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1" && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
+            if OPTIONS[].audit_value_stack && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
                 println(stderr, "PHI-VALUE-LIAR n=$(length(pvb.v.stack)) stack=$(pvb.v.stack) val=$(first(repr(val), 80)) phi=$phi_idx instrs=$(join(builder_disasm(pvb), "; ")) philoc=$(haskey(ctx.phi_locals, phi_idx) ? ctx.locals[ctx.phi_locals[phi_idx] - ctx.n_params + 1] : :none) errs=$(pvb.v.errors)")
             end
             (pvb,
@@ -1063,7 +1063,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # PURE-6024 debug: trace function name for debugging.
     # P2-batch21: ctx has no func_name field — use func_ref (the function object),
     # otherwise WT_DBG_FN can never match and the traces below are unreachable.
-    _debug_fn_pattern = get(ENV, "WT_DBG_FN", "")
+    _debug_fn_pattern = OPTIONS[].debug_fn
     _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
     if _debug_stackified
         @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"

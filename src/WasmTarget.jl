@@ -3,6 +3,10 @@ module WasmTarget
 using Binaryen_jll: wasmopt
 using PrecompileTools: @setup_workload, @compile_workload
 
+# The debug surface (parity: translator.dart TranslatorOptions) — precedes every
+# file below because builder/instr_builder.jl already reads OPTIONS.
+include("codegen/options.jl")
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
@@ -89,6 +93,7 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
                  validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Get function name for export
     func_name = string(nameof(f))
 
@@ -163,6 +168,7 @@ function compile_multi(functions::Vector; optimize=false,
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                        link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
+    OPTIONS[] = options_from_env()
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
@@ -212,6 +218,7 @@ This is the entry point for the eval_julia pipeline where type inference has alr
 function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
                                 func_name::String, arg_types::Tuple;
                                 optimize=false)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     mod = compile_module_from_ir([(code_info, return_type, arg_types, func_name)])
     bytes = to_bytes(mod)
     optimize === false && return bytes
@@ -249,6 +256,7 @@ Merged `Vector{UInt8}` containing both base and user functions.
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
                            optimize=false)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Check tools
     wasm_merge = Sys.which("wasm-merge")
     if wasm_merge === nothing
@@ -440,15 +448,12 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
             false
         end
         if !ok
-            # debug escape hatch: keep the rejected module for offline objdump
-            dump_to = get(ENV, "WT_DUMP_INVALID", "")
-            isempty(dump_to) || (write(dump_to, bytes); @info "invalid module dumped" dump_to)
             details = String(take!(err))
             # self-diagnosing failures: disassemble around the failing offset so the
             # error names the construct (e.g. WHICH callee a mis-arity call targets)
             ctx_dis = _disassembly_context(wasm_tools, p, details)
             isempty(ctx_dis) || (details *= "\n\nemitted code at the failing offset:\n" * ctx_dis)
-            throw(WasmValidationError("wasm-tools rejected the emitted $label", details))
+            throw(WasmValidationError("wasm-tools rejected the emitted $label", details, bytes))
         end
     end
     return bytes

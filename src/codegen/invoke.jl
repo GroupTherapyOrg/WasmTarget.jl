@@ -14,7 +14,7 @@ end
 # parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
 # their DATA array (op contract: these positions are strings; no type re-query).
 function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
-    haskey(ENV, "WT_DBG_STRARG") && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
+    tracing(:strarg) && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
     emit_value!(b, arg, ctx, ConcreteRef(UInt32(str_type_idx), true))
     return b
 end
@@ -1932,7 +1932,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     # runtime-constructed instance, so the invoke silently fell through to an
     # `unreachable` (Snapshot.jl newton C-W3). Resolve by TYPE against the
     # self-prepended signature and push the closure object as wasm param 1.
-    get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+    tracing(:closure) &&
         println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
                 " ti_early=", target_info_early !== nothing)
     if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
@@ -1941,7 +1941,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
             ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
-            get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+            tracing(:closure) &&
                 println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
             if ti !== nothing
                 target_info_early = ti
@@ -2351,7 +2351,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # imported calls with an unseeded operand stack.
                         local _cc_params, _ = _true_call_sig(
                             fb, target_info.wasm_idx, WasmValType[], WasmValType[])
-                        haskey(ENV, "WT_DBG_CC") && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
+                        tracing(:cc) && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
                         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
                         call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
@@ -3726,7 +3726,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # This records a source-attributed diagnostic and emits dart's validating
                 # unsupported-path trap; no permissive mode exists.
                 # which lets compilation succeed for paths that never reach this method.
-                haskey(ENV, "WT_TRACE_STUBARGS") && println(stderr, "STUBARGS ", name, " args=", repr(args))
+                tracing(:stubargs) && println(stderr, "STUBARGS ", name, " args=", repr(args))
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=expr)
