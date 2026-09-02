@@ -96,7 +96,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             return I64
         elseif val isa Int32 || val isa UInt32 || val isa Bool ||
                val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
-            # P2-batch11: narrow ints were MISSING here — a literal like 0x00
+            # Narrow ints were MISSING here — a literal like 0x00
             # fell through to AnyRef, so `return 0x00` failed
             # return_type_compatible(AnyRef, I32) and compiled to `unreachable`
             # (gap 46fd6782e95c). compile_value already emits i32.const for these.
@@ -416,13 +416,13 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         return b
     elseif _wt_is_ref(from) && !_wt_is_ref(to)
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
-        # march5 F8: an externref source crosses the boundary first (the box lives
+        # F8: an externref source crosses the boundary first (the box lives
         # under anyref; ref.cast from externref is not wasm-valid).
         from === ExternRef && any_convert_extern!(b)
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
-        # march16 (dart convertType, closure meets a top type): a KNOWN closure's
+        # (dart convertType, closure meets a top type): a KNOWN closure's
         # captured struct erasing to any/eq/struct becomes the closure OBJECT
         # {classId, context, vtable} — the value stays dynamically callable.
         if (to === AnyRef || to === EqRef || to === StructRef) && from isa ConcreteRef &&
@@ -441,7 +441,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
             if _to_is_sarr && !_from_is_sarr
                 # any string-ish ref → its data array: narrow to $JlString, read data
-                # (march12: an externref source crosses the boundary first)
+                # (an externref source crosses the boundary first)
                 from === ExternRef && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
@@ -457,7 +457,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         end
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
         if to === ExternRef && from !== ExternRef
-            # march16: a KNOWN closure crossing to extern wraps first (the seam)
+            # A KNOWN closure crossing to extern wraps first (the seam)
             from isa ConcreteRef && maybe_wrap_closure!(b, ctx, from_julia)
             # any→extern at the JS boundary.
             extern_convert_any!(b)
@@ -482,7 +482,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         else
             # Downcast.
             if to isa ConcreteRef
-                # march16: a downcast to a CLOSURE's captured struct may receive the
+                # A downcast to a CLOSURE's captured struct may receive the
                 # closure OBJECT (the erasure seam wrapped it) — unwrap via .context
                 # when the runtime value is the object; direct cast otherwise.
                 local _cbase = ctx.type_registry.closure_base_idx
@@ -535,7 +535,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             num!(b, Opcode.F32_CONVERT_I64_S)
         elseif from === I32 && to === F32
             num!(b, Opcode.F32_CONVERT_I32_S)
-        # march5 F8: the NARROWING arms (dart throws here; Julia call boundaries
+        # F8: the NARROWING arms (dart throws here; Julia call boundaries
         # genuinely narrow — e.g. an Int64 value meeting an Int32 param)
         elseif from === I64 && to === I32
             num!(b, Opcode.I32_WRAP_I64)
@@ -684,7 +684,7 @@ function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
     return b
 end
 
-"""march9 — dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
+"""— dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
 plus the post-DFS drift ids. typeId is on the stack; result i32. Uses a scratch local
 when extras exist."""
 function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
@@ -796,7 +796,7 @@ ref.cast + struct.get when needed.
 # MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
-"""THE condition visitor (march4): emit the i32 condition directly into the target builder."""
+"""THE condition visitor (): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
     if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
@@ -851,7 +851,7 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
-    # march3: THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
+    # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
     # proved _compile_value_b's tracked stack honest (zero liars across smoke +
     # the heaviest shards after the struct_new! mod-resolving fix).
     vb = _compile_value_b(val, ctx)
@@ -988,7 +988,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
-    # march4: THE narrow channel emits direct — the cast/unbox is tracked (the
+    # THE narrow channel emits direct — the cast/unbox is tracked (the
     # declared pops/pushes contract died with the bytes buffer).
     _narrow!(li, sid) = _narrow_generic_local!(b, li, sid, ctx)
 
@@ -1124,7 +1124,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
-                    # P2-batch6: real value (true unless @inbounds) — see statements.jl
+                    # real value (true unless @inbounds) — see statements.jl
                     i32_const!(b, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
                 elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
                     # Re-compile the expression to produce its value on the stack.
@@ -1237,7 +1237,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
-        # march7: funnel-first (int128)
+        # funnel-first (int128)
         local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cgint128 !== nothing
             local _ciint128 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
@@ -1264,7 +1264,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         f64_const!(b, val)
 
     elseif val isa String
-        # census F3 (march5): short literals read the ONE interned global (dart
+        # census F3 (): short literals read the ONE interned global (dart
         # constants.dart dedup — code size + `===` identity); the inline
         # data-segment path remains for long strings (dart lazies those).
         local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
@@ -1272,7 +1272,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
             return b
         end
-        # march7 LAZY: a pre-passed long literal reads its global, initializing on
+        # LAZY: a pre-passed long literal reads its global, initializing on
         # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
         local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
                     get(ctx.type_registry.lazy_string_globals, val, nothing)
@@ -1363,7 +1363,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 expected = physical_fields[Int(info.field_offset) + fi].valtype
                 emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
             end
-            struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+            struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
         else
             emit_value!(b, inner, ctx)  # R17-floor: QuoteNode delegates before a consumer exists
         end
@@ -1392,7 +1392,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif val isa Symbol
-        # march7 M7-c: Symbols share the classed string rep AND its intern registry —
+        # M7-c: Symbols share the classed string rep AND its intern registry —
         # equal symbol literals read the ONE deduplicated global (dart: one constantInfo
         # map for all kinds). Long names keep the inline data-segment path.
         name_str = String(val)
@@ -1412,7 +1412,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif typeof(val) <: Tuple
-        # march7: funnel-first (tuple) — tuples of constant-expressible fields intern
+        # funnel-first (tuple) — tuples of constant-expressible fields intern
         local _cgtp = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cgtp !== nothing
             local _citp = get(ctx.type_registry.structs, typeof(val), nothing)
@@ -1441,7 +1441,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif val isa Type
         # PURE-4151: Type constant — each unique Type gets a unique Wasm global
@@ -1465,7 +1465,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         global_get!(b, global_idx, ConcreteRef(info.wasm_type_idx, false))
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
-        # march7: funnel-first (fn-singleton) — interned when eager-able
+        # funnel-first (fn-singleton) — interned when eager-able
         local _cg_0 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cg_0 !== nothing
             local _ci_0 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
@@ -1477,10 +1477,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
         emit_struct_prefix!(b, ctx.type_registry, T, info)
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
-        # march7: funnel-first (closure-const) — interned when eager-able
+        # funnel-first (closure-const) — interned when eager-able
         local _cg_1 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cg_1 !== nothing
             local _ci_1 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
@@ -1509,7 +1509,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             emit_value!(b, field_val, ctx, _fw; from_julia=typeof(field_val))
         end
 
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif typeof(val) <: Dict
         # Dict constant with pre-populated data — materialize Memory fields as arrays
@@ -1587,7 +1587,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, Int64(getfield(val, :maxprobe)))
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields
 
     elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
         # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
@@ -1637,10 +1637,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
         _emit_tid!(Tuple{Int64})
         i64_const!(b, Int64(length(val)))
-        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
 
         # struct.new for Vector{T}
-        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
@@ -1674,7 +1674,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
-        # march7: THE ensureConstant funnel first — an eager-internable immutable
+        # THE ensureConstant funnel first — an eager-internable immutable
         # constant reads its ONE deduplicated global (dart constants.dart:427-443);
         # mutable / non-constant-field values fall through to the inline path.
         local _cg = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
@@ -1740,7 +1740,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
         finally
             pop!(_VALUE_COMPILE_STACK)
         end

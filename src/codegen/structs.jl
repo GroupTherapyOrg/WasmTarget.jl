@@ -814,7 +814,7 @@ end
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
 """
-# P2-batch17: rewrite Type{X} tuple parameters to DataType so every spelling of
+# Rewrite Type{X} tuple parameters to DataType so every spelling of
 # a type-object-carrying tuple shares one registry entry / wasm struct type.
 function _canonical_tuple_type(T::DataType)
     changed = false
@@ -894,7 +894,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
         return register_vararg_tuple_type!(mod, registry, T)
     end
 
-    # P2-batch17: canonicalize Type{X} elements to DataType. Inference spells a
+    # Canonicalize Type{X} elements to DataType. Inference spells a
     # type-object tuple element as Type{Int32} on one path (Const-widened arg
     # inference in the Core.tuple emitter) and DataType on another (the SSA
     # local's widenconst). Registering both spellings created two distinct wasm

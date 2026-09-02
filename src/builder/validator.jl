@@ -64,7 +64,7 @@ mutable struct WasmStackValidator
     # when unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
     # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
     mod::Any
-    context_hint::String   # march17: the emitting Julia statement (set via set_context!)
+    context_hint::String   # the emitting Julia statement (set via set_context!)
 end
 
 WasmStackValidator(; func_name="", mod=nothing) =
@@ -98,7 +98,7 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
     # stores popped an empty tracked stack that the spec says is bottomless).
     v.reachable || return expected
     if length(v.stack) <= _base(v)
-        # march17: name the CURE — a fragment consuming the parent's stack must
+        # Name the CURE — a fragment consuming the parent's stack must
         # DECLARE the input via seeding (append_builder! settles the contract).
         push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow (past block base) — expected $(expected) " *
               "[ctx: $(v.context_hint)]. FIX: seed the fragment's input so the merge settles it.")

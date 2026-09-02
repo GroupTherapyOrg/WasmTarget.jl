@@ -98,7 +98,7 @@ function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationCont
     return b
 end
 
-"""march6 slice B: split blocks so every region's enter_idx ENDS a block and every
+"""Slice B: split blocks so every region's enter_idx ENDS a block and every
 catch_dest STARTS one — the try_table/landing labels then open and close exactly at
 block boundaries and the stackifier's ordinary machinery does the rest."""
 function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{BasicBlock}
@@ -124,7 +124,7 @@ end
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder
-    # march6 slice B: try regions are FIRST-CLASS — pre-split at their boundaries,
+    # Slice B: try regions are FIRST-CLASS — pre-split at their boundaries,
     # then the two label events below (open at the enter block's end, close at the
     # handler block's start) are the ENTIRE try lowering. Handler blocks compile as
     # plain CFG blocks: the stackifier's phi machinery already owns handler-edge phis.
@@ -145,7 +145,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     for i in 1:length(code)
         stmt = code[i]
-        # P2-batch6: boundscheck now compiles to its REAL value (true unless
+        # Boundscheck now compiles to its REAL value (true unless
         # @inbounds), so the always-jump/dead-region carving below — which
         # assumed we emit 0 — only applies to an explicit `false` (inside
         # @inbounds). For boundscheck=true the GotoIfNot falls through to the
@@ -214,7 +214,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     # (successor edges for regions are added after the terminator walk below)
-    # march6 slice B: region → block-event maps. A region OPENS at the end of the
+    # Slice B: region → block-event maps. A region OPENS at the end of the
     # block containing its EnterNode and CLOSES at the start of its handler block.
     try_open_at = Dict{Int, Vector{Any}}()   # block_idx (enter block) → regions, outermost first
     try_close_at = Dict{Int, Vector{Any}}()  # block_idx (handler block) → regions, innermost first
@@ -303,7 +303,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
-    # march6 slice B: handler edges — the enter block flows to BOTH its fall-through
+    # Slice B: handler edges — the enter block flows to BOTH its fall-through
     # and the handler block (the catch edge), so predecessors/phi analysis see handlers.
     for r in try_regions
         eb = get(stmt_to_block, r.enter_idx, nothing)
@@ -543,7 +543,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
-    # march6 slice B: targets INSIDE a try region must open INSIDE its try_table —
+    # Slice B: targets INSIDE a try region must open INSIDE its try_table —
     # a br from within the region to a label opened outside the try would exit the
     # try entirely (first-contact bug: the normal path br'd into the handler).
     # Deepest-construct-wins vs loops: a target inside both belongs to whichever
@@ -1029,7 +1029,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
                                 # (cpv takes needs_temp) + the "safety check" re-derivation.
                                 pv_b, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
-                                # march3: typed merge — the audit proved the channel honest
+                                # Typed merge — the audit proved the channel honest
                                 # (pv_n is now trustworthy; the phantom declared-push is gone).
                                 if pv_n >= 2
                                     emit_phi_failure!(b, "multi-value phi edge cannot feed one local"; idx=i)
@@ -1061,7 +1061,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     end
 
     # PURE-6024 debug: trace function name for debugging.
-    # P2-batch21: ctx has no func_name field — use func_ref (the function object),
+    # Ctx has no func_name field — use func_ref (the function object),
     # otherwise WT_DBG_FN can never match and the traces below are unreachable.
     _debug_fn_pattern = OPTIONS[].debug_fn
     _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
@@ -1086,7 +1086,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         return tb
     end
 
-    # P2-batch23 (gaps 4be58371947f / 203da15d789c): when compiling a SUBSET of
+    # When compiling a SUBSET of
     # the function's blocks (pre-try regions, chain prefixes), a terminator can
     # target a statement BEYOND the subset (e.g. `if cond; return X; end; try…`
     # — the GotoIfNot's dest is the try region). Previously the branch was
@@ -1109,7 +1109,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     for (block_idx, block) in enumerate(blocks)
         # First, close any blocks whose target is this block
         # (We close BEFORE generating code for the target block)
-        # march6 slice B: a region's handler block starts here → the try_table and
+        # Slice B: a region's handler block starts here → the try_table and
         # its landing block END exactly at this boundary (the catch br lands at the
         # handler's first instruction). Innermost regions close first.
         if haskey(try_close_at, block_idx)
@@ -1127,7 +1127,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
                     end_block!(b)          # end landing — the catch payload arrives here
-                    # march15: bind the payload to the REGION's OWN local (dart binds each
+                    # Bind the payload to the REGION's OWN local (dart binds each
                     # catch's exception to a named local — nested regions never clobber).
                     # $current_exn still receives a copy while non-local readers remain.
                     drop!(b)                                            # stackTrace
@@ -1197,7 +1197,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
         bb = _ctx_builder(ctx, "generate_stackified_flow.block")
         _seed_builder_locals!(bb, ctx)
-        # march17: values legitimately flow BETWEEN basic blocks on the wasm stack —
+        # Values legitimately flow BETWEEN basic blocks on the wasm stack —
         # the block fragment declares the incoming stack (the merge settles exactly).
         isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))
         # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
@@ -1285,7 +1285,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Nothing statement
 
             else
-                # march4 Phase C: THE statement visitor emits directly; the drop
+                # Phase C: THE statement visitor emits directly; the drop
                 # logic reads the emission's node window (byte sniffs are gone).
                 local _stmt_i0 = length(bb.instrs)
                 local _stmt_stack0 = length(bb.v.stack)
@@ -1313,7 +1313,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
 
                 if !haskey(ctx.ssa_locals, i)
-                    # PURE-220 (march4, node): skip if the visitor already emitted a DROP.
+                    # PURE-220 (node): skip if the visitor already emitted a DROP.
                     # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
@@ -1445,7 +1445,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end
                 end
             elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
-                # P2-batch23: dest is beyond the compiled subset — branch to the
+                # Dest is beyond the compiled subset — branch to the
                 # exit block (the caller's continuation begins right after it).
                 num!(b, Opcode.I32_EQZ)
                 br_if!(b, exit_label::ControlLabel)
@@ -1530,7 +1530,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                             if func_ret_wasm isa ConcreteRef
                                 ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
                             else
-                                # P2-batch24 (gap dc4aaea42654): the local can be
+                                # (gap dc4aaea42654): The local can be
                                 # narrower than the function result (Int32 return
                                 # value in a function whose rettype widened to
                                 # Union{Int32,Int64} → i64). Mirror the numeric
@@ -1555,7 +1555,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     br!(b, get_loop_label(dest_block))
                 end
             elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
-                # P2-batch23: unconditional jump beyond the compiled subset —
+                # Unconditional jump beyond the compiled subset —
                 # branch to the exit block (the caller's continuation).
                 br!(b, exit_label::ControlLabel)
             end
@@ -1571,12 +1571,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         end
 
-        # march6 slice B: this block ends with an EnterNode (post-split guarantee) →
+        # Slice B: this block ends with an EnterNode (post-split guarantee) →
         # open the region: landing block (the catch's br target ends at the handler)
         # then the try_table whose symbolic catch target is the landing. Outermost first.
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
-                # march6 slice D: the TYPED catch — the landing block carries the tag
+                # Slice D: the TYPED catch — the landing block carries the tag
                 # payload (exn, stackTrace) as its results; catch_clause retains
                 # the landing label identity until the builder serializes it
                 # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
@@ -1649,11 +1649,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # For functions with a return type: emit unreachable (WASM validation uses
     # polymorphic stack after unreachable, so this validates). But we ALSO need
     # to ensure br to the outermost block uses `return` instead of `br`.
-    # P2-batch19: callers compiling a FALL-THROUGH region (the pre-branch code
+    # Callers compiling a FALL-THROUGH region (the pre-branch code
     # of an exit-branch try/catch) opt out — for them this guard is live code.
     trailing_unreachable && unreachable!(b)  # structural trap (dart-legit dead path)
 
-    # P2-batch23: close the subset exit block — out-of-subset branches land
+    # Close the subset exit block — out-of-subset branches land
     # here, i.e. exactly at the caller's continuation.
     needs_exit_block && end_block!(b)
 

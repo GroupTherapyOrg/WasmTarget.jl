@@ -103,7 +103,7 @@ end
 """
     _sub_builder(fb, ctx, name, n) -> InstrBuilder
 
-march17: a fragment that consumes the parent's top `n` stack values DECLARES them
+A fragment that consumes the parent's top `n` stack values DECLARES them
 (seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
 """
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
@@ -182,7 +182,7 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     info === nothing && error("exception layout is unavailable for $ErrT")
     emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
-    struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
+    struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields
     global_set!(bld, exn_global)
     global_get!(bld, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bld, ExternRef); throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
     return bld
@@ -662,7 +662,7 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
         local_result = allocate_local!(ctx, local_type)
-        bld = _sub_builder(fb, ctx, "_compile_call_checked_mul", 2)   # march17: the operands
+        bld = _sub_builder(fb, ctx, "_compile_call_checked_mul", 2)   # the operands
 
         # Save b, save a, compute a*b, save result
         local_set!(bld, local_b)
@@ -737,7 +737,7 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
             register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         end
         tuple_info = ctx.type_registry.structs[tuple_type]
-        struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fb, bld)
     end
     return nothing
@@ -961,7 +961,7 @@ Modifies `bytes` in-place.
 """
 function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     bld = _ctx_builder(ctx, "_compile_call_egaleq")
-    # march17: the two operands are already on fb — declare them (the width by arm)
+    # The two operands are already on fb — declare them (the width by arm)
     if !is_128bit
         local _sw = arg_type === Float64 ? F64 : arg_type === Float32 ? F32 :
                     isempty(fb.v.stack) ? AnyRef : fb.v.stack[end]
@@ -1899,7 +1899,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
 end
 
 """
-Compile a function call expression — dart visitor shape (march4): emits INTO the caller's builder.
+Compile a function call expression — dart visitor shape; emits INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
@@ -1975,14 +1975,14 @@ end
 
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
-    set_context!(fb, first(string(expr), 80))   # march17: errors name the call
+    set_context!(fb, first(string(expr), 80))   # errors name the call
     # A call may consume values stack-threaded by the enclosing statement fragment.
     # Preserve that tracked input across this second fragment boundary just as
     # compile_statement! preserves the parent builder's input. Without it, Julia
     # 1.13 escaping-closure arithmetic emits valid operand bytes but the validator
     # sees an empty fragment stack and reports a false underflow.
     isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
-    _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
+    _boxed_operand_unboxed = false   # FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
     args = expr.args[2:end]
@@ -2142,7 +2142,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_idx = ctx.signal_ssa_setters[idx]
         value_arg = args[3]
         local _setb = _ctx_builder(ctx, "compile_call")
-        # march14 (wrap tail): the signal cell's declared type IS the expected
+        # The signal cell's declared type IS the expected
         emit_value!(_setb, value_arg, ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)
         global_set!(_setb, global_idx)
 
@@ -2217,7 +2217,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # march16 slice D: a DYNAMIC function-value call — the callee is a runtime value
+    # A DYNAMIC function-value call — the callee is a runtime value
     # whose static type is erased or a union containing only Function subtypes. Ride
     # the closure vtable: the OBJECT
     # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
@@ -2294,7 +2294,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _fv_b = _compile_value_b(args[3], ctx)   # false_val
         local _cv_b = _compile_value_b(args[1], ctx)   # cond
 
-        # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
+        # PURE-036y / the condition must push an i32, not a ref.
         # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
         # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
         # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
@@ -2371,7 +2371,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if arg_type === String || arg_type <: AbstractVector || arg_type === Any
             # For strings and arrays, sizeof is the array length
             local _szb = _ctx_builder(ctx, "compile_call")
-            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
+            # ONE 4-arg wrap replaces the sniff+cast ladder
             emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             array_len!(_szb)
             # array.len returns i32, extend to i64 for Julia's Int
@@ -2389,7 +2389,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         arg_type = infer_value_type(arg, ctx)
         if arg_type === String || arg_type <: AbstractString
             local _ncb = _ctx_builder(ctx, "compile_call")
-            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
+            # ONE 4-arg wrap replaces the sniff+cast ladder
             emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
             array_len!(_ncb)
             # Return as Int (i64) to match Julia's ncodeunits return type
@@ -2588,7 +2588,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _refb = _ctx_builder(ctx, "compile_call")
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
-                    # march14 (wrap tail): typed arrival when the struct is registered
+                    # Typed arrival when the struct is registered
                     emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
                 else
@@ -2605,7 +2605,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _szfb = _ctx_builder(ctx, "compile_call")
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
-                    # march14 (wrap tail): typed arrival when the struct is registered
+                    # Typed arrival when the struct is registered
                     emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
                 else
@@ -2639,7 +2639,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     field_idx = findfirst(==(field_sym), info.field_names)
                     if field_idx !== nothing
                         local _sfb = _ctx_builder(ctx, "compile_call")
-                        # march14 (wrap tail): the object arrives AS the registered struct
+                        # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                         append_builder!(fb, _sfb)
@@ -2740,7 +2740,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
                     struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     return append_builder!(b, fb)
                 end
@@ -2781,7 +2781,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if field_idx !== nothing
                 local _sfgb = _ctx_builder(ctx, "compile_call")
                 set_context!(_sfgb, first(string(expr), 120))
-                # march14: the typed wrap subsumes the PURE-701 structref-narrow helper
+                # The typed wrap subsumes the PURE-701 structref-narrow helper
                 emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                 local _sfg_wfi = wasm_field_idx(info, field_idx)
                 local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
@@ -3005,7 +3005,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         end
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
-                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
                     struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
                     return append_builder!(b, fb)
                 end

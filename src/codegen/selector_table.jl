@@ -18,7 +18,7 @@
 # This file replaces the FNV-1a hash apparatus of dispatch.jl (per-function hash
 # tables + probe loops + whole-body replacement), which M8.4 DELETES.
 
-# census F5 (march5): the M8.1 SelectorInfo/SelectorRegistry transcription
+# Census F5 the M8.1 SelectorInfo/SelectorRegistry transcription
 # (a faithful dispatch_table.dart:27-77 port) was DEAD CODE — zero callers; the
 # LIVE packer is pack_dispatch_selectors! below, keyed on DispatchTableRegistry.
 # Deleted rather than kept as reference: the dart source IS the reference.
@@ -248,7 +248,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
         i32_const!(b, Int64(offset))
         num!(b, Opcode.I32_ADD)
     end
-    sig = FuncType(copy(dt.slot_types),   # march11: the per-slot LUB (was uniform AnyRef)
+    sig = FuncType(copy(dt.slot_types),   # The per-slot LUB (was uniform AnyRef)
                    dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                        WasmValType[dt.result_wasm_type] : WasmValType[])
     call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx,

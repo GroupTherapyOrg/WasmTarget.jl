@@ -84,7 +84,7 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
-    # march7: THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
+    # THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
     # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
     # identity that structural keying would wrongly merge.
@@ -94,20 +94,20 @@ mutable struct TypeRegistry
     # storage is published once by module start, then all reads share the object.
     mutable_constant_globals::Union{Nothing, IdDict{Any, Tuple{UInt32, UInt32}}}
     module_init_functions::Union{Nothing, Vector{UInt32}}
-    # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
+    # census F3 (dart constants.dart:427-443): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
     string_constant_globals::Union{Nothing, Dict{String, UInt32}}
-    # march7 LAZY constants (dart constants.dart:445-476/322-339): long strings get an
+    # LAZY constants (dart constants.dart:445-476/322-339): long strings get an
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
     lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
-    # march9: post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
+    # Post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
     # (ensure_type_id! max+1) lies outside every abstract's [low,high]; each abstract
     # ancestor records it here so isa checks the range PLUS these (dart's multi-range,
     # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
     type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
-    # march16 (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
+    # (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
     # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
@@ -131,13 +131,13 @@ TypeRegistry() = TypeRegistry(
     nothing,  # unicode_property_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
-    Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
+    Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
-    Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
-    Dict{Type, Vector{Int32}}(),            # type_extra_ids (march9)
-    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # march16 closure layouter
+    Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
+    Dict{Type, Vector{Int32}}(),            # type_extra_ids
+    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}()                                # step5 class-DAG synthetics
 )
 
@@ -155,13 +155,13 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # unicode_property_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
-    nothing,  # constant_globals (march7)
+    nothing,  # constant_globals
     nothing,  # mutable_constant_globals
     nothing,  # module_init_functions
     nothing,  # string_constant_globals (census F3)
-    nothing,  # lazy_string_globals (march7)
-    nothing,  # type_extra_ids (march9)
-    nothing, nothing, nothing,  # march16 closure layouter
+    nothing,  # lazy_string_globals
+    nothing,  # type_extra_ids
+    nothing, nothing, nothing,  # closure layouter
     nothing                     # step5 class-DAG synthetics
 )
 
@@ -172,7 +172,7 @@ symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
 """
     get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
 
-march7 LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
+LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
 (ref null \$JlString) global + an init function that builds the string once, stores
 it, and returns it. MUST be called BEFORE function-index assignment (the index-freeze
 constraint) — the literal pre-pass in compile.jl does.
@@ -206,7 +206,7 @@ end
 """
     ensure_constant_global!(mod, registry, val) -> Union{UInt32, Nothing}
 
-march7 — THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
+— THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
 map deduplicating EVERY constant kind). Returns the interned global for `val`, creating
 it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
@@ -301,7 +301,7 @@ end
 """
     get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}
 
-census F3 (march5) — INTERNED string constants, dart's constant→deduplicated-global
+census F3 () — INTERNED string constants, dart's constant→deduplicated-global
 architecture (constants.dart:427-443 ensureConstant; small strings eager via
 array_new_fixed, :512-564). Every use of an equal short literal reads ONE global,
 matching dart's code-size and `===`-identity semantics. Strings longer than the
@@ -396,7 +396,7 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
             push!(concrete_types, T)
         end
     end
-    # census F2 (march5): the closed world — IR-reachable types enter the numbering
+    # census F2 (): the closed world — IR-reachable types enter the numbering
     # even before (or without) struct registration; their ids/ranges are what isa
     # and the checked cast read, and lazy registration later reuses the same id.
     extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
@@ -543,7 +543,7 @@ function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
     end
     new_id = max_id + Int32(1)
     registry.type_ids[T] = new_id
-    # march9: record the drift id on every abstract ancestor — isa checks the DFS
+    # Record the drift id on every abstract ancestor — isa checks the DFS
     # range PLUS these extras (dart's multi-range), so numbering order can't break it.
     if registry.type_extra_ids !== nothing && T isa DataType && isconcretetype(T)
         anc = supertype(T)
@@ -1169,7 +1169,7 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return registry.arrays[elem_type]
     end
 
-    # P2-batch26 (gap 56af911c52b2): Vector{Union{}} — `map` with an
+    # (gap 56af911c52b2): Vector{Union{}} — `map` with an
     # always-throwing closure infers eltype Union{}. Such an array can only
     # ever be EMPTY (Union{} has no values), so the element representation is
     # arbitrary; use Int64 so the JS boundary and accessors have a concrete
@@ -1656,7 +1656,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = registry.jl_type_idx
     str_arr_idx = get_string_array_type!(mod, registry)
 
-    # march17: global_get! declares the global's TRUE valtype (the AnyRef lie made
+    # global_get! declares the global's TRUE valtype (the AnyRef lie made
     # this the #1 harvest offender — 96k tracked-type mismatches feeding struct_set!).
     b = InstrBuilder(; func_name="_populate_jl_hierarchy!", mod=mod)
 
@@ -1681,7 +1681,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(JL_TYPE_KIND_DATATYPE))
         struct_set!(b, dt_type_idx, UInt32(0), I32)  # field 0 = kind
@@ -1693,12 +1693,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             begin
             local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
             global_get!(b, tn_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             struct_set!(b, dt_type_idx, UInt32(1), ConcreteRef(tn_type_idx, true))  # field 1 = name
         end
@@ -1711,12 +1711,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                 begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                 begin
             local _gvt = mod.globals[Int(parent_global_idx) + 1].valtype
             global_get!(b, parent_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                 struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
             end
@@ -1725,12 +1725,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
         end
@@ -1741,7 +1741,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         if nparams == 0
             i32_const!(b, 0)
@@ -1754,7 +1754,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                     begin
             local _gvt = mod.globals[Int(p_global_idx) + 1].valtype
             global_get!(b, p_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                     # $JlDataType is sub $JlType, so ref is already compatible
                 else
@@ -1770,7 +1770,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(Int32(hash(type_val) & 0x7FFFFFFF)))
         struct_set!(b, dt_type_idx, UInt32(4), I32)  # field 4 = hash
@@ -1779,7 +1779,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(isabstracttype(type_val) ? 1 : 0))
         struct_set!(b, dt_type_idx, UInt32(5), I32)  # field 5 = abstract
@@ -1800,7 +1800,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(dfs_low))
         struct_set!(b, dt_type_idx, UInt32(6), I32)  # field 6 = dfs_low
@@ -1809,7 +1809,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(dfs_high))
         struct_set!(b, dt_type_idx, UInt32(7), I32)  # field 7 = dfs_high
@@ -1905,7 +1905,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
                 local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
                 global_get!(b, tn_global_idx, _gvt)
-                _gvt === AnyRef && ref_cast!(b, Int64(tn_type_idx), true)   # march17: the RECEIVER is a TypeName
+                _gvt === AnyRef && ref_cast!(b, Int64(tn_type_idx), true)   # the RECEIVER is a TypeName
             end
             begin
                 local _gvt = mod.globals[Int(wrapper_global_idx) + 1].valtype
@@ -2030,7 +2030,7 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
         type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds
         dt_global_idx = registry.type_constant_globals[T]
 
-        # march17: the table's declared type + narrow to the array receiver
+        # The table's declared type + narrow to the array receiver
         global_get!(b, table_global, AnyRef)
         ref_cast!(b, Int64(arr_type_idx), true)
         i32_const!(b, Int64(type_id))
@@ -2192,7 +2192,7 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         elem_type = T.parameters[2]  # Element type is second parameter for GenericMemory
         type_idx = get_array_type!(mod, registry, elem_type)
         return ConcreteRef(type_idx, true)
-    # P2-batch20: exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
+    # Exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
     # they must reach the Union branch below, not register as one member's wrapper
     # (gap 5ae13ccb033a).
     elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
@@ -2285,7 +2285,7 @@ end
 
 
 
-# ═══ march16: THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
+# ═══ THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
 
 """
     get_closure_base_struct!(mod, registry) -> UInt32

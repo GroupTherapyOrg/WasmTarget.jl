@@ -102,7 +102,7 @@ function find_try_regions(code)::Vector{TryRegion}
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
             elseif catch_dest > i
-                # P2-batch4: an always-throwing try body has NO :leave (Julia elides
+                # An always-throwing try body has NO :leave (Julia elides
                 # it when the body can't exit normally — e.g. `try div(0,0) catch`).
                 # Dropping the region here meant no try_table was emitted at all, so
                 # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
@@ -275,7 +275,7 @@ WASM structure:
 # PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
 # PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
 function ensure_exception_tag!(mod::WasmModule)
-    # march6 slice D: THE TYPED TAG — dart's createExceptionTag carries
+    # THE TYPED TAG — dart's createExceptionTag carries
     # (exception, stackTrace) as the tag payload (translator.dart:485-491);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
     # Payload: (anyref exn, externref stackTrace — null until traces wire).
@@ -303,7 +303,7 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
     return UInt32(length(mod.globals) - 1)
 end
 
-# census F7 (march5): the dormant stack-trace cluster (ensure_stack_trace_support!/
+# census F7: the dormant stack-trace cluster (ensure_stack_trace_support!/
 # emit_capture_stack!) is DELETED — zero callers since introduction (PURE-9036).
 # The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
 # (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
@@ -324,14 +324,14 @@ Structure:
   end
   ; catch handler code (pop_exception skipped, returns -1 or similar)
 """
-# P2-batch17: compile a catch-handler region [from..to] honouring GotoIfNot
+# Compile a catch-handler region [from..to] honouring GotoIfNot
 # (conditional catch arms / exception isa dispatch). The linear per-statement
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
 # then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
 # no-merge generator.
 """builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
 
-# P2-batch22 (gap bac7c93c2871): `if cond; try A catch X end else try B catch
+# `if cond; try A catch X end else try B catch
 # Y end end` — two INDEPENDENT try/catches, one per branch arm, every arm
 # returning. Neither the chain nor the sequential generator fits (chain glues
 # the else arm into the then arm's catch; sequential leaves the branch

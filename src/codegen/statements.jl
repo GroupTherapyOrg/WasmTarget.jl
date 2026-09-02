@@ -292,8 +292,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
 end
 
 """
-Compile a single IR statement — dart's ONE code generator, ONE builder (march4
-Phase C): THE visitor emits directly into the caller's builder; the byte era's
+Compile a single IR statement — dart's ONE code generator, ONE builder (Phase C): THE visitor emits directly into the caller's builder; the byte era's
 front seam and accumulator are gone.
 """
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
@@ -375,7 +374,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                 if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
                     for v in phic_stmt.values
                         if v isa Core.SSAValue && v.id == idx
-                            # march14: the upsilon store wraps to the PhiC local's declared type
+                            # The upsilon store wraps to the PhiC local's declared type
                             emit_value!(b, stmt.val, ctx,
                                         ctx.locals[ctx.phi_locals[phic_idx] - ctx.n_params + 1])
                             local_set!(b, ctx.phi_locals[phic_idx])
@@ -457,12 +456,12 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         end
 
     elseif stmt isa Expr
-        # march4 Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
+        # Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/HISTORY.md#exceptions-and-structured-control-flow).
         local _sf = _ctx_builder(ctx, "compile_statement.frag")
-        set_context!(_sf, first(string(stmt), 80))   # march17: errors name the stmt
-        # march17: statements legitimately consume values earlier statements left on
+        set_context!(_sf, first(string(stmt), 80))   # errors name the stmt
+        # Statements legitimately consume values earlier statements left on
         # the wasm stack (the stackified model) — seed the fragment with the parent's
         # TRACKED stack so pops resolve; append_builder! settles the contract exactly.
         isempty(b.v.stack) || seed_input!(_sf, copy(b.v.stack))
@@ -483,7 +482,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             compile_new!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
         elseif stmt.head === :boundscheck
-            # P2-batch6: compile to the expr's REAL value (true unless @inbounds).
+            # Compile to the expr's REAL value (true unless @inbounds).
             # We previously pushed false ("wasm has its own bounds checking"), but
             # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
             # check branch meant getindex OOB could never reach the catchable
@@ -499,7 +498,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             # Julia IR emits :the_exception in catch blocks to get the caught exception.
             # We stash exception values into a (mut anyref) global before throw,
             # and retrieve them here with global.get.
-            # march15: read the ENCLOSING region's payload local (dart's named catch
+            # Read the ENCLOSING region's payload local (dart's named catch
             # local); the global remains the fallback for reads outside any known region.
             local _exn_src_local = nothing
             for (_enter, _loc) in ctx.exn_region_locals
@@ -579,7 +578,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         if haskey(ctx.ssa_locals, idx)
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
-            # march4 Phase B: DROP+UNREACHABLE tail is two node-kind tests — the
+            # Phase B: DROP+UNREACHABLE tail is two node-kind tests — the
             # PURE-6005 false-positive class (struct_get operand bytes 0x1a 0x00)
             # cannot exist at the ir/ layer, so its GC-in-tail guard is gone too.
             is_unreachable_bytecode = (length(_sf.instrs) >= 2 &&
@@ -604,7 +603,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
 
                 # PURE-6024: If this is a slot assignment, TEE to slot local first
                 # (leaves value on stack for the SSA local.set below).
-                # march17: DIRECT — the fresh store wrapper pop_any'd an empty stack
+                # DIRECT — the fresh store wrapper pop_any'd an empty stack
                 # on EVERY SSA store (the single largest harvest class).
                 if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id)
                     local_tee!(b, ctx.slot_locals[_slot_assign_id])
@@ -617,7 +616,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
     # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
     # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
-        local_set!(b, ctx.slot_locals[_slot_assign_id])   # march17: direct
+        local_set!(b, ctx.slot_locals[_slot_assign_id])   # direct
     end
 
     # TRACE: Find double-DROP in compiled output for func 8 (node count — no byte scan)
@@ -635,7 +634,7 @@ end
 """
 Compile a struct construction expression (%new).
 """
-# P2-batch17: type-correct default for an exception field whose value can't be
+# Type-correct default for an exception field whose value can't be
 # represented (see the Exception branch of compile_new).
 function _references_argument(@nospecialize(x), n::Int)::Bool
     x == Core.Argument(n) && return true
@@ -767,7 +766,7 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
         callee_ir.code, 1, Core.Argument(arg_n), T, missing)
 end
 
-"""dart visitConstructorInvocation shape (march4): emits the struct construction
+"""dart visitConstructorInvocation shape (): emits the struct construction
 INTO the caller's builder and returns it — THE implementation."""
 function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
 
@@ -878,7 +877,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         i64_const!(b, 0)
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields
 
         return b
     end
@@ -915,7 +914,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                                       length(src_stmt.args) >= 4)
             end
         end
-        # march3 (typed): the LOCAL_GET LEB decode is gone — the tracked type
+        # (typed): the LOCAL_GET LEB decode is gone — the tracked type
         # answers "is the source numeric where field 0 needs an array ref".
         local _f0_b = _compile_value_b(field_values[1], ctx)
         if is_multi_arg_memref
@@ -994,11 +993,11 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                         static_wasm_type(field_values[1], ctx))
             array_len!(b)
             num!(b, Opcode.I64_EXTEND_I32_S)
-            struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
+            struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
         end
 
         # Create the Vector struct (already has typeId from above)
-        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
         return b
     end
 
@@ -1242,13 +1241,13 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     end
 
     # struct.new type_idx
-    struct_new!(b, info.wasm_type_idx)   # mod-resolved fields (march3)
+    struct_new!(b, info.wasm_type_idx)   # mod-resolved fields
 
     return b
 end
 
 """
-Compile a foreign call expression — dart visitor shape (march4): emits INTO the
+Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
 function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
@@ -1340,7 +1339,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # pushing it orphaned a stub value on the stack: callers (Dict ctor,
             # rehash!) discard the result, and the builder stack delta remains zero.
             # Latent until a
-            # reachable block `end` closed over the orphan (P2-batch23, gaps
+            # reachable block `end` closed over the orphan (gaps
             # 4be58371947f / 203da15d789c).
             if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
                 emit_value!(b, expr.args[6], ctx,
@@ -1699,9 +1698,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                     else
                         i64_const!(b, 0)
                     end
-                    struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
+                    struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
                     # 3. struct.new Vector(typeId, data_ref, size_tuple_ref)
-                    struct_new!(b, vec_type_idx)   # mod-resolved fields (march3)
+                    struct_new!(b, vec_type_idx)   # mod-resolved fields
                     return b
                 end
             end
