@@ -541,6 +541,32 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             # GC preservation end — no-op in WasmGC
         elseif stmt.head === :loopinfo
             # Loop optimization hint (e.g., @simd) — no-op in Wasm
+        elseif (_tu_node = ctx.nir[idx].node) isa NirThrowUndefIfNot
+            # Julia: `cond || throw(UndefVarError(var, :local))` for a captured
+            # variable that may be unassigned. The exception is the exact Julia
+            # object, thrown through the one exception tag (never a skipped check
+            # — before this lowering the head fell through as an empty statement).
+            ensure_exception_tag!(ctx.mod)
+            local _tu_exn = ensure_exception_global!(ctx.mod)
+            local _tu_info = register_struct_type!(ctx.mod, ctx.type_registry, UndefVarError)
+            _tu_info === nothing && error("UndefVarError layout is unavailable")
+            local _tu_fields = ctx.mod.types[_tu_info.wasm_type_idx + 1].fields
+            emit_value!(_sf, nir_operand(_tu_node.cond), ctx, I32)
+            num!(_sf, Opcode.I32_EQZ)
+            if_!(_sf)
+            emit_struct_prefix!(_sf, ctx.type_registry, UndefVarError, _tu_info)
+            emit_value!(_sf, QuoteNode(_tu_node.var), ctx,
+                        _tu_fields[Int(wasm_field_idx(_tu_info, 1)) + 1].valtype; from_julia=Symbol)
+            i64_const!(_sf, Int64(WASM_WORLD_AGE))
+            emit_value!(_sf, QuoteNode(:local), ctx,
+                        _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
+            struct_new!(_sf, _tu_info.wasm_type_idx)
+            global_set!(_sf, _tu_exn)
+            global_get!(_sf, _tu_exn, AnyRef)
+            ref_null!(_sf, ExternRef)
+            throw_!(_sf, 0; inputs=WasmValType[AnyRef, ExternRef])
+            end_block!(_sf)
+            stmt_bytes = builder_code(_sf)
         else
             # Every other Expr head (e.g. :splatnew, :copyast) has zero lowering.
             # Falling through silently here would leave `stmt_bytes` empty and
