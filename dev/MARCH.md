@@ -263,6 +263,36 @@ smoke lane, which is why that miscompile was invisible — it runs it now.
 Promote every ratchet at 0 to a lock; refresh `dev/PARITY_MASTER.md`'s audit stamp and the changed
 rows of `dev/CERTIFICATION.md`.
 
+### Phase 9 — result (2026-09-02)
+
+| Exit | State |
+|---|---|
+| ratchets at 0 → locks | R22 → **L104**; R21 → **L114** (foreigncalls registry-only); R20 → **L115** (invokes registry-only); R23/R24/R26/R11 locked in Phase 2 |
+| floors, written down | R19 15 → **L116** (an explicit allowlist: every remaining `is_func` symbol with its reason — pre-resolution getglobal, the interleaved getfield/setfield! family, the L38/L57 text pins, the operand-on-stack fallbacks); R14 10 (the four mutable kinds + funnel tails); R3 93 · R5 81 · R7 57 · R27 54 · R17 29 · R15 2 hold and only fall; R29a 427 · R29b 145 seeded for the frontend migration |
+| locks | 102 → **114**; every one negative-tested before it counted |
+| size | src 39,052 → 38,542 lines (the frontend boundary, the registries, the dispatch guards and the formal anchors are in; the ladders, the bespoke string builders, the FNV hash, the Dict special case and the dead resolver are out); `compile_call!` 4,583 → **2,977**, `compile_invoke!` and `compile_foreigncall!` are consult sites over registries |
+| docs | `dev/PARITY_MASTER.md` (architecture rows for registries, determinism, the frontend boundary and the formal layer; roadmap items 3–5 updated), `dev/CERTIFICATION.md` (eight revalidation rows) |
+| gates | smoke 70/70 on 1.12.7 and 1.13.0-rc1, 235 probes byte-identical to their recorded baseline, 25 TLC instances (every Broken variant rejected), shard-0 `Pkg.test` green on both Julias locally; the CI matrix on the final head is the authoritative record (link in the PARITY_MASTER audit stamp) |
+
+### Phase 10 — result (2026-09-02)
+
+Item 4: `src/frontend/nir.jl` (`195639c7`), byte-identical, flow.jl and stackified.jl converted,
+`NirThrowUndefIfNot` and `nir_operand` added when the UndefVarError lowering needed them
+(`f6e491f2`). Item 3: the sidecar prototype (`e66e9c2c`) with `daxpy.wat` recovered after
+`*.wat` turned out to be gitignored (`27e85810` — a rule now in the agent protocol). Item 5:
+`test/shadow_compile.jl` (`dcc13f10`); UnifiedIR measured absent, `:unified` errors loudly.
+
+### Phase 11 — result (2026-09-02)
+
+Six models landed, each with a Broken instance TLC rejects (`4eccc6fc` Diagnostics,
+`4091bbdb` ClosedWorld, `e17c571c` ConsultChain, `e66e9c2c` Sidecar, `120c1d10` Stackifier,
+`c2c7a577` ClassIdDispatch). Three produced findings acted on in code, never by weakening an
+invariant: ConsultChain → the egal arm's order dependence → **L113**; ClassIdDispatch →
+MissingMethodTraps (a MethodError receiver ran another row; span reservation + span guard +
+wrapper slot check) and RangeIsa (lazy class ids invisible to `isa`); Stackifier's Broken
+instance is exactly the span-carving miscompile `b9f4d229` fixed. **L111** keeps every model
+paired and anchored; `formal.yml` runs the harness on every push.
+
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
 The three roadmap items the pathway had deferred are in: item 4 (normalized frontend boundary,
