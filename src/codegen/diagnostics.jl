@@ -167,9 +167,15 @@ current Julia CFG proves the statement unreachable. `soundness_fatal=true` force
 rejection; `false` is reserved for callers that already possess an equally strong
 structural proof.
 
-  * **`:value_stub`** — the stub would emit a *wrong value* inline
-    (e.g. `jl_object_id`→constant, non-zero `memset`). This is unsound regardless
-    of reachability, so it throws [`WasmCompileError`](@ref).
+The resolution is a function of the caller's `soundness_fatal` hint and CFG-proven
+reachability ONLY — never of `kind` (dev/formal/Diagnostics.tla checks exactly this;
+an earlier version of this docstring claimed `:value_stub` was unconditionally fatal,
+which the code never enforced). A CFG-dead statement may take a trap whatever its
+kind, because it never executes. The kinds classify the diagnostic for the reader:
+
+  * **`:value_stub`** — a stub would have emitted a *wrong value* inline
+    (e.g. `jl_object_id`→constant, non-zero `memset`); callers that know the site is
+    live pass `soundness_fatal=true`.
   * **`:unsupported_method` / `:unsupported_type`** — reachable or uncertain
     unsupported code rejects instead of leaving a latent runtime trap.
 

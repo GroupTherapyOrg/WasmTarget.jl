@@ -1311,6 +1311,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 emit_duplicated_terminal!(b, dest_block)
             elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
                 br!(b, get_forward_label(dest_block))
+            elseif dest_block !== nothing && dest_block <= block_idx
+                # a backward always-taken jump is a loop back edge — the same br a
+                # GotoNode emits (dev/formal/Stackifier.tla: every edge is realized;
+                # this arm used to emit nothing)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                dest_block in loop_headers ||
+                    throw(WasmCompileError(WasmDiagnostic(:unsupported_control_flow, "backward always-taken boundscheck jump",
+                        "target block $dest_block is not a loop header", nothing, nothing)))
+                br!(b, get_loop_label(dest_block))
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
