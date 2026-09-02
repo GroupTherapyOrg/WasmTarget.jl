@@ -24,7 +24,7 @@ Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h 
 _compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_hash_b(args, ctx))
 
-"""builder-returning core (march4)."""
+"""builder-returning core."""
 function _compile_invoke_str_hash_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
@@ -116,7 +116,7 @@ Extract: str_find(haystack, needle) -> Int32. Returns 1-based position or 0 if n
 _compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_find_b(args, ctx))
 
-"""builder-returning core (march3): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_find")
@@ -292,7 +292,7 @@ Extract: str_contains(haystack, needle) -> Bool. Returns true if needle is found
 _compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_contains_b(args, ctx))
 
-"""builder-returning core (march4)."""
+"""builder-returning core."""
 function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_contains")
@@ -461,7 +461,7 @@ Extract: str_startswith(s, prefix) -> Bool.
 _compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_startswith_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_startswith")
@@ -567,7 +567,7 @@ Extract: str_endswith(s, suffix) -> Bool.
 _compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_endswith_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_endswith")
@@ -685,7 +685,7 @@ Uses WasmGC array.new_default + loop with array.copy.
 _compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_repeat_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_repeat")
@@ -717,7 +717,7 @@ function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::In
 
     # Store n as i32
     n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -782,7 +782,7 @@ BF-2000: lpad(s, n, c) -> String. Left-pad string s to length n with char c.
 _compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_lpad_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_lpad")
@@ -820,7 +820,7 @@ function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Store n as i32
     n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -834,7 +834,7 @@ function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::Inst
         i32_const!(b, Int32(UInt32(char_arg)))
     else
         # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
-        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
+        emit_value!(b, char_arg, ctx, I32)   # Julia-encoded char bits
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
@@ -896,7 +896,7 @@ BF-2000: rpad(s, n, c) -> String. Right-pad string s to length n with char c.
 _compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_rpad_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_rpad")
@@ -928,7 +928,7 @@ function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Store n as i32
     n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
+    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)
     if n_type === Int64 || n_type === Int
         num!(b, Opcode.I32_WRAP_I64)
     end
@@ -939,7 +939,7 @@ function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::Inst
     if char_arg isa Char
         i32_const!(b, Int32(UInt32(char_arg)))
     else
-        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
+        emit_value!(b, char_arg, ctx, I32)   # Julia-encoded char bits
         i32_const!(b, Int32(24))
         num!(b, Opcode.I32_SHR_U)
     end
@@ -993,7 +993,7 @@ Extract: str_uppercase(s) -> String. Convert lowercase ASCII letters to uppercas
 _compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_uppercase_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_uppercase")
@@ -1097,7 +1097,7 @@ Extract: str_lowercase(s) -> String. Convert uppercase ASCII letters to lowercas
 _compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_lowercase_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_lowercase")
@@ -1201,7 +1201,7 @@ Extract: str_trim(s) -> String. Remove leading and trailing ASCII whitespace.
 _compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_str_trim_b(args, ctx))
 
-"""builder-returning core (march4): callers merge via append_builder!."""
+"""builder-returning core: callers merge via append_builder!."""
 function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     b = InstrBuilder(; func_name="_compile_invoke_str_trim")
@@ -1404,7 +1404,7 @@ Extract: println/print handler. Emits JS IO bridge imports.
 _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_print_b(name, args, ctx))
 
-"""builder-returning core (march4)."""
+"""builder-returning core."""
 function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationContext)::InstrBuilder
     io = get_io_imports()
     if io !== nothing
@@ -1445,17 +1445,17 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 # (ref extern) is subtype of externref — no conversion needed
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                emit_value!(b, arg, ctx, I64)   # march14
+                emit_value!(b, arg, ctx, I64)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Int32
-                emit_value!(b, arg, ctx, I32)   # march14
+                emit_value!(b, arg, ctx, I32)
                 num!(b, Opcode.I64_EXTEND_I32_S)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Float64
-                emit_value!(b, arg, ctx, F64)   # march14
+                emit_value!(b, arg, ctx, F64)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Float32
-                emit_value!(b, arg, ctx, F32)   # march14
+                emit_value!(b, arg, ctx, F32)
                 num!(b, Opcode.F64_PROMOTE_F32)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
@@ -1690,7 +1690,7 @@ _invoke_singleton_instance(@nospecialize(T)) =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
 """
-Compile an invoke expression (method invocation) — dart visitor shape (march4):
+Compile an invoke expression (method invocation) — dart visitor shape:
 emits the invoke INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that replace it re-init; exits merge typed).
@@ -2170,7 +2170,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if expected_julia_type isa Type
                     expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                     actual_julia_type = infer_value_type(arg, ctx)
-                    # march5 F8 (census: dart wrap = 100% of expressions through convertType,
+                    # F8 (census: dart wrap = 100% of expressions through convertType,
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
                     # re-implementing convertType — is ONE funnel call. The emission's own
                     # tracked type (dart carries the type with the value) refines `actual`;
@@ -2661,7 +2661,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # Compile index and convert to 0-based
                 idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bsc, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
+                emit_value!(bsc, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)
                 if idx_type === Int64 || idx_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
                 end
@@ -2670,7 +2670,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # Compile char value
                 char_type = infer_value_type(args[3], ctx)
-                emit_value!(bsc, args[3], ctx, (char_type === Int64 || char_type === Int) ? I64 : I32)   # march14
+                emit_value!(bsc, args[3], ctx, (char_type === Int64 || char_type === Int) ? I64 : I32)
                 if char_type === Int64 || char_type === Int
                     num!(bsc, Opcode.I32_WRAP_I64)
                 end
@@ -2716,7 +2716,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 emit_value!(bcp, args[3], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 # dst offset (0-based)
                 dst_idx_type = infer_value_type(args[4], ctx)
-                emit_value!(bcp, args[4], ctx, (dst_idx_type === Int64 || dst_idx_type === Int) ? I64 : I32)   # march14
+                emit_value!(bcp, args[4], ctx, (dst_idx_type === Int64 || dst_idx_type === Int) ? I64 : I32)
                 if dst_idx_type === Int64 || dst_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2727,7 +2727,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 emit_value!(bcp, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
                 # src offset (0-based)
                 src_idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bcp, args[2], ctx, (src_idx_type === Int64 || src_idx_type === Int) ? I64 : I32)   # march14
+                emit_value!(bcp, args[2], ctx, (src_idx_type === Int64 || src_idx_type === Int) ? I64 : I32)
                 if src_idx_type === Int64 || src_idx_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2736,7 +2736,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # length
                 len_type = infer_value_type(args[5], ctx)
-                emit_value!(bcp, args[5], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
+                emit_value!(bcp, args[5], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)
                 if len_type === Int64 || len_type === Int
                     num!(bcp, Opcode.I32_WRAP_I64)
                 end
@@ -2782,7 +2782,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # src_off = start - 1 (convert to 0-based)
                 start_type = infer_value_type(args[2], ctx)
-                emit_value!(bss, args[2], ctx, (start_type === Int64 || start_type === Int) ? I64 : I32)   # march14
+                emit_value!(bss, args[2], ctx, (start_type === Int64 || start_type === Int) ? I64 : I32)
                 if start_type === Int64 || start_type === Int
                     num!(bss, Opcode.I32_WRAP_I64)
                 end
@@ -2791,7 +2791,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # len
                 len_type2 = infer_value_type(args[3], ctx)
-                emit_value!(bss, args[3], ctx, (len_type2 === Int64 || len_type2 === Int) ? I64 : I32)   # march14
+                emit_value!(bss, args[3], ctx, (len_type2 === Int64 || len_type2 === Int) ? I64 : I32)
                 if len_type2 === Int64 || len_type2 === Int
                     num!(bss, Opcode.I32_WRAP_I64)
                 end
@@ -2875,7 +2875,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # Compile length arg
                 len_type = infer_value_type(args[2], ctx)
-                emit_value!(ban, args[2], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
+                emit_value!(ban, args[2], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)
                 if len_type === Int64 || len_type === Int
                     num!(ban, Opcode.I32_WRAP_I64)
                 end
@@ -2921,7 +2921,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # Index (convert to 0-based)
                 idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bas, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
+                emit_value!(bas, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)
                 if idx_type === Int64 || idx_type === Int
                     num!(bas, Opcode.I32_WRAP_I64)
                 end
@@ -2934,13 +2934,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # PURE-045: If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
                     if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
-                        # march3: was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
+                        # Was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
                         # OUTER-SCOPE variables (same latent copy-paste bug as push!); the
                         # stored VALUE boxes.
                         emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
                     else
                         append_builder!(bas, _as_b)
-                        # march16: a KNOWN closure erasing into a Vector{Any} slot wraps
+                        # A KNOWN closure erasing into a Vector{Any} slot wraps
                         # into the closure OBJECT first (dart convertType at the seam)
                         val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
                         # PURE-048: Skip extern_convert_any if value is already externref
@@ -2952,7 +2952,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                 # array.set
                 array_set!(bas, arr_type_idx, _arrset_elem_w2)
-                fb = bas   # discard-and-replace (march4)
+                fb = bas   # discard-and-replace
 
             # arr_len(arr) -> Int32
             elseif name === :arr_len && length(args) == 1
@@ -2993,7 +2993,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # Emit struct.new for SubString type
                     substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
                     if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
+                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields
                     end
                 elseif length(args) >= 1
                     # SubString(str) — view of entire string
@@ -3012,7 +3012,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # Emit struct.new
                     substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
                     if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
+                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields
                     end
                 end
                 return append_builder!(b, bsub2)
@@ -3269,7 +3269,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
                 local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
                 emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
-                struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
+                struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields
                 global_set!(berr, exn_global)
                 global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 ctx.last_stmt_was_stub = true

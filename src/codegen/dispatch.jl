@@ -393,7 +393,7 @@ Returns the dispatch table if found, nothing otherwise.
 """
 function find_dispatch_call(code_info::Core.CodeInfo,
                              dt_registry::DispatchTableRegistry)
-    # march13: this feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
+    # This feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
     # for pure FORWARDERS (a body that IS the dispatch call: the call's args are
     # exactly the function's params in order, and the call's result is returned).
     # It used to fire on ANY body containing a megamorphic call (f2-the-loop got

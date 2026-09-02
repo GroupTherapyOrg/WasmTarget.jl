@@ -128,42 +128,6 @@ function function_body_lines(path::String, header::AbstractString)::Int
     return 0
 end
 
-"""
-Lines of commented-out CODE: maximal runs of `#` comment lines (outside docstrings and
-`#= =#` blocks) where EVERY line, stripped of its `#`, parses as a complete `Expr` —
-not a bare word, literal, or nothing, which is what prose and tags parse as.
-"""
-function commented_out_code_lines(root)
-    looks_like_code(s) = try
-        e = Meta.parse(s)
-        e isa Expr && e.head !== :incomplete
-    catch
-        false
-    end
-    n = 0
-    for (dir, _, files) in walkdir(root), f in files
-        endswith(f, ".jl") || continue
-        indoc = false; inblk = false; run = String[]
-        flush!() = (if !isempty(run) && all(looks_like_code, run); n += length(run); end; empty!(run))
-        for line in eachline(joinpath(dir, f))
-            s = strip(line)
-            n3 = length(collect(eachmatch(r"\"\"\"", s)))
-            startswith(s, "#=") && (inblk = true)
-            if indoc || inblk || n3 > 0
-                flush!()
-            elseif startswith(s, "#")
-                push!(run, lstrip(s[2:end]))
-            else
-                flush!()
-            end
-            isodd(n3) && (indoc = !indoc)
-            occursin("=#", s) && (inblk = false)
-        end
-        flush!()
-    end
-    return n
-end
-
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -217,10 +181,6 @@ const METRICS = [
             end
             n
         end),
-    "R25_commented_out_code" => ("lines of commented-out code: maximal # runs where every line parses as a complete Expr (prose and bare tags do not)",
-        () -> commented_out_code_lines(SRC)),
-    "R26_campaign_narration" => ("lines matching march\\d+|P2-batch (including comments: 278)",
-        () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
     "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
                           roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl"])),
@@ -1342,6 +1302,8 @@ const LOCKS = [
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
         () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
+    "L108_no_campaign_narration" => ("no march<N>/P2-batch<N> campaign-narration tags anywhere in src, comment lines included; constraint-bearing content stays as untagged comments, parity( anchors cite dart source (locked 2026-09-02)",
+        () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
     "L106_dead_codegen_defs_extinct" => ("the fifteen dead codegen definitions the march census found stay deleted (locked 2026-09-02)",
         () -> begin
             dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
