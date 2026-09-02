@@ -31,6 +31,16 @@ wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx 
 # {typeId,tag,value} wrapper scheme are DELETED. A Union value is a boxed AnyRef
 # discriminated by classId — no per-union wrapper type, no tag, no descriptor.)
 
+# The compiled module is ONE immutable closed world, so it has one world age.
+# Baking the host's `get_world_counter()` made the binary depend on how many
+# methods the compiling process had defined (probe diffs of +55 between two
+# trees). dart has no world ages; Julia's are projected onto this single value:
+# a binding visible at compile time is visible in the module.
+const WASM_WORLD_AGE = UInt64(1)
+wasm_world_bound(host_bound::Integer, host_world::Integer, lower::Bool)::Int64 =
+    lower ? (host_bound <= host_world ? Int64(WASM_WORLD_AGE) : Int64(WASM_WORLD_AGE) + 1) :
+            (host_bound >= host_world ? typemax(Int64) : Int64(0))
+
 """
 Registry for struct and array type mappings within a module.
 """
@@ -1919,14 +1929,15 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         # derives it by walking mutable BindingPartition history; WT captures
         # the result once at its immutable closed-world collection boundary.
         world_bounds = Base.check_world_bounded(tn)
+        host_world = Base.get_world_counter()
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
         i32_const!(b, world_bounds === nothing ? 0 : 1)
         struct_set!(b, tn_type_idx, UInt32(8), I32)
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        i64_const!(b, world_bounds === nothing ? 0 : first(world_bounds))
+        i64_const!(b, world_bounds === nothing ? 0 : wasm_world_bound(first(world_bounds), host_world, true))
         struct_set!(b, tn_type_idx, UInt32(9), I64)
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        i64_const!(b, world_bounds === nothing ? 0 : last(world_bounds))
+        i64_const!(b, world_bounds === nothing ? 0 : wasm_world_bound(last(world_bounds), host_world, false))
         struct_set!(b, tn_type_idx, UInt32(10), I64)
 
         # Fields 11–12: exact deprecation state for either symbol that
