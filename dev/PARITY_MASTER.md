@@ -42,7 +42,11 @@ The following are implemented and machine-locked. They are not remaining roadmap
 | Closures | One closure object/context/vtable/function-type representation for capturing closures and static tear-offs; dynamic calls use `call_ref` | L23, L24 and closure execution tests |
 | Dynamic dispatch | Monomorphic direct calls plus one classId/selector-offset table; FNV/hash dispatch is deleted | L10, L36, L49, L50 and `test/m8_selector_table.jl` |
 | Exceptions | Exact Julia exception objects and payloads flow through the typed exception tag; bottom bodies retain their real throwing flow | L56-L60, L67, L81, L82, L92 |
-| Constants and globals | Exact physical representations and concrete runtime classes; declarative framework roots; one module start | L37, L44, L48, L55, L66, L88, L91 |
+| Constants and globals | Exact physical representations and concrete runtime classes; declarative framework roots; one module start; a Dict constant serializes only its occupied slots | L37, L44, L48, L55, L66, L88, L91 |
+| Call lowering registries | One consult chain: the identity-keyed `BUILTIN_LOWERINGS`, the diagonal `INTRINSIC_BINOPS`/`INTRINSIC_UNOPS` tables with the Julia-only numeric tier quarantined beside them, the Method-keyed `INVOKE_INTRINSICS`, the symbol-keyed `FOREIGN_LOWERINGS`; a table key never has a ladder arm; the registry is consulted before any name-keyed arm; unknown IR heads reject loudly | L104, L113, R19/R20/R21 ratchets |
+| Determinism | Binaries are a function of the program: the struct registry is walked in one order, the module has one world age (`WASM_WORLD_AGE`), and the probe corpus (`test/probe_bytes.jl`, cross-process) witnesses byte identity | L112, L81/L31 |
+| Frontend boundary | `src/frontend/nir.jl` builds one discriminated node per statement with resolved identities and static types (dart's `typeContext`); consumers convert file by file under the R29 ratchets | R29a/R29b |
+| Formal layer | `dev/formal/`: TLA+ models of the algorithmic components (two-tier diagnostics, closed-world fixpoint, the consult chain, the sidecar ownership protocol, the stackifier, classId dispatch), each with a Broken instance TLC must reject; run by `dev/formal/run_tlc.sh` and the `formal.yml` workflow | L111 |
 
 The detailed correspondence to dart2wasm lives in `dev/CERTIFICATION.md`.
 
@@ -87,14 +91,18 @@ Roadmap entries require a reproducer, a capability boundary, or a measured maint
 2. **Capability manifest and diagnostics.** Classify required Wasm features, host imports,
    foreign/native calls, and unsupported dynamic semantics. Surface the call chain rather than a
    generic compilation failure.
-3. **Native sidecar prototype.** For libraries that cannot be represented as WasmGC Julia, test a
-   curated core-Wasm module with linear memory, a narrow generated ABI, and explicit ownership.
+3. **Native sidecar.** Prototype landed 2026-09-02 (`test/sidecar/`: a linear-memory `.wat`
+   module linked by the host, the GC-array transfer as a quarantined scalar loop, its ownership
+   protocol model-checked in `dev/formal/Sidecar.tla`). Next: the scalar memory opcodes in the
+   builder (dart intrinsics.dart:1630-1740) so the transfer compiles inline; a generated ABI.
    Do not imply that existing host JLL artifacts can be loaded by a browser.
-4. **Frontend isolation.** Stop allowing target codegen to depend pervasively on raw `CodeInfo`
-   shapes. Introduce a normalized frontend boundary while preserving the current path.
-5. **UnifiedIR experiment, not migration.** Once Julia exposes a usable nightly API with method
-   table overlays, shadow-compile a bounded corpus through UnifiedIR and the existing frontend.
-   Compare semantics and diagnostics before deleting the current stackifier or capture analysis.
+4. **Frontend isolation.** `src/frontend/nir.jl` landed 2026-09-02 as a byte-identical boundary;
+   the migration is the R29 ratchets (raw `CodeInfo` reads per file → 0 → lock), context.jl and
+   statements.jl being the large consumers.
+5. **UnifiedIR experiment, not migration.** `test/shadow_compile.jl` records and compares a bounded
+   corpus through named frontends; `:unified` errors loudly until Julia exposes the API
+   (JuliaLang/julia#62334 is still a draft). Compare semantics and diagnostics before deleting the
+   current stackifier or capture analysis.
 6. **Continuous differential expansion.** Add failures found by real packages to the native-vs-Wasm
    corpus and lock every fixed soundness class. This is permanent verification, not a one-time
    parity milestone.
