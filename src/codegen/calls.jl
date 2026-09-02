@@ -5,7 +5,7 @@
 """
     _is_externref_value(val, ctx) -> Bool
 
-PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
+Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
 """
 function _is_externref_value(val, ctx::AbstractCompilationContext)::Bool
@@ -40,7 +40,7 @@ end
 """
     _is_typeof_ssa(val, ctx) -> Bool
 
-PURE-9026: Check if a value is an SSAValue whose defining statement is a typeof() call.
+Check if a value is an SSAValue whose defining statement is a typeof() call.
 """
 function _is_typeof_ssa(val, ctx::AbstractCompilationContext)::Bool
     if !(val isa Core.SSAValue)
@@ -60,7 +60,7 @@ end
 """
     _resolve_type_const(val, ctx) -> Union{DataType, Nothing}
 
-PURE-9026: If val is a Type constant (GlobalRef to a type, or a direct Type value),
+If val is a Type constant (GlobalRef to a type, or a direct Type value),
 return the DataType. Otherwise return nothing.
 """
 function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
@@ -79,7 +79,7 @@ end
 """
     _ensure_typeof_scratch_local!(ctx) -> UInt32
 
-PURE-9063: Allocate (or return cached) a scratch i32 local for typeof struct lookups.
+Allocate (or return cached) a scratch i32 local for typeof struct lookups.
 The local stores the typeId temporarily while the lookup array ref is pushed.
 """
 function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
@@ -653,7 +653,7 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
     if is_128bit
         # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
         # (natively returns a value, so a silent trap would diverge).
-        empty!(bytes)  # PURE-908: clear pre-pushed args
+        empty!(bytes)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
                                "128-bit checked multiply (Int128/UInt128)")
     else
@@ -1088,7 +1088,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
         # Also check for local.get of ref-typed local
         local arg1_wasm_is_ref = arg1_is_ref
         local arg2_wasm_is_ref = arg2_is_ref
-        # PURE-9064: Detect anyref/externref from actual wasm type, not just arg_type === Any.
+        # Detect anyref/externref from actual wasm type, not just arg_type === Any.
         # Abstract types like Type, DataType etc. also map to AnyRef.
         local _arg1_wasm = julia_to_wasm_type(arg_type)
         local _arg2_wasm = julia_to_wasm_type(arg2_type)
@@ -1113,7 +1113,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
             # Check arg1's Wasm type when:
             # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
             # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
-            # - arg_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            # - arg_type === Any (Any maps to externref, must check actual local type)
             if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
@@ -1121,7 +1121,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                 local _a1_wt = static_wasm_type(args[1], ctx)
                 arg1_wasm_is_ref = is_nothing_value(args[1], ctx) || _wt_is_ref(_a1_wt)
                 arg1_is_externref = (_a1_wt === ExternRef)
-                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                # Override local type check if Julia type maps to anyref/externref
                 if arg1_is_anyref || arg1_is_externref
                     arg1_wasm_is_ref = true
                 end
@@ -1129,21 +1129,21 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
             # Check arg2's Wasm type when:
             # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
             # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
-            # - arg2_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            # - arg2_type === Any (Any maps to externref, must check actual local type)
             if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
                 local _a2_wt = static_wasm_type(args[2], ctx)
                 arg2_wasm_is_ref = is_nothing_value(args[2], ctx) || _wt_is_ref(_a2_wt)
                 arg2_is_externref = (_a2_wt === ExternRef)
-                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                # Override local type check if Julia type maps to anyref/externref
                 if arg2_is_anyref || arg2_is_externref
                     arg2_wasm_is_ref = true
                 end
             end
         end
         if arg1_wasm_is_ref && arg2_wasm_is_ref
-            # PURE-324: For immutable structs, === means VALUE equality (field-by-field),
+            # For immutable structs, === means VALUE equality (field-by-field),
             # not identity. WasmGC ref.eq is identity comparison, so we must emit
             # struct.get for each field and compare with the appropriate opcode.
             local _do_struct_egal = false
@@ -1184,7 +1184,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                     elseif egal_wt === F64
                         num!(bld, Opcode.F64_EQ)
                     elseif egal_wt === ExternRef
-                        # PURE-6024: externref fields need conversion to eqref for ref.eq
+                        # externref fields need conversion to eqref for ref.eq
                         local egal_tmp = allocate_local!(ctx, EqRef)
                         any_convert_extern!(bld)
                         ref_cast!(bld, EqRef, true)
@@ -1207,7 +1207,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                     i32_const!(bld, 1)
                 end
             elseif arg1_is_anyref && arg2_is_anyref
-                # PURE-9064: Both anyref — cast to eqref before ref.eq
+                # Both anyref — cast to eqref before ref.eq
                 # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
                 local tmp_eq_a = allocate_local!(ctx, EqRef)
                 ref_cast!(bld, EqRef, true)
@@ -1242,14 +1242,14 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                 ref_cast!(bld, EqRef, true)
                 num!(bld, Opcode.REF_EQ)
             elseif arg1_is_anyref
-                # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
+                # arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
                 local tmp_eq_a2 = allocate_local!(ctx, EqRef)
                 local_set!(bld, tmp_eq_a2)
                 ref_cast!(bld, EqRef, true)
                 local_get!(bld, tmp_eq_a2)
                 num!(bld, Opcode.REF_EQ)
             elseif arg2_is_anyref
-                # PURE-9064: arg2 anyref (top of stack): cast to eqref
+                # arg2 anyref (top of stack): cast to eqref
                 ref_cast!(bld, EqRef, true)
                 num!(bld, Opcode.REF_EQ)
             else
@@ -1557,13 +1557,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
             end
         elseif value_arg isa Core.Argument
-            # PURE-325: Also handle function parameters (not just SSA values)
+            # Also handle function parameters (not just SSA values)
             # Core.Argument(1) is the function object for non-closures, so
             # actual args start at Argument(2) → arg_types[1].
             local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
                 local _arg_jtype = ctx.arg_types[arg_idx_isa]
-                # PURE-9030: Check if this param was promoted to anyref for Union dispatch
+                # Check if this param was promoted to anyref for Union dispatch
                 if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
                     isa2_val_wasm = AnyRef
                 else
@@ -1576,8 +1576,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             drop!(bld)
             i32_const!(bld, 1)
         elseif isa2_val_wasm === ExternRef
-            # PURE-324: Value is externref (Any-typed field). Need proper type check.
-            # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
+            # Value is externref (Any-typed field). Need proper type check.
+            # For Exception subtypes with DFS typeIds, use typeId comparison
             # instead of ref.test (which can't distinguish structurally identical types
             # due to Wasm type canonicalization).
             local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
@@ -1591,7 +1591,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
                 if target_wasm isa ConcreteRef
                     any_convert_extern!(bld)
-                    # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
+                    # Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
                     ref_test!(bld, Int64(target_wasm.type_idx), false)
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
@@ -1607,7 +1607,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 end
             end
         elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
-            # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
+            # anyref/structref value — use ref.test to check concrete box type.
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
             local _ck_box_wasm = julia_to_wasm_type(check_type)
@@ -1622,7 +1622,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 emit_isa_classid!(bld, ctx, _box_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
-                # E2E-001: When multiple Julia types share the same WasmGC type index
+                # When multiple Julia types share the same WasmGC type index
                 # (due to identical field layouts), ref.test can't distinguish them.
                 # Use typeId field comparison: save value → ref.test layout → if match,
                 # reload → ref.cast → struct.get typeId → compare with target's ID.
@@ -1714,13 +1714,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
         elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
                ctx.type_registry.base_struct_idx !== nothing
-            # PURE-9027: DFS range check for anyref/structref polymorphic values
+            # DFS range check for anyref/structref polymorphic values
             # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
             local _range = get_type_range(ctx.type_registry, check_type)
             if _range !== nothing
                 local _low, _high = _range
                 local _base_idx = ctx.type_registry.base_struct_idx
-                # PURE-9064: Guard against JlType hierarchy refs.
+                # Guard against JlType hierarchy refs.
                 # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
                 # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
                 # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
@@ -2061,7 +2061,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return b
     end
 
-    # PURE-6024: Resolve indirect calls through SSAValue callees.
+    # Resolve indirect calls through SSAValue callees.
     # Unoptimized IR (may_optimize=false) produces patterns like:
     #   %1 = Base.add_int   (GlobalRef, type=Core.Const(Core.Intrinsics.add_int))
     #   %2 = (%1)(x, y)     (call with SSAValue(1) as callee)
@@ -2294,7 +2294,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _fv_b = _compile_value_b(args[3], ctx)   # false_val
         local _cv_b = _compile_value_b(args[1], ctx)   # cond
 
-        # PURE-036y / the condition must push an i32, not a ref.
+        # the condition must push an i32, not a ref.
         # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
         # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
         # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
@@ -2382,7 +2382,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # For other types, fall through to error
     end
 
-    # PURE-9032: ncodeunits(s) → array.len for string byte arrays
+    # ncodeunits(s) → array.len for string byte arrays
     # Handles AbstractString fields from exception structs (e.g., e.msg)
     if is_func(func, :ncodeunits) && length(args) == 1
         arg = args[1]
@@ -2551,7 +2551,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             return append_builder!(b, fb)
         end
 
-        # PURE-9043: Handle Task.rngState0..3 field access → Wasm global.get
+        # Handle Task.rngState0..3 field access → Wasm global.get
         # Julia's rand() accesses task-local Xoshiro state via getfield(task, :rngStateN)
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
@@ -2628,7 +2628,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
 
-            # PURE-325: AbstractArray subtypes that are pure structs (e.g., UnitRange)
+            # AbstractArray subtypes that are pure structs (e.g., UnitRange)
             # have named fields like :start, :stop — handle via struct_get
             if isconcretetype(obj_type) && isstructtype(obj_type)
                 if !haskey(ctx.type_registry.structs, obj_type)
@@ -2641,7 +2641,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         local _sfb = _ctx_builder(ctx, "compile_call")
                         # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
                     end
@@ -2741,13 +2741,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                     return append_builder!(b, fb)
                 end
             end
         end
 
-        # PURE-9064: Handle Type{T} constants for DataType field access.
+        # Handle Type{T} constants for DataType field access.
         # When a DataType constant (e.g., Vector{Int64}) appears in IR, infer_value_type
         # returns Type{Vector{Int64}}. Unwrap to DataType for struct field access, since
         # DataType is registered in the JlType hierarchy with fields like :name, :parameters.
@@ -2781,7 +2781,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if field_idx !== nothing
                 local _sfgb = _ctx_builder(ctx, "compile_call")
                 set_context!(_sfgb, first(string(expr), 120))
-                # The typed wrap subsumes the PURE-701 structref-narrow helper
+                # The typed wrap subsumes the structref-narrow helper
                 emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                 local _sfg_wfi = wasm_field_idx(info, field_idx)
                 local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
@@ -2821,7 +2821,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 if field_idx === :dynamic
                     # Dynamic tuple indexing - only supported for homogeneous tuples (NTuple)
                     # Check if all elements have the same type
-                    # PURE-605: Guard against types without definite field count (e.g., Vararg tuples)
+                    # Guard against types without definite field count (e.g., Vararg tuples)
                     elem_types = obj_type isa DataType && isconcretetype(obj_type) ?
                         fieldtypes(obj_type) : ()
                     if length(elem_types) > 0 && all(t -> t === elem_types[1], elem_types)
@@ -2894,7 +2894,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         local_get!(_htb, idx_local)
                         array_get!(_htb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
-                        # PURE-036bc: If array element type is ExternRef (e.g., elem_type=Any),
+                        # If array element type is ExternRef (e.g., elem_type=Any),
                         # array_get returns externref. Downstream code may ref_cast to a struct
                         # type, which requires anyref input. Add any_convert_extern.
                         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
@@ -3006,7 +3006,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
                     emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                     return append_builder!(b, fb)
                 end
             end
@@ -3050,7 +3050,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         ref_arg = args[1]
         ref_type = infer_value_type(ref_arg, ctx)
 
-        # PURE-9065: Nothing-typed memory — always returns nothing (i32.const 0).
+        # Nothing-typed memory — always returns nothing (i32.const 0).
         # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
         if ref_type isa DataType && (
             (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
@@ -3065,7 +3065,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
         # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
         # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-        # PURE-045: Also handle Memory types for direct array access patterns
+        # Also handle Memory types for direct array access patterns
         elem_type = Int32  # default
         if ref_type isa DataType
             if ref_type.name.name === :MemoryRef
@@ -3082,7 +3082,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
 
-        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
+        # Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
         # When cross-function calls use abstract arg types (e.g., Vector instead of
         # Vector{Any}), code_typed returns bare MemoryRef (UnionAll) instead of
         # MemoryRef{Any} (DataType). The elem_type stays as default Int32.
@@ -3151,7 +3151,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         value_arg = args[2]
         ref_type = infer_value_type(ref_arg, ctx)
 
-        # PURE-9065: Nothing-typed memory — storing nothing is a no-op.
+        # Nothing-typed memory — storing nothing is a no-op.
         # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then done.
         # Don't push a result — Nothing has no Wasm representation to keep on the stack.
         if ref_type isa DataType && (
@@ -3165,7 +3165,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
         # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
         # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-        # PURE-045: Also handle Memory types for direct array access patterns
+        # Also handle Memory types for direct array access patterns
         elem_type = Int32  # default
         if ref_type isa DataType
             if ref_type.name.name === :MemoryRef
@@ -3182,7 +3182,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
 
-        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
+        # Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
         # Same logic as memoryrefget: when ref_type is a bare UnionAll MemoryRef,
         # infer element type from SSA result type or default to Any.
         if elem_type === Int32 && !(ref_type isa DataType)
@@ -3206,7 +3206,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _mv_b = _compile_value_b(value_arg, ctx)
         local mset_val_ty = isempty(_mv_b.v.stack) ? nothing : _mv_b.v.stack[end]
         # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
-        # PURE-045: Check the actual wasm element type, not just elem_type === Any
+        # Check the actual wasm element type, not just elem_type === Any
         # Abstract types like CallInfo also map to ExternRef
         # PHASE-1-004: AnyRef arrays (Memory{Any}) need numeric→anyref boxing via struct.new
         local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
@@ -3237,14 +3237,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 emit_numeric_to_externref!(_msb, value_arg, mset_src_wasm, ctx)
             else
                 append_builder!(_msb, _mv_b)
-                # PURE-048: Skip extern_convert_any if value is already externref.
+                # Skip extern_convert_any if value is already externref.
                 # externref is NOT a subtype of anyref, so extern_convert_any would fail.
                 if !is_already_externref_mset
                     extern_convert_any!(_msb)
                 end
             end
         elseif wasm_elem_type isa ConcreteRef
-            # PURE-045: Array of concrete ref types (e.g., struct or array refs)
+            # Array of concrete ref types (e.g., struct or array refs)
             # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
             # (Typed): numeric-typed value into a ref-typed array slot → ref.null
             # (the const first-byte gate + LOCAL_GET LEB walk are the tracked type now)
@@ -3252,7 +3252,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 ref_null!(_msb, Int64(wasm_elem_type.type_idx), ConcreteRef(UInt32(wasm_elem_type.type_idx), true))
             else
                 append_builder!(_msb, _mv_b)
-                # PURE-6025: If value is externref but array element is concrete ref,
+                # If value is externref but array element is concrete ref,
                 # convert externref → anyref → ref.cast (ref null $elem_type)
                 if mset_val_ty === ExternRef
                     any_convert_extern!(_msb)
@@ -3278,7 +3278,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
         # Julia's memoryrefset! returns the stored value, so push it again
         # This is needed because compile_statement may add LOCAL_SET after this
-        # PURE-6024: Only emit return value if SSA has a local to store it in.
+        # Only emit return value if SSA has a local to store it in.
         # Without this guard, the return value (e.g., i32.const 0 for nothing)
         # is left on the stack when the SSA has no allocated local, causing
         # "values remaining on stack at end of block" validation errors.
@@ -3286,7 +3286,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _rv2_b = _compile_value_b(value_arg, ctx)
             local ret_val_ty = isempty(_rv2_b.v.stack) ? nothing : _rv2_b.v.stack[end]
             append_builder!(_msb, _rv2_b)
-            # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
+            # If the SSA local is externref but the return value is a concrete ref,
             # emit extern_convert_any. The compile_statement safety check can't catch this
             # because has_gc_prefix=true (from array_set above) skips the trailing local_get
             # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
@@ -3403,7 +3403,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Record the offset for this MemoryRef SSA so memoryrefoffset can use it
             ctx.memoryref_offsets[idx] = index
 
-            # PURE-9065: For Nothing-typed MemoryRef, check if result is used.
+            # For Nothing-typed MemoryRef, check if result is used.
             # If the SSA has no local and no subsequent statement references it,
             # skip bytecode to avoid orphaning [array_ref, i32_index] on the stack.
             ssa_type_mr = get(ctx.ssa_types, idx, Any)
@@ -3437,7 +3437,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Compile and convert index to i32 (Julia uses 1-based Int64, Wasm uses 0-based i32)
             emit_value!(_mrnb, index, ctx)  # R17-floor: actual index width selects the explicit wrap below
 
-            # PURE-6027: Check BOTH Julia type AND actual WASM type for i64→i32 wrap.
+            # Check BOTH Julia type AND actual WASM type for i64→i32 wrap.
             # infer_value_type may return Any/Union while the actual local is i64.
             idx_type = infer_value_type(index, ctx)
             idx_wasm = get_phi_edge_wasm_type(index, ctx)
@@ -3472,7 +3472,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             emit_struct_prefix!(_tupb, ctx.type_registry, tuple_type, info)
 
             # Push all tuple elements with type safety for externref fields
-            # PURE-142: Core.tuple args may be phi locals typed as i64 but
+            # Core.tuple args may be phi locals typed as i64 but
             # struct field expects externref (Any-typed tuple element)
             struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
             for (fi, arg) in enumerate(args)
@@ -3516,7 +3516,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
         field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
 
-        # PURE-9043: Handle Task.rngState0..3 field assignment → Wasm global.set
+        # Handle Task.rngState0..3 field assignment → Wasm global.set
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
@@ -3551,7 +3551,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if obj_type <: AbstractArray
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
             if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
-                # PURE-325: setfield!(vector, :ref, new_memref) — update data array
+                # setfield!(vector, :ref, new_memref) — update data array
                 # :ref is field index 1 in the Vector struct (field 0 = typeId)
                 # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
                 value_has_local = false
@@ -3571,7 +3571,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     local_get!(_vrb, temp_local)
                     struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
@@ -3602,7 +3602,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
                 # Now compile obj (struct ref)
                 emit_value!(_vsb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                # If obj_arg's local is structref, insert ref.cast null before struct_set
                                 emit_ref_cast_if_structref!(_vsb, obj_arg, info.wasm_type_idx, ctx)
 
                 # Load value from local
@@ -3626,14 +3626,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
                 field_idx = findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    # PURE-045: Check if field is Any type (maps to externref in Wasm)
+                    # Check if field is Any type (maps to externref in Wasm)
                     field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
 
                     # struct.set expects: [ref, value]
                     local _sfsb = _ctx_builder(ctx, "compile_call")
                     emit_value!(_sfsb, obj_arg, ctx,
                                 ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_sfsb, obj_arg, info.wasm_type_idx, ctx)
 
                     # Use the registered physical field type as the sole sink
@@ -3648,7 +3648,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     if field_type === Any
                         emit_value!(_sfsb, value_arg, ctx, _sf_expected)
                     else
-                        # PURE-6024: When value is nothing and field is ref-typed,
+                        # When value is nothing and field is ref-typed,
                         # compile_value(nothing) emits i32_const 0 which fails
                         # struct_set validation. Emit ref.null none instead.
                         if is_nothing_value(value_arg, ctx)
@@ -3838,7 +3838,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             return append_builder!(b, fb)
         end
 
-        # PURE-9063: typeof(x) === Type — compare DataType struct refs with ref.eq
+        # typeof(x) === Type — compare DataType struct refs with ref.eq
         # Detect when one arg comes from typeof() and the other is a Type constant
         arg1_is_typeof = _is_typeof_ssa(args[1], ctx)
         arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
@@ -3909,7 +3909,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
     is_128bit = arg_type === Int128 || arg_type === UInt128
 
-    # PURE-046: If arg_type is Any/abstract but the intrinsic expects numeric operands,
+    # If arg_type is Any/abstract but the intrinsic expects numeric operands,
     # the code is type-confused (externref being used as numeric). Emit unreachable
     # since we can't convert externref to i64 in Wasm.
     is_numeric_intrinsic = is_func(func, :eq_int) || is_func(func, :ne_int) ||
@@ -3928,7 +3928,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     end
 
-    # PURE-324: Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
+    # Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
     # add_ptr, sub_ptr, and pointerref push their own args (or trace back to string ref),
     # so they must NOT have args pre-pushed by the generic loop below.
     if func isa GlobalRef && func.name === :add_ptr
@@ -4192,7 +4192,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 idx=idx, detail=expr)
             unreachable!(_prub); append_builder!(fb, _prub)  # structural trap after recorded unsupported
         end
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
     elseif func isa GlobalRef && func.name === :pointerset
         # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
@@ -4374,11 +4374,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             record_unsupported!(ctx, :unsupported_method, "un-lowerable pushfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_psub); append_builder!(fb, _psub)
         end
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
     end
 
-    # PURE-325: Int128 checked/div/rem arithmetic can't be compiled (struct args on
+    # Int128 checked/div/rem arithmetic can't be compiled (struct args on
     # stack would mismatch i64 ops). Emit unreachable BEFORE pushing args.
     if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
@@ -4396,8 +4396,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # These are compile-time type parameters, not runtime values
     # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
     # (they get compiled to i32 type tags and compared)
-    # PURE-325: Skip arg-pushing for Core._expr — its handler manages its own args
-    # PURE-905: Skip arg-pushing for cross-call candidates — the cross-call handler
+    # Skip arg-pushing for Core._expr — its handler manages its own args
+    # Skip arg-pushing for cross-call candidates — the cross-call handler
     # at line ~20714 pushes args with type bridging. Pre-pushing here causes duplicate
     # args on the stack (e.g., setindex! gets 6 args instead of 3).
     # Cross-call candidates are GlobalRef functions found in the func_registry that
@@ -4443,7 +4443,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _skip_arg_prepush = _target !== nothing
         end
     end
-    # PURE-7012: Reorder muladd_float args for correct WASM stack order.
+    # Reorder muladd_float args for correct WASM stack order.
     # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
     # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
     # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
@@ -4469,7 +4469,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             continue
         end
         local _ia_ty = emit_value!(fb, arg, ctx)  # R17-floor: generic intrinsic normalization consumes actual width
-        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics — driven by the
+        # Fix i32/i64 mismatch for numeric intrinsics — driven by the
         # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
             _actual_wasm = _ia_ty
@@ -4510,7 +4510,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             emit_classid_unbox!(fb, ctx, _aa_target; nullable=true)
             _boxed_operand_unboxed = true   # function-scoped (the tail rebox keys on this)
         end
-        # PURE-904: Unbox externref args for numeric intrinsics.
+        # Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
         if is_numeric_intrinsic && _is_externref_value(arg, ctx)
@@ -4520,7 +4520,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
+    # For numeric intrinsics, verify the compiled args don't contain externref
     # (this catches cases where Julia type inference says Int64 but actual struct field is Any)
     if is_numeric_intrinsic && length(args) > 0
         # typed channel: a ref-typed emission feeding a numeric intrinsic = boxed/Any operand
@@ -4531,7 +4531,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local arg1_ssa = args[1]
             if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
                 # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
                     "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                 return append_builder!(b, fb)
@@ -4653,16 +4653,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fb, _ncb)
 
-    # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
     elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
         _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
 
-    # PURE-9003: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
     elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
         if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
             emit_unsupported_stub!(ctx, fb, :unsupported_method,
                 "128-bit checked addition (Int128/UInt128)"; idx=idx)
         else
@@ -4722,11 +4722,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _caddb)
         end
 
-    # PURE-9003: checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
+    # checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
     # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
     elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
         if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
             emit_unsupported_stub!(ctx, fb, :unsupported_method,
                 "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
         else
@@ -5152,7 +5152,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
         end
 
-    # PURE-9004: Population count (number of set bits)
+    # Population count (number of set bits)
     elseif is_func(func, :ctpop_int)
         if is_128bit
             emit_int128_ctpop!(fb, ctx, arg_type)
@@ -5285,7 +5285,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _sxb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the operand
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
-            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
+            # Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm !== I64
                 # A narrow source must be renormalised at its JULIA
@@ -5309,7 +5309,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
             # If source is 32-bit, sign-extend to 64-bit first
-            # PURE-325: Bool also maps to i32
+            # Bool also maps to i32
             if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8 || source_type === Bool
                 num!(_sxb, Opcode.I64_EXTEND_I32_S)
             end
@@ -5364,7 +5364,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _zxb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the operand
         if target_type === Int64 || target_type === UInt64
             # Extending to 64-bit - emit extend instruction
-            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
+            # Skip extend if source is already i64 (e.g., from widened phi local)
             src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
             if src_wasm_z !== I64
                 if _zx_mask != 0
@@ -5386,7 +5386,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
 
             # If source is 32-bit or narrower, extend to 64-bit first
-            # PURE-325: Bool also maps to i32, so include it here
+            # Bool also maps to i32, so include it here
             # P3 da22976c7cd6: 8/16-bit sources also live in i32 — mask their
             # width (dirty carry bits) before the unsigned extend
             if _zx_mask != 0
@@ -5425,7 +5425,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
 
         # Determine source and target WASM bit widths
-        # PURE-324: Also check actual Wasm type — widened phi locals may be I64
+        # Also check actual Wasm type — widened phi locals may be I64
         # even though Julia type says UInt32
         source_is_64bit = source_type === Int64 || source_type === UInt64 || source_type === Int
         if !source_is_64bit && length(args) >= 2
@@ -5601,7 +5601,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # invoke) fell into the numeric branch and emitted i64.mul on two
         # string refs — the E-003 island's fn#107 validation failure. Route
         # to the same compile_string_concat the invoke path uses; args were
-        # pre-pushed, so rebuild the buffer (PURE-908 pattern).
+        # pre-pushed, so rebuild the buffer (pattern).
         _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
         _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
         if length(args) == 2 && (_conc1 === String || _conc1 === Symbol) &&
@@ -5631,8 +5631,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
-        # PURE-1102: Emit throw instruction with tag 0 (our Julia exception tag)
-        # PURE-9032: Stash exception value in $current_exn global before throwing.
+        # Emit throw instruction with tag 0 (our Julia exception tag)
+        # Stash exception value in $current_exn global before throwing.
         # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
         ensure_exception_tag!(ctx.mod)
         exn_global = ensure_exception_global!(ctx.mod)
@@ -5664,18 +5664,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_get!(_thrb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(_thrb, ExternRef); throw_!(_thrb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
-    # PURE-1102: throw_methoderror — emit throw (catchable) instead of unreachable
+    # throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func isa GlobalRef && func.name === :throw_methoderror
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         ensure_exception_tag!(ctx.mod)
             global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
 
-    # PURE-4149: Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
+    # Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
     # _svec_len returns Int64 = array.len (converted from i32 to i64).
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
-    # PURE-6021: args[1] (svec array) is already pre-pushed by the generic loop above.
+    # args[1] (svec array) is already pre-pushed by the generic loop above.
     elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || (isdefined(Core, :_svec_len) && func === Core._svec_len)) && length(args) == 1
         # P4-stdlib: fold against host-constant svecs (padding/typename.names)
         local _svl = _try_host_svec(args[1], ctx)
@@ -5688,10 +5688,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 num!(fb, Opcode.I64_EXTEND_I32_U)
         end
 
-    # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
+    # Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
     # Match both GlobalRef and direct builtin function object (same as _svec_len above).
-    # PURE-6021: args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
+    # args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
     # the generic loop above — do NOT call compile_value again here (causes double-push,
     # leaving 2 orphaned values on the stack → "values remaining" validation error).
     elseif ((func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) || (isdefined(Core, :_svec_ref) && func === Core._svec_ref)) && length(args) == 2
@@ -5808,11 +5808,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         _emit_svec_values!(fb, args, ctx)
 
-    # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
+    # Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These builtins share the ordinary typed struct/tuple lowering below.
     elseif func isa GlobalRef &&
            any(name -> is_builtin_func(func, name), (:isdefined, :getfield, :setfield!))
-        # PURE-908: Clear pre-pushed args
+        # Clear pre-pushed args
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         # P4-stdlib (Statistics median): getfield on a compile-time CONSTANT
         # receiver (QuoteNode) — e.g. getfield(typename(UInt64), :flags) from
@@ -6064,16 +6064,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             record_unsupported!(ctx, :unsupported_method,
                                 "$(func.name) call shape not lowerable";
                                 idx=idx, detail=expr)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            ctx.last_stmt_was_stub = true
         end
 
-    # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
+    # Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
     # The argument is already compiled as a string array — just pass through.
     elseif is_func(func, :Symbol) && func isa GlobalRef && length(args) == 1
         _compile_call_symbol(args, fb, ctx)
 
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
-    # PURE-325: Skip cross-call lookup for Core._expr — it's a builtin that has a
+    # Skip cross-call lookup for Core._expr — it's a builtin that has a
     # special handler below (line ~19900). Without this guard, get_function returns
     # nothing (builtins aren't in the function registry) and emits unreachable.
     elseif func isa GlobalRef && ctx.func_registry !== nothing && !is_func(func, :_expr)
@@ -6105,7 +6105,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             target_info = get_function(ctx.func_registry, called_func, call_arg_types;
                                        expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
 
-            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            # Closure/kwarg functions are registered with self-type prepended
             if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                 closure_arg_types = (typeof(called_func), call_arg_types...)
                 target_info = get_function(ctx.func_registry, called_func, closure_arg_types;
@@ -6150,7 +6150,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         actual_julia_type = call_arg_types[arg_idx]
                         actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
-                        # PURE-901/4155: Handle Nothing→ref conversion BEFORE type bridging.
+                        # Handle Nothing→ref conversion BEFORE type bridging.
                         # compile_value emits i32_const 0 for Nothing,
                         # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                         # otherwise bridging tries any_convert_extern on an i32 value.
@@ -6186,13 +6186,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # here used to hide the call's parameter pops from validation.
                 local _xcb = fb
                 call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
-                # PURE-3111: If the callee returns Union{} (Bottom), it always throws.
+                # If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
                 if target_info.return_type === Union{}
                     unreachable!(_xcb)  # structural trap (dart-legit dead path)
                     ctx.last_stmt_was_stub = true
-                # PURE-900: Bridge type gap between function's Wasm return type
+                # Bridge type gap between function's Wasm return type
                 # and the caller's SSA local type. Handles both directions:
                 # 1. externref → ConcreteRef: any_convert_extern + ref.cast
                 # 2. ConcreteRef → externref: extern_convert_any
@@ -6207,7 +6207,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             any_convert_extern!(_xcb)
                             ref_cast!(_xcb, Int64(target_local_type.type_idx), true)
                         elseif target_local_type === AnyRef && ret_wasm === ExternRef
-                            # PURE-908: Function returns externref, local expects anyref
+                            # Function returns externref, local expects anyref
                             any_convert_extern!(_xcb)
                         elseif target_local_type === ExternRef && ret_wasm !== ExternRef && ret_wasm !== nothing
                             # Function returns concrete/struct/array ref, local expects externref
@@ -6225,7 +6225,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             # 1f6e77980994: callee returns a numeric but the SSA local is a
                             # ref class (dynamic Any-typed call site, e.g. getindex on a bond
                             # Vector resolving to an i32-returning overload) — box the RESULT
-                            # (on the stack) exactly like the PURE-9022 arg path via the one emitter.
+                            # (on the stack) exactly like the arg path via the one emitter.
                             # The box struct is already a structref subtype — no cast needed for StructRef.
                             local _ret_jt = target_info.return_type
                             (_ret_jt isa Type && isconcretetype(_ret_jt)) ||
@@ -6321,12 +6321,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
-                # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
+                # Suppress warning for known-safe dynamic dispatch paths where
                 # Julia couldn't specialize (arg types contain Any/abstract types).
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                 if get(ctx.ssa_types, idx, Any) === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
                     ctx.last_stmt_was_stub = true
@@ -6526,13 +6526,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # Unknown function call — emit unreachable (will trap at runtime)
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
-        # PURE-908: Clear pre-pushed args before UNREACHABLE
+        # Clear pre-pushed args before UNREACHABLE
         local _urb = _ctx_builder(ctx, "compile_call")
         record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)";
                             idx=idx, detail=expr)
         unreachable!(_urb)  # structural trap after recorded unsupported
         fb = _urb   # discard-and-replace
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
     end
 
     # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric

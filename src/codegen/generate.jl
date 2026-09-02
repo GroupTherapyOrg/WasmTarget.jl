@@ -272,8 +272,8 @@ WASM structure:
   )
   ;; code after try/catch
 """
-# PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
-# PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
+# Ensure module has exception tag 0 for Julia exceptions (idempotent)
+# Also ensures the $current_exn global exists for exception value stashing.
 function ensure_exception_tag!(mod::WasmModule)
     # THE TYPED TAG — dart's createExceptionTag carries
     # (exception, stackTrace) as the tag payload (translator.dart:485-491);
@@ -286,7 +286,7 @@ function ensure_exception_tag!(mod::WasmModule)
 end
 
 """
-PURE-9032: Ensure module has the \$current_exn global for exception value stashing.
+Ensure module has the \$current_exn global for exception value stashing.
 This is a (mut anyref) global initialized to ref.null any.
 Returns the global index. Idempotent — scans existing globals to avoid duplicates.
 """
@@ -304,13 +304,13 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
 end
 
 # census F7: the dormant stack-trace cluster (ensure_stack_trace_support!/
-# emit_capture_stack!) is DELETED — zero callers since introduction (PURE-9036).
+# emit_capture_stack!) is DELETED — zero callers since introduction .
 # The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
 # (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
 # source is the reference, not dead scaffolding.
 
 """
-PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
+Generate try/catch code using generate_stackified_flow for the try body.
 Used when the try body has complex control flow (phi nodes, nested conditionals).
 The simple linear approach in generate_try_catch can't handle phi locals or nested
 GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
@@ -327,7 +327,7 @@ Structure:
 # Compile a catch-handler region [from..to] honouring GotoIfNot
 # (conditional catch arms / exception isa dispatch). The linear per-statement
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
-# then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
+# then arm (gap f80bce91645e). Mirrors the handling from the simple
 # no-merge generator.
 """builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
 

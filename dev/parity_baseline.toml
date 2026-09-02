@@ -110,7 +110,7 @@ L99_emit_raw_bridges_extinct = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R11_patch_markers = 454
+R11_patch_markers = 67
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 29

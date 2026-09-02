@@ -55,8 +55,8 @@ mutable struct WasmStackValidator
     stack::Vector{WasmValType}          # Current value stack (types)
     errors::Vector{String}              # Pending diagnostics thrown by InstrBuilder._check!
     func_name::String                   # For error messages
-    labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)
-    reachable::Bool                     # Whether current code is reachable (PURE-412)
+    labels::Vector{ValidatorLabel}      # Label stack for control flow
+    reachable::Bool                     # Whether current code is reachable
     # The WasmModule being built — `wasm_subtype` needs it to resolve a ConcreteRef's
     # declared supertype chain (struct-vs-array kind + nominal `<:`). Held untyped to
     # avoid an include-order/layer dependency on WasmModule (the builder layer is below
@@ -162,7 +162,7 @@ end
 # declared supertype chain, and respects the abstract any/eq/struct/array/i31/func/
 # extern/exn hierarchy. The old permissive `wasm_types_assignable` (any-ref ↔ any-ref ⇒
 # true) + `_is_ref_type` shim were a deliberate "start permissive, tighten later"
-# placeholder (PURE-413) — DELETED here (Loop A): the validator calls `wasm_subtype`
+# placeholder — DELETED here (Loop A): the validator calls `wasm_subtype`
 # directly at every pop/branch/block-result check, with `v.mod` for the concrete chain.
 
 # ============================================================================
@@ -258,7 +258,7 @@ Validate a single instruction's stack effect. Pops expected operands and pushes
 results according to the Wasm spec. Mirrors dart2wasm's InstructionsBuilder
 assertion checks for numeric/parametric/conversion instructions.
 
-For GC-prefixed instructions (0xFB), use validate_gc_instruction! (PURE-413).
+For GC-prefixed instructions (0xFB), use validate_gc_instruction!.
 """
 function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)
 
@@ -403,7 +403,7 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
 end
 
 # ============================================================================
-# Control Flow Validation (PURE-412)
+# Control Flow Validation
 # Mirrors dart2wasm's _labelStack / Label hierarchy
 # ============================================================================
 
@@ -623,9 +623,9 @@ function validate_else!(v::WasmStackValidator)
 end
 
 # ============================================================================
-# WasmGC Instruction Validation (PURE-413)
+# WasmGC Instruction Validation
 # Mirrors dart2wasm's InstructionsBuilder GC instruction assertions.
-# These are the operations where PURE-317 through PURE-323 bugs lived.
+# These are the operations where specific bugs lived.
 # ============================================================================
 
 """

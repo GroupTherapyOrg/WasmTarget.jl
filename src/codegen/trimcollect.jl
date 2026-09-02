@@ -664,7 +664,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # discovery cannot change how base functions compile (the COLLECTION layer). Registry
     # isolation — so candidates don't perturb base get_function cross-call resolution — is
     # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
-    # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
+    # to for megamorphic (≥9-method) functions, the base pass is byte-identical
     # whether or not discovery runs.
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)

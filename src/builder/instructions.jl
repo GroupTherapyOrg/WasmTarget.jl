@@ -1149,7 +1149,7 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         end
     end
 
-    # PURE-9036: Name section (custom section) for stack trace readability
+    # Name section (custom section) for stack trace readability
     # Includes function names from exports so stack traces show meaningful names
     func_names = Dict{UInt32, String}()
     # Collect names from imports
@@ -1567,7 +1567,7 @@ end
 
 function write_composite_type!(w::WasmWriter, st::StructType)
     if st.supertype_idx !== nothing
-        # PURE-9026: Non-final subtype with one supertype
+        # Non-final subtype with one supertype
         write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final, allows further subtyping)
         write_u32!(w, 1)                # 1 supertype
         write_u32!(w, st.supertype_idx) # supertype index

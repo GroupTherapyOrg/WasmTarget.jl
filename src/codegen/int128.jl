@@ -348,7 +348,7 @@ end
 Emit 128-bit left shift: x << n (where n is 64-bit)
 Stack: [x_struct, n_i64] -> [result_struct]
 
-WBUILD-5001: WASM shift amounts are mod 64, so i64.shl(x, 64) = i64.shl(x, 0) = x.
+WASM shift amounts are mod 64, so i64.shl(x, 64) = i64.shl(x, 0) = x.
 Must handle n >= 64 and n == 0 edge cases with select.
 
 select(val1, val2, cond): cond != 0 → val1 (deeper), cond == 0 → val2 (shallower)
@@ -411,7 +411,7 @@ end
 Emit 128-bit logical right shift: x >> n (unsigned, where n is 64-bit)
 Stack: [x_struct, n_i64] -> [result_struct]
 
-WBUILD-5001: Same mod-64 edge case handling as emit_int128_shl.
+Same mod-64 edge case handling as emit_int128_shl.
 Builder-native (THE implementation).
 """
 function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)
@@ -537,7 +537,7 @@ end
 Emit 128-bit count leading zeros
 Stack: [x_struct] -> [result_struct (UInt128)]
 
-WBUILD-5001: Cleaned up dead code from first attempt that wasted 3 locals.
+Cleaned up dead code from first attempt that wasted 3 locals.
 Builder-native (THE implementation).
 """
 function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)
