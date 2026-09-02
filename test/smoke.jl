@@ -127,6 +127,16 @@ _g("dicts", Any[
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end
 mutable struct _Box; v::Int64; end
+mutable struct _RegTarget; v::Float64; end
+mutable struct _Holder; slot::Union{Nothing,_RegTarget}; end
+# @noinline so the struct genuinely escapes and setfield!/getfield compile for
+# real (inlined into a single closure body, Julia's SROA scalar-replaces the
+# field down to pure dataflow and never exercises the setfield! codegen path
+# this regresses).
+@noinline function _wt_clear_slot!(h::_Holder)
+    h.slot = nothing
+    return h.slot === nothing
+end
 _g("structs_tuples", Any[
     ("struct_field", (n::Int64) -> (p = _Pt(n, n + 1); p.x + p.y), Int64(3)),
     ("mutable_struct", (n::Int64) -> (b = _Box(n); b.v += 10; b.v), Int64(5)),
@@ -136,6 +146,11 @@ _g("structs_tuples", Any[
     # Loop B′: heterogeneous tuple at a RUNTIME index → Union element via the uniform box (both arms).
     ("het_tuple_rtidx", (x::Int64) -> (t = (10, 2.5); s = t[x]; s isa Int64 ? s : Int64(round(s))), Int64(1)),
     ("const_het_tuple_rtidx", (x::Int64) -> (t = (100, 3.5, 200); v = t[x]; v isa Int64 ? v : Int64(round(v))), Int64(1)),
+    # Phase 6.1 regression: `h.slot = nothing` lowers `nothing` as GlobalRef(Mod,:nothing),
+    # NOT a literal — setfield! into a Union{Nothing,ConcreteStruct} field must null the
+    # field with ITS OWN concrete type, not the generic bottom ref (MOI.Utilities.Model
+    # crash trigger). Round-trips nothing → back to a real struct value.
+    ("setfield_nothing_regression", (x::Float64) -> (h = _Holder(_RegTarget(x)); r1 = _wt_clear_slot!(h) ? 1 : 0; h.slot = _RegTarget(x * 2); r2 = h.slot === nothing ? 0.0 : h.slot.v; Float64(r1) + r2), 3.0),
 ])
 
 # ---- closures (capture; mutate-capture = F3) ------------------------------
