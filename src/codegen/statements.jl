@@ -827,61 +827,6 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         return b
     end
 
-    # Special case: Dict{K,V} construction
-    # Dict starts with empty Memory arrays (length 0), but our inline setindex!/getindex
-    # use linear scan and need initial capacity. Replace empty arrays with capacity-16 arrays.
-    # NOTE: Only match concrete Dict types, not AbstractDict (Base.Pairs <: AbstractDict but has 2 fields)
-    if struct_type <: Dict
-        K = keytype(struct_type)
-        V = valtype(struct_type)
-
-        if !haskey(ctx.type_registry.structs, struct_type)
-            register_struct_type!(ctx.mod, ctx.type_registry, struct_type)
-        end
-        dict_info = ctx.type_registry.structs[struct_type]
-
-        slots_arr_type = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-        keys_arr_type = get_array_type!(ctx.mod, ctx.type_registry, K)
-        vals_arr_type = get_array_type!(ctx.mod, ctx.type_registry, V)
-
-        # Initial capacity of 16
-        initial_cap = Int32(16)
-
-        emit_struct_prefix!(b, ctx.type_registry, struct_type, dict_info)
-
-        # field 1: slots - array of UInt8, initialized to 0 (empty)
-        i32_const!(b, initial_cap)
-        array_new_default!(b, slots_arr_type)
-
-        # field 2: keys - array of K, default initialized
-        i32_const!(b, initial_cap)
-        array_new_default!(b, keys_arr_type)
-
-        # field 3: vals - array of V, default initialized
-        i32_const!(b, initial_cap)
-        array_new_default!(b, vals_arr_type)
-
-        # field 4: ndel = 0 (i64)
-        i64_const!(b, 0)
-
-        # field 5: count = 0 (i64)
-        i64_const!(b, 0)
-
-        # field 6: age = 0 (u64, stored as i64)
-        i64_const!(b, 0)
-
-        # field 7: idxfloor = 1 (i64)
-        i64_const!(b, 1)
-
-        # field 8: maxprobe = 0 (i64)
-        i64_const!(b, 0)
-
-        # struct.new
-        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields
-
-        return b
-    end
-
     # Special case: Vector{T} construction
     # Vector is now a struct with (ref, size) fields to support setfield!(v, :size, ...)
     # The %new(Vector{T}, memref, size_tuple) creates a struct with both fields

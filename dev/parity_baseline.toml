@@ -14,6 +14,8 @@ L108_no_campaign_narration = 0
 L109_no_patch_marker_tags = 0
 L10_no_fnv_dispatch = 0
 L110_parity_anchors_cite_dart = 0
+L111_formal_models_paired_and_anchored = 0
+L112_struct_registry_iterated_in_one_order = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
 L13_no_byte_bridges = 0
@@ -113,7 +115,7 @@ L99_emit_raw_bridges_extinct = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
-R14_fresh_constant_structs = 11
+R14_fresh_constant_structs = 10
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 29
 R19_call_is_func_arms = 31

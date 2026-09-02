@@ -2690,6 +2690,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             else
                 field_ref
             end
+            # parity(class_info.dart:666 ClassInfoCollector.collect): dart's struct for a
+            # class exists before any field read; WT registers lazily, so the read
+            # itself registers through the one type chain (a constant Vector read only
+            # through .size never reached any other registrar).
+            if obj_type isa DataType && isconcretetype(obj_type) && obj_type <: Array
+                register_reachable_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
 
             if field_sym === :ref
                 # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)

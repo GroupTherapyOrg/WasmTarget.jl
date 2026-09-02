@@ -228,6 +228,23 @@ end
 # i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
 function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
+    if T === Int128 || T === UInt128
+        # parity(constants.dart:622-655 visitIntConstant valueTypeConstants): a boxed
+        # numeric constant gets one cached module global. Int128 is a Julia primitive
+        # (not isstructtype), so it cannot take the struct path below.
+        type_idx = get_int128_type!(mod, registry, T)
+        lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
+        hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
+        push!(init, Opcode.I32_CONST)
+        append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
+        push!(init, Opcode.I64_CONST)
+        append!(init, encode_leb128_signed(reinterpret(Int64, lo)))
+        push!(init, Opcode.I64_CONST)
+        append!(init, encode_leb128_signed(reinterpret(Int64, hi)))
+        push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+        append!(init, encode_leb128_unsigned(UInt64(type_idx)))
+        return type_idx
+    end
     (isconcretetype(T) && isstructtype(T) && !ismutabletype(T)) || return nothing
     T <: Type && return nothing                       # Type constants have their own registry
     (T === String || T === Symbol) && return nothing  # the string registry owns these

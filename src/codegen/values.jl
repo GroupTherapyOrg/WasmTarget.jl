@@ -1237,11 +1237,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
-        # funnel-first (int128)
+        # funnel-first (int128) — parity(constants.dart:622-655 visitIntConstant)
         local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cgint128 !== nothing
-            local _ciint128 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
-            _ciint128 !== nothing && (global_get!(b, _cgint128, ConcreteRef(_ciint128.wasm_type_idx, false)); return b)
+            global_get!(b, _cgint128, ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(val)), false))
+            return b
         end
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
         result_type = typeof(val)
@@ -1539,10 +1539,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # Dict's backing Memory contains intentionally unassigned hash-table slots.
-        # Those are physical nullable-reference slots, not fabricated Julia values.
-        # Every assigned element goes through the same typed wrap funnel used by
-        # ordinary array stores, including boxing heterogeneous Union keys.
+        # Only OCCUPIED hash-table slots carry values (Base.isslotfilled: the slot
+        # byte's high bit). An unoccupied isbits slot is uninitialized host memory —
+        # emitting it would bake heap addresses into the binary (a process-varying
+        # leak, never read by Dict); it takes zero. An unoccupied reference slot is
+        # a physical null. Every occupied element goes through the typed wrap
+        # funnel used by ordinary array stores, including boxing Union keys.
         compile_memory_elements! = function(mem, arr_type_idx, elem_type)
             arr_type_def = ctx.mod.types[arr_type_idx + 1]
             arr_type_def isa ArrayType || error("Dict backing storage has no Wasm array layout")
@@ -1552,17 +1554,19 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 if ctx.last_stmt_was_stub
                     break
                 end
-                if isassigned(mem, i)
+                if (dict_slots[i] & 0x80) != 0
                     v = mem[i]
                     emit_value!(b, v, ctx, expected; from_julia=typeof(v))
                 elseif expected isa RefType
                     ref_null!(b, expected)
                 elseif expected isa ConcreteRef && expected.nullable
                     ref_null!(b, Int64(expected.type_idx), expected)
+                elseif isbitstype(elem_type)
+                    emit_value!(b, zero(elem_type), ctx, expected; from_julia=elem_type)
                 else
                     throw(WasmCompileError(WasmDiagnostic(
                         :unsupported_type, string(typeof(mem)),
-                        "unassigned Dict backing slot $i has non-nullable physical type $expected",
+                        "unoccupied Dict backing slot $i has non-nullable physical type $expected",
                         nothing, nothing)))
                 end
             end
@@ -1641,16 +1645,13 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             array_new_fixed!(b, array_type_idx, length(val), wasm_elem_type)
         end
 
-        # Field 2: size tuple — Tuple{Int64} with the length
-        size_tuple_type = Tuple{Int64}
-        if !haskey(ctx.type_registry.structs, size_tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
-        end
-        size_info = ctx.type_registry.structs[size_tuple_type]
-        # Push typeId (field 0) with DFS-assigned ID for size tuple
-        _emit_tid!(Tuple{Int64})
-        i64_const!(b, Int64(length(val)))
-        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
+        # Field 2: size tuple — an immutable Tuple{Int64}, interned like any tuple
+        # constant (Base replaces v.size wholesale, never writes into the tuple), so
+        # every constant Vector of one length shares it. parity(constants.dart:938-959
+        # ensureConstant: sub-constants intern regardless of the composite's eagerness)
+        local _cgsz = ensure_constant_global!(ctx.mod, ctx.type_registry, (Int64(length(val)),))
+        _cgsz === nothing && error("unreachable: Tuple{Int64} constant funnel declined")
+        global_get!(b, _cgsz, ConcreteRef(ctx.type_registry.structs[Tuple{Int64}].wasm_type_idx, false))
 
         # struct.new for Vector{T}
         struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
