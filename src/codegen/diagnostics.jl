@@ -61,18 +61,24 @@ function Base.showerror(io::IO, e::WasmCompileError)
 end
 
 """
-    WasmValidationError(msg, details)
+    WasmValidationError(msg, details, bytes=UInt8[])
 
 Thrown when the opt-in independent `wasm-tools validate` cross-check rejects the
-emitted module. `details` carries the validator's stderr when available.
+emitted module. `details` carries the validator's stderr when available; `bytes`
+carries the rejected module itself (dart2wasm always writes its output — this is
+the equivalent: the error carries what would have been written).
 """
 struct WasmValidationError <: Exception
     msg::String
     details::String
+    bytes::Vector{UInt8}
 end
-WasmValidationError(msg::AbstractString) = WasmValidationError(String(msg), "")
+WasmValidationError(msg::AbstractString, details::AbstractString) =
+    WasmValidationError(String(msg), String(details), UInt8[])
+WasmValidationError(msg::AbstractString) = WasmValidationError(String(msg), "", UInt8[])
 Base.showerror(io::IO, e::WasmValidationError) =
-    print(io, "WasmValidationError: ", e.msg, isempty(e.details) ? "" : "\n" * e.details)
+    print(io, "WasmValidationError: ", e.msg, isempty(e.details) ? "" : "\n" * e.details,
+          isempty(e.bytes) ? "" : "\n($(length(e.bytes)) bytes of rejected module in `.bytes`)")
 
 # --- Source attribution -----------------------------------------------------
 # ctx.code_info is a Core.CodeInfo for normal compilation and a SimpleIR wrapper

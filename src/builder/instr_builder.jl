@@ -75,7 +75,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:expression, 0, WasmValType[],
                                    WasmValType[r for r in result_types], true))
-    trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
+    trace = OPTIONS[].builder_trace ? String[] : nothing
     InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[])
 end
 
@@ -765,7 +765,7 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
                 end
             end
         end
-        error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
+        error("append_builder!($(dst.func_name) ← $(src.func_name)): source has open control labels: " *
               "$(length(src.v.labels)) labels; $_report")
     end
     # march17: fragment violations PROPAGATE — they were silently dropped here,

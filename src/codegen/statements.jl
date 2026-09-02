@@ -128,7 +128,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
     # Walk through recognized storage-relative operations looking only for the
     # backing object's identity. Offsets remain runtime values and are compiled
     # by the consumer; no raw host address is ever synthesized.
-    _mm_dbg = haskey(ENV, "WT_TRACE_MM")
+    _mm_dbg = tracing(:mm)
     _fail = function (why, what)
         _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
         return nothing
@@ -472,7 +472,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         if stmt.head === :call
             compile_call!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
-            if haskey(ENV, "WT_TRACE_MM") && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
+            if tracing(:mm) && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
                 println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
             end
         elseif stmt.head === :invoke

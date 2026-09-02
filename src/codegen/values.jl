@@ -383,7 +383,7 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
     if !val_is_ref && ret_is_ref
         return true
     end
-    haskey(ENV, "WT_TRACE_RETCOMPAT") && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
+    tracing(:retcompat) && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
     return false
 end
 
@@ -798,7 +798,7 @@ ref.cast + struct.get when needed.
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
 """THE condition visitor (march4): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
-    if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
+    if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
             println(stderr, "   ", fr)
@@ -996,7 +996,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
-        haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
+        tracing(:deadval) && println(stderr, "DEADVAL val=", first(repr(val), 60))
         unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
         return b
     end
