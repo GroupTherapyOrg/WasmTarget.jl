@@ -123,16 +123,25 @@ end
     @testset "Threads.Atomic rejects — pointer escapes storage-relative algebra" begin
         err = _wt_nc_compile_err(_wt_nc_atomic, (Float64,))
         @test err isa WasmTarget.WasmCompileError
-        @test occursin("jl_value_ptr escapes storage-relative WasmGC operations", sprint(showerror, err))
+        # 1.12 lowers Atomic through jl_value_ptr pointer algebra; 1.13 through the
+        # :invoke_modify IR head (atomic modifyfield!). Both must reject loudly —
+        # the pre-p53 tree let :invoke_modify fall through and compiled the
+        # function with an empty statement (the 1.13 CI red at 3cfa1269).
+        msg = sprint(showerror, err)
+        @test occursin("jl_value_ptr escapes storage-relative WasmGC operations", msg) ||
+              occursin("IR head `:invoke_modify` has no lowering", msg)
     end
 
     @testset "eval rejects — dynamic world-age reflection" begin
         err = _wt_nc_compile_err(_wt_nc_eval, (Float64,))
         @test err isa WasmTarget.WasmCompileError
         @test !(err isa WasmTarget.StackImbalanceError)
-        @test occursin(
-            "eval (dynamic world-age reflection is outside WT's closed-world compilation target)",
-            sprint(showerror, err))
+        # The quoted expression's :copyast statement precedes the eval call in
+        # IR order, so the unknown-head reject (p53) fires first; the eval-specific
+        # diagnostic remains the reason when no :copyast is present.
+        msg = sprint(showerror, err)
+        @test occursin("eval (dynamic world-age reflection is outside WT's closed-world compilation target)", msg) ||
+              occursin("IR head `:copyast` has no lowering", msg)
     end
 
     @testset "@async rejects — task/scheduler creation" begin
