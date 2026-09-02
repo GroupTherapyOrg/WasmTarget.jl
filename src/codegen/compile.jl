@@ -393,71 +393,19 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_eq
-        # str_eq(a::String, b::String)::Bool
-        # Element-by-element comparison (not ref.eq identity check)
-        # local 0 = a (array ref), local 1 = b (array ref), local 2 = i (loop counter)
-        push!(extra_locals, I32)  # local 2: loop counter i
+        # str_eq(a::String, b::String)::Bool — the shared strings.jl core
+        # (reused, not re-derived) does the actual length/element comparison.
+        # local 0 = a (array ref), local 1 = b (array ref)
+        # extra locals: local 2 = len, local 3 = i (loop counter)
+        push!(extra_locals, I32)  # local 2: len
+        push!(extra_locals, I32)  # local 3: i
+        len_local = 2 + length(extra_locals) - 2
+        i_local = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, len_local, I32)
+        builder_set_local_type!(b, i_local, I32)
 
-        # Compare lengths first: if a.len != b.len, return false
-        local_get!(b, 0)  # a
-        array_len!(b)
-        local_get!(b, 1)  # b
-        array_len!(b)
-        num!(b, Opcode.I32_NE)
-        if_!(b, UInt8(I32))  # result type i32
-        # Lengths differ → return 0 (false)
-        i32_const!(b, 0)
-        else_!(b)
+        _emit_string_equal_core!(b, str_type_idx, 0, 1, len_local, i_local)
 
-        # Lengths equal — loop to compare elements
-        # i = 0
-        i32_const!(b, 0)
-        local_set!(b, 2)  # i = 0
-
-        # block $exit (result i32) — for early return of false
-        exit_label = block!(b, UInt8(I32))  # result type i32
-
-        # loop $loop (void)
-        loop_label = loop!(b)  # void block type
-
-        # if i >= a.len → break out with true (all matched)
-        local_get!(b, 2)  # i
-        local_get!(b, 0)  # a
-        array_len!(b)
-        num!(b, Opcode.I32_GE_U)
-        if_!(b)  # void
-        # Done — push 1 (true) and break out of block
-        i32_const!(b, 1)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # Compare a[i] vs b[i] (array.get_u for packed i8)
-        local_get!(b, 0)  # a
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        local_get!(b, 1)  # b
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        num!(b, Opcode.I32_NE)
-        if_!(b)  # void
-        # Mismatch — push 0 (false) and break out of block
-        i32_const!(b, 0)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # i++
-        local_get!(b, 2)  # i
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 2)  # i = i + 1
-
-        # br $loop (continue)
-        br!(b, loop_label)
-        end_block!(b)  # end loop
-        unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
-        end_block!(b)  # end block
-
-        end_block!(b)  # end if/else (lengths equal)
         end_block!(b)  # end function
         return (builder_code(b), extra_locals)
 
@@ -486,10 +434,10 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_concat
-        # str_concat(a::String, b::String)::String
-        # Concatenate two UTF-8 byte arrays into a new array
+        # str_concat(a::String, b::String)::String — the shared strings.jl core
+        # (reused, not re-derived) does the actual array.new_default + array.copy work;
+        # this arm only unwraps the CLASSED params into DATA-array locals for it.
         # local 0 = a (array ref), local 1 = b (array ref)
-        # extra locals: local 2 = len_a, local 3 = result (array ref)
         # parity(class_info.dart:18 FieldIndex): params are CLASSED strings — unwrap once into array locals
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
@@ -502,44 +450,21 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                     ConcreteRef(UInt32(str_type_idx), true))
         local_set!(b, _b_data)
-        push!(extra_locals, I32)  # len_a
+
+        push!(extra_locals, I32)  # offset
+        push!(extra_locals, I32)  # total_len
         str_ref_type = ConcreteRef(str_type_idx, true)
-        push!(extra_locals, str_ref_type)  # local 3: result array ref
-        builder_set_local_type!(b, 4, I32)
-        builder_set_local_type!(b, 5, str_ref_type)
+        push!(extra_locals, str_ref_type)  # result array ref
+        offset_local = 2 + length(extra_locals) - 3
+        total_len_local = 2 + length(extra_locals) - 2
+        result_local = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, offset_local, I32)
+        builder_set_local_type!(b, total_len_local, I32)
+        builder_set_local_type!(b, result_local, str_ref_type)
 
-        # len_a = array.len(a)
-        local_get!(b, _a_data)  # a data
-        array_len!(b)
-        local_set!(b, 4)  # len_a
+        _emit_string_concat_core!(b, str_type_idx, Int[_a_data, _b_data],
+                                  offset_local, total_len_local, result_local)   # leaves result on the stack
 
-        # result = array.new_default(len_a + array.len(b))
-        local_get!(b, 4)  # len_a
-        local_get!(b, _b_data)  # b data
-        array_len!(b)
-        num!(b, Opcode.I32_ADD)
-        array_new_default!(b, str_type_idx)
-        local_set!(b, 5)  # result
-
-        # array.copy(result, 0, a, 0, len_a)
-        local_get!(b, 5)  # dst: result
-        i32_const!(b, 0)  # dst_offset: 0
-        local_get!(b, _a_data)  # src: a data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 4)  # len: len_a
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # array.copy(result, len_a, b, 0, array.len(b))
-        local_get!(b, 5)  # dst: result
-        local_get!(b, 4)  # dst_offset: len_a
-        local_get!(b, _b_data)  # src: b data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, _b_data)  # b data
-        array_len!(b)  # len: array.len(b)
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # return result
-        local_get!(b, 5)  # result
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
         _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
         end_block!(b)

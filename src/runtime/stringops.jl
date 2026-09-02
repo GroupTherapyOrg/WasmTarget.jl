@@ -396,7 +396,13 @@ str_uppercase("abc123")       # Returns "ABC123"
 """
 @noinline function str_uppercase(s::String)::String
     len = str_len(s)
-    result = str_new(len)
+    # Built via a byte vector, not str_setchar! — str_setchar! is a documented
+    # native no-op (Julia strings are immutable), which made this function's
+    # NATIVE result always the all-null string from str_new. Vector{UInt8} +
+    # String(bytes) is the same construction idiom already used throughout
+    # interpreter.jl's overlays (chop/last/reverse/titlecase), so both the
+    # native oracle and the generic wasm codegen produce the real result.
+    bytes = UInt8[]
 
     i = Int32(1)
     while i <= len
@@ -405,11 +411,11 @@ str_uppercase("abc123")       # Returns "ABC123"
         if c >= _CHAR_A_LOWER && c <= _CHAR_Z_LOWER
             c = c - _CHAR_CASE_DIFF  # Convert to uppercase
         end
-        str_setchar!(result, i, c)
+        push!(bytes, UInt8(c))
         i = i + Int32(1)
     end
 
-    return Base.inferencebarrier(result)::String
+    return Base.inferencebarrier(String(bytes))::String
 end
 
 """
@@ -428,7 +434,8 @@ str_lowercase("ABC123")       # Returns "abc123"
 """
 @noinline function str_lowercase(s::String)::String
     len = str_len(s)
-    result = str_new(len)
+    # See str_uppercase: built via a byte vector, not the native-no-op str_setchar!.
+    bytes = UInt8[]
 
     i = Int32(1)
     while i <= len
@@ -437,11 +444,11 @@ str_lowercase("ABC123")       # Returns "abc123"
         if c >= _CHAR_A_UPPER && c <= _CHAR_Z_UPPER
             c = c + _CHAR_CASE_DIFF  # Convert to lowercase
         end
-        str_setchar!(result, i, c)
+        push!(bytes, UInt8(c))
         i = i + Int32(1)
     end
 
-    return Base.inferencebarrier(result)::String
+    return Base.inferencebarrier(String(bytes))::String
 end
 
 # ASCII whitespace characters
