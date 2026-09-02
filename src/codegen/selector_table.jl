@@ -1,5 +1,5 @@
 # ============================================================================
-# parity(M8): THE DISPATCH TABLE — dart dispatch_table.dart:391-458
+# parity(dispatch_table.dart:396 DispatchTable): THE DISPATCH TABLE
 # ============================================================================
 #
 # dart's model, faithfully: a SELECTOR (there: method name; here: generic function
@@ -62,7 +62,11 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
         if length(varying) == 1
             any(length(g) > 1 for g in values(groups)) && continue   # axis tie
         else
-            # parity(M8.3): 2-axis cascade — each tied level-1 group must be
+            # parity(quarantine: Julia multiple-dispatch cascade has no dart equivalent — dart selectors vary
+            # only on the receiver's classId by construction (dispatch_table.dart:391-458 SelectorInfo is
+            # single-axis; code_generator.dart:2028 _virtualCall's PolymorphicDispatchers fallback at :3694
+            # handles static-dispatch-range gaps within ONE classId axis, not a second varying axis; looked
+            # for a composed/second-axis dispatch structure in both files and found none): 2-axis cascade — each tied level-1 group must be
             # cleanly dispatchable on axis2
             axis2 = varying[2]
             ok2 = all(values(groups)) do g
@@ -139,12 +143,12 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
     end
     dt_registry.selector_table_len = length(table)
     dt_registry.selector_table_idx = add_table!(mod, FuncRef, UInt32(length(table)))
-    # parity(M8.4): a table that can't route (3+-axis / axis-tied — unseen in practice)
+    # parity(code_generator.dart:2062 _virtualCall noTarget): a table that can't route (3+-axis / axis-tied — unseen in practice)
     # is DROPPED: its callers compile their normal bodies, and an unresolvable dynamic
     # call surfaces through the loud record_unsupported! posture instead of a probe.
     for func_ref in collect(keys(dt_registry.tables))
         if !haskey(dt_registry.selector_offset, func_ref)
-            @debug "parity(M8.4): dispatch table for $(func_ref) is not selector-routable — dropped"
+            @debug "parity(code_generator.dart:2062 _virtualCall noTarget): dispatch table for $(func_ref) is not selector-routable — dropped"
             delete!(dt_registry.tables, func_ref)
         end
     end
@@ -166,7 +170,7 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)
         for (pos, entry_i) in positions
             push!(entries, (pos, dt.entries[entry_i].wrapper_idx))
         end
-        # parity(M8.3): cascade trampolines — dart's virtual-call shape applied to
+        # parity(translator.dart:911 callDispatchTable): cascade trampolines — dart's virtual-call shape applied to
         # axis2, emitted as tiny uniform-sig functions living in the SAME table.
         for c in get(dt_registry.selector_cascades, func_ref, [])
             arity = Int(dt.arity)

@@ -387,9 +387,9 @@ function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::I
     builder_set_local_type!(b, len1_local, I32)
 
     # Store str1, str2
-    emit_value!(b, str1, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
+    emit_value!(b, str1, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
     local_set!(b, str1_local)
-    emit_value!(b, str2, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
+    emit_value!(b, str2, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
     local_set!(b, str2_local)
 
     # len1 = str1.len (stored); len2 = str2.len (left on stack)

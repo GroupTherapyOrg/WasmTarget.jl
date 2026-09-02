@@ -1540,7 +1540,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # Value is already on stack — check if it's actually a ref type
         local isa2_val_wasm = nothing
         if value_arg isa Core.SSAValue
-            # parity(M10): the load (_narrow_generic_local!) delivers the SSA's REFINED
+            # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the load (_narrow_generic_local!) delivers the SSA's REFINED
             # type — when the join proved a numeric, the value on stack IS that numeric
             # regardless of the (anyref) local. The refined type drives the fold.
             local _isa2_refined = get(ctx.ssa_types, value_arg.id, Any)
@@ -1654,7 +1654,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
             elseif check_type === String || check_type === Symbol || check_type <: AbstractString
-                # parity(M9): strings are CLASSED — isa tests the string struct
+                # parity(class_info.dart:18 FieldIndex): strings are CLASSED — isa tests the string struct
                 local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                 ref_test!(bld, Int64(_str_idx), false)
             else
@@ -2483,7 +2483,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             array_get!(tb, arr_idx, ew; signed=packed_array_signedness(E))
             return append_builder!(b, tb)
         end
-        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read) through the box's REAL struct type.
         local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
         if obj_type === Core.Box && _mb_fld === :contents
@@ -2592,8 +2592,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
                 else
-                    # parity(M11): an unregistered struct previously emitted an INCOMPLETE
+                    # parity(class_info.dart:666 ClassInfoCollector.collect): an unregistered struct previously emitted an INCOMPLETE
                     # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
+                    # dart's closed-world fixpoint registers every reachable class's struct
+                    # BEFORE codegen begins, so this situation cannot arise there; WT's
+                    # late/dynamic frontend lacks that guarantee, so it rejects instead.
                     record_unsupported!(ctx, :unsupported_type, "field access on an unregistered struct type"; idx=idx)
                     unreachable!(_refb)
                 end
@@ -3949,7 +3952,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             idx_ssa === nothing && (idx_ssa = length(args) >= 2 ? args[2] : 1)
             local _prsb = _ctx_builder(ctx, "compile_call")
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            # parity(M9): the classed string → its DATA array (the funnel adjusts)
+            # parity(translator.dart:1597 Translator.convertType): the classed string → its DATA array (the funnel adjusts)
             emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
             emit_value!(_prsb, idx_ssa, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
             num!(_prsb, Opcode.I32_WRAP_I64)
@@ -4500,7 +4503,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
         # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
         local _generic_arith = is_generic_arithmetic
-        # parity(M10): when the SSA's REFINED type is already numeric (the join),
+        # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): when the SSA's REFINED type is already numeric (the join),
         # the LOAD (_narrow_generic_local!) is THE single unbox source — appending a
         # second unbox here double-converted. Only unbox when the type is truly erased.
         local _aa_refined_numeric = arg isa Core.SSAValue &&
@@ -4546,7 +4549,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # and the merge papered over it (7k+ harvest errors from this one idiom).
     _op1! = (op::UInt8) -> num!(fb, op)
 
-    # parity(M11.2): THE INTRINSICS TABLE ROUTE (dart intrinsics.dart) — one
+    # parity(intrinsics.dart:995 _binaryOperatorMap lookup): THE INTRINSICS TABLE ROUTE — one
     # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
     # emit here via `emit_intrinsic_binop!` (the ONE production caller — see
     # intrinsics_table.jl); the chain below keeps only what the table can't
@@ -5928,7 +5931,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        # parity(M10b): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
+        # parity(closures.dart:1365 Context): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
         # (dart Context variable write); the value wraps to anyref through the funnel.
         if !_gfc_done && func.name === :setfield! && length(args) == 3 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -5946,7 +5949,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _bxs_ib)
             _gfc_done = true
         end
-        # parity(M10b): isdefined(%box::Core.Box, :contents) — the shared cell's
+        # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
         # defined-check = a null test on the anyref contents.
         if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -6008,7 +6011,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read). The cell is the F3 anyref box struct.
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -6023,7 +6026,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _bx_ib)
             _gfc_done = true
         end
-        # parity(M10b): getfield(closure_value, :boxfield) — the box was born in a
+        # parity(closures.dart:1365 Context): getfield(closure_value, :boxfield) — the box was born in a
         # callee; read the registered struct field here (the ONE shared cell).
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
@@ -6286,7 +6289,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         _dyneq_ok = true
                     end
                 end
-                # parity(M10b): convert(T, x) where x's REFINED type is already T —
+                # parity(translator.dart:1598 Translator.convertType): convert(T, x) where x's REFINED type is already T —
                 # identity (dart: no conversion node when types agree). The join can
                 # refine an erased Any to T after inference classified the convert.
                 if !_dyneq_ok && called_func === Base.convert && length(args) == 2 &&
@@ -6468,7 +6471,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # Locals-first approach: compile each piece into a local, then assemble.
 
             # Step 1: Compile head (Symbol = array<i32>) → local
-            # parity(M9): the head Symbol is a CLASSED string value
+            # parity(class_info.dart:18 FieldIndex): the head Symbol is a CLASSED string value
             head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
                 emit_value!(fb, head_arg, ctx, static_wasm_type(head_arg, ctx))
                 local_set!(fb, head_local)
@@ -6535,7 +6538,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         ctx.last_stmt_was_stub = true
     end
 
-    # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
+    # parity(translator.dart:1621 Translator.convertType): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
     # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
     # Keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a

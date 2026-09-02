@@ -5,7 +5,7 @@ For simple if-then-else patterns, we use the `if` instruction.
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     b = _ctx_builder(ctx, "generate_structured")
     code = ctx.code_info.code
-    # parity(M1) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
+    # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
     # THE stackifier. Retired strategies this replaced: the nested-conditional
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
@@ -97,7 +97,7 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
     elseif val isa Float32
         return F32
     elseif val isa Symbol || val isa String
-        # parity(M9): String/Symbol constants are the CLASSED string struct
+        # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
         str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(str_type_idx, false)
     elseif val isa GlobalRef
@@ -184,8 +184,8 @@ the store is skipped (these represent unreachable code paths in Union types).
 Returns true if the store was emitted, false if skipped.
 """
 function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
-    # parity(M2): THE wrap collapse — a phi-edge store IS dart's wrap(val, phi_local_type)
-    # followed by local.set (code_generator.dart:879 + convertType): emit typed, coerce the
+    # parity(code_generator.dart:2149 visitVariableSet): THE wrap collapse — a phi-edge store IS dart's wrap(val, phi_local_type)
+    # followed by local.set (translateExpression :2171 + convertType): emit typed, coerce the
     # ACTUAL emitted type to the phi local's type through the ONE convert_type! funnel, store.
     # Replaces the ~360-line phi_local_type × edge_val_type elseif-chain (hand-rolled box/
     # extern/cast/widen arms, byte-scans, and the flagged unsigned-LEB REF_CAST_NULL bridge —
