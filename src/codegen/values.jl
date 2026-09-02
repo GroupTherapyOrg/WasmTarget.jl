@@ -663,22 +663,6 @@ function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
 end
 
 """
-    emit_string_data!(b, mod, registry; from_anyref=false)
-
-parity(M9) — the classed string CONSUMER: with a string value on the stack
-(`\$JlString` or anyref), read its `data` byte array. String OPS call this once at
-entry and work on the array — dart's methods read the class's array field the same way.
-"""
-function emit_string_data!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
-                           from_anyref::Bool=false)
-    struct_idx = get_string_struct_type!(mod, registry)
-    arr_idx = get_string_array_type!(mod, registry)
-    from_anyref && ref_cast!(b, Int64(struct_idx), false)
-    struct_get!(b, UInt32(struct_idx), UInt32(2), ConcreteRef(arr_idx, true))
-    return b
-end
-
-"""
     emit_classid_range_check!(b, low, high)
 
 dart's `emitClassIdRangeCheck` (code_generator.dart:3847-3884), THE single abstract-type

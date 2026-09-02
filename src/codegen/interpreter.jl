@@ -1938,7 +1938,6 @@ end
 #      rtol=1e-9 in the band [1e-12, 1e-7] (below 1e-12 the atol covers it).
 #      tanh = sinh/cosh with a |x|>20 ⇒ ±1 guard so large x can't make Inf/Inf.
 # Remove when: native libm-style hyperbolic codegen exists.
-const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
 
 # P3 gap c9f2efb08deb: the previous exp(a - ln2) trick for a > 20 carried ~3
 # ulp error (argument rounding amplified by exp), which sin(sinh(x)) blew into

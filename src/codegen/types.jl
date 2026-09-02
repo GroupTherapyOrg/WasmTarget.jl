@@ -710,9 +710,6 @@ end
 
 # PURE-9063: Kind constants for $JlType.$kind field
 const JL_TYPE_KIND_DATATYPE  = Int32(0)
-const JL_TYPE_KIND_UNION     = Int32(1)
-const JL_TYPE_KIND_UNIONALL  = Int32(2)
-const JL_TYPE_KIND_TYPEVAR   = Int32(3)
 
 """
     create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
@@ -2056,24 +2053,6 @@ function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
     local_get!(b, temp_local)
     array_get!(b, registry.type_lookup_array_idx, AnyRef)
     return b
-end
-
-"""
-Get or create an array type that holds string references.
-"""
-function get_string_ref_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    # First ensure string array type exists
-    str_type_idx = get_string_array_type!(mod, registry)
-
-    # Create array type for string refs if not exists
-    # Key: use Vector{String} as the Julia type marker
-    if !haskey(registry.arrays, Vector{String})
-        # Element type is (ref null str_type_idx) - ConcreteRef with nullable=true
-        str_ref_type = ConcreteRef(str_type_idx, true)
-        arr_idx = add_array_type!(mod, str_ref_type, true)
-        registry.arrays[Vector{String}] = arr_idx
-    end
-    return registry.arrays[Vector{String}]
 end
 
 """

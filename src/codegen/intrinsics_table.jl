@@ -14,8 +14,6 @@
 # already on the stack AT THEIR TABLE TYPES (the callers' wrap channel guarantees
 # that) and returns the result type it pushed.
 
-const _IB = InstrBuilder   # local alias for signature brevity
-
 """One typed binary-op emission: opcode + result type."""
 struct BinOpEmit
     opcode::UInt8
