@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# march16: FIRST-CLASS CLOSURES — trampolines + vtable globals
+# FIRST-CLASS CLOSURES — trampolines + vtable globals
 # (dart ClosureLayouter/ClosureRepresentation, closures.dart:41-118;
 #  the closure object = {classId, identityHash, context, vtable, functionType})
 # ═══════════════════════════════════════════════════════════════════════════
@@ -236,7 +236,7 @@ end
 """
     emit_dynamic_closure_call!(b, ctx, func, args, idx) -> Bool
 
-march16 slice D: the DYNAMIC function-value call (dart: vtable entry at
+The DYNAMIC function-value call (dart: vtable entry at
 vtableBaseIndex+argCount → call_ref). The callee value is the closure OBJECT
 (wrapped at the erasure seam); args ride the UNIFORM dynamic signature
 (everything anyref). Returns false when the shape doesn't apply.

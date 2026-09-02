@@ -794,7 +794,7 @@ function _compile_closed_world_plan(functions::Vector;
 
     for (f, arg_types, name) in normalized
         # Check if this is a closure (function with captured variables)
-        # march16: a TYPE-KEYED entry (f IS the closure DataType — capturing
+        # A TYPE-KEYED entry (f IS the closure DataType — capturing
         # closures have no instance) resolves IR by ftype, and the closure type
         # is f itself, not typeof(f).
         local _type_keyed_closure = f isa DataType && is_closure_type(f)
@@ -912,7 +912,7 @@ function _compile_closed_world_plan(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # PURE-9063: Create $JlType hierarchy types FIRST (march5 reorder: the closed-world
+    # PURE-9063: Create $JlType hierarchy types FIRST (the closed-world
     # collector below registers structs whose DataType-typed fields must resolve to
     # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
     # which the Any-only patch pass below can't fix)
@@ -1033,7 +1033,7 @@ function _compile_closed_world_plan(functions::Vector;
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
 
-    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
+    # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).

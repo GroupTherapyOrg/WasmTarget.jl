@@ -332,7 +332,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Union{Vector{Float64}, Vector{UInt64}} <: AbstractArray is true and
         # short-circuited here to ArrayRef, but Vectors are concretely struct
         # refs; route unions to find_common_wasm_type below (same class as
-        # the P2-batch20 exclusion in get_concrete_wasm_type).
+        # The exclusion in get_concrete_wasm_type).
         return ArrayRef
     elseif T <: WasmGlobal
         # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)

@@ -67,7 +67,7 @@ mutable struct CompilationContext <: AbstractCompilationContext
     entry_calls::Vector{UInt32} # typed zero-argument runtime adapters before root body
     # Diagnostics accumulated during compilation (see diagnostics.jl).
     diagnostics::Vector{WasmDiagnostic}
-    # march15: per-try-region exception payload locals (dart binds each catch's
+    # Per-try-region exception payload locals (dart binds each catch's
     # exception to its OWN local; keyed by the region's enter_idx). :the_exception
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
     exn_region_locals::Dict{Int, Int}
@@ -506,7 +506,7 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             return ConcreteRef(type_idx, true)
         end
-    # P2-batch20: exclude Unions — Union{Vector{Int32},Vector{Int64}} <: AbstractArray
+    # Exclude Unions — Union{Vector{Int32},Vector{Int64}} <: AbstractArray
     # is true, and registering the UNION as a single-member vector wrapper here while
     # value sites used the tagged-union struct made the two representations collide
     # (gap 5ae13ccb033a: `sum([x,x,acc_b])` with Int32→Int64 widening). Unions fall
@@ -611,7 +611,7 @@ Encode a block result type (for if/block/loop).
 Handles both simple types (i32/i64/f32/f64) and concrete reference types.
 Returns a vector of bytes to append to the instruction stream.
 """
-# march6 slice D: MULTI-VALUE blocktype — a function-type INDEX encoded as s33
+# MULTI-VALUE blocktype — a function-type INDEX encoded as s33
 # (wasm spec). Used by the typed-catch landing block (results = the tag payload).
 # Int specifically (not Integer): UInt8 0x40/void keeps its raw single-byte path.
 encode_block_type(type_idx::Int)::Vector{UInt8} = encode_leb128_signed(Int64(type_idx))

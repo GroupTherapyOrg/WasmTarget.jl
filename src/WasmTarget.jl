@@ -27,7 +27,7 @@ include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (re
 include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
 include("codegen/compile.jl")
 include("codegen/structs.jl")
-include("codegen/closures.jl")   # march16: the closure layouter consumers
+include("codegen/closures.jl")   # the closure layouter consumers
 include("codegen/unions.jl")
 include("codegen/int128.jl")
 include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/HISTORY.md#closures-and-dynamic-dispatch)

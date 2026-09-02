@@ -611,7 +611,7 @@ end
 # NOTE: Two-pass approach avoids codegen bug where `===` comparison combined with
 # push! in a loop produces wrong results. Pass 1 finds the boundary index, Pass 2
 # does an unconditional copy.
-# P2-batch7: scan/copy bounds are BYTE counts — these loops index codeunits, and
+# Scan/copy bounds are BYTE counts — these loops index codeunits, and
 # the old `length(s)` bound (char count) truncated multibyte strings
 # (strip("héllo") dropped the last byte → gap 0beb5ec969a2 family). The
 # ncodeunits-on-String(bytes) aliasing bug that originally forced length() here
@@ -635,7 +635,7 @@ end
         start += 1
     end
     start > n && return ""
-    # Pass 2: unconditional copy from start to the LAST BYTE. P2-batch7: the
+    # Pass 2: unconditional copy from start to the LAST BYTE. The
     # copy bound must be the byte count — the old length(s) bound truncated
     # multibyte strings (strip("héllo") dropped a byte, gap 0beb5ec969a2).
     nb = sizeof(s)
@@ -649,7 +649,7 @@ end
 end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
-    n = sizeof(s)   # P2-batch7: BYTE count — backward scan starts at the last
+    n = sizeof(s)   # BYTE count — backward scan starts at the last
     # byte; UTF-8 continuation bytes (0x80-0xBF) never match ASCII whitespace,
     # so byte-wise scanning is multibyte-safe. (The old length(s) bound started
     # the scan mid-string for multibyte inputs and truncated the result.)
@@ -778,7 +778,7 @@ end
     return String(out)
 end
 
-# ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
+# ─── reinterpret Overlay  ─────────────────────────────────────
 # Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
 #      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
 #      error paths) that miscompiles (gap e817213d1890). For same-size
@@ -1576,7 +1576,7 @@ end
 
 # ─── Char Classification & Case Overlays ──────────────────────────────────
 # Why: Base implementations use foreigncall(:utf8proc_category) / _toupper /
-#      _tolower — C library calls that can't compile to WASM. P2-batch8:
+#      _tolower — C library calls that can't compile to WASM.
 #      extended from ASCII-only to EXACT ASCII + Latin-1 (U+0000–U+00FF)
 #      coverage, table-verified against native Julia (uppercase('é')='É',
 #      µ→Μ, ß→ẞ, ÿ→Ÿ, NEL/NBSP isspace, ª/µ/º letters). The fuzz generator's

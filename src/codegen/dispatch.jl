@@ -28,8 +28,7 @@ mutable struct DispatchTable
     # Filled during emit phase:
     dispatch_sig_idx::UInt32   # Type idx for uniform dispatch signature
     result_wasm_type::Union{WasmValType,Nothing}  # `nothing` means a genuinely void selector
-    # march11 (dart _computeSignature's unboxed-primitive fast lane,
-    # dispatch_table.dart:172-205): per-slot signature types — a slot where ALL
+    # Per-slot signature types — a slot where ALL
     # specializations agree on ONE primitive stays UNBOXED; everything else AnyRef.
     slot_types::Vector{WasmValType}
 end
@@ -95,15 +94,14 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
                                 threshold::Int=2)::DispatchTableRegistry
     # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
     # (dispatch_table.dart:401-403 needsDispatch). The 2-8 machinery was proven at
-    # march13b (void-drop + mirror arm, target-signature casts, class-axis, dedup).
     dt_registry = DispatchTableRegistry()
 
     for (func_ref, infos) in func_registry.by_ref
         length(infos) < threshold && continue
-        # march16 owns closures: function values dispatch through the closure
+        # Owns closures: function values dispatch through the closure
         # VTABLE (call_ref), never the class-selector table — same split as dart.
         any(i -> occursin("#", string(i.name)), infos) && continue
-        # march13b: the selector table dispatches on receiver.classId — a group needs
+        # The selector table dispatches on receiver.classId — a group needs
         # at least one CLASS axis (every specialization's type at that slot is a real
         # struct with a classId header). Primitive-only groups (process(Int32)/
         # process(Int64)) are compile-time-resolved overloads, not runtime dispatch —
@@ -155,7 +153,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             end
             all_valid || continue
 
-            # march13: dedup by tuple — the un-capped discovery can register a candidate
+            # Dedup by tuple — the un-capped discovery can register a candidate
             # COPY of an explicit specialization; first registration wins (M8.4 rule).
             any(e -> e.type_ids == type_ids, entries) && continue
             push!(entries, DispatchEntry(type_ids, info.wasm_idx, UInt32(0), info.return_type))
@@ -167,7 +165,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
         result_wasm = all_no_return ? nothing :
                       mixed_returns ? AnyRef : julia_to_wasm_type(return_type)
 
-        # march11: per-slot LUB — dart's unboxed-primitive fast lane
+        # Per-slot LUB — dart's unboxed-primitive fast lane
         # (dispatch_table.dart:172-205). A slot stays unboxed iff EVERY
         # specialization declares the SAME primitive Julia type there.
         # tag-run item 1: dart _upperBound (dispatch_table.dart:172-205) — the
@@ -241,7 +239,7 @@ function emit_dispatch_metadata!(mod::WasmModule,
     # tables) is DELETED — the selector table is the only dispatch structure. All this
     # phase does now is create each selector's uniform call_indirect signature.
     for (func_ref, dt) in dt_registry.tables
-        param_types = copy(dt.slot_types)   # march11: the per-slot LUB (was uniform AnyRef)
+        param_types = copy(dt.slot_types)   # the per-slot LUB (was uniform AnyRef)
         result_types = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
             WasmValType[dt.result_wasm_type] : WasmValType[]
         dt.dispatch_sig_idx = add_type!(mod, FuncType(param_types, result_types))
@@ -259,7 +257,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
     isempty(dt_registry.tables) && return
 
     for (func_ref, dt) in dt_registry.tables
-        param_types = copy(dt.slot_types)   # march11: the per-slot LUB
+        param_types = copy(dt.slot_types)   # the per-slot LUB
         # Dispatch signature result type
         is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
         is_anyref_return = dt.result_wasm_type == AnyRef
@@ -300,7 +298,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                             ref_cast!(b, Int64(_tpl.type_idx), _tpl.nullable)
                     end
                 elseif dt.slot_types[j] !== AnyRef
-                    # march11 fast lane: the slot arrives UNBOXED — pass through
+                    # The slot arrives UNBOXED — pass through
                 else
                     # step3 (dart wrapper rule): the cast target is ALWAYS the TARGET's
                     # declared param — the tid-resolved struct can differ from what the
@@ -350,11 +348,11 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     local_set!(b, UInt32(Int(dt.arity)))  # first extra local
                     i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                     local_get!(b, UInt32(Int(dt.arity)))
-                    struct_new!(b, box_idx)   # mod-resolved fields (march3)
+                    struct_new!(b, box_idx)   # mod-resolved fields
                 end
             elseif dt.result_wasm_type ∉ (I32, I64, F32, F64, AnyRef) &&
                    entry.return_type !== Nothing && entry.return_type !== Union{}
-                # march13b: a VOID dispatch signature over value-returning targets
+                # A VOID dispatch signature over value-returning targets
                 # (non-core-rep result_wasm_type → results=[]) must DROP the target's
                 # return — the 2-entry tables surfaced wrappers left unbalanced
                 # ("values remaining on stack"; Base.get's wrapper, func 9).

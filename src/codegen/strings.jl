@@ -154,7 +154,7 @@ end
 # Stack Trace Support — JS new Error().stack Import
 # ============================================================================
 
-# census F7 (march5): add_stack_trace_import!/ensure_stack_trace_global! deleted
+# census F7 (): add_stack_trace_import!/ensure_stack_trace_global! deleted
 # with the dormant PURE-9036 cluster (see generate.jl note; rebuild = D9.1 typed tag).
 
 # ============================================================================
@@ -368,7 +368,7 @@ Uses locals for intermediate values.
 """
 # MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
 # array.copy. Byte-identical to before.
-"""builder-returning core (march3): callers merge via append_builder!."""
+"""builder-returning core (): callers merge via append_builder!."""
 function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
@@ -462,7 +462,7 @@ Uses scratch locals allocated by allocate_scratch_locals!.
 """
 # MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
 # control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-"""builder-returning core (march3): callers merge via append_builder!."""
+"""builder-returning core (): callers merge via append_builder!."""
 function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
