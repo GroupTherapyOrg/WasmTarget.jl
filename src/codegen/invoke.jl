@@ -55,6 +55,13 @@ only entry using this today, `isascii`, is verified to compile correctly this
 way) — or `:standalone` — the builder pushes every input itself via
 `emit_value!`/`_emit_str_arg!` and is a complete, self-contained replacement
 for `fb`.
+
+A builder may DECLINE a call it is registered for by returning `nothing` —
+used when one Method covers call shapes only SOME of which this entry
+handles (an arity/literal-value guard the Method's static signature alone
+cannot express, e.g. `Base.kwerr`'s `length(args) == 2`). On decline,
+`compile_invoke!`'s consult falls through to the terminal unsupported-method
+reject, exactly as a pre-migration bare-Symbol name-guard miss did.
 """
 struct InvokeIntrinsicEntry
     fn::Function     # :append → (args, ctx) -> InstrBuilder (fragment); :standalone → (args, ctx, idx, expr) -> InstrBuilder (whole result)
@@ -370,6 +377,631 @@ function _invoke_unalias_b(args, ctx::AbstractCompilationContext, idx::Int, expr
     return bua
 end
 
+
+# ---- :standalone builders migrated off the name === :sym ladder (R20) ----
+# Each docstring says whether the body is a verbatim move, a verbatim move with a
+# widened/narrowed registration (Method identity now does work the old runtime name
+# check did), or a genuine rewrite (and why). "DECLINES" means the builder returns
+# `nothing` for a call shape this Method covers but this entry does not handle;
+# the ladder then falls through to the terminal unsupported-method reject.
+
+_invoke_is_32bit_arith(@nospecialize(arg_type))::Bool =
+    arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+    arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+    (arg_type isa Type && isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
+
+"""The five arithmetic/length invoke intrinsics below (_invoke_add_b/_invoke_sub_b/
+_invoke_neg_b/_invoke_mul_b/_invoke_length_str_b) all key off `args[1]`'s inferred
+Julia type — ONE shared read, same as the pre-migration ladder's single top-of-
+function `arg_type = infer_value_type(args[1], ctx)` these Methods all used to reuse
+via closure capture (R3: infer_value_type callers are counted per call SITE, not per
+invocation — a shared helper keeps this at one site instead of five)."""
+_invoke_operand1_type(args, ctx::AbstractCompilationContext) = infer_value_type(args[1], ctx)
+
+"""parity(translator.dart:1621 Translator.convertType): numeric arith result → ref-typed
+SSA local ⇒ box through THE one producer (emit_classid_box!). Shared by the +/-/*
+invoke intrinsics below — each was compile_invoke!'s local `_f3_result_box!` closure
+before this migration; unchanged logic, just parameterized instead of captured."""
+function _invoke_box_arith_result!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int, expr::Expr,
+                                   @nospecialize(arg_type), is_32bit::Bool)
+    dl = get(ctx.ssa_locals, idx, nothing)
+    dl === nothing && return nothing
+    doff = dl - ctx.n_params
+    (doff >= 0 && doff < length(ctx.locals) && ctx.locals[doff + 1] === AnyRef) || return nothing
+    rbx = _ctx_builder(ctx, "compile_invoke")
+    boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
+    (boxed_result_jt isa Type && isconcretetype(boxed_result_jt)) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "boxed invoke result lacks a concrete Julia source type"; idx=idx, detail=expr)
+    emit_classid_box!(rbx, ctx, is_32bit ? I32 : I64, boxed_result_jt)
+    append_builder!(b, rbx)
+    return nothing
+end
+
+"""+(x::T,y::T) where T<:BitInteger — Base arithmetic invoked directly (inference did
+not intrinsify it down to a raw add_int :call). REWRITTEN standalone: pushes both
+operands fresh (the old body assumed they were already on `fb` from the pre-push
+loop) and routes the opcode choice THROUGH intrinsics_table.jl's emit_intrinsic_binop!
+— the SAME table's (I32/I64,:add_int) entries — instead of re-deriving it, so there is
+one producer per op (dev/PARITY_MASTER L104's spirit). The bare `:add_int`/`:sub_int`/
+`:mul_int` disjuncts the pre-migration guard also checked are DROPPED: an intrinsic's
+own Method object always has `.name === :IntrinsicFunction` (confirmed on Julia 1.12
+and 1.13 — `which(Core.Intrinsics.add_int, (Int,Int))`), never `:add_int`, so those
+disjuncts could never fire via `mi.def isa Method`; direct intrinsic calls are `:call`
+expressions handled in calls.jl, not `:invoke` reaching this file at all."""
+function _invoke_add_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    badd = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(badd, args[1], ctx, wt)
+    emit_value!(badd, args[2], ctx, wt)
+    emit_intrinsic_binop!(badd, wt, wt, :add_int)
+    _invoke_box_arith_result!(badd, ctx, idx, expr, arg_type, is_32bit)
+    return badd
+end
+
+"""-(x::T,y::T) where T<:BitInteger — binary subtraction. REWRITTEN standalone, same
+shape and rationale as _invoke_add_b (routes through emit_intrinsic_binop!)."""
+function _invoke_sub_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bsub3 = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bsub3, args[1], ctx, wt)
+    emit_value!(bsub3, args[2], ctx, wt)
+    emit_intrinsic_binop!(bsub3, wt, wt, :sub_int)
+    _invoke_box_arith_result!(bsub3, ctx, idx, expr, arg_type, is_32bit)
+    return bsub3
+end
+
+"""-(x::T) where T<:BitInteger — unary negation, lowered as `0 - x` (unchanged from
+the pre-migration arm; the unary entry in intrinsics_table.jl's INTRINSIC_UNOPS uses
+`-1 * x` instead — a DIFFERENT Method's shape, not this one, so it is not reused here).
+REWRITTEN standalone: a distinct Method from the 2-arg `-` above (different arity ⇒
+different Method object), registered separately."""
+function _invoke_neg_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bneg = _ctx_builder(ctx, "compile_invoke")
+    is_32bit ? i32_const!(bneg, 0) : i64_const!(bneg, 0)
+    emit_value!(bneg, args[1], ctx, wt)
+    emit_intrinsic_binop!(bneg, wt, wt, :sub_int)
+    _invoke_box_arith_result!(bneg, ctx, idx, expr, arg_type, is_32bit)
+    return bneg
+end
+
+"""*(x::T,y::T) where T<:BitInteger — numeric multiply. REWRITTEN standalone, same
+shape as _invoke_add_b. The pre-migration arm never boxed this result (no
+`_f3_result_box!()` call in the numeric-mul arm) — preserved exactly: no boxing here
+either."""
+function _invoke_mul_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bmul = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bmul, args[1], ctx, wt)
+    emit_value!(bmul, args[2], ctx, wt)
+    emit_intrinsic_binop!(bmul, wt, wt, :mul_int)
+    return bmul
+end
+
+"""*(s1::Union{AbstractChar,AbstractString}, ss::Union{AbstractChar,AbstractString}...)
+— string/char concatenation. A DIFFERENT Method than the BitInteger `*` above (Method
+identity now disambiguates concat from multiply — the pre-migration ladder needed a
+runtime `infer_value_type` guard here purely because it only had the bare Symbol
+`:*` to dispatch on; a guard MISS fell through to the numeric-mul arm and silently
+multiplied string-array refs as integers, e.g. for a Char argument the guard didn't
+cover). DECLINES (→ terminal unsupported-method reject) unless proven all-String/
+Symbol by `_all_string_args` — narrower than the Method's own Char/AbstractString
+domain, preserved exactly as the pre-migration guard's scope; loud rejection now
+replaces what used to be a silent wrong-value fallthrough for anything outside that
+scope, never the reverse."""
+function _invoke_star_concat_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) >= 2 && _all_string_args(args, ctx)) || return nothing
+    return compile_string_concat_many_b(args, ctx)
+end
+
+"""length(s::String) → array.len. Moved verbatim (including the any→array cast for
+when WT's OWN type tracking (infer_value_type) still reports Any/Union{} even though
+this Method's declared parameter is String — the same imprecision the pre-migration
+arm's `arg_type === Any || arg_type === Union{}` branch compensated for)."""
+function _invoke_length_str_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    blen = _ctx_builder(ctx, "compile_invoke")
+    str_wasm = ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true)
+    emit_value!(blen, args[1], ctx, str_wasm;
+                from_julia=(arg_type isa Type && isconcretetype(arg_type)) ? arg_type : nothing)
+    if arg_type === Any || arg_type === Union{}
+        any_convert_extern!(blen)        # externref → anyref
+        ref_cast!(blen, ArrayRef, true)  # anyref → (ref null array)
+    end
+    array_len!(blen)
+    coerce_stack_top!(blen, I64, ctx)   # funnel: array.len's i32 → Julia's Int
+    return blen
+end
+
+"""_thisind_continued closure (Base's local helper inside `_thisind_str`) — WasmGC
+strings are array<i32> (one codepoint per element), so every index is already a valid
+`thisind`: identity. Moved verbatim. Both name spellings in the pre-migration guard
+(`:_thisind_continued` and `Symbol("#_thisind_continued#_thisind_str##0")`) resolved
+to the SAME Method — a closure's `Method.name` is its declared short name, stripped
+of the enclosing-scope mangling that only appears in the closure's TYPE name — so one
+Method-keyed entry replaces both disjuncts."""
+function _invoke_thisind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    bti = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bti, length(args) >= 3 ? args[2] : args[1], ctx, I64)
+    return bti
+end
+
+"""_nextind_continued closure — `nextind(s,i) = i + 1` in WasmGC. Moved verbatim; same
+single-Method rationale as _invoke_thisind_continued_b."""
+function _invoke_nextind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    bni = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bni, length(args) >= 3 ? args[2] : args[1], ctx, I64)
+    i64_const!(bni, 1)
+    num!(bni, Opcode.I64_ADD)
+    return bni
+end
+
+"""_string(a::Union{Char,SubString{String},String,Symbol}...) / string(a::Union{Char,
+String,Symbol}...) / string(a::Union{Char,SubString{String},String,Symbol}...) — N-way
+concatenation. Three distinct vararg Methods (one on `Base._string`, two on
+`Base.string` depending on whether a SubString could appear), all registered to this
+ONE builder. Moved verbatim: only String/Symbol arguments are PROVEN concatenable by
+`_all_string_args` — narrower than what each Method's own signature actually allows
+(Char and SubString are structurally valid too); not widened here, matching the
+pre-migration guard's exact scope. DECLINES when there are fewer than 2 arguments —
+the terminal `else` then rejects loudly, same as the pre-migration fallthrough."""
+function _invoke_string_concat_or_reject_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) > 1 || return nothing
+    _all_string_args(args, ctx) && return compile_string_concat_many_b(args, ctx)
+    arg_types = [infer_value_type(a, ctx) for a in args]
+    record_unsupported!(ctx, :unsupported_method,
+        "specialized multi-argument string lowering requires every argument to be String or Symbol";
+        idx=idx, detail=arg_types)
+    bms = _ctx_builder(ctx, "compile_invoke")
+    unreachable!(bms)  # polymorphic bottom; no fabricated String value
+    ctx.last_stmt_was_stub = true
+    return bms
+end
+
+"""string(n::Integer) — the dedicated positional Integer method (its kwarg body is
+`#string#403`, handled separately for the interpolation fast path near the top of
+compile_invoke!; THIS Method is what a plain `string(x)` call for any Int8..UInt64
+resolves to). Moved verbatim: redirects to int_to_string."""
+function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    value_arg = args[1]
+    bis1 = _ctx_builder(ctx, "compile_invoke")
+    int_to_string_info = nothing
+    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
+        int_to_string_func = getfield(WasmTarget, :int_to_string)
+        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
+    end
+    if int_to_string_info !== nothing
+        emit_value!(bis1, value_arg, ctx, I32)   # funnel: I64/UInt64 narrow via convert_type!
+        call!(bis1, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
+        return bis1
+    else
+        error("Base.string(::Integer) requires int_to_string in compile_multi. " *
+              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
+    end
+end
+
+"""string(a::String) / string(a::Symbol) — identity (WasmGC represents Symbol using
+String's array shape). Moved verbatim, two distinct Methods sharing one builder."""
+function _invoke_string_identity_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bid = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bid, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+    return bid
+end
+
+"""string(xs...) — the fully generic Vararg{Any} fallback Method (Base strings/io.jl).
+Reached only when no more specific `string` method applies: Integer/String/Symbol all
+have their own dedicated Methods registered separately above, and Float16/32/64 are
+deliberately left UNREGISTERED (cross-call/auto-discovery owns Ryu.writeshortest, same
+as before this migration — registering the float Method here would be a second
+producer for the same op). Moved verbatim: length>1 defers to the same
+concat-or-reject builder the Char/String/Symbol vararg Methods use; length==1
+redirects Integer / passes String,Symbol through / hard-errors otherwise, matching the
+pre-migration arm's native `error()` exactly (this Method, for a length==1 call, is a
+Base-internal seam that was never proven reachable either before or after this
+migration — verbatim preservation, not a claim of coverage)."""
+function _invoke_string_generic_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) > 1 && return _invoke_string_concat_or_reject_b(args, ctx, idx, expr)
+    length(args) == 1 || return nothing
+    value_type = infer_value_type(args[1], ctx)
+    (value_type === Float32 || value_type === Float64) && return nothing
+    if value_type === Int32 || value_type === Int64 ||
+       value_type === UInt32 || value_type === UInt64 ||
+       value_type === Int16 || value_type === UInt16 ||
+       value_type === Int8 || value_type === UInt8
+        return _invoke_string_int_b(args, ctx, idx, expr)
+    elseif value_type === String || value_type === Symbol
+        return _invoke_string_identity_b(args, ctx, idx, expr)
+    else
+        error("Base.string(::$(value_type)) not yet supported. " *
+              "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
+    end
+end
+
+"""_throw_argerror(s) / throw_boundserror(A,I) / throw(...) (the Core builtin) /
+_throw_not_readable() — emit throw (catchable) using args[1] as the exception payload
+(absent for the 0-arg `_throw_not_readable`, which always hits the reject branch below
+— unchanged from the pre-migration arm). Moved verbatim.
+
+`_throw_not_writable`, named in the pre-migration guard alongside these, does not
+exist as a Base binding on Julia 1.12 or 1.13 (`isdefined(Base, :_throw_not_writable)`
+is false on both — confirmed directly) — dead, dropped rather than registered."""
+function _invoke_throw_payload_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    ensure_exception_tag!(ctx.mod)
+    bthr2 = _ctx_builder(ctx, "compile_invoke")
+    exn_global = ensure_exception_global!(ctx.mod)
+    if isempty(args)
+        record_unsupported!(ctx, :unsupported_method,
+            "throw helper has no exception payload"; idx=idx, detail=expr)
+        unreachable!(bthr2)  # structural trap after recorded unsupported
+        ctx.last_stmt_was_stub = true
+        return bthr2
+    end
+    emit_value!(bthr2, args[1], ctx, AnyRef)
+    global_set!(bthr2, exn_global)
+    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return bthr2
+end
+
+"""rethrow() / rethrow(e) — re-throw the currently-caught exception, already stashed
+in \$current_exn; any argument is disregarded (native `rethrow`'s optional `e` is
+likewise informational — WT's exception global always holds the live exception
+object). Moved verbatim; registered separately from _invoke_throw_payload_b (a
+DIFFERENT builder replaces the old bare-Symbol `rethrow` runtime branch)."""
+function _invoke_rethrow_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    ensure_exception_tag!(ctx.mod)
+    brt = _ctx_builder(ctx, "compile_invoke")
+    global_get!(brt, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(brt, ExternRef); throw_!(brt, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return brt
+end
+
+"""True when Method `m`'s first explicit parameter is not `<: IO` — the SAME test
+`_invoke_has_explicit_io` applies per-callsite (L96), applied ONCE per Method here at
+registry-construction time instead: println/print/show each have a handful of
+receiver-free overloads (`println(xs...)`, `println(x)`, `println(x,y)`, ...) plus
+hundreds of ordinary `f(io::IO, x::SomeType)` formatting methods; only the
+receiver-free ones belong to the host-console bridge (L96), so only those get
+registered — the IO-explicit ones are ordinary Julia methods compiled through
+cross-call, exactly as before this migration."""
+function _invoke_receiver_free_method(m::Method)::Bool
+    sig = m.sig
+    (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 2) || return true
+    param_types = sig.parameters[2:end]
+    return !_invoke_has_explicit_io(param_types)
+end
+
+"""println(xs...) — receiver-free Methods only (see _invoke_receiver_free_method).
+Moved verbatim; the `if haskey(ctx.ssa_locals, idx)` nothing-placeholder push (used
+downstream by trim-collected show machinery) that used to run AFTER this arm's body
+mutated `fb` now runs inside the standalone builder itself."""
+function _invoke_println_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fbp = _compile_invoke_print_b(true, args, ctx)
+    if haskey(ctx.ssa_locals, idx)
+        bpn = _ctx_builder(ctx, "compile_invoke")
+        ref_null!(bpn, AnyRef)  # ref.null any (0xD0 0x6E)
+        append_builder!(fbp, bpn)
+    end
+    return fbp
+end
+
+"""print(xs...) — receiver-free Methods only. Moved verbatim, same shape as
+_invoke_println_b (is_println=false: no trailing newline write)."""
+function _invoke_print_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fbp = _compile_invoke_print_b(false, args, ctx)
+    if haskey(ctx.ssa_locals, idx)
+        bpn = _ctx_builder(ctx, "compile_invoke")
+        ref_null!(bpn, AnyRef)
+        append_builder!(fbp, bpn)
+    end
+    return fbp
+end
+
+"""show(x) — the ONE receiver-free `show` Method (`Tuple{typeof(show),Any}`). Moved
+verbatim, including the pre-migration behavior of silently emitting nothing when no
+IO bridge is configured (unlike print/println, which reject via record_unsupported!
+— an existing asymmetry, not something this migration changes)."""
+function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    io = get_io_imports()
+    if io !== nothing
+        bsh2 = _ctx_builder(ctx, "compile_invoke")
+        for arg in args
+            arg_type = nothing
+            if arg isa Core.SSAValue
+                arg_type = ctx.code_info.ssavaluetypes[arg.id]
+            elseif arg isa Core.Argument
+                slot_id = arg.n
+                arg_type = ctx.code_info.slottypes[slot_id]
+            elseif arg isa String || arg isa Symbol
+                arg_type = String
+            elseif arg isa Int64 || arg isa Int32 || arg isa Int
+                arg_type = typeof(arg)
+            elseif arg isa Float64 || arg isa Float32
+                arg_type = typeof(arg)
+            elseif arg isa Bool
+                arg_type = Bool
+            elseif arg isa Nothing || arg === nothing
+                arg_type = Nothing
+            elseif arg isa GlobalRef && arg.name === :nothing
+                arg_type = Nothing
+            end
+
+            if arg_type === Nothing
+                call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
+            elseif arg_type === String || arg_type === Symbol
+                emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
+                emit_jl_string_to_js!(bsh2, io.decode_idx)
+                call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
+                emit_value!(bsh2, arg, ctx, I64)
+                call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Int32
+                emit_value!(bsh2, arg, ctx, I64)   # funnel: I32 source widens via convert_type!
+                call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Float64
+                emit_value!(bsh2, arg, ctx, F64)
+                call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Float32
+                emit_value!(bsh2, arg, ctx, F64)   # funnel: F32 source promotes via convert_type!
+                call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Bool
+                emit_value!(bsh2, arg, ctx, I32)
+                call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
+            else
+                record_unsupported!(ctx, :unsupported_method,
+                    "show has no IO bridge representation for argument type $arg_type";
+                    idx=idx, detail=arg)
+                unreachable!(bsh2) # recorded unsupported; polymorphic bottom
+                ctx.last_stmt_was_stub = true
+                break
+            end
+        end
+        if haskey(ctx.ssa_locals, idx)
+            ref_null!(bsh2, AnyRef)
+        end
+        return bsh2
+    else
+        fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+        return fb2
+    end
+end
+
+"""truncate(io::GenericIOBuffer, n) — IOBuffer resize is a no-op in WasmGC; return the
+IOBuffer argument unchanged (Julia's `truncate` returns its io argument). REWRITTEN
+standalone: the pre-migration arm's body was empty, relying on the io argument (and,
+ambiguously, the length argument) being left over from the ordinary pre-push loop —
+that leftover-stack shape cannot be replicated by a self-contained builder. This
+pushes exactly the io argument and nothing else, matching the arm's documented intent
+("just leave it on stack... Returns the IOBuffer itself") unambiguously."""
+function _invoke_truncate_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    btr = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(btr, args[1], ctx, static_wasm_type(args[1], ctx))
+    return btr
+end
+
+"""getindex_continued(s,i,u) — UTF-8 byte-level multibyte continuation; not
+implemented (WasmGC strings are array<i32>, one codepoint per element — genuinely
+unreachable for valid indices). Moved verbatim."""
+function _invoke_getindex_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bgic = _ctx_builder(ctx, "compile_invoke")
+    record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
+    unreachable!(bgic)
+    ctx.last_stmt_was_stub = true
+    return bgic
+end
+
+"""error() / error(s::AbstractString) / error(s::Vararg{Any,N}) — Base.error's 3
+Methods all funnel through ONE ErrorException construction (message-only payload);
+`error` called with more than one argument native-errors at WT-compile time exactly
+like the pre-migration arm (`length(args) <= 1 || error(...)`), since the payload
+this builds has no room for extra values. Moved verbatim."""
+function _invoke_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
+    _ee_info === nothing && error("ErrorException layout is unavailable")
+    length(args) <= 1 || error("unexpected error() lowering arity: $(length(args))")
+    emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
+    _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
+    _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
+    emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
+    struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields
+    global_set!(berr, exn_global)
+    global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return berr
+end
+
+"""JuliaSyntax.parse_float_literal(::Type,str,firstind,endind) — not implemented
+(orig uses ccall(:jl_strtod_c)). Moved verbatim: Strict Approach A loud reject."""
+function _invoke_parse_float_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+    emit_unsupported_stub!(ctx, fb2, :unsupported_method,
+        "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
+    return fb2
+end
+
+"""JuliaSyntax.parse_int_literal(str) / parse_uint_literal(str,k) — not implemented.
+Moved verbatim: both Methods share the SAME stub message the pre-migration arm's
+combined `parse_int_literal`/`parse_uint_literal` name guard used."""
+function _invoke_parse_int_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+    emit_unsupported_stub!(ctx, fb2, :unsupported_method,
+        "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
+    return fb2
+end
+
+"""Symbol(s::String) — identity (WasmGC represents Symbol using String's array
+shape). Moved verbatim."""
+function _invoke_symbol_from_string_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsym = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bsym, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+    return bsym
+end
+
+"""typeintersect(a,b) — a C runtime function used in tuple convert; with unoptimized
+IR the convert inlines typeintersect. Evaluated at compile time when both args are
+constant Type values. DECLINES otherwise — the terminal unsupported-method reject
+then applies, the same end state the pre-migration guard miss fell through to."""
+function _invoke_typeintersect_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) >= 2 && args[1] isa Type && args[2] isa Type) || return nothing
+    result_type = typeintersect(args[1], args[2])
+    bti2 = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
+    global_get!(bti2, global_idx, AnyRef)
+    extern_convert_any!(bti2)   # concrete ref → externref (Type values are externref in general context)
+    return bti2
+end
+
+"""_tuple_error(T,x) — error function in the tuple-convert dead-code path. Emit throw
+(catchable) instead of unreachable (trap). Moved verbatim."""
+function _invoke_tuple_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    ensure_exception_tag!(ctx.mod)
+    global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return bte
+end
+
+
+"""Base.padding(T,baseoffset) — a compile-time SimpleVector constant (P4-stdlib radix
+sort guard). DECLINES unless both args are literal `Type`/`Integer` values in the IR —
+matches the pre-migration guard exactly; falls through to the terminal reject
+otherwise, same as before."""
+function _invoke_padding_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) == 2 && args[1] isa Type && args[2] isa Integer) || return nothing
+    bpad = _ctx_builder(ctx, "compile_invoke")
+    _padding = Base.padding(args[1], Int(args[2]))
+    _emit_svec_values!(bpad, collect(_padding), ctx)
+    return bpad
+end
+
+"""Base.sizehint!(collection,n) — a memory optimization hint; WasmGC arrays have no
+capacity concept, so it's a no-op returning the collection unchanged. Registered for
+EVERY sizehint! Method (Vector/Set/Dict/BitSet/IdSet/WeakKeyDict/...) — the
+pre-migration arm applied uniformly by name, not by collection type. Moved verbatim."""
+function _invoke_sizehint_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsh = _ctx_builder(ctx, "compile_invoke")
+    if !isempty(args)
+        emit_value!(bsh, args[1], ctx, static_wasm_type(args[1], ctx))
+    else
+        record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
+        unreachable!(bsh)
+    end
+    return bsh
+end
+
+"""#sizehint!#81(first,shrink,::typeof(sizehint!),a,sz) — the keyword-body entry
+`sizehint!(v,n)` desugars to. Moved verbatim: the vector argument is the 4th
+positional arg (matching the pre-migration arm's `args[4]`, which is the SAME
+position — `args` is the same expression-argument slice here as there)."""
+function _invoke_sizehint_kwbody_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsh = _ctx_builder(ctx, "compile_invoke")
+    if length(args) >= 4
+        emit_value!(bsh, args[4], ctx, static_wasm_type(args[4], ctx))
+    else
+        record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
+        unreachable!(bsh)
+    end
+    return bsh
+end
+
+"""Base.kwerr(kw,args...) always throws the exact closed-world
+MethodError(Core.kwcall, (kw,args...), world). This is a real Julia exception
+payload, not a generic trap: catch-side isa/field inspection must observe the same
+object shape as native Julia. Moved verbatim (lock L81_kwerr_throws_exact_methoderror).
+DECLINES unless exactly 2 arguments (kw,f) — matches the pre-migration guard's
+`length(args) == 2`."""
+function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) == 2 || return nothing
+    bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
+    arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
+    all(T -> T isa Type, arg_julia_types) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
+    args_tuple_type = Tuple{arg_julia_types...}
+    args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
+    error_info === nothing && error("MethodError layout is unavailable")
+    args_info === nothing && error("kwerr argument tuple layout is unavailable")
+
+    emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
+    emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
+    emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
+    args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
+    args_layout isa StructType || error("kwerr argument tuple has no struct layout")
+    for (i, arg) in enumerate(args)
+        ft = args_layout.fields[Int(wasm_field_idx(args_info, i)) + 1].valtype
+        jt = arg_julia_types[i]
+        emit_value!(bkw, arg, ctx, ft;
+                    from_julia=isconcretetype(jt) ? jt : nothing)
+    end
+    struct_new!(bkw, args_info.wasm_type_idx)
+    i64_const!(bkw, Int64(WASM_WORLD_AGE))
+    struct_new!(bkw, error_info.wasm_type_idx)
+    global_set!(bkw, exn_global)
+    global_get!(bkw, exn_global, AnyRef)
+    ref_null!(bkw, ExternRef)
+    throw_!(bkw, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bkw
+end
+
+"""Core.throw_inexacterror(func,to,val) is precisely throw(InexactError(func,
+(to,val))). Preserve both fields so catch-side inspection agrees with Julia. Moved
+verbatim (lock L82_inexact_helper_throws_exact_payload)."""
+function _invoke_throw_inexacterror_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 3 || return nothing
+    bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, InexactError)
+    payload = args[2:end]
+    payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
+    all(T -> T isa Type, payload_types) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
+    payload_type = Tuple{payload_types...}
+    payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
+    error_info === nothing && error("InexactError layout is unavailable")
+    payload_info === nothing && error("InexactError argument tuple layout is unavailable")
+
+    emit_struct_prefix!(bie, ctx.type_registry, InexactError, error_info)
+    emit_value!(bie, args[1], ctx,
+                ctx.mod.types[error_info.wasm_type_idx + 1].fields[
+                    Int(wasm_field_idx(error_info, 1)) + 1].valtype;
+                from_julia=Symbol)
+    emit_struct_prefix!(bie, ctx.type_registry, payload_type, payload_info)
+    payload_layout = ctx.mod.types[payload_info.wasm_type_idx + 1]
+    payload_layout isa StructType || error("InexactError payload has no struct layout")
+    for (i, value) in enumerate(payload)
+        ft = payload_layout.fields[Int(wasm_field_idx(payload_info, i)) + 1].valtype
+        jt = payload_types[i]
+        emit_value!(bie, value, ctx, ft;
+                    from_julia=isconcretetype(jt) ? jt : nothing)
+    end
+    struct_new!(bie, payload_info.wasm_type_idx)
+    struct_new!(bie, error_info.wasm_type_idx)
+    global_set!(bie, exn_global)
+    global_get!(bie, exn_global, AnyRef)
+    ref_null!(bie, ExternRef)
+    throw_!(bie, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bie
+end
+
 """Populate INVOKE_INTRINSICS once, lazily, on first `compile_invoke!` call."""
 function _build_invoke_intrinsics!()
     isempty(INVOKE_INTRINSICS) || return nothing
@@ -387,6 +1019,72 @@ function _build_invoke_intrinsics!()
     _register_invoke_intrinsic!(SubString, InvokeIntrinsicEntry(_invoke_substring_b, :standalone))
     _register_invoke_intrinsic!(Base.array_subpadding, InvokeIntrinsicEntry(_invoke_array_subpadding_b, :standalone))
     _register_invoke_intrinsic!(Base.unalias, InvokeIntrinsicEntry(_invoke_unalias_b, :standalone))
+
+    # ---- R20 migration (phase 5): the former name === :sym ladder arms -------
+    # Arithmetic: Base's BitInteger fallback Methods (the raw intrinsics never reach
+    # here as :invoke — see _invoke_add_b's docstring).
+    _register_invoke_intrinsic!(Base.:+, InvokeIntrinsicEntry(_invoke_add_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:-, InvokeIntrinsicEntry(_invoke_sub_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:-, InvokeIntrinsicEntry(_invoke_neg_b, :standalone); argtypes=(Int64,))
+    _register_invoke_intrinsic!(Base.:*, InvokeIntrinsicEntry(_invoke_mul_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:*, InvokeIntrinsicEntry(_invoke_star_concat_b, :standalone); argtypes=(String, String))
+    _register_invoke_intrinsic!(Base.length, InvokeIntrinsicEntry(_invoke_length_str_b, :standalone); argtypes=(String,))
+
+    # _thisind_continued / _nextind_continued: singleton closures — `getfield` returns
+    # the closure TYPE (mangled `#<name>#<enclosing>##<n>` naming); `.instance` is the
+    # one callable value `methods()` can resolve.
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#_thisind_continued#_thisind_str##0")).instance,
+                                InvokeIntrinsicEntry(_invoke_thisind_continued_b, :standalone))
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#_nextind_continued#_nextind_str##0")).instance,
+                                InvokeIntrinsicEntry(_invoke_nextind_continued_b, :standalone))
+
+    # string()/_string(): every vararg concat Method shares one builder; the dedicated
+    # Integer/String/Symbol Methods and the generic Vararg{Any} fallback each get their
+    # own (Float16/32/64 deliberately unregistered — see _invoke_string_generic_b).
+    _register_invoke_intrinsic!(Base._string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone); argtypes=(String, String))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone); argtypes=(SubString{String}, String))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_int_b, :standalone); argtypes=(Int64,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_identity_b, :standalone); argtypes=(String,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_identity_b, :standalone); argtypes=(Symbol,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_generic_b, :standalone); argtypes=(Int64, Int64))
+
+    # throw/rethrow family.
+    _register_invoke_intrinsic!(Base._throw_argerror, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base.throw_boundserror, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Core.throw, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base._throw_not_readable, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base.rethrow, InvokeIntrinsicEntry(_invoke_rethrow_b, :standalone))
+
+    # println/print/show: the host-console bridge — receiver-free Methods only.
+    for m in methods(println)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_println_b, :standalone))
+    end
+    for m in methods(print)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_print_b, :standalone))
+    end
+    for m in methods(show)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_show_b, :standalone))
+    end
+
+    _register_invoke_intrinsic!(Base.truncate, InvokeIntrinsicEntry(_invoke_truncate_b, :standalone);
+                                argtypes=(Base.GenericIOBuffer, Integer))
+    _register_invoke_intrinsic!(Base.getindex_continued, InvokeIntrinsicEntry(_invoke_getindex_continued_b, :standalone))
+    _register_invoke_intrinsic!(Base.error, InvokeIntrinsicEntry(_invoke_error_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_float_literal, InvokeIntrinsicEntry(_invoke_parse_float_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_int_literal, InvokeIntrinsicEntry(_invoke_parse_int_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_uint_literal, InvokeIntrinsicEntry(_invoke_parse_int_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.Symbol, InvokeIntrinsicEntry(_invoke_symbol_from_string_b, :standalone); argtypes=(String,))
+    _register_invoke_intrinsic!(Base.typeintersect, InvokeIntrinsicEntry(_invoke_typeintersect_b, :standalone))
+    _register_invoke_intrinsic!(Base._tuple_error, InvokeIntrinsicEntry(_invoke_tuple_error_b, :standalone))
+    _register_invoke_intrinsic!(Base.padding, InvokeIntrinsicEntry(_invoke_padding_b, :standalone); argtypes=(DataType, Int64))
+    _register_invoke_intrinsic!(Base.sizehint!, InvokeIntrinsicEntry(_invoke_sizehint_b, :standalone))
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#sizehint!#81")), InvokeIntrinsicEntry(_invoke_sizehint_kwbody_b, :standalone))
+    _register_invoke_intrinsic!(Base.kwerr, InvokeIntrinsicEntry(_invoke_kwerr_b, :standalone))
+    _register_invoke_intrinsic!(Core.throw_inexacterror, InvokeIntrinsicEntry(_invoke_throw_inexacterror_b, :standalone))
     return nothing
 end
 
@@ -397,7 +1095,7 @@ _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationContext)::Vect
     builder_code(_compile_invoke_print_b(name, args, ctx))
 
 """builder-returning core."""
-function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationContext)::InstrBuilder
+function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilationContext)::InstrBuilder
     io = get_io_imports()
     if io !== nothing
         b = _ctx_builder(ctx, "_compile_invoke_print")
@@ -627,7 +1325,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                     "println/print has no IO bridge representation for argument type $arg_type")
             end
         end
-        if name === :println
+        if is_println
             call!(b, io.write_newline_idx, WasmValType[], WasmValType[])
         end
         return b
@@ -1163,11 +1861,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
 
-    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
-               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
-               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
-
     # mi was already extracted above for parameter type checking
     if mi isa Core.MethodInstance
         meth = mi.def
@@ -1382,20 +2075,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             # parity(translator.dart:1621 Translator.convertType): numeric arith result → ref-typed SSA local ⇒ box through THE
             # one producer, dart's boxing branch (the scalar-replaced Core.Box cycle: unbox → op → box → store).
-            _f3_result_box! = () -> begin
-                local _dl = get(ctx.ssa_locals, idx, nothing)
-                _dl === nothing && return
-                local _doff = _dl - ctx.n_params
-                (_doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef) || return
-                local _rbx = _ctx_builder(ctx, "compile_invoke")
-                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
-                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "boxed invoke result lacks a concrete Julia source type";
-                        idx=idx, detail=expr)
-                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
-                append_builder!(fb, _rbx)
-            end
+            # (moved to _invoke_box_arith_result! — the +/-/* invoke intrinsics' shared
+            # helper, R20 migration; this used to be a local closure capturing `fb`/
+            # `arg_type`/`is_32bit`, both of which are now computed inside each of
+            # those Method-keyed builders instead of once here.)
             if is_self_call
                 # Self-recursive call - emit call instruction
                 # fullstrict: the args live on fb; the OWN placeholder sig is the contract
@@ -1441,367 +2124,18 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # ladder for every op below that has a registry entry. `:append` continues
             # the SAME fb the args loop already pushed to (isascii — verified to compile
             # correctly this way); `:standalone` pushes its own inputs and IS the result.
-            elseif (local _invoke_reg_entry = get(INVOKE_INTRINSICS, meth, nothing)) !== nothing
+            elseif (local _invoke_reg_entry = get(INVOKE_INTRINSICS, meth, nothing)) !== nothing &&
+                   (local _invoke_reg_result = (_invoke_reg_entry.mode === :append ?
+                        _invoke_reg_entry.fn(args, ctx) : _invoke_reg_entry.fn(args, ctx, idx, expr))) !== nothing
                 if _invoke_reg_entry.mode === :append
-                    append_builder!(fb, _invoke_reg_entry.fn(args, ctx))
+                    append_builder!(fb, _invoke_reg_result)
                 else
-                    return append_builder!(b, _invoke_reg_entry.fn(args, ctx, idx, expr))
+                    return append_builder!(b, _invoke_reg_result)
                 end
 
-            elseif name === :+ || name === :add_int
-                badd = _ctx_builder(ctx, "compile_invoke")
-                num!(badd, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-                append_builder!(fb, badd)
-                _f3_result_box!()
-            elseif name === :- || name === :sub_int
-                if length(args) == 1
-                    # Unary negation -(x) → 0 - x. Prepend the 0 via
-                    # fragment composition (the pushfirst! byte surgery is gone).
-                    local _negb = _ctx_builder(ctx, "compile_invoke.frag")
-                    _seed_builder_locals!(_negb, ctx)
-                    is_32bit ? i32_const!(_negb, 0) : i64_const!(_negb, 0)
-                    append_builder!(_negb, fb)
-                    fb = _negb
-                end
-                bsub3 = _ctx_builder(ctx, "compile_invoke")
-                num!(bsub3, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-                append_builder!(fb, bsub3)
-                _f3_result_box!()
-            elseif (name === :* || name === :mul_int) && length(args) == 2 &&
-                   (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
-                   (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
-                # String/Symbol `*` is CONCATENATION: this name-keyed arithmetic
-                # fallback fires when the concat MI failed to register as a
-                # cross-call (its body bottoms out in Vararg _string) and was
-                # emitting i64.mul on two string refs — the E-003 island's
-                # fn#107 validation failure. Args were pre-pushed: rebuild.
-                bcat = _ctx_builder(ctx, "compile_invoke")
-                append_builder!(bcat, compile_string_concat_many_b([args[1], args[2]], ctx))
-                return append_builder!(b, bcat)
-            elseif name === :* || name === :mul_int
-                bmul = _ctx_builder(ctx, "compile_invoke")
-                num!(bmul, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-                append_builder!(fb, bmul)
-            elseif name === :length && (arg_type === String || arg_type === Any || arg_type === Union{})
-                # String/Any length - argument already pushed, emit array.len
-                # Only for types that are actually WasmGC arrays (String, Any)
-                # Vector length is handled in calls.jl via struct_get on size field
-                # Other AbstractVector subtypes (StepRange, SubArray, ReinterpretArray)
-                # must go through cross-function call to their specific length() method
-                blen = _ctx_builder(ctx, "compile_invoke")
-                if arg_type === Any || arg_type === Union{}
-                    any_convert_extern!(blen)        # externref → anyref
-                    ref_cast!(blen, ArrayRef, true)  # anyref → (ref null array)
-                end
-                array_len!(blen)
-                coerce_stack_top!(blen, I64, ctx)   # funnel: array.len's i32 → Julia's Int
-                append_builder!(fb, blen)
-
-            # String concatenation: string * string -> string
-            # Julia compiles string concatenation to Base._string
-            # Also handle String, Symbol for error message construction
-            elseif (name === :* || name === :_string) && length(args) >= 2 &&
-                   _all_string_args(args, ctx)
-                fb = compile_string_concat_many_b(args, ctx)
-
-            # isascii/==/str_char/str_setchar!/str_new/str_copy/str_substr/arr_new/
-            # arr_get/arr_set!/arr_len/SubString: INVOKE_INTRINSICS registry
-            # (dev/MARCH.md Phase 5.2 item B) — handled by the registry-lookup
-            # branch above `cross_call_handled`. str_len/str_hash are deleted
-            # outright: the generic cross-call path already resolves them
-            # correctly (str_len via generate_intrinsic_body; str_hash via its
-            # own stringops.jl body), so a registry entry would be a second
-            # producer for the same op.
-
-            # ================================================================
-            # _thisind_continued / _nextind_continued — identity
-            # In WasmGC, strings are array<i32> (char codes), so every
-            # character index is valid (no multi-byte encoding).
-            # ================================================================
-            elseif (name === :_thisind_continued || name === Symbol("#_thisind_continued#_thisind_str##0")) && length(args) >= 2
-                bti = _ctx_builder(ctx, "compile_invoke")
-                # Closure form: (closure, string, index, len) → return index
-                if length(args) >= 3
-                    emit_value!(bti, args[2], ctx, I64)
-                else
-                    emit_value!(bti, args[1], ctx, I64)
-                end
-                return append_builder!(b, bti)
-
-            elseif (name === :_nextind_continued || name === Symbol("#_nextind_continued#_nextind_str##0")) && length(args) >= 2
-                bni = _ctx_builder(ctx, "compile_invoke")
-                # nextind(s, i) = i + 1 in WasmGC
-                if length(args) >= 3
-                    emit_value!(bni, args[2], ctx, I64)
-                else
-                    emit_value!(bni, args[1], ctx, I64)
-                end
-                i64_const!(bni, 1)
-                num!(bni, Opcode.I64_ADD)
-                return append_builder!(b, bni)
-
-            # ================================================================
-            # Multi-arg string() → inline N-way concatenation
-            # string("hello", " ", "world") or string("x = ", int_to_string(x))
-            # Allocates one result array of total length, copies each arg in
-            # ================================================================
-            elseif (name === :string || name === :_string) && length(args) > 1
-                bms = _ctx_builder(ctx, "compile_invoke")  # Clear pre-compiled args
-
-                # Check arg types — for now handle all-String args
-                arg_types = [infer_value_type(a, ctx) for a in args]
-                all_strings = all(t -> t === String || t === Symbol, arg_types)
-
-                if all_strings
-                    bms = compile_string_concat_many_b(args, ctx)
-                else
-                    # A result-producing invoke may never substitute a valid but
-                    # unrelated String.  Normal Julia string conversion is handled
-                    # by the collected print_to_string body; if this specialized arm
-                    # is nevertheless selected without an all-string proof, reject
-                    # the unsupported lowering explicitly.
-                    record_unsupported!(ctx, :unsupported_method,
-                        "specialized multi-argument string lowering requires every argument to be String or Symbol";
-                        idx=idx, detail=arg_types)
-                    unreachable!(bms)  # polymorphic bottom; no fabricated String value
-                    ctx.last_stmt_was_stub = true
-                end
-                return append_builder!(b, bms)
-
-            # ================================================================
-            # Base.string dispatch for single-arg types
-            # Float64 is handled via auto-discovery of Ryu.writeshortest.
-            # Int types fall back to int_to_string runtime if not auto-discovered.
-            # ================================================================
-            elseif name === :string && length(args) == 1 &&
-                   let _vt = infer_value_type(args[1], ctx)
-                       _vt !== Float32 && _vt !== Float64
-                   end
-                value_arg = args[1]
-                value_type = infer_value_type(value_arg, ctx)
-
-                if value_type === Int32 || value_type === Int64 ||
-                       value_type === UInt32 || value_type === UInt64 ||
-                       value_type === Int16 || value_type === UInt16 ||
-                       value_type === Int8 || value_type === UInt8
-                    # Integer types - redirect to int_to_string
-                    bis1 = _ctx_builder(ctx, "compile_invoke")
-
-                    int_to_string_info = nothing
-                    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
-                        int_to_string_func = getfield(WasmTarget, :int_to_string)
-                        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
-                    end
-
-                    if int_to_string_info !== nothing
-                        emit_value!(bis1, value_arg, ctx, I32)   # funnel: I64/UInt64 narrow via convert_type!
-
-                        call!(bis1, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
-                        return append_builder!(b, bis1)
-                    else
-                        error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
-                              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
-                    end
-                elseif value_type === String || value_type === Symbol
-                    # string(s::String) is identity — the arg is already on the stack
-                    # (pre-compiled by the argument loop above)
-                else
-                    error("Base.string(::$(value_type)) not yet supported. " *
-                          "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
-                end
-
-            # Error-throwing functions from Base (used by pop!, resize!, etc.)
-            # Emit throw (catchable) instead of unreachable (trap)
-            elseif name === :_throw_argerror || name === :throw_boundserror ||
-                   name === :throw || name === :rethrow ||
-                   name === :_throw_not_readable || name === :_throw_not_writable
-                ensure_exception_tag!(ctx.mod)
-                bthr2 = _ctx_builder(ctx, "compile_invoke")
-                if name === :rethrow
-                    # rethrow() preserves the exception in the global —
-                    # just re-throw without overwriting. The caught exception is
-                    # already in $current_exn from the original throw.
-                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                else
-                    exn_global = ensure_exception_global!(ctx.mod)
-                    if isempty(args)
-                        record_unsupported!(ctx, :unsupported_method,
-                            "throw helper has no exception payload"; idx=idx, detail=expr)
-                        unreachable!(bthr2)  # structural trap after recorded unsupported
-                        ctx.last_stmt_was_stub = true
-                        return append_builder!(b, bthr2)
-                    end
-                    emit_value!(bthr2, args[1], ctx, AnyRef)
-                    global_set!(bthr2, exn_global)
-                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                end
-                append_builder!(fb, bthr2)
-                ctx.last_stmt_was_stub = true
-
-            # println/print → JS IO bridge imports
-            elseif (name === :println || name === :print) &&
-                   !_invoke_has_explicit_io(param_types)
-                fb = _compile_invoke_print_b(name, args, ctx)
-                # print returns `nothing`; the io imports are void. If this SSA
-                # has a local (the nothing value is USED downstream — common in
-                # trim-collected show machinery), push its representation so the
-                # statement wrapper's local.set has a value to consume.
-                if haskey(ctx.ssa_locals, idx)
-                    bpn = _ctx_builder(ctx, "compile_invoke")
-                    ref_null!(bpn, AnyRef)  # ref.null any (0xD0 0x6E)
-                    append_builder!(fb, bpn)
-                end
-
-            # show(x) → IO bridge imports (like print, no newline)
-            # show(42) displays "42", show(true) displays "true", show(nothing) displays "nothing"
-            elseif name === :show && !_invoke_has_explicit_io(param_types)
-                io = get_io_imports()
-                if io !== nothing
-                    bsh2 = _ctx_builder(ctx, "compile_invoke")
-                    for arg in args
-                        # Determine argument type
-                        arg_type = nothing
-                        if arg isa Core.SSAValue
-                            arg_type = ctx.code_info.ssavaluetypes[arg.id]
-                        elseif arg isa Core.Argument
-                            slot_id = arg.n
-                            arg_type = ctx.code_info.slottypes[slot_id]
-                        elseif arg isa String || arg isa Symbol
-                            arg_type = String
-                        elseif arg isa Int64 || arg isa Int32 || arg isa Int
-                            arg_type = typeof(arg)
-                        elseif arg isa Float64 || arg isa Float32
-                            arg_type = typeof(arg)
-                        elseif arg isa Bool
-                            arg_type = Bool
-                        elseif arg isa Nothing || arg === nothing
-                            arg_type = Nothing
-                        elseif arg isa GlobalRef && arg.name === :nothing
-                            arg_type = Nothing
-                        end
-
-                        if arg_type === Nothing
-                            # show(nothing) → write "nothing"
-                            call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === String || arg_type === Symbol
-                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
-                            emit_jl_string_to_js!(bsh2, io.decode_idx)
-                            call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                            emit_value!(bsh2, arg, ctx, I64)
-                            call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Int32
-                            emit_value!(bsh2, arg, ctx, I64)   # funnel: I32 source widens via convert_type!
-                            call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Float64
-                            emit_value!(bsh2, arg, ctx, F64)
-                            call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Float32
-                            emit_value!(bsh2, arg, ctx, F64)   # funnel: F32 source promotes via convert_type!
-                            call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Bool
-                            emit_value!(bsh2, arg, ctx, I32)
-                            call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
-                        else
-                            record_unsupported!(ctx, :unsupported_method,
-                                "show has no IO bridge representation for argument type $arg_type";
-                                idx=idx, detail=arg)
-                            unreachable!(bsh2) # recorded unsupported; polymorphic bottom
-                            ctx.last_stmt_was_stub = true
-                            break
-                        end
-                    end
-                    # show returns `nothing`; io imports are void — same contract
-                    # as the print handler above.
-                    if haskey(ctx.ssa_locals, idx)
-                        ref_null!(bsh2, AnyRef)
-                    end
-                    return append_builder!(b, bsh2)
-                else
-                    fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
-                end
-
-            # Handle truncate (IOBuffer resize) — no-op in WasmGC
-            # Returns the IOBuffer itself
-            elseif name === :truncate
-                # First arg is the IOBuffer — just leave it on stack
-                # (already compiled by the args loop above)
-                # No-op: WasmGC arrays don't need explicit truncation
-
-            # Handle getindex_continued (multi-byte string char access)
-            # UTF-8 byte continuation not implemented.
-            # In WasmGC, strings are array<i32> (one codepoint per element),
-            # so multi-byte continuation shouldn't be needed. If hit, it means
-            # a code path assumes byte-level string access.
-            elseif name === :getindex_continued
-                bgic = _ctx_builder(ctx, "compile_invoke")
-                record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
-                unreachable!(bgic)
-                append_builder!(fb, bgic)
-                ctx.last_stmt_was_stub = true
-
-            # Error/throw functions — emit throw (catchable) instead of unreachable (trap)
-            # Create exception struct objects and stash in $current_exn
-            # so that :the_exception + isa checks can identify the exception type.
-            elseif name === :error
-                berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                # error("msg") → create ErrorException struct, stash, throw
-                local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
-                _ee_info === nothing && error("ErrorException layout is unavailable")
-                length(args) <= 1 || error("unexpected error() lowering arity: $(length(args))")
-                emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
-                local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
-                local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
-                emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
-                struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields
-                global_set!(berr, exn_global)
-                global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true
-                return append_builder!(b, berr)
-            # Handle JuliaSyntax internal functions that have complex implementations
-            # These are intercepted and compiled as simplified stubs
-            elseif name === :parse_float_literal
-                # Float literal parsing not implemented (orig uses
-                # ccall(:jl_strtod_c)). Strict Approach A — loud reject (returns a
-                # value natively, so a silent trap would diverge).
-                emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                    "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
-
-            elseif name === :parse_int_literal ||
-                   name === :parse_uint_literal
-                # Int/uint literal parsing not implemented.
-                emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                    "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
-
-            # unalias: INVOKE_INTRINSICS registry (Phase 5.2 item B).
-
-            # Handle push!/pop! growth closures from Base (_growend!)
-            # These are generated when Julia inlines push! and need to resize the array
-            # The closure name starts with # (e.g., #_growend!##0)
-            # For WasmGC, we implement array growth inline:
-            # 1. Allocate new array with 2x capacity
-            # 2. Copy elements from old array using array.copy
-            # 3. Update the vector's ref field
-            # sizehint! is a memory optimization hint — no-op in WasmGC.
-            # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
-            # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
-            # Must be checked BEFORE the "#" closure handler below, since #sizehint!#81
-            # starts with "#" and would be incorrectly caught by the _growend! handler.
-            elseif name === :sizehint! || name === Symbol("#sizehint!#81")
-                bsh = _ctx_builder(ctx, "compile_invoke")
-                # The vector argument: for sizehint! it's args[1], for #sizehint!#81 it's args[4]
-                vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
-                          (length(args) >= 4 ? args[4] : nothing)
-                if vec_arg !== nothing
-                    emit_value!(bsh, vec_arg, ctx, static_wasm_type(vec_arg, ctx))
-                else
-                    record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
-                    unreachable!(bsh)
-                end
-                return append_builder!(b, bsh)
-
+            # Base arithmetic (+/-/*), length(::String), _thisind_continued,
+            # _nextind_continued, string()/_string(), throw/rethrow,
+            # println/print/show: INVOKE_INTRINSICS registry (R20 migration).
             elseif meth.module === Base &&
                    occursin(r"^#_(?:growend|growbeg|growat)!", string(name))
                 # Clear any accumulated bytes from argument compilation
@@ -1930,43 +2264,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     ctx.last_stmt_was_stub = true
                 end
 
-            elseif name === :Symbol && length(args) == 1
-                # Symbol(s::String) — in WasmGC, Symbol IS String (both are byte arrays).
-                # The argument String is already on the stack from arg compilation above.
-                # Just pass it through — no conversion needed.
-                # (args were already compiled and pushed to `bytes` above)
-
-            # typeintersect(T1, T2) — C runtime function used in tuple convert.
-            # With unoptimized IR (may_optimize=false), the convert inlines typeintersect.
-            # Evaluate at compile time when both args are constant Type values.
-            elseif name === :typeintersect && length(args) >= 2 && args[1] isa Type && args[2] isa Type
-                # Evaluate at compile time — pure function with constant args
-                result_type = typeintersect(args[1], args[2])
-                bti2 = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
-                global_get!(bti2, global_idx, AnyRef)
-                # Convert concrete ref to externref (Type values are externref in general context)
-                extern_convert_any!(bti2)
-                return append_builder!(b, bti2)
-
-            # _tuple_error — error function in tuple convert dead code path.
-            # Emit throw (catchable) instead of unreachable (trap).
-            elseif name === :_tuple_error
-                bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true
-                return append_builder!(b, bte)
-
-            # Julia 1.13: hash_bytes(ptr, len, seed, secret) — Base's
-            # hash(::String,::UInt)/hash(::SubString{String},::UInt) are now
-            # overlaid with a pure-Julia, bit-exact-with-native port of
-            # rapidhash (interpreter.jl, "String hash Overlay"), so this
-            # :invoke is never reached: grep of Base (1.13.0-rc1) confirms
-            # hash(String/SubString{String}) are the only string-hashing
-            # callers of hash_bytes. Falling through to the terminal
-            # :unsupported_method below is intentionally loud if some future
-            # Base version proves that wrong.
+            # Symbol(::String), typeintersect, _tuple_error: INVOKE_INTRINSICS registry.
 
             # ================================================================
             # Struct constructor via :invoke — immutable structs with only
@@ -2063,94 +2361,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     ctx.last_stmt_was_stub = true
                 end
 
-            elseif name === :padding && length(args) == 2 &&
-                   args[1] isa Type && args[2] isa Integer
-                # `padding(T,n)` is a compile-time SimpleVector constant.
-                bpad = _ctx_builder(ctx, "compile_invoke")
-                local _padding = Base.padding(args[1], Int(args[2]))
-                _emit_svec_values!(bpad, collect(_padding), ctx)
-                return append_builder!(b, bpad)
-
-            # array_subpadding: INVOKE_INTRINSICS registry (Phase 5.2 item B).
-
-            elseif name === :kwerr && length(args) == 2
-                # Base.kwerr(kw, f) always throws the exact closed-world
-                # MethodError(Core.kwcall, (kw, f), world). This is a real Julia
-                # exception payload, not a generic trap: catch-side isa/field
-                # inspection must observe the same object shape as native Julia.
-                bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
-                arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
-                all(T -> T isa Type, arg_julia_types) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
-                args_tuple_type = Tuple{arg_julia_types...}
-                args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
-                error_info === nothing && error("MethodError layout is unavailable")
-                args_info === nothing && error("kwerr argument tuple layout is unavailable")
-
-                emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
-                emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
-                emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
-                args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
-                args_layout isa StructType || error("kwerr argument tuple has no struct layout")
-                for (i, arg) in enumerate(args)
-                    ft = args_layout.fields[Int(wasm_field_idx(args_info, i)) + 1].valtype
-                    jt = arg_julia_types[i]
-                    emit_value!(bkw, arg, ctx, ft;
-                                from_julia=isconcretetype(jt) ? jt : nothing)
-                end
-                struct_new!(bkw, args_info.wasm_type_idx)
-                i64_const!(bkw, Int64(WASM_WORLD_AGE))
-                struct_new!(bkw, error_info.wasm_type_idx)
-                global_set!(bkw, exn_global)
-                global_get!(bkw, exn_global, AnyRef)
-                ref_null!(bkw, ExternRef)
-                throw_!(bkw, 0; inputs=WasmValType[AnyRef, ExternRef])
-                return append_builder!(b, bkw)
-
-            elseif name === :throw_inexacterror && length(args) >= 3
-                # Core.throw_inexacterror(func, to, values...) is precisely
-                # throw(InexactError(func, (to, values...))). Preserve both
-                # fields so catch-side inspection agrees with Julia.
-                bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                error_info = register_struct_type!(ctx.mod, ctx.type_registry, InexactError)
-                payload = args[2:end]
-                payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
-                all(T -> T isa Type, payload_types) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
-                payload_type = Tuple{payload_types...}
-                payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
-                error_info === nothing && error("InexactError layout is unavailable")
-                payload_info === nothing && error("InexactError argument tuple layout is unavailable")
-
-                emit_struct_prefix!(bie, ctx.type_registry, InexactError, error_info)
-                emit_value!(bie, args[1], ctx,
-                            ctx.mod.types[error_info.wasm_type_idx + 1].fields[
-                                Int(wasm_field_idx(error_info, 1)) + 1].valtype;
-                            from_julia=Symbol)
-                emit_struct_prefix!(bie, ctx.type_registry, payload_type, payload_info)
-                payload_layout = ctx.mod.types[payload_info.wasm_type_idx + 1]
-                payload_layout isa StructType || error("InexactError payload has no struct layout")
-                for (i, value) in enumerate(payload)
-                    ft = payload_layout.fields[Int(wasm_field_idx(payload_info, i)) + 1].valtype
-                    jt = payload_types[i]
-                    emit_value!(bie, value, ctx, ft;
-                                from_julia=isconcretetype(jt) ? jt : nothing)
-                end
-                struct_new!(bie, payload_info.wasm_type_idx)
-                struct_new!(bie, error_info.wasm_type_idx)
-                global_set!(bie, exn_global)
-                global_get!(bie, exn_global, AnyRef)
-                ref_null!(bie, ExternRef)
-                throw_!(bie, 0; inputs=WasmValType[AnyRef, ExternRef])
-                return append_builder!(b, bie)
-
+            # padding, kwerr, throw_inexacterror: INVOKE_INTRINSICS registry
+            # (R20 migration). array_subpadding/unalias already registered above.
             else
                 # Unknown method — codegen has no translation for this invoke target.
                 # This records a source-attributed diagnostic and emits dart's validating
