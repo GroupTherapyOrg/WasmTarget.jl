@@ -141,6 +141,9 @@ _wt_shard0() && include("host_boundary_types.jl")
 
 include("utils.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
+# Phase 10.2 prototype: native linear-memory sidecar (dev/PARITY_MASTER.md item 3).
+# Node-differential, run once (shard 0 only) like the other fixture suites above.
+_wt_shard0() && include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
 _wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
 _wt_shard0() && include("recursive_groups.jl")
 _wt_shard0() && include("apply_iterate_soundness.jl")
