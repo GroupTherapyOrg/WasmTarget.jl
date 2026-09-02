@@ -316,6 +316,58 @@ _c("string_startswith", () -> startswith("abc", "ab"))
 _c("string_uppercase", () -> uppercase("abc"))
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5b. Phase 5.2 (dev/MARCH.md §2 "Identity registries", §4 Phase 5 items 2/4):
+#     spike A (bespoke string builders hash/repeat/lpad/rpad → generic/overlay
+#     path) and registry B (invoke.jl name===:x arms → Method-keyed
+#     INVOKE_INTRINSICS). These wrapper functions exercise ops that are never
+#     otherwise reachable through ordinary Julia syntax (the WT-only str_*/
+#     arr_* intrinsics) so the invoke arm/registry entry actually compiles.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_c("string_hash",      () -> WasmTarget.str_hash("hello"))
+_c("string_repeat_char", () -> repeat('a', 3))
+_c("string_lpad",      () -> lpad("x", 5))
+_c("string_lpad_char", () -> lpad("x", 5, '-'))
+_c("string_rpad_char", () -> rpad("x", 5, '-'))
+
+# Int32 index (not Int/Int64 — see the report: generate_intrinsic_body's
+# hardcoded str_char/str_setchar! bodies assume an i32 index local and
+# StackImbalanceError on the Int64 overload EVEN BEFORE this migration; that
+# latent bug is fixed as a side effect of routing these through the registry
+# + _skip_cross_call, so it is validated differentially, not by this probe).
+_wt_wrap_strchar(s::String, i::Int32) = WasmTarget.str_char(s, i)
+_c("wt_str_char", _wt_wrap_strchar, String, Int32)
+_wt_wrap_strsetchar(s::String, i::Int32, c::Int32) = WasmTarget.str_setchar!(s, i, c)
+_c("wt_str_setchar", _wt_wrap_strsetchar, String, Int32, Int32)
+_wt_wrap_strlen(s::String) = WasmTarget.str_len(s)
+_c("wt_str_len", _wt_wrap_strlen, String)
+_wt_wrap_strnew(n::Int32) = WasmTarget.str_new(n)
+_c("wt_str_new", _wt_wrap_strnew, Int32)
+_wt_wrap_strcopy(a::String, b::Int32, c::String, d::Int32, e::Int32) = WasmTarget.str_copy(a, b, c, d, e)
+_c("wt_str_copy", _wt_wrap_strcopy, String, Int32, String, Int32, Int32)
+
+_wt_wrap_arrnew()::Vector{Int64} = WasmTarget.arr_new(Int64, Int32(5))
+_c("wt_arr_new", _wt_wrap_arrnew)
+_wt_wrap_arrget(v::Vector{Int64}, i::Int32) = WasmTarget.arr_get(v, i)
+_c("wt_arr_get", _wt_wrap_arrget, Vector{Int64}, Int32)
+_wt_wrap_arrset(v::Vector{Int64}, i::Int32, x::Int64) = WasmTarget.arr_set!(v, i, x)
+_c("wt_arr_set", _wt_wrap_arrset, Vector{Int64}, Int32, Int64)
+_wt_wrap_arrlen(v::Vector{Int64}) = WasmTarget.arr_len(v)
+_c("wt_arr_len", _wt_wrap_arrlen, Vector{Int64})
+
+_wt_wrap_isascii(s::String) = isascii(codeunits(s))
+_c("wt_isascii_codeunits", _wt_wrap_isascii, String)
+_wt_wrap_streq(a::String, b::String) = a == b
+_c("wt_string_eq", _wt_wrap_streq, String, String)
+_wt_wrap_substr3(s::String, i::Int, j::Int) = SubString(s, i, j)
+_c("wt_substring3", _wt_wrap_substr3, String, Int, Int)
+_wt_wrap_substr1(s::String) = SubString(s)
+_c("wt_substring1", _wt_wrap_substr1, String)
+_c("wt_array_subpadding", () -> Base.array_subpadding(Float64, Int64))
+_wt_wrap_unalias(a::Vector{Int64}, b::Vector{Int64}) = Base.unalias(a, b)
+_c("wt_unalias", _wt_wrap_unalias, Vector{Int64}, Vector{Int64})
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 6. Union{Nothing,T}: local, 3-way phi, field read.
 # ─────────────────────────────────────────────────────────────────────────────
 
