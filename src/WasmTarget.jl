@@ -25,6 +25,7 @@ include("codegen/types.jl")
 include("codegen/dispatch.jl")
 include("codegen/selector_table.jl")   # parity(dispatch_table.dart:396 DispatchTable): the dart dispatch table (replaces FNV, M8.4)
 include("codegen/intrinsics_table.jl")  # parity(intrinsics.dart:437 _binaryOperatorMap): the dart intrinsics table
+include("codegen/julia_numeric_tier.jl")  # parity(quarantine: Julia numeric semantics dart2wasm does not have)
 include("codegen/compile.jl")
 include("codegen/structs.jl")
 include("codegen/closures.jl")   # the closure layouter consumers

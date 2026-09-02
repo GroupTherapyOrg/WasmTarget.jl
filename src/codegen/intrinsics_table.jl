@@ -3,12 +3,10 @@
 # ============================================================================
 #
 # dart's model: a DECLARATIVE map (lhsType → rhsType → opName → emitter callback),
-# consulted by ONE dispatch point. WT's disease: 121 scattered `is_func` chains in
-# calls.jl selecting opcodes per site. This table replaces the numeric core; the
+# consulted by ONE dispatch point. This table replaces that per-site dispatch: the
 # calls.jl binary-op arm routes through `emit_intrinsic_binop!` — its ONE
 # production caller — ahead of the legacy `is_func` chain, which keeps only
 # what the table can't yet express and dies family-by-family through M11.2-.4.
-# Unary ops are not migrated yet; no `emit_intrinsic_unop!` exists.
 #
 # An emitter is `(b::InstrBuilder) -> WasmValType` — it assumes its operands are
 # already on the stack AT THEIR TABLE TYPES (the callers' wrap channel guarantees
@@ -120,8 +118,7 @@ end
 # dart's seven entries emit two instructions (`~` = const -1; xor, `unary-`
 # = const -1; mul, intrinsics.dart:477-484). The result type is
 # `_unaryResultMap[op]` when present, else the operand type (intrinsics.dart:
-# 578-583, :1010). Unary ops are not migrated yet in `emit_intrinsic_binop!`'s
-# docstring above — this table is that migration.
+# 578-583, :1010).
 
 """One typed unary-op emission: a callback (operand already on the stack) + result type."""
 struct UnOpEmit
