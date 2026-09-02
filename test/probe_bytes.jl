@@ -7,7 +7,10 @@
 # proves "nothing observable changed"; dart2wasm structural parity and the native
 # differential remain the real oracles (see dev/PARITY_MASTER.md).
 #
-# Each probe compiles with `WasmTarget.compile(f, argtypes; validate=false)`
+# Each probe compiles with `WasmTarget.compile_multi([(f, argtypes, name)]; validate=false)`
+# — the explicit export NAME matters: `compile(f, …)` exports `string(nameof(f))`, and for an
+# anonymous closure that is Julia's session-global gensym (`#17`), which advances whenever any
+# closure is defined in the process, so the bytes would depend on corpus order, not codegen.
 # (unoptimized IR, no wasm-tools double-check — module bytes only) and is
 # fingerprinted with `bytes2hex(SHA.sha256(bytes))`. SHA is a Julia stdlib
 # (always on LOAD_PATH regardless of the active Project.toml), so `using SHA`
@@ -275,7 +278,8 @@ _wt_kwerr_probe()::Int64 = try
 catch err
     err isa MethodError && err.f === Core.kwcall ? 1 : 2
 end
-_c("kwerr", _wt_kwerr_probe)
+# kwerr is not fingerprinted: its MethodError embeds the compile-time world age, so its
+# bytes change whenever the session defines a method — L81 covers it differentially.
 
 _wt_inexact_probe()::Int64 = try
     Core.throw_inexacterror(:convert, UInt8, UInt64(300))
@@ -399,7 +403,7 @@ end
 function main()
     hashes = Dict{String,String}()
     for (name, (f, argtypes)) in CASES
-        bytes = WasmTarget.compile(f, argtypes; validate=false)
+        bytes = WasmTarget.compile_multi([(f, argtypes, name)]; validate=false)
         hashes[name] = bytes2hex(SHA.sha256(bytes))
     end
 
