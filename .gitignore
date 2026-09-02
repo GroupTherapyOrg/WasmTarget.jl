@@ -1,6 +1,8 @@
 # Build outputs
 *.wasm
 *.wat
+# hand-written sidecar modules are source, not build output
+!test/sidecar/*.wat
 docs/dist/
 docs/build/
 Manifest.toml
