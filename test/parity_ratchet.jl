@@ -487,19 +487,16 @@ const LOCKS = [
             count(p -> occursin(p, values_src), forbidden) +
                 count(p -> !occursin(p, values_src), required)
         end),
-    "L89_erased_boundschecks_preserve_cfg_edges" => ("erasing explicit @inbounds checks forwards their control edges before dominator and loop ownership analysis",
+    "L89_erased_boundschecks_preserve_cfg_edges" => ("an always-taken @inbounds boundscheck branch is FOLDED (its fall-through edge dropped) and dead code is whatever the folded CFG cannot reach from the entry — never the statements between the jump and its target (that span carving dropped the live loop of reduce(max, 1:n) on 1.13); reachability runs before dominator and loop ownership analysis (re-pinned 2026-09-02)",
         () -> begin
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
-            resolver = findfirst("function resolve_through_dead_boundscheck", stack_src)
+            reach = findfirst("Dead code = unreachable from the entry over the folded CFG", stack_src)
             cfg = findfirst("# Build successor/predecessor maps", stack_src)
             dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
-            ordering_fail = resolver === nothing || cfg === nothing || dominators === nothing ||
-                            first(resolver) > first(cfg) || first(resolver) > first(dominators)
-            required = ["dropping the nodes without forwarding their edges disconnects the graph",
-                        "dest_block = resolve_through_dead_boundscheck(dest_block)",
-                        "fall_through_block = resolve_through_dead_boundscheck(fall_through_block)",
-                        "next_block = resolve_through_dead_boundscheck(next_block)"]
-            Int(ordering_fail) + count(p -> !occursin(p, stack_src), required)
+            ordering_fail = reach === nothing || cfg === nothing || dominators === nothing ||
+                            first(cfg) > first(reach) || first(reach) > first(dominators)
+            forbidden = ["for j in (i + 2):(target - 1)", "resolve_through_dead_boundscheck"]
+            Int(ordering_fail) + count(p -> occursin(p, stack_src), forbidden)
         end),
     "L90_crossing_regions_are_normalized_or_rejected" => ("shared terminal CFG tails are duplicated through the canonical visitor and every physical label closure is LIFO-checked",
         () -> begin
