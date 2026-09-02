@@ -529,39 +529,14 @@ function _lower_memoryrefset!(b, fb, ctx, expr, idx, args, callee)
         local _rv2_b = _compile_value_b(value_arg, ctx)
         local ret_val_ty = isempty(_rv2_b.v.stack) ? nothing : _rv2_b.v.stack[end]
         append_builder!(_msb, _rv2_b)
-        # If the SSA local is externref but the return value is a concrete ref,
-        # emit extern_convert_any. The compile_statement safety check can't catch this
-        # because has_gc_prefix=true (from array_set above) skips the trailing local_get
-        # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
+        # An externref-typed result local needs the GC value converted; the
+        # typed channel says what the pushed value is.
         local mset_ret_local = ctx.ssa_locals[idx]
         local mset_ret_arr_idx = mset_ret_local - ctx.n_params + 1
-        if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals)
-            local mset_ret_local_type = ctx.locals[mset_ret_arr_idx]
-            if mset_ret_local_type === ExternRef
-                # Check if return value is a concrete ref (not already externref)
-                local mset_ret_src_wasm = nothing
-                if length(ret_val_bytes) >= 2 && ret_val_bytes[1] == Opcode.LOCAL_GET
-                    local mset_src_idx = 0
-                    local mset_shift = 0
-                    local mset_pos = 2
-                    while mset_pos <= length(ret_val_bytes)
-                        byt = ret_val_bytes[mset_pos]
-                        mset_src_idx |= (Int(byt & 0x7f) << mset_shift)
-                        mset_shift += 7
-                        mset_pos += 1
-                        (byt & 0x80) == 0 && break
-                    end
-                    if mset_pos - 1 == length(ret_val_bytes) && mset_src_idx >= ctx.n_params
-                        local mset_src_arr = mset_src_idx - ctx.n_params + 1
-                        if mset_src_arr >= 1 && mset_src_arr <= length(ctx.locals)
-                            mset_ret_src_wasm = ctx.locals[mset_src_arr]
-                        end
-                    end
-                end
-                if mset_ret_src_wasm isa ConcreteRef || mset_ret_src_wasm === StructRef || mset_ret_src_wasm === ArrayRef || mset_ret_src_wasm === AnyRef
-                    extern_convert_any!(_msb)
-                end
-            end
+        if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals) &&
+           ctx.locals[mset_ret_arr_idx] === ExternRef &&
+           (ret_val_ty isa ConcreteRef || ret_val_ty === StructRef || ret_val_ty === ArrayRef || ret_val_ty === AnyRef)
+            extern_convert_any!(_msb)
         end
     end
     append_builder!(fb, _msb)
