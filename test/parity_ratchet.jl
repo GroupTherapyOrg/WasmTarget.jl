@@ -89,6 +89,81 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
     return n
 end
 
+"""
+Count every line in `.jl` files under `roots` matching `rx`, including comment lines.
+Used for metrics that must count sediment like marches and narration tags.
+"""
+function count_lines_all(rx::Regex; roots=[SRC])
+    n = 0
+    for root in roots
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            for line in eachline(joinpath(dir, f))
+                occursin(rx, line) && (n += 1)
+            end
+        end
+    end
+    return n
+end
+
+"""
+Return the line span of the top-level definition whose first line starts with `header`,
+using Julia's own parser (keyword-counting cannot see `@inbounds for`, trailing `do`, or
+one-line `if … end`). 0 if no such definition exists.
+"""
+function function_body_lines(path::String, header::AbstractString)::Int
+    lines = readlines(path)
+    start = findfirst(l -> startswith(l, header), lines)
+    start === nothing && return 0
+    ex = Meta.parseall(read(path, String); filename=path)
+    linenos(e, acc) = (e isa LineNumberNode ? push!(acc, e.line) :
+                       e isa Expr ? foreach(a -> linenos(a, acc), e.args) : nothing; acc)
+    for top in ex.args
+        top isa Expr || continue
+        ls = linenos(top, Int[])
+        isempty(ls) && continue
+        # a docstring makes the top-level expression begin before the header line
+        minimum(ls) <= start <= maximum(ls) && return maximum(ls) - start + 1
+    end
+    return 0
+end
+
+"""
+Lines of commented-out CODE: maximal runs of `#` comment lines (outside docstrings and
+`#= =#` blocks) where EVERY line, stripped of its `#`, parses as a complete `Expr` —
+not a bare word, literal, or nothing, which is what prose and tags parse as.
+"""
+function commented_out_code_lines(root)
+    looks_like_code(s) = try
+        e = Meta.parse(s)
+        e isa Expr && e.head !== :incomplete
+    catch
+        false
+    end
+    n = 0
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") || continue
+        indoc = false; inblk = false; run = String[]
+        flush!() = (if !isempty(run) && all(looks_like_code, run); n += length(run); end; empty!(run))
+        for line in eachline(joinpath(dir, f))
+            s = strip(line)
+            n3 = length(collect(eachmatch(r"\"\"\"", s)))
+            startswith(s, "#=") && (inblk = true)
+            if indoc || inblk || n3 > 0
+                flush!()
+            elseif startswith(s, "#")
+                push!(run, lstrip(s[2:end]))
+            else
+                flush!()
+            end
+            isodd(n3) && (indoc = !indoc)
+            occursin("=#", s) && (inblk = false)
+        end
+        flush!()
+    end
+    return n
+end
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -109,6 +184,67 @@ const METRICS = [
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
     "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
         () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
+    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (phase 3/5: migrate to tables and registries; file-agnostic so an arm cannot hide by moving)",
+        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
+    "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+ arms in statements.jl compile_foreigncall! dispatch",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> occursin(r"(_fc_sym|fname|cfn) === :\w+", line) && !_iscomment(line),
+                  split(stmt_src, '\n'))
+        end),
+    "R22_table_covered_ladder_arms" => ("is_func(func, :key) arms for keys in every INTRINSIC_* dict",
+        () -> begin
+            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
+            keys_set = Set{Symbol}()
+            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
+                    occursin("table residue", line) || (n += 1)
+                end
+            end
+            n
+        end),
+    "R23_dead_codegen_defs" => ("named definitions still present from the 17 dead-codegen list",
+        () -> begin
+            dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
+                          "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
+                          "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
+                          "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
+                          "_dv", "f64bits", "has_dispatch_table", "get_string_ref_array_type!"]
+            all_src = join((read(joinpath(dir, f), String)
+                            for (dir, _, files) in walkdir(SRC)
+                            for f in files if endswith(f, ".jl")), "\n")
+            count(dead_names) do name
+                q = replace(name, "!" => "\\!")
+                # multiline anchors: a definition at the start of any LINE
+                occursin(Regex("^function\\s+$(q)\\s*\\(", "m"), all_src) ||
+                occursin(Regex("^$(q)\\s*\\(.*\\)\\s*=(?!=)", "m"), all_src) ||
+                occursin(Regex("^const\\s+$(q)\\s*=", "m"), all_src) ||
+                occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
+            end
+        end),
+    "R24_scattered_env_reads" => ("scattered WT_* environment reads in src (ENV[…]/haskey/get forms) outside the one options struct; WT_VALIDATE is the documented gate and exempt",
+        () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
+    "R25_commented_out_code" => ("lines of commented-out code: maximal # runs where every line parses as a complete Expr (prose and bare tags do not)",
+        () -> commented_out_code_lines(SRC)),
+    "R26_campaign_narration" => ("lines matching march\\d+|P2-batch (including comments: 278)",
+        () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
+    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
+                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl"])),
     "R11_patch_markers" => ("patch-tag comment sediment PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- (monotone down via root-fixes)",
         () -> begin  # markers live IN comments, so count comment lines too
             n = 0
@@ -1260,6 +1396,11 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     ok = true
     current_m = Dict{String,Int}()
     current_l = Dict{String,Int}()
+
+    # function_body_lines must see the whole god function (4,583 lines at the march baseline);
+    # a helper that exits early would make every span lock vacuous
+    _fbl_check = function_body_lines(joinpath(CODEGEN, "calls.jl"), "function compile_call!(")
+    _fbl_check > 4000 || (println("⚠ function_body_lines sanity check: got $_fbl_check (expected > 4000)"); ok = false)
 
     println("── parity ratchet (dev/PARITY_MASTER.md) ──")
     for (id, (desc, thunk)) in METRICS

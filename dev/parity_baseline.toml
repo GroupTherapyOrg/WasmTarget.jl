@@ -3,6 +3,10 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [locks]
+L100_try_drivers_unified = 0
+L101_catch_all_clauses_extinct = 0
+L102_convert_ladders_unified = 0
+L103_anyref_dispatch_extinct = 0
 L10_no_fnv_dispatch = 0
 L11_driver_fronts = 0
 L12_god_fn_seams_only = 0
@@ -89,6 +93,7 @@ L86_phi_null_is_semantic_not_numeric = 0
 L87_symbolic_control_labels = 0
 L88_constant_fields_keep_exact_classes = 0
 L89_erased_boundschecks_preserve_cfg_edges = 0
+L8_no_silent_traps = 0
 L90_crossing_regions_are_normalized_or_rejected = 0
 L91_framework_roots_are_declarative = 0
 L92_runtime_predicates_and_bottom_edges_are_exact = 0
@@ -99,11 +104,6 @@ L96_explicit_io_never_becomes_host_console = 0
 L97_planner_entries_are_closed = 0
 L98_single_external_link_road = 0
 L99_emit_raw_bridges_extinct = 0
-L100_try_drivers_unified = 0
-L101_catch_all_clauses_extinct = 0
-L102_convert_ladders_unified = 0
-L103_anyref_dispatch_extinct = 0
-L8_no_silent_traps = 0
 L9_no_unjustified_untyped_emission = 0
 
 [metrics]
@@ -111,6 +111,15 @@ R11_patch_markers = 454
 R14_fresh_constant_structs = 12
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 29
+R19_call_is_func_arms = 123
+R20_invoke_name_arms = 54
+R21_foreigncall_arms = 25
+R22_table_covered_ladder_arms = 30
+R23_dead_codegen_defs = 17
+R24_scattered_env_reads = 17
+R25_commented_out_code = 134
+R26_campaign_narration = 278
+R27_coercion_bypass = 94
 R3_infer_value_type = 127
 R5_julia_type_reguess = 82
 R7_raw_coercion_ops = 109
