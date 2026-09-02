@@ -227,7 +227,7 @@ function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
 end
 
 # ============================================================================
-# PURE-9047: Compile with base.wasm merge
+# Compile with base.wasm merge
 # ============================================================================
 
 const WASM_MERGE_GC_FLAGS = [

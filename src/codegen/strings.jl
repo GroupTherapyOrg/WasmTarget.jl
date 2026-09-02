@@ -155,14 +155,14 @@ end
 # ============================================================================
 
 # census F7 (): add_stack_trace_import!/ensure_stack_trace_global! deleted
-# with the dormant PURE-9036 cluster (see generate.jl note; rebuild = D9.1 typed tag).
+# with the dormant cluster (see generate.jl note; rebuild = D9.1 typed tag).
 
 # ============================================================================
 # IO Bridge — println/print via JS Imports
 # ============================================================================
 
 """
-PURE-9040: IO import indices stored in the module for println/print support.
+IO import indices stored in the module for println/print support.
 """
 mutable struct IOImports
     write_string_idx::UInt32    # io.write_string(externref) → void
@@ -170,7 +170,7 @@ mutable struct IOImports
     write_float_idx::UInt32     # io.write_float(f64) → void
     write_bool_idx::UInt32      # io.write_bool(i32) → void
     write_newline_idx::UInt32   # io.write_newline() → void
-    write_nothing_idx::UInt32   # io.write_nothing() → void (PURE-9041)
+    write_nothing_idx::UInt32   # io.write_nothing() → void
     decode_idx::UInt32          # wasm:text-decoder.decodeStringFromUTF8Array
 end
 
@@ -201,7 +201,7 @@ function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
         WasmValType[I32], WasmValType[])
     write_newline_idx = add_import!(mod, "io", "write_newline",
         WasmValType[], WasmValType[])
-    # PURE-9041: write_nothing() outputs "nothing" string
+    # write_nothing() outputs "nothing" string
     write_nothing_idx = add_import!(mod, "io", "write_nothing",
         WasmValType[], WasmValType[])
 
@@ -244,7 +244,7 @@ function clear_io_imports!()
 end
 
 # ============================================================================
-# Performance Timer — jl_hrtime via performance.now() (PURE-9042)
+# Performance Timer — jl_hrtime via performance.now()
 # ============================================================================
 
 const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
@@ -269,11 +269,11 @@ function clear_perf_now!()
 end
 
 # ============================================================================
-# RNG State — Xoshiro256++ via Wasm Globals (PURE-9043)
+# RNG State — Xoshiro256++ via Wasm Globals
 # ============================================================================
 
 """
-PURE-9043: RNG state stored in 4 mutable i64 Wasm globals.
+RNG state stored in 4 mutable i64 Wasm globals.
 Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
 We store these in Wasm globals instead.
 """

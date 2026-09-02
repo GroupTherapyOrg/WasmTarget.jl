@@ -124,7 +124,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             push!(arities, length(info.arg_types))
         end
         if length(arities) != 1
-            @debug "PURE-9060: Skipping dispatch table for $(func_ref): mixed arities $(arities)"
+            @debug "Skipping dispatch table for $(func_ref): mixed arities $(arities)"
             continue
         end
         arity = first(arities)
@@ -145,7 +145,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             for T in info.arg_types
                 tid = get_type_id(type_registry, T)
                 if tid == Int32(0)
-                    @debug "PURE-9060: No type ID for $(T) — skipping dispatch entry"
+                    @debug "No type ID for $(T) — skipping dispatch entry"
                     all_valid = false
                     break
                 end
@@ -324,7 +324,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             # call $target — target_idx is correct because actual functions were added first
             call!(b, entry.target_idx, WasmValType[], WasmValType[])
 
-            # PURE-9061: Box numeric results when dispatch table uses anyref return
+            # Box numeric results when dispatch table uses anyref return
             # tag-run: key on the TRACKED actual — the call's derived (placeholder)
             # result is the truth; a target already returning a ref needs NO box
             # (the julia-derived width lied for Any-erased returns).
@@ -334,7 +334,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             elseif is_anyref_return
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
                 if entry.return_type === Nothing || entry.return_type === Union{}
-                    # WBUILD-4000: Target function returns void (Nothing/Union{}).
+                    # Target function returns void (Nothing/Union{}).
                     # Push ref.null none as the anyref return value.
                     ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
                 elseif entry_wasm_type in (I32, I64, F32, F64)

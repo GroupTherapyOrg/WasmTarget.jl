@@ -1462,10 +1462,10 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 emit_value!(b, arg, ctx, I32)   # step4
                 call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
             elseif arg_type === Nothing
-                # PURE-9041: println(nothing) → write "nothing"
+                # println(nothing) → write "nothing"
                 call!(b, io.write_nothing_idx, WasmValType[], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Vector
-                # PURE-9067: Vector display — emit "[e1, e2, ...]"
+                # Vector display — emit "[e1, e2, ...]"
                 elem_type = eltype(arg_type)
 
                 # Register vector type to get struct info
@@ -1567,7 +1567,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 emit_jl_string_to_js!(b, io.decode_idx)
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
-                # PURE-9067: Tuple display — emit "(e1, e2, ...)"
+                # Tuple display — emit "(e1, e2, ...)"
                 tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, arg_type)
                 if tuple_info !== nothing
                     tuple_type_idx = tuple_info.wasm_type_idx
@@ -1826,7 +1826,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             actual_func_ref_early = pi_ssa_stmt
         end
     elseif func_ref_early isa Core.Argument
-        # PURE-220: Higher-order function calls — extract function from mi.specTypes
+        # Higher-order function calls — extract function from mi.specTypes
         if mi isa Core.MethodInstance
             spec = mi.specTypes
             if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
@@ -1841,14 +1841,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
        isdefined(actual_func_ref_early.mod, actual_func_ref_early.name)
             called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
             if called_func === ctx.func_ref
-                # PURE-220: Also check arity — overloaded methods share the same function
+                # Also check arity — overloaded methods share the same function
                 # object but have different specTypes. A call to a different overload is NOT
                 # a self-call (e.g., parse_comma(ps) calling parse_comma(ps, true)).
                 if mi isa Core.MethodInstance
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple
                         call_nargs = length(spec.parameters) - 1  # subtract typeof(func)
-                        # PURE-047: Check both arity AND parameter types — same-arity overloads
+                        # Check both arity AND parameter types — same-arity overloads
                         # (e.g., validate_code!(errors, mi, c) vs validate_code!(errors, c, bool))
                         # share the function object and arity but have different specTypes.
                         if call_nargs == length(ctx.arg_types)
@@ -1881,7 +1881,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
 
-    # PURE-036z: Compute target_info EARLY so we can use its arg_types for proper type checking
+    # Compute target_info EARLY so we can use its arg_types for proper type checking
     # during argument compilation. This helps when param_types (from mi.specTypes) differ from
     # the actual compiled function's parameter types.
     target_info_early = nothing
@@ -1892,7 +1892,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             called_func_early = isdefined(actual_func_ref_early.mod, actual_func_ref_early.name) ?
                 getfield(actual_func_ref_early.mod, actual_func_ref_early.name) : nothing
         elseif actual_func_ref_early isa Function
-            # PURE-209a: func_ref can be a Function object directly (default-arg methods)
+            # func_ref can be a Function object directly (default-arg methods)
             called_func_early = actual_func_ref_early
         elseif mi isa Core.MethodInstance && mi.def isa Method
             # Fallback: get function from MethodInstance
@@ -1913,7 +1913,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             _exp_ret = get(ctx.ssa_types, idx, nothing)
             target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early;
                                              expected_return=_exp_ret isa Type ? _exp_ret : nothing)
-            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            # Closure/kwarg functions are registered with self-type prepended
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
                 closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
                 target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
@@ -2087,7 +2087,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     for (arg_idx, arg) in enumerate(args)
 
         # Check if this is a nothing argument that needs ref.null
-        # PURE-044: Also check PiNode with typ === Nothing (Union dispatch pattern)
+        # Also check PiNode with typ === Nothing (Union dispatch pattern)
         is_nothing_arg = arg === nothing ||
                         (arg isa GlobalRef && arg.name === :nothing) ||
                         (arg isa Core.SSAValue && begin
@@ -2096,7 +2096,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             (ssa_stmt isa Core.PiNode && ssa_stmt.typ === Nothing)
                         end)
 
-        # PURE-044: Also check if param_types expects Nothing (Union dispatch to different signatures)
+        # Also check if param_types expects Nothing (Union dispatch to different signatures)
         # This handles the case where the arg is a phi value but param expects Nothing (i32)
         if !is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             param_type = param_types[arg_idx]
@@ -2134,7 +2134,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             append_builder!(fb, _nb)
         elseif is_nothing_arg
             # Nothing arg without param_types — emit ref.null anyref as safe default
-            # PURE-9022: Use anyref (not externref) for internal polymorphic positions
+            # Use anyref (not externref) for internal polymorphic positions
             _nb2 = _ctx_builder(ctx, "compile_invoke")
             ref_null!(_nb2, AnyRef)
             append_builder!(fb, _nb2)
@@ -2176,7 +2176,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # tracked type (dart carries the type with the value) refines `actual`;
                     # the old ssa_locals re-lookup died with the ladder.
 
-                    # PURE-3111/4155: Handle Nothing→ref conversion.
+                    # Handle Nothing→ref conversion.
                     # compile_value emits i32_const 0 for Nothing,
                     # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                     # otherwise bridging tries conversions on an i32 value.
@@ -2232,7 +2232,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     actual_func_ref = ssa_stmt
                 end
             elseif func_ref isa Core.Argument
-                # PURE-220: Higher-order function calls (e.g., parse_Nary's `down(ps)`)
+                # Higher-order function calls (e.g., parse_Nary's `down(ps)`)
                 # func_ref is a function parameter. Extract actual function from mi.specTypes.
                 if mi isa Core.MethodInstance
                     spec = mi.specTypes
@@ -2250,7 +2250,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Check if this GlobalRef refers to the same function
                     called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
                     if called_func === ctx.func_ref
-                        # PURE-220/047: Check arity AND types for overloaded methods
+                        # Check arity AND types for overloaded methods
                         if mi isa Core.MethodInstance
                             spec = mi.specTypes
                             if spec isa DataType && spec <: Tuple
@@ -2267,9 +2267,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         end
                     end
             elseif ctx.func_ref !== nothing && actual_func_ref isa Function
-                # PURE-209a: Function object direct comparison
+                # Function object direct comparison
                 if actual_func_ref === ctx.func_ref
-                    # PURE-220/047: Check arity AND types for overloaded methods
+                    # Check arity AND types for overloaded methods
                     if mi isa Core.MethodInstance
                         spec = mi.specTypes
                         if spec isa DataType && spec <: Tuple
@@ -2289,7 +2289,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            # PURE-913: Skip cross-call for runtime intrinsics with proper inline handlers.
+            # Skip cross-call for runtime intrinsics with proper inline handlers.
             # str_substr's generate_intrinsic_body is a stub (returns source string unchanged).
             # str_trim calls str_substr internally, so also broken when compiled standalone.
             # The inline handlers below (str_substr at line ~22446, str_trim at ~23572)
@@ -2306,11 +2306,11 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # For constructor calls, the func_ref might be the type directly
                     called_func = actual_func_ref
                 elseif actual_func_ref isa Function
-                    # PURE-209a: For default-arg methods, func_ref can be a Function object
+                    # For default-arg methods, func_ref can be a Function object
                     # (e.g., typeof(next_token) for next_token(lexer, true))
                     called_func = actual_func_ref
                 elseif actual_func_ref isa Core.Argument && mi isa Core.MethodInstance
-                    # PURE-220: Fallback for Core.Argument — extract from mi.specTypes
+                    # Fallback for Core.Argument — extract from mi.specTypes
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
                         func_type = spec.parameters[1]
@@ -2333,7 +2333,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         target_info = target_info_early
                     end
 
-                    # PURE-320: Closure/kwarg functions are registered with self-type prepended
+                    # Closure/kwarg functions are registered with self-type prepended
                     # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
                     if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                         closure_arg_types = (typeof(called_func), call_arg_types...)
@@ -2356,7 +2356,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
                         call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
                         cross_call_handled = true
-                        # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
+                        # If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.
                         # Emit unreachable to make stack polymorphic — prevents DROP from
                         # causing "nothing on stack" when the void call has no return value.
@@ -2366,7 +2366,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         if target_info.return_type === Union{}
                             unreachable!(bcc)  # structural trap (dart-legit dead path)
                         end
-                        # PURE-220: Unused cross-call return values are dropped by
+                        # Unused cross-call return values are dropped by
                         # the stackifier (builder stack delta + use_count==0).
                         # Do NOT emit DROP here — the stackifier's already_dropped heuristic
                         # has false positives when the LEB128 function index byte coincides
@@ -2391,13 +2391,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 elseif target_local_type === AnyRef
                                     ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if ret_wasm === ExternRef
-                                        # PURE-908: Function returns externref, local expects anyref
+                                        # Function returns externref, local expects anyref
                                         any_convert_extern!(bcc)
                                     end
                                 elseif target_local_type === ExternRef && func_ref isa Core.Argument
-                                    # PURE-220: Higher-order call returns concrete ref but local expects externref
+                                    # Higher-order call returns concrete ref but local expects externref
                                     # (SSA type is Any because the function parameter is generic)
-                                    # PURE-6022: But if the callee already returns externref, skip —
+                                    # But if the callee already returns externref, skip —
                                     # extern_convert_any expects anyref input, not externref.
                                     callee_ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if callee_ret_wasm !== ExternRef
@@ -2443,7 +2443,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
                 bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
                 call!(bsc2, ctx.func_idx, WasmValType[], WasmValType[])
-                # PURE-908: Bridge return type for self-calls (externref→anyref)
+                # Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)
                     local_idx_val = ctx.ssa_locals[idx]
                     local_arr_idx = local_idx_val - ctx.n_params + 1
@@ -2474,7 +2474,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 _f3_result_box!()
             elseif name === :- || name === :sub_int
                 if length(args) == 1
-                    # WBUILD-3001: Unary negation -(x) → 0 - x. Prepend the 0 via
+                    # Unary negation -(x) → 0 - x. Prepend the 0 via
                     # fragment composition (the pushfirst! byte surgery is gone).
                     local _negb = _ctx_builder(ctx, "compile_invoke.frag")
                     _seed_builder_locals!(_negb, ctx)
@@ -2524,7 +2524,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                    _all_string_args(args, ctx)
                 fb = compile_string_concat_many_b(args, ctx)
 
-            # PURE-325: isascii(s) — check all bytes < 0x80
+            # isascii(s) — check all bytes < 0x80
             # Called from normalize_identifier via isascii(codeunits(s)).
             # The argument is CodeUnits{UInt8,String} (a struct wrapping String).
             # Extract the String (field 0) from the struct, then iterate bytes.
@@ -2931,7 +2931,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Value — typed channel throughout
                 local _as_b = _compile_value_b(args[3], ctx)
                 local val_ty = isempty(_as_b.v.stack) ? nothing : _as_b.v.stack[end]
-                # PURE-045: If elem_type is Any (externref array), convert ref→externref
+                # If elem_type is Any (externref array), convert ref→externref
                 if elem_type === Any
                     if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
                         # Was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
@@ -2943,7 +2943,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # A KNOWN closure erasing into a Vector{Any} slot wraps
                         # into the closure OBJECT first (dart convertType at the seam)
                         val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
-                        # PURE-048: Skip extern_convert_any if value is already externref
+                        # Skip extern_convert_any if value is already externref
                         val_ty === ExternRef || extern_convert_any!(bas)
                     end
                 else
@@ -2962,7 +2962,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 append_builder!(fb, blen3)
 
             # ================================================================
-            # PURE-322: SubString — create proper SubString struct
+            # SubString — create proper SubString struct
             # SubString(str, start, stop) does UTF-8 thisind validation that
             # uses jl_string_ptr/pointerref (unsupported in WasmGC). Since
             # WasmGC strings are array<i32> (char arrays, not byte arrays),
@@ -3018,7 +3018,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 return append_builder!(b, bsub2)
 
             # ================================================================
-            # PURE-322: _thisind_continued / _nextind_continued — identity
+            # _thisind_continued / _nextind_continued — identity
             # In WasmGC, strings are array<i32> (char codes), so every
             # character index is valid (no multi-byte encoding).
             # ================================================================
@@ -3045,7 +3045,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 return append_builder!(b, bni)
 
             # ================================================================
-            # PURE-9016: Multi-arg string() → inline N-way concatenation
+            # Multi-arg string() → inline N-way concatenation
             # string("hello", " ", "world") or string("x = ", int_to_string(x))
             # Allocates one result array of total length, copies each arg in
             # ================================================================
@@ -3073,7 +3073,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 return append_builder!(b, bms)
 
             # ================================================================
-            # WBUILD-5401: Base.string dispatch for single-arg types
+            # Base.string dispatch for single-arg types
             # Float64 is handled via auto-discovery of Ryu.writeshortest.
             # Int types fall back to int_to_string runtime if not auto-discovered.
             # ================================================================
@@ -3122,7 +3122,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                           "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
                 end
 
-            # PURE-1102: Error-throwing functions from Base (used by pop!, resize!, etc.)
+            # Error-throwing functions from Base (used by pop!, resize!, etc.)
             # Emit throw (catchable) instead of unreachable (trap)
             elseif name === :_throw_argerror || name === :throw_boundserror ||
                    name === :throw || name === :rethrow ||
@@ -3130,7 +3130,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 ensure_exception_tag!(ctx.mod)
                 bthr2 = _ctx_builder(ctx, "compile_invoke")
                 if name === :rethrow
-                    # PURE-9034: rethrow() preserves the exception in the global —
+                    # rethrow() preserves the exception in the global —
                     # just re-throw without overwriting. The caught exception is
                     # already in $current_exn from the original throw.
                     global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
@@ -3148,9 +3148,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
                 end
                 append_builder!(fb, bthr2)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                ctx.last_stmt_was_stub = true
 
-            # PURE-9040: println/print → JS IO bridge imports
+            # println/print → JS IO bridge imports
             elseif (name === :println || name === :print) &&
                    !_invoke_has_explicit_io(param_types)
                 fb = _compile_invoke_print_b(name, args, ctx)
@@ -3164,7 +3164,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     append_builder!(fb, bpn)
                 end
 
-            # PURE-9041: show(x) → IO bridge imports (like print, no newline)
+            # show(x) → IO bridge imports (like print, no newline)
             # show(42) displays "42", show(true) displays "true", show(nothing) displays "nothing"
             elseif name === :show && !_invoke_has_explicit_io(param_types)
                 io = get_io_imports()
@@ -3243,7 +3243,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # No-op: WasmGC arrays don't need explicit truncation
 
             # Handle getindex_continued (multi-byte string char access)
-            # WBUILD-8001: UTF-8 byte continuation not implemented.
+            # UTF-8 byte continuation not implemented.
             # In WasmGC, strings are array<i32> (one codepoint per element),
             # so multi-byte continuation shouldn't be needed. If hit, it means
             # a code path assumes byte-level string access.
@@ -3254,8 +3254,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 append_builder!(fb, bgic)
                 ctx.last_stmt_was_stub = true
 
-            # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
-            # PURE-9032: Create exception struct objects and stash in $current_exn
+            # Error/throw functions — emit throw (catchable) instead of unreachable (trap)
+            # Create exception struct objects and stash in $current_exn
             # so that :the_exception + isa checks can identify the exception type.
             elseif name === :error
                 berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
@@ -3277,7 +3277,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # Handle JuliaSyntax internal functions that have complex implementations
             # These are intercepted and compiled as simplified stubs
             elseif name === :parse_float_literal
-                # WBUILD-8001: Float literal parsing not implemented (orig uses
+                # Float literal parsing not implemented (orig uses
                 # ccall(:jl_strtod_c)). Strict Approach A — loud reject (returns a
                 # value natively, so a silent trap would diverge).
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -3285,7 +3285,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             elseif name === :parse_int_literal ||
                    name === :parse_uint_literal
-                # WBUILD-8001: Int/uint literal parsing not implemented.
+                # Int/uint literal parsing not implemented.
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
                     "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
 
@@ -3307,7 +3307,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # 1. Allocate new array with 2x capacity
             # 2. Copy elements from old array using array.copy
             # 3. Update the vector's ref field
-            # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC.
+            # sizehint! is a memory optimization hint — no-op in WasmGC.
             # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
             # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
             # Must be checked BEFORE the "#" closure handler below, since #sizehint!#81
@@ -3379,14 +3379,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                     # 1. Get the vector and store in local
                     emit_value!(bgr, vec_arg, ctx, ConcreteRef(UInt32(vec_type_idx), true))
-                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    # heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(vec_type_idx), true)
                     local_set!(bgr, vec_scratch_local)
 
                     # 2. Get old backing array and store
                     local_get!(bgr, vec_scratch_local)
                     struct_get!(bgr, vec_type_idx, wasm_field_idx(vec_info, 1), ConcreteRef(UInt32(arr_type_idx), true))
-                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    # heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(arr_type_idx), true)
                     local_set!(bgr, old_arr_local)
 
@@ -3450,7 +3450,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                         idx=idx, detail=expr)
                     unreachable!(bgrf)  # structural trap after recorded unsupported
                     append_builder!(fb, bgrf)
-                    ctx.last_stmt_was_stub = true  # PURE-908
+                    ctx.last_stmt_was_stub = true
                 end
 
             elseif name === :Symbol && length(args) == 1
@@ -3459,7 +3459,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Just pass it through — no conversion needed.
                 # (args were already compiled and pushed to `bytes` above)
 
-            # PURE-6024: typeintersect(T1, T2) — C runtime function used in tuple convert.
+            # typeintersect(T1, T2) — C runtime function used in tuple convert.
             # With unoptimized IR (may_optimize=false), the convert inlines typeintersect.
             # Evaluate at compile time when both args are constant Type values.
             elseif name === :typeintersect && length(args) >= 2 && args[1] isa Type && args[2] isa Type
@@ -3472,13 +3472,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 extern_convert_any!(bti2)
                 return append_builder!(b, bti2)
 
-            # PURE-6024: _tuple_error — error function in tuple convert dead code path.
+            # _tuple_error — error function in tuple convert dead code path.
             # Emit throw (catchable) instead of unreachable (trap).
             elseif name === :_tuple_error
                 bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
                 ensure_exception_tag!(ctx.mod)
                 global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
+                ctx.last_stmt_was_stub = true
                 return append_builder!(b, bte)
 
             # Julia 1.13: hash_bytes(ptr, len, seed, secret) replaces memhash foreigncall
@@ -3734,7 +3734,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx)
                 unreachable!(bunk)
                 append_builder!(fb, bunk)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                ctx.last_stmt_was_stub = true
             end
         end
     end

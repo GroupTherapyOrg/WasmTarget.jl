@@ -297,7 +297,7 @@ front seam and accumulator are gone.
 """
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
 
-    # PURE-6027: Reset dead code guard at basic block boundaries.
+    # Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
     # block boundaries — the next block is reachable via a different control flow path.
     # Check: (a) previous stmt is a terminator, OR (b) this idx is a jump target.
@@ -320,7 +320,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         end
     end
 
-    # PURE-6022: If a previous statement in this function was a stub (emitted unreachable),
+    # If a previous statement in this function was a stub (emitted unreachable),
     # skip ALL further statement compilation within the SAME basic block. Bytes after
     # unreachable must be structurally valid WASM, and continuing to compile produces invalid
     # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
@@ -329,7 +329,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         return b
     end
 
-    # PURE-6024: Handle slot assignments in unoptimized IR (may_optimize=false).
+    # Handle slot assignments in unoptimized IR (may_optimize=false).
     # Unwrap Expr(:(=), SlotNumber(n), inner_expr) → compile inner_expr, store to slot local.
     _slot_assign_id = 0  # SlotNumber.id if this is a slot assignment, 0 otherwise
     if stmt isa Expr && stmt.head === :(=) && length(stmt.args) >= 2 && stmt.args[1] isa Core.SlotNumber
@@ -337,7 +337,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         stmt = stmt.args[2]  # Unwrap to inner expression
     end
 
-    # PURE-6024b: When a slot assignment RHS is a bare value (SlotNumber, SSAValue, literal,
+    # When a slot assignment RHS is a bare value (SlotNumber, SSAValue, literal,
     # GlobalRef), it won't match any Expr/Return/Goto handler below. Compile it directly
     # as a value so the slot LOCAL_SET at the bottom of this function has something on the stack.
     if _slot_assign_id > 0 && !(stmt isa Expr) && !(stmt isa Core.ReturnNode) &&
@@ -365,7 +365,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # Conditional branch - handled by control flow analysis
 
     elseif stmt isa Core.UpsilonNode
-        # PURE-9033: UpsilonNode stores a value for later PhiCNode retrieval.
+        # UpsilonNode stores a value for later PhiCNode retrieval.
         # Semantics: local.set into the associated PhiCNode's local.
         # The association is: PhiCNode.values contains SSAValue(this_upsilon_idx).
         # Find which PhiCNode references this UpsilonNode.
@@ -388,7 +388,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # If no PhiCNode found, UpsilonNode is dead — no-op
 
     elseif stmt isa Core.PhiCNode
-        # PURE-9033: PhiCNode is a no-op at the statement level.
+        # PhiCNode is a no-op at the statement level.
         # The value was already stored into phi_locals[idx] by the associated UpsilonNode.
         # When other statements use SSAValue(idx), compile_value reads from phi_locals[idx].
 
@@ -425,7 +425,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         end
 
     elseif stmt isa Core.NewvarNode
-        # PURE-6024: Unoptimized IR slot initialization — no-op in WASM
+        # Unoptimized IR slot initialization — no-op in WASM
         # (WASM locals are default-initialized to null/zero)
 
     elseif stmt isa Core.EnterNode
@@ -467,7 +467,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         isempty(b.v.stack) || seed_input!(_sf, copy(b.v.stack))
         _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
-        ctx.last_stmt_was_stub = false  # PURE-908: reset before dispatch
+        ctx.last_stmt_was_stub = false  # reset before dispatch
         if stmt.head === :call
             compile_call!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
@@ -494,7 +494,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             compile_foreigncall!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
         elseif stmt.head === :the_exception
-            # PURE-9032: Retrieve the caught exception value from the $current_exn global.
+            # Retrieve the caught exception value from the $current_exn global.
             # Julia IR emits :the_exception in catch blocks to get the caught exception.
             # We stash exception values into a (mut anyref) global before throw,
             # and retrieve them here with global.get.
@@ -536,11 +536,11 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         elseif stmt.head === :pop_exception
             # Exception handling: Pop exception from handler stack — no-op in WASM
         elseif stmt.head === :gc_preserve_begin
-            # PURE-9066: GC preservation — no-op in WasmGC (browser GC handles this)
+            # GC preservation — no-op in WasmGC (browser GC handles this)
         elseif stmt.head === :gc_preserve_end
-            # PURE-9066: GC preservation end — no-op in WasmGC
+            # GC preservation end — no-op in WasmGC
         elseif stmt.head === :loopinfo
-            # PURE-9066: Loop optimization hint (e.g., @simd) — no-op in Wasm
+            # Loop optimization hint (e.g., @simd) — no-op in Wasm
         end
 
         # The fragment's tracked stack is the only store contract. Merge it
@@ -579,12 +579,12 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             stmt_type = get(ctx.ssa_types, idx, Any)
             is_unreachable_type = stmt_type === Union{}
             # Phase B: DROP+UNREACHABLE tail is two node-kind tests — the
-            # PURE-6005 false-positive class (struct_get operand bytes 0x1a 0x00)
+            # false-positive class (struct_get operand bytes 0x1a 0x00)
             # cannot exist at the ir/ layer, so its GC-in-tail guard is gone too.
             is_unreachable_bytecode = (length(_sf.instrs) >= 2 &&
                                        _sf.instrs[end] isa InstrIR.Unreachable &&
                                        _sf.instrs[end-1] isa InstrIR.Drop) ||
-                                      _stmt_ends_unreachable  # PURE-908: catch stub UNREACHABLE
+                                      _stmt_ends_unreachable  # catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
             if should_store
@@ -601,7 +601,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
                     coerce_stack_top!(b, local_type, ctx; from_julia=stmt_type)
                 end
 
-                # PURE-6024: If this is a slot assignment, TEE to slot local first
+                # If this is a slot assignment, TEE to slot local first
                 # (leaves value on stack for the SSA local.set below).
                 # DIRECT — the fresh store wrapper pop_any'd an empty stack
                 # on EVERY SSA store (the single largest harvest class).
@@ -613,7 +613,7 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         end
     end
 
-    # PURE-6024: If this is a slot assignment but there's NO SSA local to store to,
+    # If this is a slot assignment but there's NO SSA local to store to,
     # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
         local_set!(b, ctx.slot_locals[_slot_assign_id])   # direct
@@ -783,7 +783,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     elseif struct_type_ref isa DataType
         struct_type_ref
     elseif struct_type_ref isa Core.SSAValue
-        # PURE-801: Handle Core.apply_type results (e.g., NamedTuple from keyword args)
+        # Handle Core.apply_type results (e.g., NamedTuple from keyword args)
         # ssavaluetypes[ssa.id] gives Type{ConcreteType} — extract the parameter
         ssa_type = ctx.code_info.ssavaluetypes[struct_type_ref.id]
         if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
@@ -901,7 +901,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         # emit ref.null of the correct array type instead of the wrong-typed local.get.
         # This happens with non-Array AbstractVector types (UnitRange, StepRange) whose
         # fields are i64 but get registered with Vector's ref-based layout.
-        # PURE-325: Check if field0 is a multi-arg memoryrefnew that produces [array_ref, i32_index].
+        # Check if field0 is a multi-arg memoryrefnew that produces [array_ref, i32_index].
         # Vector only needs the array_ref — drop the extra i32 index.
         is_multi_arg_memref = false
         if field_values[1] isa Core.SSAValue
@@ -923,7 +923,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         end
         local _f0_ty = isempty(_f0_b.v.stack) ? nothing : _f0_b.v.stack[end]
         if _f0_ty === I64 || _f0_ty === I32
-            # PURE-325: numeric source but Vector field 0 needs an array ref.
+            # numeric source but Vector field 0 needs an array ref.
             # Before falling back to ref.null, check if the source SSA is a memoryrefnew
             # or memorynew result — if so, recompile the source to get the actual array ref.
             recompiled = false
@@ -1001,7 +1001,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         return b
     end
 
-    # PURE-049: MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
+    # MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
     # :new(MemoryRef{T}, mem, ptr_or_offset) → just pass through the mem (array ref).
     # :new(Memory{T}, ...) → emit ref.null of the array type (Memory is backing storage).
     if struct_type isa DataType && struct_type.name.name in (:MemoryRef, :GenericMemoryRef)
@@ -1036,7 +1036,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
 
     info = ctx.type_registry.structs[struct_type]
 
-    # PURE-9024/9025: Push typeId (i32) as field 0 before Julia field values
+    # Push typeId (i32) as field 0 before Julia field values
     emit_struct_prefix!(b, ctx.type_registry, struct_type, info)
 
     # Push field values in order, handling Union field types
@@ -1067,12 +1067,12 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             should_emit_null = is_literal_nothing || is_nothing_type_ssa
 
             if should_emit_null
-                # PURE-6024: Check actual Wasm field type first. For nullable
+                # Check actual Wasm field type first. For nullable
                 # primitives (Union{Nothing, Bool/Int32/etc}), the Wasm field
                 # is i32/i64 — emit zero constant, NOT ref.null.
                 _null_field_wasm = nothing
                 _null_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
-                local _wasm_fi = i + Int(info.field_offset)  # PURE-9024: skip typeId
+                local _wasm_fi = i + Int(info.field_offset)  # skip typeId
                 if _null_struct_def isa StructType && _wasm_fi <= length(_null_struct_def.fields)
                     _null_field_wasm = _null_struct_def.fields[_wasm_fi].valtype
                 end
@@ -1127,7 +1127,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                     from_julia=(_cn_julia isa Type ? _cn_julia : nothing))
             end
         elseif field_type === Any
-            # PURE-9064: Determine actual Wasm field type (AnyRef when JlType hierarchy active,
+            # Determine actual Wasm field type (AnyRef when JlType hierarchy active,
             # ExternRef otherwise). Look it up from the module type definition.
             local _cn_wasm_fi = i + Int(info.field_offset)  # i is 1-based, +offset for typeId
             local _cn_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
@@ -1135,7 +1135,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                 _cn_wasm_fi <= length(_cn_struct_def.fields) &&
                 _cn_struct_def.fields[_cn_wasm_fi].valtype === AnyRef
 
-            # PURE-044: Check for nothing values FIRST before compile_value
+            # Check for nothing values FIRST before compile_value
             # compile_value(nothing) returns i32.const 0, which can't be converted
             is_nothing_val = val === nothing ||
                             (val isa GlobalRef && val.name === :nothing) ||
@@ -1322,7 +1322,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
 
             return b
         elseif name === :memset
-            # WBUILD-5501: memset(ptr, value, size) — fill memory with a byte value.
+            # memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
             # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
             # (Dict/Set constructor, rehash!) use value=0 (a literal 0x00).
@@ -1421,7 +1421,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
 
             return b
         elseif name === :jl_alloc_string
-            # PURE-317: jl_alloc_string(n::UInt64) -> String
+            # jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
             # Create a zero-filled array of the requested size.
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -1505,7 +1505,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
         elseif name === :jl_string_to_genericmemory
-            # PURE-316: jl_string_to_genericmemory(s::String) -> Memory{UInt8}
+            # jl_string_to_genericmemory(s::String) -> Memory{UInt8}
             # Converts a String's underlying bytes to a Memory{UInt8}.
             # In WasmGC, both String and Memory{UInt8} are represented as array<i32>,
             # so this is a no-op: just return the string argument itself.
@@ -1518,7 +1518,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             end
             return b
         elseif name === :jl_genericmemory_to_string
-            # PURE-325: jl_genericmemory_to_string(memory, n) -> String
+            # jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
             # The underlying WasmGC array may have more capacity than n
             # (Julia allocates Memory with minimum size 16), so we must
@@ -1578,7 +1578,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             ctx.last_stmt_was_stub = true
             return b
         elseif name === :jl_pchar_to_string
-            # PURE-325: jl_pchar_to_string(ptr, n) -> String
+            # jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
             # the pointer back to the underlying array, then copy exactly n bytes.
             if length(expr.args) >= 7
@@ -1643,7 +1643,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             end
             return b
         elseif name === :utf8proc_grapheme_break_stateful
-            # PURE-316: utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
+            # utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
             # WT has no utf8proc runtime yet.  Returning a constant here silently
             # corrupted grapheme boundaries, so this remains explicitly unsupported
@@ -1653,7 +1653,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 idx=idx, detail=expr, soundness_fatal=true)
             return b
         elseif name === :jl_ptr_to_array_1d
-            # PURE-324: jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
+            # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
             # The pointer arg traces back through bitcast/getfield(:ptr) to a Memory
             # (= array in WasmGC). We trace the IR to find the original data array,
@@ -1707,7 +1707,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
 
-    # PURE-325: memchr(ptr, byte, count) — scan string array for a byte value.
+    # memchr(ptr, byte, count) — scan string array for a byte value.
     # Used by Base._search for findnext/findfirst on strings.
     # In WasmGC, we scan the array<i32> representation directly.
     # With jl_string_ptr base=1: ptr = 1+i-1 = i (1-based start position).
@@ -1807,7 +1807,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
 
-    # PURE-325: memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
+    # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
     # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
     # In WasmGC, we emit array.copy between the underlying array<i32> representations.
     # Trace: memmove args come from getfield(memoryref, :ptr_or_offset) which is i64.const 0.
@@ -1865,7 +1865,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         dest_info = _trace_memmove_array(dest_ptr_arg, code, ctx)
         src_info = _trace_memmove_array(src_ptr_arg, code, ctx)
 
-        # WBUILD-5401: Fallback for Ryu pattern where pointers come from
+        # Fallback for Ryu pattern where pointers come from
         # bitcast(Ptr{Nothing}, add_ptr(getfield(:mem), offset)) instead of
         # getfield(:ptr_or_offset). In WasmGC, the pointer value IS the offset
         # (base is always 0), so we trace to find the array and use pointer
@@ -1956,7 +1956,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 num!(b, Opcode.I32_SUB)
             end
             # count (convert from bytes to elements)
-            # PURE-9066: memmove passes byte count, but array.copy needs element count.
+            # memmove passes byte count, but array.copy needs element count.
             # Determine element size from the Memory/MemoryRef type parameter.
             _elem_size = 1  # default for UInt8/i8 arrays
             if dest_arr_ssa isa Core.SSAValue
@@ -2004,7 +2004,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
 
-    # PURE-9043: jl_get_current_task → phantom value (no bytecode)
+    # jl_get_current_task → phantom value (no bytecode)
     # Task SSA is used by getfield/setfield for rngState0..3 (Xoshiro256++ RNG)
     # We handle those field accesses as Wasm global reads/writes in compile_call.
     if name === :jl_get_current_task
@@ -2013,7 +2013,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         return b
     end
 
-    # PURE-9042: jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
+    # jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
     # Used by @elapsed and @time for timing.
     if name === :jl_hrtime
         perf_now_idx = ensure_perf_now_import!(ctx.mod)
@@ -2027,7 +2027,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         return b
     end
 
-    # PURE-9065: Base.memhash(ptr, len, seed) → UInt64 string hash
+    # Base.memhash(ptr, len, seed) → UInt64 string hash
     # Used by Dict{String,...} for key hashing. In WasmGC, we hash the byte array
     # directly using FNV-1a instead of going through C memhash.
     if name === :memhash
@@ -2409,7 +2409,7 @@ function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
                 return (arr_ssa !== nothing ? arr_ssa : base_ssa, nothing)
             end
         elseif fn isa GlobalRef && fn.name === :getfield && length(memref_stmt.args) >= 3
-            # PURE-9066: getfield(vector, :ref) — MemoryRef obtained directly from Vector
+            # getfield(vector, :ref) — MemoryRef obtained directly from Vector
             # instead of via memoryrefnew. Common in broadcasting copy paths.
             field_ref = memref_stmt.args[3]
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
@@ -2422,7 +2422,7 @@ function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
             end
         end
     elseif memref_stmt isa Core.PhiNode
-        # WBUILD-3001: PhiNode selecting between MemoryRef branches.
+        # PhiNode selecting between MemoryRef branches.
         # Common in sizehint! where dest ref depends on shrink=true/false path.
         # All phi branches typically reference the same underlying Memory.
         # Trace each branch to find the base Memory (via _resolve_memref_to_array).
@@ -2498,7 +2498,7 @@ end
 """
     _trace_ptr_to_memory_array(ptr_ssa, code)
 
-WBUILD-5401: Trace a pointer SSA back through bitcast/add_ptr/sub_ptr/getfield(:mem)
+Trace a pointer SSA back through bitcast/add_ptr/sub_ptr/getfield(:mem)
 to find the underlying Memory array SSA. Used as fallback for memmove when the pointer
 doesn't come from getfield(:ptr_or_offset) but from add_ptr on a Memory reference.
 

@@ -5,7 +5,7 @@
 # miscompiler — dropped all-but-one phi at diamond merges, gap 1bcb0e7214c3 family,
 # test/fuzz/repro_multivar_phi_merge.jl), is_simple_conditional → generate_if_then_else, and
 # the void-without-loops fast-path → generate_void_flow (whose missing pre-loop phi init was
-# PURE-314; the stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
+# The stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
 
 """
 Stackifier algorithm for complex control flow.
@@ -20,7 +20,7 @@ Reference: https://labs.leaningtech.com/blog/control-flow
 """
 
 """
-PURE-325: Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
+Emit boxing bytecode for a numeric value that needs to be returned as ExternRef.
 Handles the common pattern where a function returns ExternRef (Union type) but the actual
 value is numeric (I32/I64/F32/F64). Boxes the value in a WasmGC struct + extern_convert_any.
 
@@ -657,7 +657,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # append_builder!, so the fragment's REAL stack effect transfers (no declared
         # pushes; the pv_ty===nothing guess that let an invalid module through WT's
         # own validation is structurally impossible now). `temp_map` substitutes
-        # circular-phi temp locals at the plain local.get branches (PURE-1001).
+        # circular-phi temp locals at the plain local.get branches.
         pvb = _ctx_builder(ctx, "compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin
@@ -710,7 +710,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
                 if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
                     if phi_local_wasm_type === I64 && ssa_local_type === I32
-                        # PURE-313: Return i32 local.get — caller handles i64 widening
+                        # Return i32 local.get — caller handles i64 widening
                         local_get!(pvb, get(temp_map, local_idx, local_idx))
                     else
                         # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
@@ -760,7 +760,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             else
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
-                # PURE-6021: Guard against out-of-bounds SSAValue IDs (sentinel values)
+                # Guard against out-of-bounds SSAValue IDs (sentinel values)
                 if val.id < 1 || val.id > length(code)
                     emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
                     return _cpv_ret()
@@ -791,7 +791,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
-                    # PURE-313: i32 → i64 widening for recomputed SSA without local.
+                    # i32 → i64 widening for recomputed SSA without local.
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx, I32)
@@ -830,11 +830,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     # Helper: determine the Wasm type that a phi edge value will produce on the stack
     function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
-        # PURE-3111: Handle literal nothing — compile_value(nothing) emits i32_const 0
+        # Handle literal nothing — compile_value(nothing) emits i32_const 0
         if val === nothing
             return I32
         end
-        # PURE-3111: Handle GlobalRef to nothing (e.g., Core.nothing)
+        # Handle GlobalRef to nothing (e.g., Core.nothing)
         if val isa GlobalRef && val.name === :nothing
             return I32
         end
@@ -860,7 +860,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 return julia_to_wasm_type_concrete(edge_julia_type, ctx)
             end
         elseif val isa Core.Argument
-            # PURE-036ab: Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
+            # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
             # Julia IR uses _1 for function type (not in arg_types), _2 for first arg (arg_types[1]), etc.
             # So arg_types index = val.n - 1 for non-closures.
             arg_types_idx = val.n - 1  # _2 → arg_types[1], _3 → arg_types[2], etc.
@@ -880,10 +880,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa QuoteNode
-            # PURE-036bg: QuoteNode wraps a value - recursively determine its Wasm type
+            # QuoteNode wraps a value - recursively determine its Wasm type
             return get_phi_edge_wasm_type(val.value)
         elseif val isa GlobalRef
-            # PURE-317: Resolve GlobalRef to its actual value and determine its Wasm type.
+            # Resolve GlobalRef to its actual value and determine its Wasm type.
             # Without this, GlobalRef falls to the else branch where typeof(val) is GlobalRef
             # and isstructtype(GlobalRef) is true, causing a false type mismatch that replaces
             # the actual value with i32.const 0 (e.g., EOF_CHAR = Char(0xFFFFFFFF) → i32(-1)
@@ -894,11 +894,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             isdefined(val.mod, val.name) || return nothing
             return get_phi_edge_wasm_type(getfield(val.mod, val.name))
         elseif val isa Char
-            # PURE-317: Char is a 4-byte primitive type, compiled as I32
+            # Char is a 4-byte primitive type, compiled as I32
             return I32
         elseif val isa Type
-            # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
-            # PURE-9063: Use $JlDataType when hierarchy is available
+            # Type{T} values are now represented as DataType struct refs (global.get).
+            # Use $JlDataType when hierarchy is available
             dt_idx = get_datatype_type_idx(ctx.type_registry)
             return ConcreteRef(dt_idx, true)
         else
@@ -968,7 +968,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         dest_start = target_stmt > 0 ? target_stmt : blocks[dest_block].start_idx
         dest_end = blocks[dest_block].end_idx
 
-        # PURE-1001: Detect circular phi references (simultaneous assignment)
+        # Detect circular phi references (simultaneous assignment)
         # When phi A's value reads phi B's local and both are being set on the same edge,
         # we must save old values to temps first to avoid read-after-write corruption.
         # Example: a, b = b, a+b → %17=phi(edge→%19), %18=phi(edge→%17)
@@ -1060,13 +1060,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
-    # PURE-6024 debug: trace function name for debugging.
+    # trace function name for debugging.
     # Ctx has no func_name field — use func_ref (the function object),
     # otherwise WT_DBG_FN can never match and the traces below are unreachable.
     _debug_fn_pattern = OPTIONS[].debug_fn
     _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
     if _debug_stackified
-        @warn "PURE-6024 STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
+        @warn "STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
     end
 
     function emit_duplicated_terminal!(tb::InstrBuilder, target::Int)
@@ -1200,12 +1200,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # Values legitimately flow BETWEEN basic blocks on the wasm stack —
         # the block fragment declares the incoming stack (the merge settles exactly).
         isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))
-        # PURE-7001a: Reset dead code guard at block boundaries. Each non-dead block
+        # Reset dead code guard at block boundaries. Each non-dead block
         # is reachable via a different control flow path, so a stub flag from a previous
         # block must not cascade. Without this, compile_statement emits unreachable on
         # valid fall-through paths after br_if (e.g., _next_token codepoint check).
         ctx.last_stmt_was_stub = false
-        _block_is_dead = false  # PURE-9066: Track dead code within a block
+        _block_is_dead = false  # Track dead code within a block
         for i in block.start_idx:block.end_idx
             # Skip dead statements
             if i in dead_regions
@@ -1214,7 +1214,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if i in boundscheck_jumps
                 continue  # This GotoIfNot always jumps - skip it (handled below)
             end
-            # PURE-9066: Skip statements after unreachable/stub within same block.
+            # Skip statements after unreachable/stub within same block.
             # After throw/error, remaining statements in the block are dead code.
             # Compiling them would place unreachable opcodes in the wrong block.
             if _block_is_dead
@@ -1302,7 +1302,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end
                 end
 
-                # PURE-9066: After unreachable/stub, mark dead code within block.
+                # After unreachable/stub, mark dead code within block.
                 # Previous `break` exited the block loop, causing subsequent dead
                 # statements to be placed in the wrong block. Now we mark dead code
                 # and skip remaining statements with `continue` at the top of the loop.
@@ -1313,8 +1313,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
 
                 if !haskey(ctx.ssa_locals, i)
-                    # PURE-220 (node): skip if the visitor already emitted a DROP.
-                    # The PURE-6006 func_idx-0x1a false positive cannot exist at the ir/ layer.
+                    # Skip if the visitor already emitted a DROP.
+                    # The func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
                     if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
                         if !already_dropped && _stmt_emitted && _stmt_pushed_value
@@ -1455,7 +1455,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 drop!(b)
             end
 
-            # PURE-314: GotoIfNot fall-through phi locals
+            # GotoIfNot fall-through phi locals
             # When condition is TRUE, execution falls through to the next block.
             # The false branch sets phi locals via set_phi_locals_for_edge! above,
             # but the true (fall-through) path never did. Set phi locals for the
@@ -1472,7 +1472,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             dest_block = get(stmt_to_block, term.label, nothing)
             terminator_idx = block.end_idx
 
-            # WBUILD-3001: Resolve through dead boundscheck blocks to find real target.
+            # Resolve through dead boundscheck blocks to find real target.
             # Same resolution as non_trivial_targets computation.
             if dest_block !== nothing && dest_block in dead_blocks
                 dest_block = resolve_through_dead_boundscheck(dest_block)
@@ -1492,7 +1492,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # Forward jump
                 if dest_block in non_trivial_targets
                     local target_label = get_forward_label(dest_block)
-                    # WBUILD-3001: If the br exits ALL open blocks (outermost),
+                    # If the br exits ALL open blocks (outermost),
                     # emit return instead to avoid falling through to unreachable.
                     # The phi locals were just set by set_phi_locals_for_edge!.
                     # Find the destination block's ReturnNode and its phi local.
@@ -1513,7 +1513,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     ret_local = ctx.phi_locals[vid]
                                     break
                                 elseif haskey(ctx.ssa_locals, vid)
-                                    # WBUILD-7000: Only use ssa_local for return optimization
+                                    # Only use ssa_local for return optimization
                                     # if the SSA value is defined OUTSIDE the destination block.
                                     # SSA values defined IN the destination block haven't been
                                     # computed yet (the local is still 0), so we must use br
@@ -1644,7 +1644,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end_block!(b)
     end
 
-    # WBUILD-3001: After all blocks close, control may reach here when a `br`
+    # After all blocks close, control may reach here when a `br`
     # exits the outermost block. For void functions: unreachable is fine.
     # For functions with a return type: emit unreachable (WASM validation uses
     # polymorphic stack after unreachable, so this validates). But we ALSO need

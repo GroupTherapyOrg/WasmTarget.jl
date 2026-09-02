@@ -546,7 +546,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_substr
-        # WBUILD-8001: str_substr intrinsic body not implemented.
+        # str_substr intrinsic body not implemented.
         # The inline version at call sites properly implements this using
         # array.new + array.copy. This path is only hit when str_substr is
         # called as a standalone function (not inlined at call site).
@@ -659,7 +659,7 @@ function _compile_closed_world_plan(functions::Vector;
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
-    # PURE-9026: Create base struct type FIRST — all other structs will be subtypes
+    # Create base struct type FIRST — all other structs will be subtypes
     get_base_struct_type!(mod, type_registry)
 
     # Pre-register import stubs at their import indices in func_registry.
@@ -669,14 +669,14 @@ function _compile_closed_world_plan(functions::Vector;
         register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
     end
 
-    # PURE-325: Pre-register numeric box types for all common numeric Wasm types.
+    # Pre-register numeric box types for all common numeric Wasm types.
     # These are needed when functions with ExternRef return types (heterogeneous Unions)
     # need to return numeric values. Pre-registering avoids compilation order issues
     # where the caller's isa() check is compiled before the callee's box type exists.
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
-    # PURE-9028: Pre-register BoxedNothing type
+    # Pre-register BoxedNothing type
     get_nothing_box_type!(mod, type_registry)
 
     # Normalize input: ensure each entry is (func, arg_types, name)
@@ -732,7 +732,7 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
+    # Scan all functions for println/print/show usage and add IO imports if needed
     needs_io = false
     for (f, arg_types, fname) in normalized
         try
@@ -761,7 +761,7 @@ function _compile_closed_world_plan(functions::Vector;
         clear_io_imports!()
     end
 
-    # PURE-9043: Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
+    # Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
     needs_rng = false
     for (f, arg_types, fname) in normalized
         try
@@ -912,7 +912,7 @@ function _compile_closed_world_plan(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # PURE-9063: Create $JlType hierarchy types FIRST (the closed-world
+    # Create $JlType hierarchy types FIRST (the closed-world
     # collector below registers structs whose DataType-typed fields must resolve to
     # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
     # which the Any-only patch pass below can't fix)
@@ -928,22 +928,22 @@ function _compile_closed_world_plan(functions::Vector;
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
     _reachable = _collect_reachable_ir_types(function_data)
 
-    # PURE-9025: Assign DFS type IDs (the closed world = registered + reachable)
+    # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)
 
-    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
+    # Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
 
-    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
+    # Patch struct types registered before JlType hierarchy existed.
     # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
     # Now that the hierarchy exists, patch them to AnyRef.
     patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
 
-    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
+    # Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # PURE-9065: Pre-create string hash helper function if any function uses memhash.
+    # Pre-create string hash helper function if any function uses memhash.
     # This must happen BEFORE function index assignment, because adding functions during
     # body compilation would shift indices and break cross-function calls.
     needs_string_hash = false
@@ -1017,7 +1017,7 @@ function _compile_closed_world_plan(functions::Vector;
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
-    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
+    n_existing = length(mod.functions)  # includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
@@ -1072,7 +1072,7 @@ function _compile_closed_world_plan(functions::Vector;
 
 
 
-    # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
+    # Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
 
@@ -1094,7 +1094,7 @@ function _compile_closed_world_plan(functions::Vector;
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
 
-        # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
+        # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
         dispatch_dt = nothing
         if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
@@ -1106,7 +1106,7 @@ function _compile_closed_world_plan(functions::Vector;
             # Use the intrinsic body directly
             body, locals = intrinsic_body
         elseif dispatch_dt !== nothing
-            # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
+            # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
             if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
                 # parity(M8.2): the dart virtual call — classId + offset + call_indirect
@@ -1168,20 +1168,20 @@ function _compile_closed_world_plan(functions::Vector;
         add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
-    # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
+    # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
     # This ensures entry.target_idx values (from func_registry) point to correct indices.
     if !isempty(dispatch_registry.tables)
         emit_dispatch_wrappers!(mod, type_registry, dispatch_registry)
     end
 
-    # PURE-9062 Phase 2: Add overlay wrapper functions
+    # Phase 2: Add overlay wrapper functions
 
-    # PURE-4149: Populate DataType/TypeName fields for type constant globals.
+    # Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
 
-    # PURE-9040/9042/9043: Clear module-level state after compilation
+    # Clear module-level state after compilation
     clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
