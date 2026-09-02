@@ -1275,11 +1275,10 @@ caller's builder. Handles patterns like jl_alloc_genericmemory for Vector alloca
 # `nothing` to fall through to the next stage — dart's own nullable-return
 # entry-funnel pattern (intrinsics.dart :607/:685/:1018).
 #
-# A handful of arms keep their direct `name === :sym` / `_fc_sym === :sym`
-# dispatch text below `compile_foreigncall!` instead of living here: several
-# parity_ratchet.jl locks (L42, L44, L46, L47, L92) pin that exact source text
-# as a structural invariant, so folding them into this Dict would break a
-# locked dimension rather than advance one.
+# Every foreigncall symbol WT lowers is registered here; `compile_foreigncall!`
+# below has exactly one consult point (this Dict) and carries no name-keyed
+# arm (L114). parity_ratchet.jl locks L42, L44, L46, L47, L92 pin each entry's
+# registration text as a structural invariant.
 # ============================================================================
 
 function _fc_jl_alloc_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
@@ -2007,54 +2006,9 @@ function _fc_jl_stored_inline!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstr
     return nothing
 end
 
-const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
-    :jl_alloc_genericmemory => _fc_jl_alloc_genericmemory!,
-    :memset => _fc_memset!,
-    :jl_types_equal => _fc_jl_types_equal!,
-    :jl_object_id => _fc_jl_object_id!,
-    :jl_string_to_genericmemory => _fc_jl_string_to_genericmemory!,
-    :jl_alloc_string => _fc_jl_alloc_string!,
-    :jl_string_ptr => _fc_jl_string_ptr!,
-    :jl_symbol_name => _fc_jl_string_ptr!,
-    :strlen => _fc_strlen!,
-    :jl_genericmemory_to_string => _fc_jl_genericmemory_to_string!,
-    :jl_cstr_to_string => _fc_jl_cstr_to_string!,
-    :jl_pchar_to_string => _fc_jl_pchar_to_string!,
-    :utf8proc_grapheme_break_stateful => _fc_utf8proc_grapheme_break_stateful!,
-    :jl_ptr_to_array_1d => _fc_jl_ptr_to_array_1d!,
-    :memchr => _fc_memchr!,
-    :jl_symbol_n => _fc_jl_symbol_n!,
-    :jl_get_current_task => _fc_jl_get_current_task!,
-    :jl_hrtime => _fc_jl_hrtime!,
-    :memhash => _fc_memhash!,
-    :jl_genericmemory_copyto => _fc_jl_genericmemory_copyto!,
-    :jl_type_intersection => _fc_jl_type_intersection!,
-    :jl_value_ptr => _fc_jl_value_ptr!,
-    :jl_get_tls_world_age => _fc_jl_get_tls_world_age!,
-    :jl_is_const => _fc_jl_is_const!,
-    :jl_is_binding_deprecated => _fc_jl_is_binding_deprecated!,
-    :jl_genericmemory_owner => _fc_jl_genericmemory_owner!,
-    :jl_stored_inline => _fc_jl_stored_inline!,
-)
-
-function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-
-    # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
-    if isempty(expr.args)
-        record_unsupported!(ctx, :unsupported_method, "foreigncall with no target symbol"; idx=idx, detail=expr)
-        unreachable!(b)  # structural trap after recorded unsupported
-        ctx.last_stmt_was_stub = true
-        return b
-    end
-    name = extract_foreigncall_name(expr.args[1])
-
-    handler = get(FOREIGN_LOWERINGS, name, nothing)
-    if handler !== nothing
-        result = handler(b, expr, idx, ctx)
-        result !== nothing && return result
-    end
-
-    if name in (:jl_is_operator, :jl_is_syntactic_operator) && length(expr.args) >= 6
+function _fc_operator_flags!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
+    name = extract_foreigncall_name(first(expr.args))
             traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
             if traced !== nothing
                 source, _ = traced
@@ -2081,7 +2035,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                     return b
                 end
             end
-        elseif name === :jl_id_start_char
+    return nothing
+end
+
+function _fc_jl_id_start_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
             emit_value!(b, expr.args[6], ctx, I32)
@@ -2090,7 +2047,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
-        elseif name === :jl_id_char
+end
+
+function _fc_jl_id_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
                 "jl_id_char missing codepoint"; idx=idx, detail=expr)
             emit_value!(b, expr.args[6], ctx, I32)
@@ -2099,14 +2058,15 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
-    end
+end
 
+function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
     # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
     # In WasmGC, we emit array.copy between the underlying array<i32> representations.
     # Trace: memmove args come from getfield(memoryref, :ptr_or_offset) which is i64.const 0.
     # The real arrays are found by tracing back through memoryrefnew to the backing Memory.
-    if (name === :memmove || name === :memcpy) && length(expr.args) >= 8
+    length(expr.args) >= 8 || return nothing
         dest_ptr_arg = expr.args[6]   # Ptr{Nothing} — traces to dest MemoryRef
         src_ptr_arg = expr.args[7]    # Ptr{Nothing} — traces to src MemoryRef
         nbytes_arg = expr.args[8]     # UInt64 — byte count
@@ -2285,23 +2245,30 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             emit_value!(b, dest_ptr_arg, ctx, I64)
             return b
         end
-    end
+    return nothing
+end
 
-    local _fc_sym = name
-    if _fc_sym === :jl_module_parent && length(expr.args) >= 6
+function _fc_jl_module_parent!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
         module_info = ctx.type_registry.structs[Module]
         emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(3), AnyRef)
         ref_cast!(b, Int64(module_info.wasm_type_idx), false)
         return b
-    elseif _fc_sym === :jl_module_name && length(expr.args) >= 6
+end
+
+function _fc_jl_module_name!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
         module_info = ctx.type_registry.structs[Module]
         string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(2),
                     ConcreteRef(UInt32(string_idx), true))
         return b
-    elseif _fc_sym === :jl_type_unionall && length(expr.args) >= 6
+end
+
+function _fc_jl_type_unionall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
         # Julia 1.13 lowers `x isa UnionAll` to this runtime predicate on
         # platforms where inference cannot prove x. The target already has one
         # canonical $JlUnionAll subtype in the JlType hierarchy, so the exact
@@ -2311,19 +2278,83 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         emit_value!(b, expr.args[6], ctx, AnyRef)
         ref_test!(b, Int64(unionall_idx), false)
         return b
-    elseif _fc_sym === :utf8proc_charwidth && length(expr.args) >= 6
+end
+
+function _fc_utf8proc_charwidth!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
         emit_value!(b, expr.args[6], ctx, I32)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
         call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
         i32_const!(b, 5); num!(b, Opcode.I32_SHR_U)
         i32_const!(b, 0x03); num!(b, Opcode.I32_AND)
         return b
-    elseif _fc_sym === :utf8proc_category && length(expr.args) >= 6
+end
+
+function _fc_utf8proc_category!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
         emit_value!(b, expr.args[6], ctx, I32)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
         call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
         i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
         return b
+end
+
+const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
+    :jl_alloc_genericmemory => _fc_jl_alloc_genericmemory!,
+    :memset => _fc_memset!,
+    :jl_types_equal => _fc_jl_types_equal!,
+    :jl_object_id => _fc_jl_object_id!,
+    :jl_string_to_genericmemory => _fc_jl_string_to_genericmemory!,
+    :jl_alloc_string => _fc_jl_alloc_string!,
+    :jl_string_ptr => _fc_jl_string_ptr!,
+    :jl_symbol_name => _fc_jl_string_ptr!,
+    :strlen => _fc_strlen!,
+    :jl_genericmemory_to_string => _fc_jl_genericmemory_to_string!,
+    :jl_cstr_to_string => _fc_jl_cstr_to_string!,
+    :jl_pchar_to_string => _fc_jl_pchar_to_string!,
+    :utf8proc_grapheme_break_stateful => _fc_utf8proc_grapheme_break_stateful!,
+    :jl_ptr_to_array_1d => _fc_jl_ptr_to_array_1d!,
+    :memchr => _fc_memchr!,
+    :jl_symbol_n => _fc_jl_symbol_n!,
+    :jl_get_current_task => _fc_jl_get_current_task!,
+    :jl_hrtime => _fc_jl_hrtime!,
+    :memhash => _fc_memhash!,
+    :jl_genericmemory_copyto => _fc_jl_genericmemory_copyto!,
+    :jl_type_intersection => _fc_jl_type_intersection!,
+    :jl_value_ptr => _fc_jl_value_ptr!,
+    :jl_get_tls_world_age => _fc_jl_get_tls_world_age!,
+    :jl_is_const => _fc_jl_is_const!,
+    :jl_is_binding_deprecated => _fc_jl_is_binding_deprecated!,
+    :jl_genericmemory_owner => _fc_jl_genericmemory_owner!,
+    :jl_stored_inline => _fc_jl_stored_inline!,
+    :jl_is_operator => _fc_operator_flags!,
+    :jl_is_syntactic_operator => _fc_operator_flags!,
+    :jl_id_start_char => _fc_jl_id_start_char!,
+    :jl_id_char => _fc_jl_id_char!,
+    :memmove => _fc_memmove!,
+    :memcpy => _fc_memmove!,
+    :jl_module_parent => _fc_jl_module_parent!,
+    :jl_module_name => _fc_jl_module_name!,
+    :jl_type_unionall => _fc_jl_type_unionall!,
+    :utf8proc_charwidth => _fc_utf8proc_charwidth!,
+    :utf8proc_category => _fc_utf8proc_category!,
+)
+
+function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+
+    # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
+    if isempty(expr.args)
+        record_unsupported!(ctx, :unsupported_method, "foreigncall with no target symbol"; idx=idx, detail=expr)
+        unreachable!(b)  # structural trap after recorded unsupported
+        ctx.last_stmt_was_stub = true
+        return b
+    end
+    name = extract_foreigncall_name(expr.args[1])
+
+    handler = get(FOREIGN_LOWERINGS, name, nothing)
+    if handler !== nothing
+        result = handler(b, expr, idx, ctx)
+        result !== nothing && return result
     end
 
     # Unknown foreigncall: dart-style loud unsupported path. It is never valid to
