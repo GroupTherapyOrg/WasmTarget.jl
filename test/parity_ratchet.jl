@@ -368,13 +368,13 @@ const LOCKS = [
             count(p -> occursin(p, trim_src), forbidden) +
                 count(p -> !occursin(p, trim_src), required)
         end),
-    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and collection world instead of a generic trap",
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and the module's one world age (WASM_WORLD_AGE — never the host counter) instead of a generic trap",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
                         "args_tuple_type = Tuple{arg_julia_types...}",
-                        "Base.get_world_counter()", "_wt_exact_kwerr_exception"]
+                        "Int64(WASM_WORLD_AGE)", "_wt_exact_kwerr_exception"]
             count(p -> !occursin(p, invoke_src * test_src), required)
         end),
     "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
@@ -1009,7 +1009,7 @@ const LOCKS = [
                         "for (container_arg, container_type) in zip(container_args, container_types)",
                         "_emit_apply_method_error!",
                         "MethodError(f, (), world)",
-                        "Base.get_world_counter()",
+                        "Int64(WASM_WORLD_AGE)",
                         "_get_binary_reduce_opcode(target_value, elem_type)",
                         "func === (+)",
                         "local_set!(bld, has_value)"]

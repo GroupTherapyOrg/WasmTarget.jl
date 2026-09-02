@@ -5469,7 +5469,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     emit_value!(bld, target_value, ctx, AnyRef; from_julia=typeof(target_value))
     emit_struct_prefix!(bld, ctx.type_registry, Tuple{}, args_info)
     struct_new!(bld, args_info.wasm_type_idx)
-    i64_const!(bld, reinterpret(Int64, UInt64(Base.get_world_counter())))
+    i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
     global_set!(bld, exn_global)
     global_get!(bld, exn_global, AnyRef)

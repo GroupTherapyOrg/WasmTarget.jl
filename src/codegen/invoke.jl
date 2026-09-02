@@ -2136,7 +2136,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 from_julia=isconcretetype(jt) ? jt : nothing)
                 end
                 struct_new!(bkw, args_info.wasm_type_idx)
-                i64_const!(bkw, reinterpret(Int64, UInt64(Base.get_world_counter())))
+                i64_const!(bkw, Int64(WASM_WORLD_AGE))
                 struct_new!(bkw, error_info.wasm_type_idx)
                 global_set!(bkw, exn_global)
                 global_get!(bkw, exn_global, AnyRef)

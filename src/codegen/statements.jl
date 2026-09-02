@@ -2140,9 +2140,7 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         i64_const!(b, 0)
         return b
     elseif _fc_sym === :jl_get_tls_world_age
-        # A Wasm module is one immutable closed-world snapshot. Its TLS world
-        # age is therefore the exact collection world captured at compilation.
-        i64_const!(b, reinterpret(Int64, UInt64(Base.get_world_counter())))
+        i64_const!(b, Int64(WASM_WORLD_AGE))
         return b
     elseif _fc_sym === :jl_is_const && length(expr.args) >= 7
         module_owner = _trace_field_owner(expr.args[6], :module, ctx)
