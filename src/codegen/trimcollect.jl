@@ -529,6 +529,9 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
     return out
 end
 
+# formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
+# below always collects exactly the methods reachable from the roots, never stops
+# early, and never silently drops a reachable method whose specialization fails.
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
