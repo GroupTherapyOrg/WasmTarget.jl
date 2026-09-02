@@ -5135,7 +5135,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if length(args) == 2 && (_conc1 === String || _conc1 === Symbol) &&
            (_conc2 === String || _conc2 === Symbol)
             fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-            append_builder!(fb, compile_string_concat_b(args[1], args[2], ctx))
+            append_builder!(fb, compile_string_concat_many_b([args[1], args[2]], ctx))
         elseif arg_type === Float32
             _op1!(Opcode.F32_MUL)
         elseif arg_type === Float64
