@@ -237,6 +237,27 @@ Exit: downstream CI green; ExplicitImports green.
    `@test occursin("<exact blocker>", sprint(showerror, err))` — if the edge moves, the test goes
    red and the record is updated deliberately.
 
+
+### Phases 3–8 — results (2026-09-02)
+
+| Phase | Outcome | Locks / ratchets |
+|---|---|---|
+| 3 numeric registry | `INTRINSIC_BINOPS` diagonal completed (`e1483400`), `INTRINSIC_UNOPS` + result map (`416090ac` — which also fixed the Float32 `copysign` row the arm deletion had exposed: "dead below the table" needs a row for every width, and the corpus now fingerprints every op×width), integer negation as dart does it (`dd4a6085`), the Julia-only tier `julia_numeric_tier.jl` — Int128 registry, checked overflow, shifts, fma, bswap/flipsign (`883203f0`, `20a82c9e`), the callback-shaped table carrying the div/rem guard (`1cb2ddb1`), one narrow-width normaliser and the conversions registry (`64df7f97`) | R22 35 → **0 → L104** (per-symbol exclusivity: a table key can never have a ladder arm anywhere in codegen) |
+| 4 duplication | one Julia-type → wasm-type chain, dart `translateStorageType` with an unbox flag (`79d74456`); the probe lane made a pure function of codegen — `nameof` gensyms had leaked into export names (`70afbf62`); `FunctionRegistry` anchored to `FunctionCollector`, constants to `constants.dart` with one fallback tail (`23f61196`); Int128 and the Vector size tuple intern through `ensure_constant_global!` (`4bf09c1b`) | R5 82 → 81, R14 12 → **10** |
+| 5 strings, then registries | the seven bespoke string builders deleted — the one code generator compiles the `stringops.jl` bodies (`898c373b`); Core/Base builtins through an identity-keyed `BUILTIN_LOWERINGS` (`86e4f70c`); invoke intrinsics through the Method-keyed `INVOKE_INTRINSICS` — the spike's verdict was that hash/repeat/lpad/rpad need no intrinsic at all (`f1baebd2`); foreigncalls through the symbol-keyed `FOREIGN_LOWERINGS`, every unknown IR head rejecting loudly (`ba4b66d4`) | R19 123 → **31**, R20 54 → **32** (residue in flight), R21 25 → **5** (in flight), R3 127 → 96, R7 109 → 62, R27 94 → 55; **L113** (registry consulted before any name-keyed arm — the ConsultChain model's finding) |
+| 6 diagnostics | `setfield!` of a GlobalRef-aliased `nothing` into a concrete-ref field root-fixed (the MOI crash was a coercion-funnel gap, not the hypothesised layout); `eval`/`readline` classify at the boundary; ten negative controls (`b3e101a7`) | `test/capability_negative_controls.jl` |
+| 7 host boundary | `translate_external_type` (dart `translateExternalType`, total, widening to anyref) and the import-stub signature check in the closed-world plan (`4f6666a5`); the framework-host builder surface declared `public` (`bc37f374`) | `test/host_boundary_types.jl` |
+| 8 canaries | the capability trip-wires; the SciML surface stayed on the existing `WasmTargetSimpleDiffEqExt` (SimpleDiffEq + SciMLBase + DiffEqBase keyed) — measured as sufficient, so no new ext was cut | — |
+
+Found and root-fixed along the way (each with its own narrative in the log): class ids depended
+on `Dict` hash order (`9bc3d859`, **L112**); a Dict constant serialised uninitialised host memory
+— heap pointers — for its unoccupied slots, and `:new(Dict)` ignored its arguments so a copied
+constant lost its entries on insert (`4bf09c1b`); the host's world counter was baked into
+binaries (`4a823f9f`, one `WASM_WORLD_AGE`); the stackifier declared everything between an
+`@inbounds` jump and its target dead, which dropped the live loop of `reduce(max, 1:n)` on Julia
+1.13 (`b9f4d229`, dead = unreachable in the folded CFG, **L89 re-pinned**); CI had never run the
+smoke lane, which is why that miscompile was invisible — it runs it now.
+
 ### Phase 9 — Close
 
 Promote every ratchet at 0 to a lock; refresh `dev/PARITY_MASTER.md`'s audit stamp and the changed
