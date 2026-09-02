@@ -178,12 +178,12 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
             return cur
         elseif st isa Expr && st.head === :call && length(st.args) >= 2
             cf = st.args[1]
-            cfn = cf isa GlobalRef ? cf.name : cf
-            if cfn === :bitcast
+            call_name = cf isa GlobalRef ? cf.name : cf
+            if call_name === :bitcast
                 cur = st.args[3]
-            elseif cfn === :add_ptr || cfn === :sub_ptr
+            elseif call_name === :add_ptr || call_name === :sub_ptr
                 cur = st.args[2]
-            elseif cfn === :memorynew
+            elseif call_name === :memorynew
                 # P4-stdlib: pointer into a freshly-allocated Memory{T} —
                 # Memory compiles DIRECTLY as a wasm array; valid terminal
                 # (callers use _emit_backing_array! which skips the Vector
@@ -192,7 +192,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                 local _mn_el = _mn_t isa DataType && length(_mn_t.parameters) >= 2 ? _mn_t.parameters[2] : nothing
                 _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
                 return cur
-            elseif cfn === :memoryrefnew
+            elseif call_name === :memoryrefnew
                 # The MemoryRef value itself is the runtime owner. Keeping it as
                 # the terminal preserves resize/copy phis that legitimately select
                 # different allocations; following into one constructor arm would
@@ -203,7 +203,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                                (_mr_t isa DataType && !isempty(_mr_t.parameters) ? _mr_t.parameters[1] : nothing)
                 _mr_el in eltypes || return _fail("memoryrefnew-elty: $_mr_t", st)
                 return cur
-            elseif cfn === :getfield && length(st.args) >= 3
+            elseif call_name === :getfield && length(st.args) >= 3
                 fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
                 if fld === :ptr_or_offset || fld === :ptr
                     owner = st.args[2]
@@ -282,7 +282,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                     return _fail("getfield-fld=$fld", st)
                 end
             else
-                return _fail("call-fn=$cfn", st)
+                return _fail("call-fn=$call_name", st)
             end
         else
             return _fail("stmt-kind", st)
@@ -541,6 +541,17 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
             # GC preservation end — no-op in WasmGC
         elseif stmt.head === :loopinfo
             # Loop optimization hint (e.g., @simd) — no-op in Wasm
+        else
+            # Every other Expr head (e.g. :splatnew, :copyast) has zero lowering.
+            # Falling through silently here would leave `stmt_bytes` empty and
+            # this statement's SSA local unstored — a silently WRONG module,
+            # not a compile failure. Reject loudly instead (dart's structured
+            # DiagnosticReporter shape; L8 "no silent traps").
+            record_unsupported!(ctx, :ir_node, "IR head `:$(stmt.head)` has no lowering";
+                                idx=idx, detail=stmt)
+            unreachable!(_sf)  # structural trap after recorded unsupported
+            stmt_bytes = builder_code(_sf)
+            ctx.last_stmt_was_stub = true
         end
 
         # The fragment's tracked stack is the only store contract. Merge it
@@ -1229,19 +1240,23 @@ end
 Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
-function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+# ============================================================================
+# Foreigncall lowering registry — parity(functions.dart:90-189 FunctionCollector):
+# dart resolves wasm:import/wasm:export externals by (module, name) STRING
+# identity; a foreigncall's C symbol IS that identity here (unlike a Julia
+# Method, there is no dispatch ambiguity to preserve), so a Symbol-keyed
+# registry is the faithful shape. Each entry returns the builder on success or
+# `nothing` to fall through to the next stage — dart's own nullable-return
+# entry-funnel pattern (intrinsics.dart :607/:685/:1018).
+#
+# A handful of arms keep their direct `name === :sym` / `_fc_sym === :sym`
+# dispatch text below `compile_foreigncall!` instead of living here: several
+# parity_ratchet.jl locks (L42, L44, L46, L47, L92) pin that exact source text
+# as a structural invariant, so folding them into this Dict would break a
+# locked dimension rather than advance one.
+# ============================================================================
 
-    # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
-    # For jl_alloc_genericmemory:
-    #   args[1] = :(:jl_alloc_genericmemory)
-    #   args[2] = return type (e.g., Ref{Memory{Int32}})
-    #   args[7] = element type (e.g., Memory{Int32})
-    #   args[8] = length
-
-    if length(expr.args) >= 1
-        name = extract_foreigncall_name(expr.args[1])
-
-        if name === :jl_alloc_genericmemory
+function _fc_jl_alloc_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # Extract element type from return type
             # args[2] is like Ref{Memory{Int32}}
             # args[7] is Memory{Int32}
@@ -1300,7 +1315,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             array_new_default!(b, arr_type_idx)
 
             return b
-        elseif name === :memset
+end
+
+function _fc_memset!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
             # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
@@ -1325,7 +1342,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                             static_wasm_type(expr.args[6], ctx))
             end
             return b
-        elseif name === :jl_types_equal
+end
+
+function _fc_jl_types_equal!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
             # compile-time type literals, fold to a constant (gap 01c21040d51f:
@@ -1341,7 +1360,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 end
             end
             # Non-literal args: fall through to the unknown-foreigncall stub below
-        elseif name === :jl_object_id
+    return nothing
+end
+
+function _fc_jl_object_id!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
             # assign a non-zero module-local identity on first observation.
             local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
@@ -1385,7 +1407,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b
-        elseif name === :jl_string_to_genericmemory
+end
+
+function _fc_jl_string_to_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
             # So this is essentially just passing through the underlying array
@@ -1399,7 +1423,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             end
 
             return b
-        elseif name === :jl_alloc_string
+end
+
+function _fc_jl_alloc_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
             # Create a zero-filled array of the requested size.
@@ -1419,7 +1445,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             array_new_default!(b, str_arr_type)
             emit_string_wrap!(b, ctx)   # parity(constants.dart:872 visitStringConstant): a String is classed from birth
             return b
-        elseif name === :jl_string_ptr || name === :jl_symbol_name
+end
+
+function _fc_jl_string_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
             # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
@@ -1428,7 +1456,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
             i64_const!(b, 1)
             return b
-        elseif name === :strlen && length(expr.args) >= 6
+end
+
+function _fc_strlen!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
             traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
             if traced !== nothing
                 source, _ = traced
@@ -1438,65 +1469,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 julia_to_wasm_type(expr.args[2]) === I64 && widen_length_to_i64!(b)
                 return b
             end
-        elseif name in (:jl_is_operator, :jl_is_syntactic_operator) && length(expr.args) >= 6
-            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
-            if traced !== nothing
-                source, _ = traced
-                bit = name === :jl_is_operator ? Int32(0x01) : Int32(0x02)
-                literal = source isa QuoteNode ? source.value : source
-                if literal isa Symbol || literal isa AbstractString
-                    i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
-                    return b
-                end
-                if get_ssa_type(ctx, source) === Symbol
-                    string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(b, source, ctx, ConcreteRef(UInt32(string_idx), true))
-                    struct_get!(b, string_idx, UInt32(3), I32)
-                    local status_local = allocate_local!(ctx, I32)
-                    local_tee!(b, status_local)
-                    i32_const!(b, -1); num!(b, Opcode.I32_EQ)
-                    if_!(b, I32)
-                    unreachable!(b)  # structural trap: dynamically-created Symbol lacks operator metadata
-                    else_!(b)
-                    local_get!(b, status_local)
-                    i32_const!(b, bit); num!(b, Opcode.I32_AND)
-                    i32_const!(b, bit); num!(b, Opcode.I32_EQ)
-                    end_block!(b)
-                    return b
-                end
-            end
-        elseif name === :jl_id_start_char
-            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
-                "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
-            emit_value!(b, expr.args[6], ctx, I32)
-            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
-            i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
-            i32_const!(b, 1); num!(b, Opcode.I32_AND)
-            return b
-        elseif name === :jl_id_char
-            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
-                "jl_id_char missing codepoint"; idx=idx, detail=expr)
-            emit_value!(b, expr.args[6], ctx, I32)
-            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
-            i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
-            i32_const!(b, 1); num!(b, Opcode.I32_AND)
-            return b
-        elseif name === :jl_string_to_genericmemory
-            # jl_string_to_genericmemory(s::String) -> Memory{UInt8}
-            # Converts a String's underlying bytes to a Memory{UInt8}.
-            # In WasmGC, both String and Memory{UInt8} are represented as array<i32>,
-            # so this is a no-op: just return the string argument itself.
-            # For ASCII/UTF-8 source code, the codepoint values equal the byte values.
-            if length(expr.args) >= 6
-                str_arg = expr.args[6]
-                # parity(translator.dart:1597 convertType): the classed string → its DATA array (the funnel adjusts)
-                emit_value!(b, str_arg, ctx,
-                            ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-            end
-            return b
-        elseif name === :jl_genericmemory_to_string
+    return nothing
+end
+
+function _fc_jl_genericmemory_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
             # The underlying WasmGC array may have more capacity than n
@@ -1542,7 +1518,10 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 emit_string_wrap!(b, ctx)
             end
             return b
-        elseif name === :jl_cstr_to_string && length(expr.args) >= 6
+end
+
+function _fc_jl_cstr_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
             traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
             if traced !== nothing
                 source, _ = traced
@@ -1556,7 +1535,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b
-        elseif name === :jl_pchar_to_string
+end
+
+function _fc_jl_pchar_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
             # the pointer back to the underlying array, then copy exactly n bytes.
@@ -1621,7 +1602,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 ctx.last_stmt_was_stub = true
             end
             return b
-        elseif name === :utf8proc_grapheme_break_stateful
+end
+
+function _fc_utf8proc_grapheme_break_stateful!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
             # WT has no utf8proc runtime yet.  Returning a constant here silently
@@ -1631,7 +1614,9 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                 "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime";
                 idx=idx, detail=expr, soundness_fatal=true)
             return b
-        elseif name === :jl_ptr_to_array_1d
+end
+
+function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
             # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
             # The pointer arg traces back through bitcast/getfield(:ptr) to a Memory
@@ -1683,15 +1668,11 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
                     return b
                 end
             end
-        end
-    end
+    return nothing
+end
 
-    # memchr(ptr, byte, count) — scan string array for a byte value.
-    # Used by Base._search for findnext/findfirst on strings.
-    # In WasmGC, we scan the array<i32> representation directly.
-    # With jl_string_ptr base=1: ptr = 1+i-1 = i (1-based start position).
-    # memchr returns the 1-based "pointer" (base + array_index) if found, or 0 (C_NULL) if not.
-    if name === :memchr && length(expr.args) >= 8
+function _fc_memchr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 8 || return nothing
         ptr_arg = expr.args[6]   # Ptr{UInt8} — traces back to string + offset
         byte_arg = expr.args[7]  # Int32 — the byte to search for
         count_arg = expr.args[8] # UInt64 — number of bytes to search
@@ -1784,6 +1765,314 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             local_get!(b, result_local)
             return b
         end
+    return nothing
+end
+
+function _fc_jl_symbol_n!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+        # jl_symbol_n(ptr::Ptr{UInt8}, len::Int64) -> Ref{Symbol}
+        # In WasmGC, Symbol is represented as a string byte array (same as String).
+        # The GC root argument (expr.args[8]) is the original String — just return it.
+        if length(expr.args) >= 8
+            gc_root = expr.args[8]
+            emit_value!(b, gc_root, ctx, static_wasm_type(gc_root, ctx))
+            return b
+        end
+    return nothing
+end
+
+function _fc_jl_get_current_task!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    # The Task value is phantom (no bytecode): sound ONLY for rand()'s
+    # rngState field pattern — any other consumer rejects loudly.
+    if _task_ssa_used_unsafely(ctx.code_info.code, idx)
+        record_unsupported!(ctx, :unsupported_method,
+            "current_task() (Task identity / scheduler state) used outside the rand() RNG-state field pattern";
+            idx=idx, detail=expr, soundness_fatal=true)
+        ctx.last_stmt_was_stub = true
+        return b
+    end
+    return b
+end
+
+function _fc_jl_hrtime!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+        perf_now_idx = ensure_perf_now_import!(ctx.mod)
+        call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
+        # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
+        f64_const!(b, 1.0e6)
+        num!(b, Opcode.F64_MUL)
+        # Convert f64 → i64 (unsigned — trunc_sat to handle large values).
+        # Typed builder emitter (was a raw 0xFC 0x07 splice — F17 retired it).
+        trunc_sat!(b, Opcode.I64_TRUNC_SAT_F64_U)
+        return b
+end
+
+function _fc_memhash!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+        # Trace the pointer argument back to jl_string_ptr to find the original string
+        str_arg = nothing
+        if length(expr.args) >= 6
+            ptr_arg = expr.args[6]
+            if ptr_arg isa Core.SSAValue
+                ptr_stmt = ctx.code_info.code[ptr_arg.id]
+                if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
+                    ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
+                    if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
+                        str_arg = ptr_stmt.args[6]  # The original string argument
+                    end
+                end
+            end
+        end
+
+        if str_arg !== nothing
+            # Get or create the string hash helper function
+            hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
+            # Push args: string array ref, length (i64), seed (i32)
+            emit_value!(b, str_arg, ctx,
+                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(translator.dart:1597 convertType): funnel → DATA
+            if length(expr.args) >= 7
+                len_arg = expr.args[7]
+                emit_value!(b, len_arg, ctx, I64)  # length as i64
+            else
+                i64_const!(b, 0)
+            end
+            if length(expr.args) >= 8
+                seed_arg = expr.args[8]
+                # seed may be i64 from SSA — wrap to i32
+                seed_type = infer_value_type(seed_arg, ctx)
+                emit_value!(b, seed_arg, ctx,
+                            (seed_type === UInt64 || seed_type === Int64 || seed_type === Int) ? I64 : I32)
+                if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
+                    num!(b, Opcode.I32_WRAP_I64)
+                end
+            else
+                i32_const!(b, 0)
+            end
+            call!(b, hash_func_idx, WasmValType[], WasmValType[I64])
+            return b
+        end
+        # If we can't trace the string, fall through to unreachable
+    return nothing
+end
+
+function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 10 || return nothing
+        local _gmc_mt = infer_value_type(expr.args[6], ctx)
+        local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
+        if _gmc_te isa DataType && isprimitivetype(_gmc_te) && sizeof(_gmc_te) in (1, 2, 4, 8) &&
+           infer_value_type(expr.args[8], ctx) === _gmc_mt
+            local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
+            local _gmc_sh = trailing_zeros(sizeof(_gmc_te))
+            local _gmc_off = a -> begin
+                emit_value!(b, a, ctx, I64)
+                num!(b, Opcode.I32_WRAP_I64)
+                if _gmc_sh > 0
+                    i32_const!(b, Int64(_gmc_sh))
+                    num!(b, Opcode.I32_SHR_U)
+                end
+            end
+            emit_value!(b, expr.args[6], ctx, ConcreteRef(UInt32(_gmc_arr), true))
+            _gmc_off(expr.args[7])
+            emit_value!(b, expr.args[8], ctx, ConcreteRef(UInt32(_gmc_arr), true))
+            _gmc_off(expr.args[9])
+            local _gmc_nt = infer_value_type(expr.args[10], ctx)
+            emit_value!(b, expr.args[10], ctx,
+                        _gmc_nt in (Int64, UInt64, Int) ? I64 : I32)
+            if _gmc_nt in (Int64, UInt64, Int)
+                num!(b, Opcode.I32_WRAP_I64)
+            end
+            array_copy!(b, _gmc_arr, _gmc_arr)
+            return b   # Cvoid — no value
+        end
+    return nothing
+end
+
+function _fc_jl_type_intersection!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 7 || return nothing
+        # P4-stdlib (Random hash_seed): dispatch guards compare
+        # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
+        # the host and emit the resulting type constant (NOT a stub: the
+        # stub flag dead-coded the live loop-exit condition that follows).
+        local _ti_a = expr.args[6]
+        local _ti_b = expr.args[7]
+        _ti_a isa QuoteNode && (_ti_a = _ti_a.value)
+        _ti_b isa QuoteNode && (_ti_b = _ti_b.value)
+        if _ti_a isa GlobalRef
+            _ti_a = try getfield(_ti_a.mod, _ti_a.name) catch; _ti_a end
+        end
+        if _ti_b isa GlobalRef
+            _ti_b = try getfield(_ti_b.mod, _ti_b.name) catch; _ti_b end
+        end
+        if _ti_a isa Type && _ti_b isa Type
+            local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
+            if _ti_r !== nothing
+                emit_value!(b, _ti_r, ctx, AnyRef; from_julia=Type{_ti_r})
+                return b
+            end
+        end
+    return nothing
+end
+
+function _fc_jl_value_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+        # Internal pointer_from_objref is representable only when its entire use
+        # graph stays inside the storage-relative pointer algebra proved above.
+        # The backing storage is recovered by the consuming array operation, and
+        # zero is then the exact relative offset of the object's first byte.
+        _storage_relative_pointer_is_closed(ctx, idx) || begin
+            record_unsupported!(ctx, :unsupported_method,
+                "jl_value_ptr escapes storage-relative WasmGC operations";
+                idx=idx, detail=expr, soundness_fatal=true)
+            ctx.last_stmt_was_stub = true
+            return b
+        end
+        i64_const!(b, 0)
+        return b
+end
+
+function _fc_jl_get_tls_world_age!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    i64_const!(b, Int64(WASM_WORLD_AGE))
+    return b
+end
+
+function _fc_jl_is_const!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 7 || return nothing
+        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
+        name_owner = _trace_field_owner(expr.args[7], :singletonname, ctx)
+        if module_owner !== nothing && isequal(module_owner, name_owner)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            emit_value!(b, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+            struct_get!(b, tn_idx, UInt32(7), I32)
+            return b
+        end
+    return nothing
+end
+
+function _fc_jl_is_binding_deprecated!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 7 || return nothing
+        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
+        symbol_owner = _trace_typename_symbol_owner(expr.args[7], ctx)
+        if module_owner !== nothing && isequal(module_owner, symbol_owner)
+            emit_typename_symbol_metadata!(b, expr.args[7], module_owner,
+                                           UInt32(11), UInt32(12), ctx)
+            return b
+        end
+    return nothing
+end
+
+function _fc_jl_genericmemory_owner!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
+        # Julia's GenericMemory owner is the memory allocation itself. Memory is
+        # represented directly by its non-null WasmGC array, so ownership is an
+        # identity operation widened to the foreigncall's `Any` result.
+        emit_value!(b, expr.args[6], ctx, AnyRef)
+        return b
+end
+
+function _fc_jl_stored_inline!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    length(expr.args) >= 6 || return nothing
+        # datatype_storedinline(T) — pure layout predicate; fold when the
+        # type argument is a compile-time constant.
+        local _fc_t = expr.args[6]
+        _fc_t isa QuoteNode && (_fc_t = _fc_t.value)
+        if _fc_t isa GlobalRef
+            _fc_t = try getfield(_fc_t.mod, _fc_t.name) catch; _fc_t end
+        end
+        if _fc_t isa Type
+            i32_const!(b, (try Base.allocatedinline(_fc_t) catch; false end) ? 1 : 0)
+            return b
+        end
+    return nothing
+end
+
+const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
+    :jl_alloc_genericmemory => _fc_jl_alloc_genericmemory!,
+    :memset => _fc_memset!,
+    :jl_types_equal => _fc_jl_types_equal!,
+    :jl_object_id => _fc_jl_object_id!,
+    :jl_string_to_genericmemory => _fc_jl_string_to_genericmemory!,
+    :jl_alloc_string => _fc_jl_alloc_string!,
+    :jl_string_ptr => _fc_jl_string_ptr!,
+    :jl_symbol_name => _fc_jl_string_ptr!,
+    :strlen => _fc_strlen!,
+    :jl_genericmemory_to_string => _fc_jl_genericmemory_to_string!,
+    :jl_cstr_to_string => _fc_jl_cstr_to_string!,
+    :jl_pchar_to_string => _fc_jl_pchar_to_string!,
+    :utf8proc_grapheme_break_stateful => _fc_utf8proc_grapheme_break_stateful!,
+    :jl_ptr_to_array_1d => _fc_jl_ptr_to_array_1d!,
+    :memchr => _fc_memchr!,
+    :jl_symbol_n => _fc_jl_symbol_n!,
+    :jl_get_current_task => _fc_jl_get_current_task!,
+    :jl_hrtime => _fc_jl_hrtime!,
+    :memhash => _fc_memhash!,
+    :jl_genericmemory_copyto => _fc_jl_genericmemory_copyto!,
+    :jl_type_intersection => _fc_jl_type_intersection!,
+    :jl_value_ptr => _fc_jl_value_ptr!,
+    :jl_get_tls_world_age => _fc_jl_get_tls_world_age!,
+    :jl_is_const => _fc_jl_is_const!,
+    :jl_is_binding_deprecated => _fc_jl_is_binding_deprecated!,
+    :jl_genericmemory_owner => _fc_jl_genericmemory_owner!,
+    :jl_stored_inline => _fc_jl_stored_inline!,
+)
+
+function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+
+    # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
+    if isempty(expr.args)
+        record_unsupported!(ctx, :unsupported_method, "foreigncall with no target symbol"; idx=idx, detail=expr)
+        unreachable!(b)  # structural trap after recorded unsupported
+        ctx.last_stmt_was_stub = true
+        return b
+    end
+    name = extract_foreigncall_name(expr.args[1])
+
+    handler = get(FOREIGN_LOWERINGS, name, nothing)
+    if handler !== nothing
+        result = handler(b, expr, idx, ctx)
+        result !== nothing && return result
+    end
+
+    if name in (:jl_is_operator, :jl_is_syntactic_operator) && length(expr.args) >= 6
+            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+            if traced !== nothing
+                source, _ = traced
+                bit = name === :jl_is_operator ? Int32(0x01) : Int32(0x02)
+                literal = source isa QuoteNode ? source.value : source
+                if literal isa Symbol || literal isa AbstractString
+                    i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
+                    return b
+                end
+                if get_ssa_type(ctx, source) === Symbol
+                    string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                    emit_value!(b, source, ctx, ConcreteRef(UInt32(string_idx), true))
+                    struct_get!(b, string_idx, UInt32(3), I32)
+                    local status_local = allocate_local!(ctx, I32)
+                    local_tee!(b, status_local)
+                    i32_const!(b, -1); num!(b, Opcode.I32_EQ)
+                    if_!(b, I32)
+                    unreachable!(b)  # structural trap: dynamically-created Symbol lacks operator metadata
+                    else_!(b)
+                    local_get!(b, status_local)
+                    i32_const!(b, bit); num!(b, Opcode.I32_AND)
+                    i32_const!(b, bit); num!(b, Opcode.I32_EQ)
+                    end_block!(b)
+                    return b
+                end
+            end
+        elseif name === :jl_id_start_char
+            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
+                "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
+            emit_value!(b, expr.args[6], ctx, I32)
+            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
+            i32_const!(b, 1); num!(b, Opcode.I32_AND)
+            return b
+        elseif name === :jl_id_char
+            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
+                "jl_id_char missing codepoint"; idx=idx, detail=expr)
+            emit_value!(b, expr.args[6], ctx, I32)
+            prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
+            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
+            i32_const!(b, 1); num!(b, Opcode.I32_AND)
+            return b
     end
 
     # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
@@ -1972,194 +2261,8 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         end
     end
 
-    if name === :jl_symbol_n
-        # jl_symbol_n(ptr::Ptr{UInt8}, len::Int64) -> Ref{Symbol}
-        # In WasmGC, Symbol is represented as a string byte array (same as String).
-        # The GC root argument (expr.args[8]) is the original String — just return it.
-        if length(expr.args) >= 8
-            gc_root = expr.args[8]
-            emit_value!(b, gc_root, ctx, static_wasm_type(gc_root, ctx))
-            return b
-        end
-    end
-
-    # jl_get_current_task → phantom value (no bytecode)
-    # Task SSA is used by getfield/setfield for rngState0..3 (Xoshiro256++ RNG)
-    # We handle those field accesses as Wasm global reads/writes in compile_call.
-    if name === :jl_get_current_task
-        if _task_ssa_used_unsafely(ctx.code_info.code, idx)
-            record_unsupported!(ctx, :unsupported_method,
-                "current_task() (Task identity / scheduler state) used outside the rand() RNG-state field pattern";
-                idx=idx, detail=expr, soundness_fatal=true)
-            ctx.last_stmt_was_stub = true
-            return b
-        end
-        # No bytecode needed — the Task value is phantom.
-        # Mark this SSA so it doesn't get stored to a local.
-        return b
-    end
-
-    # jl_hrtime → performance.now() * 1e6 (nanoseconds as UInt64)
-    # Used by @elapsed and @time for timing.
-    if name === :jl_hrtime
-        perf_now_idx = ensure_perf_now_import!(ctx.mod)
-        call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
-        # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
-        f64_const!(b, 1.0e6)
-        num!(b, Opcode.F64_MUL)
-        # Convert f64 → i64 (unsigned — trunc_sat to handle large values).
-        # Typed builder emitter (was a raw 0xFC 0x07 splice — F17 retired it).
-        trunc_sat!(b, Opcode.I64_TRUNC_SAT_F64_U)
-        return b
-    end
-
-    # Base.memhash(ptr, len, seed) → UInt64 string hash
-    # Used by Dict{String,...} for key hashing. In WasmGC, we hash the byte array
-    # directly using FNV-1a instead of going through C memhash.
-    if name === :memhash
-        # Trace the pointer argument back to jl_string_ptr to find the original string
-        str_arg = nothing
-        if length(expr.args) >= 6
-            ptr_arg = expr.args[6]
-            if ptr_arg isa Core.SSAValue
-                ptr_stmt = ctx.code_info.code[ptr_arg.id]
-                if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
-                    ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
-                    if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
-                        str_arg = ptr_stmt.args[6]  # The original string argument
-                    end
-                end
-            end
-        end
-
-        if str_arg !== nothing
-            # Get or create the string hash helper function
-            hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-            # Push args: string array ref, length (i64), seed (i32)
-            emit_value!(b, str_arg, ctx,
-                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(translator.dart:1597 convertType): funnel → DATA
-            if length(expr.args) >= 7
-                len_arg = expr.args[7]
-                emit_value!(b, len_arg, ctx, I64)  # length as i64
-            else
-                i64_const!(b, 0)
-            end
-            if length(expr.args) >= 8
-                seed_arg = expr.args[8]
-                # seed may be i64 from SSA — wrap to i32
-                seed_type = infer_value_type(seed_arg, ctx)
-                emit_value!(b, seed_arg, ctx,
-                            (seed_type === UInt64 || seed_type === Int64 || seed_type === Int) ? I64 : I32)
-                if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
-            else
-                i32_const!(b, 0)
-            end
-            call!(b, hash_func_idx, WasmValType[], WasmValType[I64])
-            return b
-        end
-        # If we can't trace the string, fall through to unreachable
-    end
-
-    # P4-stdlib (Statistics median): jl_genericmemory_copyto(dest_mem,
-    # dest_off_ptr, src_mem, src_off_ptr, n_elements) — Memory{T} compiles
-    # directly as a wasm array, so this is a plain array.copy; the ptr args
-    # are byte offsets (fake-base model) scaled to element indices.
-    local _gmc_sym = extract_foreigncall_name(expr.args[1])
-    if _gmc_sym === :jl_genericmemory_copyto && length(expr.args) >= 10
-        local _gmc_mt = infer_value_type(expr.args[6], ctx)
-        local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
-        if _gmc_te isa DataType && isprimitivetype(_gmc_te) && sizeof(_gmc_te) in (1, 2, 4, 8) &&
-           infer_value_type(expr.args[8], ctx) === _gmc_mt
-            local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
-            local _gmc_sh = trailing_zeros(sizeof(_gmc_te))
-            local _gmc_off = a -> begin
-                emit_value!(b, a, ctx, I64)
-                num!(b, Opcode.I32_WRAP_I64)
-                if _gmc_sh > 0
-                    i32_const!(b, Int64(_gmc_sh))
-                    num!(b, Opcode.I32_SHR_U)
-                end
-            end
-            emit_value!(b, expr.args[6], ctx, ConcreteRef(UInt32(_gmc_arr), true))
-            _gmc_off(expr.args[7])
-            emit_value!(b, expr.args[8], ctx, ConcreteRef(UInt32(_gmc_arr), true))
-            _gmc_off(expr.args[9])
-            local _gmc_nt = infer_value_type(expr.args[10], ctx)
-            emit_value!(b, expr.args[10], ctx,
-                        _gmc_nt in (Int64, UInt64, Int) ? I64 : I32)
-            if _gmc_nt in (Int64, UInt64, Int)
-                num!(b, Opcode.I32_WRAP_I64)
-            end
-            array_copy!(b, _gmc_arr, _gmc_arr)
-            return b   # Cvoid — no value
-        end
-    end
-
-    # P4-stdlib (Statistics median/quantile): two HOT-PATH foreigncalls that
-    # must NOT set the stub flag — range compilers treat a stubbed statement
-    # as dead code and abort the rest of the block, poisoning later
-    # conditions into `unreachable`.
-    local _fc_sym = extract_foreigncall_name(expr.args[1])
-    if _fc_sym === :jl_type_intersection && length(expr.args) >= 7
-        # P4-stdlib (Random hash_seed): dispatch guards compare
-        # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
-        # the host and emit the resulting type constant (NOT a stub: the
-        # stub flag dead-coded the live loop-exit condition that follows).
-        local _ti_a = expr.args[6]
-        local _ti_b = expr.args[7]
-        _ti_a isa QuoteNode && (_ti_a = _ti_a.value)
-        _ti_b isa QuoteNode && (_ti_b = _ti_b.value)
-        if _ti_a isa GlobalRef
-            _ti_a = try getfield(_ti_a.mod, _ti_a.name) catch; _ti_a end
-        end
-        if _ti_b isa GlobalRef
-            _ti_b = try getfield(_ti_b.mod, _ti_b.name) catch; _ti_b end
-        end
-        if _ti_a isa Type && _ti_b isa Type
-            local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
-            if _ti_r !== nothing
-                emit_value!(b, _ti_r, ctx, AnyRef; from_julia=Type{_ti_r})
-                return b
-            end
-        end
-    end
-    if _fc_sym === :jl_value_ptr
-        # Internal pointer_from_objref is representable only when its entire use
-        # graph stays inside the storage-relative pointer algebra proved above.
-        # The backing storage is recovered by the consuming array operation, and
-        # zero is then the exact relative offset of the object's first byte.
-        _storage_relative_pointer_is_closed(ctx, idx) || begin
-            record_unsupported!(ctx, :unsupported_method,
-                "jl_value_ptr escapes storage-relative WasmGC operations";
-                idx=idx, detail=expr, soundness_fatal=true)
-            ctx.last_stmt_was_stub = true
-            return b
-        end
-        i64_const!(b, 0)
-        return b
-    elseif _fc_sym === :jl_get_tls_world_age
-        i64_const!(b, Int64(WASM_WORLD_AGE))
-        return b
-    elseif _fc_sym === :jl_is_const && length(expr.args) >= 7
-        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
-        name_owner = _trace_field_owner(expr.args[7], :singletonname, ctx)
-        if module_owner !== nothing && isequal(module_owner, name_owner)
-            tn_idx = ctx.type_registry.jl_typename_idx
-            emit_value!(b, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-            struct_get!(b, tn_idx, UInt32(7), I32)
-            return b
-        end
-    elseif _fc_sym === :jl_is_binding_deprecated && length(expr.args) >= 7
-        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
-        symbol_owner = _trace_typename_symbol_owner(expr.args[7], ctx)
-        if module_owner !== nothing && isequal(module_owner, symbol_owner)
-            emit_typename_symbol_metadata!(b, expr.args[7], module_owner,
-                                           UInt32(11), UInt32(12), ctx)
-            return b
-        end
-    elseif _fc_sym === :jl_module_parent && length(expr.args) >= 6
+    local _fc_sym = name
+    if _fc_sym === :jl_module_parent && length(expr.args) >= 6
         module_info = ctx.type_registry.structs[Module]
         emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(3), AnyRef)
@@ -2171,12 +2274,6 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(2),
                     ConcreteRef(UInt32(string_idx), true))
-        return b
-    elseif _fc_sym === :jl_genericmemory_owner && length(expr.args) >= 6
-        # Julia's GenericMemory owner is the memory allocation itself. Memory is
-        # represented directly by its non-null WasmGC array, so ownership is an
-        # identity operation widened to the foreigncall's `Any` result.
-        emit_value!(b, expr.args[6], ctx, AnyRef)
         return b
     elseif _fc_sym === :jl_type_unionall && length(expr.args) >= 6
         # Julia 1.13 lowers `x isa UnionAll` to this runtime predicate on
@@ -2201,18 +2298,6 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
         call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
         i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
         return b
-    elseif _fc_sym === :jl_stored_inline && length(expr.args) >= 6
-        # datatype_storedinline(T) — pure layout predicate; fold when the
-        # type argument is a compile-time constant.
-        local _fc_t = expr.args[6]
-        _fc_t isa QuoteNode && (_fc_t = _fc_t.value)
-        if _fc_t isa GlobalRef
-            _fc_t = try getfield(_fc_t.mod, _fc_t.name) catch; _fc_t end
-        end
-        if _fc_t isa Type
-            i32_const!(b, (try Base.allocatedinline(_fc_t) catch; false end) ? 1 : 0)
-            return b
-        end
     end
 
     # Unknown foreigncall: dart-style loud unsupported path. It is never valid to
@@ -2300,12 +2385,12 @@ function _trace_ptr_to_data(ptr_val, ctx::AbstractCompilationContext)
             if stmt.head === :call
                 func = stmt.args[1]
                 if func isa GlobalRef
-                    fname = func.name
-                    if fname === :bitcast && length(stmt.args) >= 3
+                    call_name = func.name
+                    if call_name === :bitcast && length(stmt.args) >= 3
                         # bitcast(TargetType, source) — continue tracing source
                         current = stmt.args[3]
                         continue
-                    elseif fname === :getfield && length(stmt.args) >= 3
+                    elseif call_name === :getfield && length(stmt.args) >= 3
                         field_ref = stmt.args[3]
                         field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
                         if field_sym === :ptr
@@ -2323,8 +2408,8 @@ function _trace_ptr_to_data(ptr_val, ctx::AbstractCompilationContext)
                 end
             elseif stmt.head === :foreigncall
                 # May be jl_string_ptr or similar — check
-                fname = extract_foreigncall_name(stmt.args[1])
-                if fname === :jl_string_ptr && length(stmt.args) >= 6
+                call_name = extract_foreigncall_name(stmt.args[1])
+                if call_name === :jl_string_ptr && length(stmt.args) >= 6
                     # jl_string_ptr(s) — the string IS the data in WasmGC
                     return stmt.args[6]
                 end
@@ -2470,8 +2555,8 @@ function _resolve_memref_to_array(ssa, code)
             end
         end
     elseif stmt.head === :foreigncall
-        fname = extract_foreigncall_name(stmt.args[1])
-        if fname === :jl_string_to_genericmemory && length(stmt.args) >= 6
+        call_name = extract_foreigncall_name(stmt.args[1])
+        if call_name === :jl_string_to_genericmemory && length(stmt.args) >= 6
             # In WasmGC, jl_string_to_genericmemory returns the String which IS the array
             return stmt.args[6]
         end
@@ -2511,14 +2596,14 @@ function _trace_ptr_to_memory_array(ptr_ssa, code)
         if !(func isa GlobalRef)
             return nothing
         end
-        fname = func.name
-        if fname === :bitcast && length(stmt.args) >= 3
+        call_name = func.name
+        if call_name === :bitcast && length(stmt.args) >= 3
             current = stmt.args[3]
-        elseif fname === :add_ptr && length(stmt.args) >= 3
+        elseif call_name === :add_ptr && length(stmt.args) >= 3
             current = stmt.args[2]
-        elseif fname === :sub_ptr && length(stmt.args) >= 3
+        elseif call_name === :sub_ptr && length(stmt.args) >= 3
             current = stmt.args[2]
-        elseif fname === :getfield && length(stmt.args) >= 3
+        elseif call_name === :getfield && length(stmt.args) >= 3
             field_ref = stmt.args[3]
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
             if field_sym === :mem

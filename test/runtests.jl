@@ -194,6 +194,7 @@ _wt_shard0() && include("no_fabricated_values.jl")
 # represent must reject through record_unsupported! (classified WasmCompileError),
 # never leak an internal StackImbalanceError.
 _wt_shard0() && include("capability_negative_controls.jl")
+_wt_shard0() && include("unknown_ir_heads.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()

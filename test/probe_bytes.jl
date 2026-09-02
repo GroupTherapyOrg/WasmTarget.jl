@@ -366,6 +366,34 @@ _c("wt_substring1", _wt_wrap_substr1, String)
 _c("wt_array_subpadding", () -> Base.array_subpadding(Float64, Int64))
 _wt_wrap_unalias(a::Vector{Int64}, b::Vector{Int64}) = Base.unalias(a, b)
 _c("wt_unalias", _wt_wrap_unalias, Vector{Int64}, Vector{Int64})
+# 5b. Phase 5.3 foreigncall registry migration (statements.jl compile_foreigncall!
+#     → FOREIGN_LOWERINGS): one probe per migrated symbol not already covered
+#     above (memoryrefnew is covered by memoryrefnew_vecmut). Each name reaches
+#     the arm named in its comment (verified against the pre-migration source
+#     via WasmTarget.compile succeeding, i.e. never falling into the
+#     unknown-foreigncall trap — confirmed 2026-09-02).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_c("fc_alloc_genericmemory", (n::Int64) -> (v = Vector{Float64}(undef, n); v[1] = 1.0; v[1]), Int64)   # jl_alloc_genericmemory
+_c("fc_memset_dict_ctor", () -> (d = Dict{Int64,Int64}(); d[1] = 2; d[1]))                              # memset
+_c("fc_types_equal_pow", (x::Float32) -> x^2.0f0, Float32)                                              # jl_types_equal
+mutable struct _WTProbeObjId
+    x::Int64
+end
+_c("fc_object_id", (s::_WTProbeObjId) -> objectid(s), _WTProbeObjId)                                    # jl_object_id
+_c("fc_string_to_genericmemory", (s::String) -> length(Vector{UInt8}(s)), String)                       # jl_string_to_genericmemory
+_c("fc_genericmemory_to_string", (v::Vector{UInt8}) -> String(v), Vector{UInt8})                        # jl_genericmemory_to_string (+ jl_pchar_to_string)
+_c("fc_symbol_to_string", (s::Symbol) -> String(s), Symbol)                                             # jl_symbol_name / jl_string_ptr
+_c("fc_string_to_symbol", (s::String) -> String(Symbol(s)), String)                                     # jl_symbol_n
+_c("fc_alloc_string", () -> length(Base._string_n(5)))                                                  # jl_alloc_string
+_c("fc_cstr_to_string", (s::String) -> unsafe_string(pointer(s)), String)                                # jl_cstr_to_string
+_c("fc_pchar_to_string_ptrlen", (v::Vector{UInt8}) -> unsafe_string(pointer(v), length(v)), Vector{UInt8})  # jl_pchar_to_string (ptr,len)
+_c("fc_iobuffer_grow_take", () -> (io = IOBuffer(); for i in 1:2000; write(io, UInt8(i % 256)); end; length(take!(io))))  # jl_pchar_to_string (grown IOBuffer)
+_c("fc_memchr_findfirst_char", (s::String) -> something(findfirst('b', s), 0), String)                   # memchr
+_c("fc_task_rand", () -> rand())                                                                         # jl_get_current_task
+_c("fc_hrtime_elapsed", () -> @elapsed (1 + 1))                                                          # jl_hrtime
+_c("fc_memhash_dict_string", (s::String) -> (d = Dict{String,Int64}(); d[s] = 1; d[s]), String)          # memhash
+_c("fc_genericmemory_copyto", (v::Vector{Float64}) -> copy(v)[1], Vector{Float64})                       # jl_genericmemory_copyto
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Union{Nothing,T}: local, 3-way phi, field read.
