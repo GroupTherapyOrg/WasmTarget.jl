@@ -106,7 +106,32 @@ canaries. Each phase: dart anchor, verification lane, agent tier, exit.
 Tier: haiku for thunks and the two-touch diff (exact lines given); orchestrator negative-tests every
 thunk and writes the probe corpus.
 
-### Phase 2 — Bloat nuke (byte-identical unless stated)
+### Phase 1 — result (2026-09-02)
+
+Done and committed: nine ratchets (`f05045a1`), `WT_PHASE` (`62c42fd0`; measured 24–48 s per
+family, ~20 s of it harness setup), the probe lane (`2c4a0cb8`; 123 probes, 26–29 s,
+deterministic). Three of the nine delivered thunks were vacuous until reviewed (a missing multiline
+flag read 17 dead names as 0; a narrow regex read 15 env reads as 1; the span helper exited at 675
+of 4,583 lines and had lowered its own sanity bar) — every thunk is now negative-tested before its
+number is trusted, and R19/R22 became file-agnostic after the "move the arm to another file" dodge
+was demonstrated.
+
+### Phase 2 — result (2026-09-02)
+
+| Step | Outcome | Lock |
+|---|---|---|
+| 2a dead definitions | 15 deleted, 141 lines (`a14d94ca`); two census entries were JavaScript inside `bridge.jl`'s template and stayed | **L106** |
+| 2b test-only names | `emit_phi_local_set!` deleted (superseded, per the phi-edge postmortem); five builder primitives, three real APIs, and six false positives kept (`aa65cccf`) | — |
+| 2c debug surface | 17 scattered reads → `src/codegen/options.jl` `CompilerOptions` (dart `TranslatorOptions`); `WT_CUR_FN` deleted; `WasmValidationError` carries the rejected bytes (`3fb4e035`) | **L107** |
+| 2d commented-out code | **retired**: every parser-flagged range was pseudo-code annotation of the emitted wasm; R25 removed | — |
+| 2e narration tags | 278 → 0 (`378e7ee7`, `0afbf979`) | **L108** |
+| patch markers | 454 → 0 (`c5d2aa4b`, `3f6b49f4`, `ff57901d`) | **L109** |
+| anchor audit (added) | 93 of 95 `parity(` anchors were phase labels; now 86 dart citations at the pinned commit + 4 explicit quarantines, 20 spot-checked, two stale 2024 line ranges and one wrong citation corrected (`2003973c`) | **L110** |
+| 2f exports | 10 undocumented zero-reference exports de-exported, kept as internals (`aa65cccf`) | — |
+
+Every commit was byte-identical to the compiled output (probe lane 0 changed). Locks 102 → 107.
+
+### Phase 2 — plan as executed (kept for the record)
 
 | Step | Start | Action **[rev]** | Exit |
 |---|---|---|---|
@@ -224,8 +249,8 @@ rows of `dev/CERTIFICATION.md`. Deferred to the first build on the clean foundat
 |---|---|---|---|
 | structure | `julia --project=. test/parity_ratchet.jl` | 3 s | every edit |
 | behavior (curated) | `julia --project=. test/smoke.jl [group]` | 14 s | every edit |
-| byte identity | `julia --project=. test/probe_bytes.jl` | measured after Phase 1 | every pure restructuring |
-| family | `WT_PHASE=<name> julia --project=. test/runtests.jl` | measured after Phase 1 | the family touched |
+| byte identity | `julia --project=. test/probe_bytes.jl` | 26–29 s | every pure restructuring |
+| family | `WT_PHASE=<name> julia --project=. test/runtests.jl` | 24–48 s | the family touched |
 | behavioral locks | `test/*.jl` testsets (negative controls, canary trip-wires) | per file | never in the ratchet |
 | commit | `WT_SHARD=0,4 …` + the touched family's shard | 5–8 min | before each commit |
 | PR | CI matrix | 18–46 min | the authoritative full gate |
@@ -242,3 +267,12 @@ immediately; every enforcement thunk is negative-tested; hygiene checks run with
 parents loaded; an oddly-shaped construct is assumed load-bearing until its scope is read (the
 `optimize` kwarg shadowing incident); a census is never acted on before an adversarial pass
 (the `!f!(` negation-prefix bug would have deleted live phi-merge code).
+
+Learned in Phase 2: an agent's completion claim is never trusted — the tree is measured before a
+commit (files were reported "processed" with 40 tags left, and "verified" edits that did not
+exist); verified work commits immediately, before the next agent starts (finished edits were wiped
+twice by another agent's `git checkout` despite the ban); the scanner decides and the agent
+executes, with "stop and report" for anything off-shape — and the stops are honored (both 2d stops
+were correct); parallel agents get disjoint file sets and lists regenerated from the current tree
+at every hand-off; a commit gates on a negative test's exit code, not on the command sequence
+completing (L109 was once committed as "negative-tested" when it had not registered at all).
