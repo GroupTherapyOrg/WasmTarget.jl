@@ -135,15 +135,15 @@ _wt_shard0() && include("test_aqua.jl")
 _wt_shard0() && include("test_explicit_imports.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
-# formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
-_wt_shard0() && include("dispatch_method_error.jl")
-# formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
-_wt_shard0() && include("lazy_classid_isa.jl")
 _wt_shard0() && include("m11_intrinsics_table.jl")
 _wt_shard0() && include("module_builder_validation.jl")
 _wt_shard0() && include("host_boundary_types.jl")
 
 include("utils.jl")
+# formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
+_wt_shard0() && include("dispatch_method_error.jl")
+# formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
+_wt_shard0() && include("lazy_classid_isa.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
 # Phase 10.2 prototype: native linear-memory sidecar (dev/PARITY_MASTER.md item 3).
 # Node-differential, run once (shard 0 only) like the other fixture suites above.
