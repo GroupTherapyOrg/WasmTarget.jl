@@ -3914,14 +3914,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # If arg_type is Any/abstract but the intrinsic expects numeric operands,
     # the code is type-confused (externref being used as numeric). Emit unreachable
-    # since we can't convert externref to i64 in Wasm.
-    is_numeric_intrinsic = is_func(func, :eq_int) || is_func(func, :ne_int) ||
-                           is_func(func, :slt_int) || is_func(func, :sle_int) ||
-                           is_func(func, :ult_int) || is_func(func, :ule_int) ||
-                           is_func(func, :add_int) || is_func(func, :sub_int) ||
-                           is_func(func, :mul_int) ||
-                           is_func(func, :not_int) || is_func(func, :or_int) ||
-                           is_func(func, :xor_int) || is_func(func, :and_int)
+    # since we can't convert externref to i64 in Wasm. (See intrinsics_table.jl's
+    # NUMERIC_INTRINSIC_ARG_OPS for why this stays a curated int-only Set rather
+    # than a raw INTRINSIC_BINOPS/UNOPS membership query.)
+    is_numeric_intrinsic = is_numeric_intrinsic_arg(func)
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
         # An Any/externref value used in a numeric intrinsic (boxing / type instability).
@@ -4562,17 +4558,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _it_w = arg_type === Float64 ? F64 :
                       arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
         if haskey(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name))
-            # Comparisons observe FULL register width — narrow pairs (Int8/Int16 on
-            # i32) normalise first (sign-extend for signed/equality, mask for
-            # unsigned; semantics carried into the table route).
+            # Comparisons and div/rem observe FULL register width — narrow pairs
+            # (Int8/Int16 on i32) normalise first (sign-extend for signed/equality/
+            # signed-div-rem, mask for unsigned; semantics carried into the table
+            # route — same signed/unsigned choice the retired arms used).
             # This is the callers' wrap channel that `emit_intrinsic_binop!`'s
             # contract assumes (operands already at their table types).
-            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int)
-                _emit_normalise_narrow_pair!(fb, ctx, true, _julia_int_width(arg_type, is_32bit))
-            elseif is_32bit && _it_name in (:ult_int, :ule_int)
-                _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
+            local _dw = _julia_int_width(arg_type, is_32bit)
+            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int,
+                                         :sdiv_int, :srem_int, :checked_sdiv_int, :checked_srem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, true, _dw)
+            elseif is_32bit && _it_name in (:ult_int, :ule_int,
+                                             :udiv_int, :urem_int, :checked_udiv_int, :checked_urem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, false, _dw)
             end
-            local _it_result = emit_intrinsic_binop!(fb, _it_w, _it_w, _it_name)
+            local _it_result = emit_intrinsic_binop!(fb, _it_w, _it_w, _it_name, ctx, _dw)
             # (The rebox link): a numeric intrinsic whose SSA LOCAL is
             # ref-typed (the boxed accumulator: Any-joined phi) must REBOX its
             # result — keyed on the REAL local type, never inference (the sink's
@@ -4814,26 +4814,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _csubb)
         end
 
-    elseif is_func(func, :sdiv_int) || is_func(func, :checked_sdiv_int)
-        local _dw = _julia_int_width(arg_type, is_32bit)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, true, _dw)
-        _emit_div_guard!(fb, ctx, is_32bit; check_overflow=true, julia_width=_dw)
-        _op1!(is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
-
-    elseif is_func(func, :udiv_int) || is_func(func, :checked_udiv_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
-
-    elseif is_func(func, :srem_int) || is_func(func, :checked_srem_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, true, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_REM_S : Opcode.I64_REM_S)
-
-    elseif is_func(func, :urem_int) || is_func(func, :checked_urem_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_REM_U : Opcode.I64_REM_U)
+    # sdiv_int/udiv_int/srem_int/urem_int (+ checked_* aliases, I32/I64): THE
+    # intrinsics table route above (guard + opcode, same as this arm used to do).
 
     # Bitcast (reinterpret bits between types)
     elseif is_func(func, :bitcast)
@@ -5013,21 +4995,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
 
-    # Bitwise operations
-    elseif is_func(func, :and_int)
-        # (128-bit handled by THE Int128 registry route above)
-        _op1!(is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-
-    elseif is_func(func, :or_int)
-        # (128-bit handled by THE Int128 registry route above)
-        _op1!(is_32bit ? Opcode.I32_OR : Opcode.I64_OR)
-
-    elseif is_func(func, :xor_int)
-        # (128-bit handled by THE Int128 registry route above)
-        _op1!(is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-
-    # not_int: non-128-bit handled by THE intrinsics table route above (and the boolean
-    # NOT special case just above it); 128-bit handled by THE Int128 registry route above.
+    # and_int/or_int/xor_int/not_int (non-128-bit): THE intrinsics table route above
+    # (not_int also has the boolean NOT special case just above it); 128-bit handled
+    # by THE Int128 registry route above.
 
     # Shift operations
     # Note: Wasm requires shift amount to have same type as value being shifted
