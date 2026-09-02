@@ -1338,6 +1338,16 @@ const LOCKS = [
             end
             n + count(a -> !(a in models), anchors)
         end),
+    "L112_struct_registry_iterated_in_one_order" => ("the struct registry Dict is walked ONLY through registered_structs (sorted by wasm index then name) — a raw `for … in registry.structs` / keys/values/pairs walk picks a hash-order-dependent first match or id and emits process-varying bytes (the Dict-constant nondeterminism finding; dart numbers classes once, class_info.dart:831; locked 2026-09-02)",
+        () -> begin
+            walk = r"\b(?:in|keys|values|pairs)\(?\s*[\w.]*\.structs\b|collect\([^)]*\.structs\b"
+            # the helper's own collect is the one sanctioned walk; if it ever
+            # disappears the subtraction must not mask a rogue walk elsewhere
+            in_types = count_sites(walk; roots=[CODEGEN], exclude_files=String[]) -
+                       count_sites(walk; roots=[CODEGEN], exclude_files=["types.jl"])
+            in_types >= 1 || return 1000
+            count_sites(walk; roots=[SRC]) - 1
+        end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",

@@ -72,7 +72,7 @@ get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_
 function _dispatch_supertype_idx(idx::UInt32, registry)::Union{UInt32, Nothing}
     d = registry.abstract_struct_idxs
     # a concrete struct's parent: find T with this idx, return its dag parent chainable
-    for (T, info) in registry.structs
+    for (T, info) in registered_structs(registry)
         if info.wasm_type_idx == idx && T isa DataType
             local P = supertype(T)
             (P === Any || !(P isa DataType)) && return registry.base_struct_idx

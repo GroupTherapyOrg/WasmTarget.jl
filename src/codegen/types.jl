@@ -391,7 +391,7 @@ IDs start at 1 (0 is reserved for unknown/unassigned).
 function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
-    for (T, info) in registry.structs
+    for (T, info) in registered_structs(registry)
         if T isa DataType && isconcretetype(T) && info.field_offset > 0
             push!(concrete_types, T)
         end
@@ -510,6 +510,22 @@ function get_type_id(registry::TypeRegistry, T::Type)::Int32
 end
 
 """
+    registered_structs(registry::TypeRegistry) -> Vector{Pair{Type,StructInfo}}
+
+The ONE way to iterate the struct registry. `structs` is a `Dict` keyed by type
+object, whose iteration order varies per process; every consumer that picks
+"the first type at this wasm index" or assigns an id while walking it would
+otherwise emit process-varying bytes (the Dict-constant nondeterminism finding).
+The order is (wasm_type_idx, type name) — dart numbers classes once from the
+hierarchy (class_info.dart:831) and never depends on hash order.
+"""
+function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo}}
+    registry.structs === nothing && return Pair{Type,StructInfo}[]
+    return sort!(collect(Pair{Type,StructInfo}, registry.structs);
+                 by = p -> (p.second.wasm_type_idx, string(p.first)))
+end
+
+"""
     is_shared_wasm_type(registry, wasm_type_idx, T) -> Bool
 
 Check if another Julia type in the registry shares the same WasmGC type index.
@@ -517,8 +533,7 @@ When types share an index, ref.test can't distinguish them and typeId-based
 dispatch is needed.
 """
 function is_shared_wasm_type(registry::TypeRegistry, wasm_type_idx::UInt32, T::Type)::Bool
-    registry.structs === nothing && return false
-    for (other_type, other_info) in registry.structs
+    for (other_type, other_info) in registered_structs(registry)
         if other_info.wasm_type_idx == wasm_type_idx && other_type !== T
             return true
         end
@@ -597,7 +612,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 
     # Struct types
     structs = Dict{String, Any}[]
-    for (T, info) in sort(collect(registry.structs), by=x->x[2].wasm_type_idx)
+    for (T, info) in registered_structs(registry)
         push!(structs, Dict{String, Any}(
             "julia_type" => string(T),
             "wasm_type_idx" => Int(info.wasm_type_idx),
