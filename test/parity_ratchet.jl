@@ -217,27 +217,6 @@ const METRICS = [
             end
             n
         end),
-    "R23_dead_codegen_defs" => ("named definitions still present from the dead-codegen list (15; two JS-template names were census false positives)",
-        () -> begin
-            dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
-                          "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
-                          "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
-                          "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
-                          "has_dispatch_table", "get_string_ref_array_type!"]
-            all_src = join((read(joinpath(dir, f), String)
-                            for (dir, _, files) in walkdir(SRC)
-                            for f in files if endswith(f, ".jl")), "\n")
-            count(dead_names) do name
-                q = replace(name, "!" => "\\!")
-                # multiline anchors: a definition at the start of any LINE
-                occursin(Regex("^function\\s+$(q)\\s*\\(", "m"), all_src) ||
-                occursin(Regex("^$(q)\\s*\\(.*\\)\\s*=(?!=)", "m"), all_src) ||
-                occursin(Regex("^const\\s+$(q)\\s*=", "m"), all_src) ||
-                occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
-            end
-        end),
-    "R24_scattered_env_reads" => ("scattered WT_* environment reads in src (ENV[…]/haskey/get forms) outside the one options struct; WT_VALIDATE is the documented gate and exempt",
-        () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "R25_commented_out_code" => ("lines of commented-out code: maximal # runs where every line parses as a complete Expr (prose and bare tags do not)",
         () -> commented_out_code_lines(SRC)),
     "R26_campaign_narration" => ("lines matching march\\d+|P2-batch (including comments: 278)",
@@ -1363,6 +1342,27 @@ const LOCKS = [
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
         () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
+    "L106_dead_codegen_defs_extinct" => ("the fifteen dead codegen definitions the march census found stay deleted (locked 2026-09-02)",
+        () -> begin
+            dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
+                          "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
+                          "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
+                          "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
+                          "has_dispatch_table", "get_string_ref_array_type!"]
+            all_src = join((read(joinpath(dir, f), String)
+                            for (dir, _, files) in walkdir(SRC)
+                            for f in files if endswith(f, ".jl")), "\n")
+            count(dead_names) do name
+                q = replace(name, "!" => "\\!")
+                # multiline anchors: a definition at the start of any LINE
+                occursin(Regex("^function\\s+$(q)\\s*\\(", "m"), all_src) ||
+                occursin(Regex("^$(q)\\s*\\(.*\\)\\s*=(?!=)", "m"), all_src) ||
+                occursin(Regex("^const\\s+$(q)\\s*=", "m"), all_src) ||
+                occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
+            end
+        end),
+    "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
+        () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
