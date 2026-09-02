@@ -1089,7 +1089,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
             param_type = param_types[arg_idx]
-            wasm_type = julia_to_wasm_type_concrete(param_type, ctx)
+            wasm_type = get_concrete_wasm_type(param_type, ctx.mod, ctx.type_registry; for_local=true)
             # Emit the appropriate null/zero value based on the wasm type
             _nb = _ctx_builder(ctx, "compile_invoke")
             if wasm_type isa ConcreteRef
@@ -1358,7 +1358,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # insert any_convert_extern + ref.cast null to bridge the type gap.
                         # This happens when the function's wasm return type is externref (mapped
                         # from Any/Union via julia_to_wasm_type) but the caller's SSA local uses
-                        # a tagged union struct (mapped via julia_to_wasm_type_concrete).
+                        # a tagged union struct (mapped via get_concrete_wasm_type).
                         if haskey(ctx.ssa_locals, idx)
                             local_idx_val = ctx.ssa_locals[idx]
                             local_arr_idx = local_idx_val - ctx.n_params + 1

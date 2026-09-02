@@ -56,7 +56,7 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         end
         edge_julia_type = get(ctx.ssa_types, val.id, nothing)
         if edge_julia_type !== nothing
-            return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+            return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
         end
     elseif val isa Core.SlotNumber
         # SlotNumber in unoptimized IR — check slot_locals first
@@ -73,7 +73,7 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
             return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
         else
             source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
+            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
     elseif val isa Core.Argument
         # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.

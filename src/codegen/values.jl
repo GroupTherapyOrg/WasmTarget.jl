@@ -50,7 +50,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         end
         # Fall back to Julia type inference
         ssa_type = get(ctx.ssa_types, val.id, Any)
-        return julia_to_wasm_type_concrete(ssa_type, ctx)
+        return get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
     elseif val isa Core.SlotNumber
         # SlotNumber in unoptimized IR — check slot_locals first, then params
         if haskey(ctx.slot_locals, val.id)
@@ -67,10 +67,10 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             arg_idx = val.id - 1
         end
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         else
             source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
+            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
         return AnyRef
     elseif val isa Core.Argument
@@ -87,7 +87,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             tuple_info === nothing && error("packed vararg tuple layout is unavailable")
             return ConcreteRef(UInt32(tuple_info.wasm_type_idx), true)
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         end
         return I32
     else
@@ -1040,7 +1040,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         underlying_type = get(ctx.ssa_types, stmt.val.id, Any)
                         # For Union{Nothing, T}, emit ref.null $T
                         if underlying_type !== Nothing && underlying_type !== Any
-                            wasm_type = julia_to_wasm_type_concrete(underlying_type, ctx)
+                            wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
                             if wasm_type isa ConcreteRef
                                 ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
                                 emitted_nothing = true
@@ -1094,17 +1094,17 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         # PiNode narrows to a struct/ref type (not numeric).
                         # Source value may be EqRef/StructRef/AnyRef (from Union{Nothing, T} local).
                         # Add ref.cast_null to narrow to the concrete type so struct.get works.
-                        local _pi_concrete = julia_to_wasm_type_concrete(pi_type, ctx)
+                        local _pi_concrete = get_concrete_wasm_type(pi_type, ctx.mod, ctx.type_registry; for_local=true)
                         if _pi_concrete isa ConcreteRef
                             # Check if the source is a generic ref type that needs casting
                             local _pi_src_wasm2 = nothing
                             if stmt.val isa Core.SSAValue
                                 local _pi_src_type2 = get(ctx.ssa_types, stmt.val.id, Any)
-                                _pi_src_wasm2 = julia_to_wasm_type_concrete(_pi_src_type2, ctx)
+                                _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
                             elseif stmt.val isa Core.Argument
                                 local _pi_arg_idx2 = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
                                 if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
-                                    _pi_src_wasm2 = julia_to_wasm_type_concrete(ctx.arg_types[_pi_arg_idx2], ctx)
+                                    _pi_src_wasm2 = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx2], ctx.mod, ctx.type_registry; for_local=true)
                                 end
                             end
                             if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef

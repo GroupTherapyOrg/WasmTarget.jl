@@ -52,11 +52,46 @@ _g("controlflow", Any[
 ])
 
 # ---- phi / union (the boxing channel) -------------------------------------
+# P4-types (get_concrete_wasm_type / julia_to_wasm_type_concrete fold): protect the
+# Union{Nothing,T}-for-locals EqRef seam (CG-003d) before the two duplicate chains merge.
+struct _PU
+    v::Int64
+end
+struct _PUWrap
+    inner::Union{Nothing,_PU}
+end
 _g("phi_union", Any[
     ("loop_phi", (n::Int64) -> (s = 0; for i in 1:n; s += i % 2 == 0 ? i : -i; end; s), Int64(6)),
     ("union_add", (b::Bool) -> (b ? 10 : 20) + 1, true),
     ("ternary_widen", (x::Int64) -> x > 5 ? 1.5 : 2.5, Int64(2)),
     ("acc_float", (n::Int64) -> (s = 0.0; for i in 1:n; s += i; end; s), Int64(5)),
+    # (1) two-edge if/else phi: one Nothing edge, one concrete-struct edge, stored in a
+    # local then used. Exercises the EqRef-for-locals path when the local is re-read.
+    ("phi_nothing_struct",
+     (x::Int64) -> (r = x > 0 ? _PU(x) : nothing; y = r; y === nothing ? Int64(-1) : y.v),
+     Int64(3)),
+    # (2) >=3-predecessor phi (if/elseif/elseif/else) merging Union{Nothing,_PU}.
+    ("phi_3way_nothing_struct",
+     (x::Int64) -> (r = if x == 1
+         _PU(10)
+     elseif x == 2
+         _PU(20)
+     elseif x == 3
+         nothing
+     else
+         _PU(30)
+     end; r === nothing ? Int64(-1) : r.v),
+     Int64(2)),
+    # (3) a Union{Nothing,_PU} value widened through an Any-typed intermediate, then
+    # merged again at a second phi (one edge sourced from the Any local, one Nothing).
+    ("phi_any_intermediate",
+     (x::Int64) -> (pre = x > 0 ? _PU(x) : nothing; dyn::Any = pre; post = x > 3 ? dyn : nothing;
+                    (post isa _PU) ? post.v : Int64(-1)),
+     Int64(6)),
+    # (4) a struct field of type Union{Nothing,T} read straight into a local, then used.
+    ("struct_field_nothing_to_local",
+     (x::Int64) -> (w = _PUWrap(x > 0 ? _PU(x) : nothing); f = w.inner; f === nothing ? Int64(-1) : f.v),
+     Int64(8)),
 ])
 
 # ---- arrays ---------------------------------------------------------------

@@ -2059,15 +2059,17 @@ end
     _resolve_multivariant_union(T, non_nothing, mod, registry; for_local=false) -> WasmValType
 
 THE single resolver for a multi-variant (2+ non-Nothing) Union value's wasm type — dart2wasm
-parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT had
-TWO drifting copies — get_concrete_wasm_type + julia_to_wasm_type_concrete — that the "MUST agree"
-comments warned would silently null-deref on divergence). Mirrors dart's two outcomes: an UNBOXED
-primitive for a same-category numeric union (dart's unboxed int/double via `boxedClasses`), else the
-TOP type AnyRef (dart's `topInfo.nullableType`) — heterogeneous/incompatible-numeric values live
-boxed-with-classId behind AnyRef. `for_local=true` (the SSA-local allocator) applies WT's anyref→
-externref-for-locals wart on the numeric path (a WT-only anyref/externref split dart doesn't have;
-preserved exactly here, retired when that hierarchy unifies). The nullable (Union{Nothing,T}) case
-stays caller-side — the two callers diverge there intentionally (EqRef vs concrete inner ref).
+parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT once
+had two drifting copies of the whole type-translation chain — one taking `(mod, registry)`, one
+taking a compilation `ctx` — that the "MUST agree" comments warned would silently null-deref on
+divergence; both are now this one `for_local`-gated function, P4-types fold). Mirrors dart's two
+outcomes: an UNBOXED primitive for a same-category numeric union (dart's unboxed int/double via
+`boxedClasses`), else the TOP type AnyRef (dart's `topInfo.nullableType`) — heterogeneous/
+incompatible-numeric values live boxed-with-classId behind AnyRef. `for_local=true` (the SSA-local
+allocator) applies WT's anyref→externref-for-locals wart on the numeric path (a WT-only
+anyref/externref split dart doesn't have; preserved exactly here, retired when that hierarchy
+unifies). The nullable (Union{Nothing,T}) case stays caller-side — the two `for_local` branches of
+the caller diverge there intentionally (EqRef vs concrete inner ref).
 """
 function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     all_numeric = !isempty(non_nothing) && all(non_nothing) do t
@@ -2103,8 +2105,21 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
 end
 
 """
-Get a concrete Wasm type for a Julia type, using the module and registry.
-This is used before CompilationContext is created.
+Takes a Julia type `T`, the target `mod`, its `registry`, and a `for_local` keyword
+(default `false`); returns the `WasmValType` that represents `T`.
+
+THE single Julia-type → Wasm-type translator (dart2wasm parity: `translateType`
+translator.dart:1044 → `translateStorageType(type, {unbox})` :1067 — dart has ONE such
+translator, gated by one `unbox` flag; WT had TWO drifting ~200-line copies, this one and
+a former `ctx`-taking twin (`julia_to_wasm_type` plus `_concrete` — deleted; every call
+site now calls this function directly with `for_local` set true). `for_local`
+mirrors dart's `unbox`: `true` is the SSA-local/phi/PhiC/slot allocator (a value about to
+occupy a WT-allocated local that has no OTHER fixed representation yet); `false` is every
+signature/field/return position where the value already has a fixed representation
+established elsewhere (a function parameter's declared type, a struct field's wasm type).
+`T` is intentionally unannotated (not typed as a `Type`): `Vararg{T,N}` markers are
+`Core.TypeofVararg` instances, which are not subtypes of `Type`, so a `Type`-constrained
+signature would MethodError on them before the Vararg case below ever runs.
 """
 
 """
@@ -2120,9 +2135,19 @@ single source consumers migrate onto as those rework.
 derive_nullability(@nospecialize(T))::Bool =
     T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
 
-function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry)::WasmValType
-    # Union{} (bottom type) indicates unreachable code - return void/nothing
+function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
+    # Vararg is a type modifier (Core.TypeofVararg), not a proper Julia type — never `<: Type`.
+    # Use ExternRef for locals to avoid externref↔anyref mismatches (Any→ExternRef, and
+    # cross-calls return ExternRef, so locals holding a vararg tail must be ExternRef too).
+    if T isa Core.TypeofVararg
+        return ExternRef
+    end
+    # Union{} (bottom type / TypeofBottom): no runtime value exists of this type. In a
+    # signature/field position (for_local=false) that is a genuine bug — throw. The
+    # SSA-local allocator (for_local=true) can legitimately type an unreachable dead
+    # phi/local edge Union{}; I32 is a harmless placeholder no live value ever occupies.
     if T === Union{}
+        for_local && return I32
         throw(ArgumentError("Union{} has no runtime Wasm value type"))
     end
     # Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
@@ -2139,8 +2164,20 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         # a class). Symbol shares the rep (its name string).
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
-    elseif is_closure_type(T)
-        # Closure types are structs with captured variables
+    elseif !for_local && is_closure_type(T)
+        # Closure types are structs with captured variables. NOT a deliberate asymmetry —
+        # a DISCOVERED pre-existing gap between the two former chains, preserved here rather
+        # than fixed (out of scope for a byte-identical fold; probe_bytes' string_uppercase
+        # caught the attempt to ungate this). The former ctx-taking twin (the for_local=true /
+        # SSA-local-phi-slot chain) never checked is_closure_type at all — an
+        # unregistered closure reaching the local allocator fell to the `is_struct_type` arm
+        # below and got `register_struct_type!`'s generic layout instead of
+        # `register_closure_type!`'s Object/vtable-prefixed one. In practice this is FIRST
+        # reached in the for_local=false chain (function parameter/return-type registration,
+        # compile.jl's arg_types loop) before any closure-typed local is ever allocated, so
+        # the gap is believed latent, not live — but that belief is unverified here. Flag for
+        # a follow-up: either prove it unreachable for_local=true, or route it through
+        # register_closure_type! there too (a real behavior change, not a fold).
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -2165,6 +2202,14 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         end
         return StructRef
     elseif T <: Tuple
+        # UnionAll tuples (e.g., Tuple{T, T} where T<:Type) lack .parameters — registration
+        # would throw. Skip registration and fall through to the abstract StructRef. Gated
+        # by for_local: this case came from the ctx (SSA-local) chain only — the
+        # mod/registry chain never had it, and ungating changed a pre-existing signature/
+        # field-position caller's result for `string_uppercase` (probe_bytes caught it).
+        if for_local && T isa UnionAll
+            return StructRef
+        end
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -2185,6 +2230,18 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         # IMPORTANT: Check BEFORE AbstractArray since MemoryRef <: AbstractArray
         elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
         type_idx = get_array_type!(mod, registry, elem_type)
+        return ConcreteRef(type_idx, true)
+    elseif for_local && T isa UnionAll && T <: Base.GenericMemoryRef
+        # Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll) — happens when
+        # cross-function calls use Vector (no eltype). Extract the element type from the
+        # type variable bound when available, else fall back to Any. Gated by for_local:
+        # this case came from the ctx (SSA-local) chain only — see the Tuple/UnionAll note
+        # above for why ungating it changed a signature/field-position result.
+        local memref_elem_type = Any
+        if T.var isa TypeVar && T.var.ub !== Any
+            memref_elem_type = T.var.ub
+        end
+        type_idx = get_array_type!(mod, registry, memref_elem_type)
         return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
         # Memory{T} / GenericMemory maps to array type for element T
@@ -2252,18 +2309,29 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         if inner_type !== nothing
             # Union{Nothing, T} → T's concrete rep with DERIVED nullability (item 2:
             # dart's isPotentiallyNullable — true here by construction of the union)
-            local _inner_w = get_concrete_wasm_type(inner_type, mod, registry)
+            local _inner_w = get_concrete_wasm_type(inner_type, mod, registry; for_local=for_local)
             if _inner_w isa ConcreteRef
+                # Union{Nothing, T} where T is a struct/array ref type.
+                # for_local=true (the SSA-local/phi/PhiC/slot allocator): use EqRef (not T's
+                # concrete ref) because the Nothing path may produce struct_new of the base
+                # tagged struct or ref.null, which is NOT a subtype of ConcreteRef(T). EqRef
+                # is the common supertype of all struct/array refs; downstream narrowing casts
+                # to the concrete type on read. for_local=false (field/signature position):
+                # the value already has a fixed nullable-concrete representation there, so
+                # return the derived-nullability ConcreteRef directly.
+                for_local && return EqRef
                 return ConcreteRef(_inner_w.type_idx, derive_nullability(T))
             end
             return _inner_w
         else
             # Multi-variant union → THE single resolver (dart2wasm translateType parity).
-            # Formerly a copy that "MUST agree" with julia_to_wasm_type_concrete's twin; both
-            # now delegate here so they cannot drift (drift DROPped the value → ref.null →
-            # null-deref at runtime, on heterogeneous-tuple / interpolation inputs).
+            # Formerly a copy that "MUST agree" with the former ctx-taking twin's own version;
+            # both for_local branches now delegate here so they cannot drift (drift DROPped the
+            # value → ref.null → null-deref at runtime, on heterogeneous-tuple / interpolation
+            # inputs). `for_local` keeps WT's anyref→externref-for-locals wart on the numeric
+            # path when set.
             non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
-            return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=false)
+            return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=for_local)
         end
     elseif T === Core.SimpleVector
         # Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
@@ -2279,7 +2347,17 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         end
         return StructRef
     else
-        return julia_to_wasm_type(T)
+        # Standard (non-struct/array) conversion.
+        result = julia_to_wasm_type(T)
+        # Never return AnyRef for locals — use ExternRef instead. Exception — when the
+        # $JlType hierarchy is active, keep AnyRef for Any-typed locals: $JlType struct
+        # fields return (ref null $JlType), a subtype of anyref but NOT externref, so
+        # locals must align with function params. Signature/field positions (for_local=
+        # false) return the raw AnyRef unconditionally, as before this function existed.
+        if for_local && result === AnyRef && registry.jl_type_idx === nothing
+            return ExternRef
+        end
+        return result
     end
 end
 
