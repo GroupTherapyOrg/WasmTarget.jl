@@ -891,6 +891,102 @@ function _lower_egal_early!(b, fb, ctx, expr, idx, args, callee)
     return nothing
 end
 
+# `Core._expr(:head, arg1, arg2, ...)` — materializes an `Expr(head::Symbol,
+# args::Vector{Any})`. Julia-only (dart has no `Expr` node); the WasmGC
+# representation is a classed Expr struct wrapping a head Symbol (a classed
+# string) and a Vector{Any} of the remaining args. Self-contained: emits its
+# own operands directly onto `fb` (R19 — this identity match used to gate a
+# `_skip_arg_prepush` carve-out in `compile_call!`'s generic arg-push loop;
+# consulted from THE identity-keyed funnel instead, this call never reaches
+# that loop at all, so no carve-out is needed there any more).
+function _lower_expr!(b, fb, ctx, expr, idx, args, callee)
+    # Register Expr type if not already registered
+    if !haskey(ctx.type_registry.structs, Expr)
+        register_struct_type!(ctx.mod, ctx.type_registry, Expr)
+    end
+    haskey(ctx.type_registry.structs, Expr) || return append_builder!(b, fb)
+    expr_info = ctx.type_registry.structs[Expr]
+
+    # Ensure Vector{Any} is registered (for the args field)
+    if !haskey(ctx.type_registry.structs, Vector{Any})
+        register_vector_type!(ctx.mod, ctx.type_registry, Vector{Any})
+    end
+    vec_any_info = ctx.type_registry.structs[Vector{Any}]
+
+    # Ensure Tuple{Int64} is registered (for Vector size field)
+    if !haskey(ctx.type_registry.structs, Tuple{Int64})
+        register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Int64})
+    end
+    size_tuple_info = ctx.type_registry.structs[Tuple{Int64}]
+
+    # Get array type for Any (externref array)
+    any_array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Any)
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+
+    # args[1] is the head (Symbol), args[2:end] are the Expr.args elements
+    head_arg = args[1]
+    expr_args = args[2:end]
+    n_expr_args = length(expr_args)
+
+    # Locals-first approach: compile each piece into a local, then assemble.
+
+    # Step 1: Compile head (Symbol = array<i32>) → local
+    # parity(class_info.dart:18 FieldIndex): the head Symbol is a CLASSED string value
+    head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
+        emit_value!(fb, head_arg, ctx, static_wasm_type(head_arg, ctx))
+        local_set!(fb, head_local)
+
+    # Step 2: Create data array (array<anyref>) → local
+    # Any maps to the registered array element type. Every element flows
+    # through the typed boxing/conversion chokepoint.
+    wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
+    if n_expr_args == 0
+            i32_const!(fb, 0)
+            array_new_default!(fb, any_array_type_idx)
+    else
+        # Push each arg, then array_new_fixed
+        for ea in expr_args
+            emit_value!(fb, ea, ctx, wasm_elem_type)
+        end
+            array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
+    end
+    data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
+        local_set!(fb, data_arr_local)
+
+        # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
+        emit_struct_prefix!(fb, ctx.type_registry, Tuple{Int64}, size_tuple_info)
+        i64_const!(fb, Int64(n_expr_args))
+        struct_new!(fb, size_tuple_info.wasm_type_idx)   # mod-resolved fields
+    size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
+    let ib = _sub_builder(fb, ctx, "compile_call", 1)   # the size tuple
+        local_set!(ib, size_local)
+
+        # Step 4: Assemble Expr struct
+        emit_struct_prefix!(ib, ctx.type_registry, Expr, expr_info)
+        # Push head (Expr field 1)
+        local_get!(ib, head_local)
+        # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
+        emit_struct_prefix!(ib, ctx.type_registry, Vector{Any}, vec_any_info)
+        local_get!(ib, data_arr_local)
+        local_get!(ib, size_local)
+        struct_new!(ib, vec_any_info.wasm_type_idx)   # mod-resolved fields
+        # struct.new Expr with (typeId, head, vector)
+        struct_new!(ib, expr_info.wasm_type_idx)   # mod-resolved fields
+        append_builder!(fb, ib)
+    end
+
+    return append_builder!(b, fb)
+end
+
+# `Symbol(x)` — in WasmGC, Symbol IS String (both are byte arrays); the
+# argument is already a string array and compiles straight through.
+# Self-contained: emits its own operand directly onto `fb`.
+function _lower_symbol!(b, fb, ctx, expr, idx, args, callee)
+    length(args) == 1 || return nothing
+    append_builder!(fb, _compile_value_b(args[1], ctx))
+    return append_builder!(b, fb)
+end
+
 # ---- Registry population ---------------------------------------------------
 # One entry per builtin identity. Aliases (e.g. isvisible/_closed_world_isvisible)
 # map to the SAME lowering function, matching dart's KernelNodes resolving
@@ -920,6 +1016,8 @@ BUILTIN_LOWERINGS[Core.memorynew] = _lower_memorynew!
 BUILTIN_LOWERINGS[Core.memoryref] = _lower_memoryref!
 BUILTIN_LOWERINGS[Core.memoryrefnew] = _lower_memoryrefnew!
 BUILTIN_LOWERINGS[Core.tuple] = _lower_tuple!
+BUILTIN_LOWERINGS[Core._expr] = _lower_expr!
+BUILTIN_LOWERINGS[Symbol] = _lower_symbol!
 BUILTIN_LOWERINGS[Core.donotdelete] = _lower_donotdelete!
 BUILTIN_LOWERINGS[Core.compilerbarrier] = _lower_compilerbarrier!
 BUILTIN_LOWERINGS[Core.apply_type] = _lower_apply_type!

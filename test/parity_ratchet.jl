@@ -128,6 +128,77 @@ function function_body_lines(path::String, header::AbstractString)::Int
     return 0
 end
 
+"""
+Tally every `is_func(func, :SYM)` site in calls.jl by the SYMBOL named, not by
+line (one line can name more than one symbol — the `is_func(func, :getfield) ||
+is_func(func, :getproperty)` interleave counts one occurrence of each). Powers
+L116's explicit-allowlist check; `#`-comment lines are excluded exactly like
+`count_sites`.
+"""
+function _is_func_site_tally()::Dict{String,Int}
+    tally = Dict{String,Int}()
+    rx = r"is_func\(func, (:\([^)]*\)|:[A-Za-z_][A-Za-z0-9_!]*|:[+\-*])\)"
+    for line in eachline(joinpath(CODEGEN, "calls.jl"))
+        _iscomment(line) && continue
+        for m in eachmatch(rx, line)
+            sym = m.captures[1]::AbstractString
+            tally[sym] = get(tally, sym, 0) + 1
+        end
+    end
+    return tally
+end
+
+# The R19 floor (march p57): every symbol legitimately left name-keyed in
+# calls.jl's `is_func(func, :sym)` ladder, with the one-line reason it cannot
+# route through a table/registry/BUILTIN_LOWERINGS entry instead, and the
+# maximum occurrence count it may appear at. checked_s{add,sub,mul}_int/
+# checked_u{add,sub,mul}_int (→ CHECKED_OPS' `op` data test), muladd_float/
+# fma_float (→ the hoisted `_it_name` data test), Core._expr, Symbol, and
+# Core.tuple's siblings were all migrated OUT of this ladder — see
+# julia_numeric_tier.jl's CHECKED_OPS/FMA_OPS and builtins.jl's
+# BUILTIN_LOWERINGS for where they live now.
+const L116_ALLOWLIST = Dict{String,Int}(
+    # getglobal-typename fast path runs BEFORE the SSAValue→GlobalRef callee
+    # resolution a few lines below it — an early-position dependency that
+    # THE identity-keyed builtin funnel (consulted only AFTER that
+    # resolution, or on the raw pre-resolution callee for a disjoint few
+    # arms) cannot reproduce without reordering compile_call!'s own callee
+    # resolution step.
+    ":getglobal" => 1,
+    # L38_no_known_value_substitutions pins this arm's text verbatim.
+    ":ifelse" => 1,
+    # getfield/getproperty interleave with raw (func.mod===Core/Base &&
+    # func.name===:getfield) identity checks (closure self-capture skip,
+    # :signal skip, the P3 layout-pointer fold) whose CURRENT relative order
+    # must hold — see the block comment above builtins.jl's BUILTIN_LOWERINGS
+    # constant for why folding them into one dict entry is unsafe. THREE
+    # `is_func(func, :getfield) || is_func(func, :getproperty)` sites: the P3
+    # layout-pointer fold, the signal-read detector, and the general
+    # concrete-struct getfield/getproperty arm.
+    ":getfield" => 3,
+    ":getproperty" => 3,
+    # setfield!/setproperty! interleave with the signal-write raw identity
+    # check and the Core.Box capture-write arm the same way.
+    ":setfield!" => 2,
+    ":setproperty!" => 2,
+    # L57_exact_typeassert_exception pins this arm's text verbatim.
+    ":typeassert" => 1,
+    # `_compile_call_egaleq` and the raw `!==` arm read `fb.v.stack` directly
+    # ("the two operands are already on fb") — not self-contained, so they
+    # cannot be dispatched from THE identity-keyed builtin funnel, which runs
+    # BEFORE the generic arg-push loop that puts those operands there.
+    ":(===)" => 2,   # one to gate the arg-prepush Type-value exception, one the arm itself
+    ":(!==)" => 2,   # ditto
+    # The high-level-operator fallback arms (`_op1!` emits a bare opcode onto
+    # already-pushed operands) are equally not self-contained.
+    ":+" => 1,
+    ":-" => 1,
+    ":*" => 1,
+    # `_compile_call_isa`: "the value argument is already on the stack from
+    # the loop that pushes all args" — not self-contained either.
+    ":isa" => 1,
+)
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -148,7 +219,7 @@ const METRICS = [
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
     "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
         () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
-    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (phase 3/5: migrate to tables and registries; file-agnostic so an arm cannot hide by moving)",
+    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (march p57: floor reached — the calls.jl arms remaining are L116's explicit allowlist, each one genuinely unable to route through a table/registry/BUILTIN_LOWERINGS entry; this ratchet stays file-agnostic so a site cannot dodge L116 by moving to another codegen file)",
         () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
     "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
@@ -1381,6 +1452,14 @@ const LOCKS = [
                            (occursin(r"^\s*(if|elseif)\b", line) &&
                             occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
                   split(stmt_src, '\n'))
+        end),
+    "L116_call_arms_are_the_allowlist" => ("every `is_func(func, :sym)` symbol remaining in calls.jl (march p57: floor reached, R19 31→15) is an entry in L116_ALLOWLIST above, each with a one-line reason it cannot route through a table/registry/BUILTIN_LOWERINGS entry; a symbol outside the allowlist, or a listed symbol whose occurrence count exceeds its allowed maximum, breaks this lock (locked 2026-09-02)",
+        () -> begin
+            violations = 0
+            for (sym, n) in _is_func_site_tally()
+                n > get(L116_ALLOWLIST, sym, 0) && (violations += 1)
+            end
+            violations
         end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),

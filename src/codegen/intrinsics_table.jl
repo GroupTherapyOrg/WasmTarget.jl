@@ -226,7 +226,7 @@ const NUMERIC_INTRINSIC_ARG_OPS = Set{Symbol}((
 
 """True when `func` names one of `NUMERIC_INTRINSIC_ARG_OPS` — same name-extraction
 rule `_it_name` uses (GlobalRef / Core.IntrinsicFunction), so this is a drop-in for
-the `is_func(func, :op1) || is_func(func, :op2) || …` chain it replaces."""
+a chain of individual per-op `is_func` name checks, ORed together, that it replaces."""
 function is_numeric_intrinsic_arg(func)::Bool
     name = func isa GlobalRef ? func.name :
            func isa Core.IntrinsicFunction ? Symbol(func) : nothing

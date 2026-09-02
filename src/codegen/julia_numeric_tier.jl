@@ -87,10 +87,10 @@ end
 # translator.dart never traps or returns a flag; the `Tuple{T,Bool}` contract is
 # purely Julia's `Base.Checked` surface). A pure move of the six arms that used to
 # sit at the head of `compile_call!`'s ladder (`_compile_call_checked!` in
-# calls.jl re-derives the exact op the same way the ladder did — `is_func`, not a
-# symbol-equality shortcut — so all six keys forward to the one dispatcher).
-const _checked_dispatch = (fbref, ctx, func, args, is_128bit, is_32bit, arg_type, idx) ->
-    _compile_call_checked!(fbref, ctx, func, args, is_128bit, is_32bit, arg_type, idx)
+# calls.jl tests the Dict key `op` directly — a data test, R19 — instead of
+# re-deriving identity via `is_func`; all six keys forward to the one dispatcher).
+const _checked_dispatch = (fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx) ->
+    _compile_call_checked!(fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx)
 const CHECKED_OPS = Dict{Symbol,Function}(
     :checked_sadd_int => _checked_dispatch,
     :checked_uadd_int => _checked_dispatch,
@@ -130,6 +130,9 @@ const SHIFT_OPS = Dict{Symbol,Function}(
 # (`[c, a, b]` so `f64.mul` sees `(a,b)` then `f64.add` sees `(c, a*b)`) happens
 # in `compile_call!`'s SHARED arg-push loop, ahead of every registry consult —
 # operands are already correctly ordered on the stack by the time these fire.
+# That reorder gate is keyed on THE SAME `_it_name` extraction these keys are
+# dispatched by (R19: one hoisted local, not a second `is_func` re-derivation)
+# — see the "Reorder muladd_float/fma_float args" comment there.
 const FMA_OPS = Dict{Symbol,Function}(
     :muladd_float => (fb, ctx, arg_type) -> begin
         num!(fb, arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
@@ -158,14 +161,16 @@ const MISC_OPS = Dict{Symbol,Function}(
 )
 
 """
-    emit_julia_numeric!(fbref, ctx, op, func, args, arg_type, is_128bit, is_32bit, idx) -> Union{WasmValType,Nothing}
+    emit_julia_numeric!(fbref, ctx, op, args, arg_type, is_128bit, is_32bit, idx) -> Union{WasmValType,Nothing}
 
 THE Julia-only numeric quarantine dispatch, consulted from `compile_call!`
 right where THE Int128/UInt128 registry route leaves off (mirrors
 `emit_int128_op!`'s nullable-return contract). Tries CHECKED_OPS, SHIFT_OPS,
 FMA_OPS, then MISC_OPS in turn; `nothing` means none of the four claim `op` —
 the caller's legacy ladder (bitcast, `===`/`!==`, sext/zext/trunc, …) keeps
-handling it.
+handling it. `op` is the caller's single extracted callee-identity Symbol
+(R19: every entry tests IT, a data value, never re-deriving identity from the
+raw callee via `is_func`) — there is no `func` parameter here at all.
 
 `fbref` is a `Ref{InstrBuilder}` rather than a plain `InstrBuilder`: only
 CHECKED_OPS's is_128bit add/sub reject ever needs to REPLACE the builder (see
@@ -176,11 +181,11 @@ the boxed-operand-unbox flag that link depends on can never be set for them;
 the tail rebox in `compile_call!` was already a no-op for every op this
 dispatch owns.
 """
-function emit_julia_numeric!(fbref::Base.RefValue{InstrBuilder}, ctx, op::Symbol, func, args,
+function emit_julia_numeric!(fbref::Base.RefValue{InstrBuilder}, ctx, op::Symbol, args,
                              arg_type, is_128bit::Bool, is_32bit::Bool,
                              idx::Int)::Union{WasmValType,Nothing}
     if haskey(CHECKED_OPS, op)
-        return CHECKED_OPS[op](fbref, ctx, func, args, is_128bit, is_32bit, arg_type, idx)
+        return CHECKED_OPS[op](fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx)
     elseif haskey(SHIFT_OPS, op)
         return SHIFT_OPS[op](fbref[], ctx, args, arg_type, is_32bit)
     elseif haskey(FMA_OPS, op)
