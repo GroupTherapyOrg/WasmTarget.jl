@@ -26,8 +26,8 @@
 export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirPhi, NirPi, NirGoto, NirGotoIfNot, NirReturn, NirEnter, NirLeave,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
-       NirBoundscheck, NirUnsupported,
-       build_nir, nir_raw_code, resolve_invoke_method, resolve_invoke_mi
+       NirBoundscheck, NirThrowUndefIfNot, NirUnsupported,
+       build_nir, nir_raw_code, nir_operand, resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
 # Node kinds — census: NirSSA/Argument/Slot/GlobalRef (values), NirPhi/Pi (SSA-form),
@@ -147,6 +147,14 @@ AST node in a language without unchecked array access). `flag` is the literal Bo
 `Expr(:boundscheck, flag)`'s arg is a literal Bool, else `nothing`."""
 struct NirBoundscheck <: NirNode
     flag::Union{Bool,Nothing}
+end
+
+"""Julia-only, quarantine tier: `Expr(:throw_undef_if_not, var, cond)` — Julia's
+undefined-capture check (`cond || throw(UndefVarError(var, :local))`); Dart has no
+possibly-unassigned captured variables (definite assignment is checked at compile time)."""
+struct NirThrowUndefIfNot <: NirNode
+    var::Symbol
+    cond::NirNode
 end
 
 """Any head outside the census above. A consumer MUST route this to `record_unsupported!`
@@ -345,6 +353,8 @@ function _nir_classify(stmt, ctx)::NirNode
         elseif head === :boundscheck
             flag = (!isempty(args) && args[1] isa Bool) ? args[1] : nothing
             return NirBoundscheck(flag)
+        elseif head === :throw_undef_if_not && length(args) == 2 && args[1] isa Symbol
+            return NirThrowUndefIfNot(args[1], resolve_operand(args[2], ctx))
         elseif head === :leave
             return NirLeave(length(args))
         elseif head === :pop_exception
@@ -382,3 +392,16 @@ end
 consumer (has_try_catch/find_try_regions/compile_statement!/...) gets back exactly
 `code_info.code`, without that consumer ever writing the identifier `code_info` itself."""
 nir_raw_code(ctx) = Any[s.raw for s in ctx.nir]
+
+"""The value channel (`emit_value!`) still consumes raw IR operands; a converted
+consumer hands it a node through this inverse until the channel itself takes NirNode
+(the last step of the R29 migration). A Symbol literal is re-quoted, as `Expr.args`
+carried it, so the channel does not mistake it for a binding."""
+function nir_operand(node::NirNode)
+    node isa NirSSA && return Core.SSAValue(node.id)
+    node isa NirArgument && return Core.Argument(node.n)
+    node isa NirSlot && return Core.SlotNumber(node.n)
+    node isa NirGlobalRef && return GlobalRef(node.mod, node.name)
+    node isa NirLiteral && return node.value isa Symbol ? QuoteNode(node.value) : node.value
+    error("nir_operand: $(nameof(typeof(node))) is not a value operand")
+end
