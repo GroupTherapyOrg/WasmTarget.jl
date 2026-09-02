@@ -150,7 +150,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # assumed we emit 0 — only applies to an explicit `false` (inside
         # @inbounds). For boundscheck=true the GotoIfNot falls through to the
         # check + catchable throw_boundserror, and that path must stay live.
-        if stmt isa Expr && stmt.head === :boundscheck && length(stmt.args) >= 1 && stmt.args[1] === false
+        # parity(code_generator.dart:77 typeContext): classification via the NIR boundary
+        # (frontend/nir.jl) instead of raw Expr.head/.args — NirBoundscheck's `flag` is
+        # `nothing` unless the arg was a literal Bool, so `flag === false` is exactly
+        # `stmt.head === :boundscheck && length(stmt.args) >= 1 && stmt.args[1] === false`.
+        if (nstmt = ctx.nir[i].node) isa NirBoundscheck && nstmt.flag === false
             if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
                 goto_stmt = code[i + 1]::Core.GotoIfNot
                 if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
@@ -1297,8 +1301,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
                     _drop_count = count(x -> x isa InstrIR.Drop, @view bb.instrs[_stmt_i0+1:end])
-                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke)
-                        @warn "STACKIFIED-DROP stmt=$i head=$(stmt.head) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
+                    # parity(code_generator.dart:77 typeContext): NIR-node dispatch instead
+                    # of Expr.head — exactly `stmt.head === :call || stmt.head === :invoke`
+                    # (NirCall/NirInvoke classify exactly those two heads, unconditionally).
+                    if ctx.nir[i].node isa Union{NirCall, NirInvoke}
+                        @warn "STACKIFIED-DROP stmt=$i kind=$(nameof(typeof(ctx.nir[i].node))) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end
                 end
 
@@ -1316,7 +1323,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Skip if the visitor already emitted a DROP.
                     # The func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
-                    if stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :foreigncall)
+                    # parity(code_generator.dart:77 typeContext): NIR-node dispatch instead
+                    # of Expr.head — exactly `stmt.head in (:call, :invoke, :foreigncall)`.
+                    if ctx.nir[i].node isa Union{NirCall, NirInvoke, NirForeignCall}
                         if !already_dropped && _stmt_emitted && _stmt_pushed_value
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
