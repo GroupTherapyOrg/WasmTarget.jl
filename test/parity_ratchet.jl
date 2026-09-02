@@ -1348,6 +1348,16 @@ const LOCKS = [
             in_types >= 1 || return 1000
             count_sites(walk; roots=[SRC]) - 1
         end),
+    "L113_builtin_registry_consulted_first" => ("in compile_call! the identity-keyed builtin registry is consulted BEFORE any name-keyed is_func arm — dev/formal/ConsultChain.tla showed the egal/getglobal arms' predicates overlap the registry's (a late `is_func(func, :(===))` also matches the string/typeof/nothing shapes the registry owns), so their correctness is a program-ORDER invariant, locked here (2026-09-02)",
+        () -> begin
+            lines = readlines(joinpath(CODEGEN, "calls.jl"))
+            start = findfirst(l -> startswith(l, "function compile_call!("), lines)
+            start === nothing && return 1000
+            first_builtin = findnext(l -> occursin("_try_builtin_lowering!(", l) && !_iscomment(l), lines, start)
+            first_arm = findnext(l -> occursin(r"is_func\(func, :", l) && !_iscomment(l), lines, start)
+            (first_builtin === nothing || first_arm === nothing) && return 1000
+            first_builtin < first_arm ? 0 : 1
+        end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
