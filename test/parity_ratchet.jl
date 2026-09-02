@@ -159,28 +159,6 @@ const METRICS = [
             count(line -> occursin(r"(_fc_sym|fname|cfn) === :\w+", line) && !_iscomment(line),
                   split(stmt_src, '\n'))
         end),
-    "R22_table_covered_ladder_arms" => ("is_func(func, :key) arms for keys in every INTRINSIC_* dict",
-        () -> begin
-            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
-            keys_set = Set{Symbol}()
-            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
-            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
-                push!(keys_set, Symbol(m.captures[1]))
-            end
-            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
-                push!(keys_set, Symbol(m.captures[1]))
-            end
-            n = 0
-            for (dir, _, files) in walkdir(CODEGEN), f in files
-                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
-                for line in eachline(joinpath(dir, f))
-                    _iscomment(line) && continue
-                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
-                    occursin("table residue", line) || (n += 1)
-                end
-            end
-            n
-        end),
     "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
                           roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl"])),
@@ -1295,6 +1273,28 @@ const LOCKS = [
         () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
     "L110_parity_anchors_cite_dart" => ("every parity( anchor in src cites a dart file:line at the pinned oracle commit or is an explicit quarantine — phase labels are narration, not anchors (locked 2026-09-02)",
         () -> count_lines_all(r"parity\((?![A-Za-z_/]+\.dart:\d+|quarantine:)"; roots=[SRC])),
+    "L104_table_ops_have_no_ladder_arm" => ("per-symbol exclusivity: every op key in any INTRINSIC_* table has ZERO name-keyed is_func ladder arms anywhere in codegen — a table entry and an arm can never coexist, so a half-wired table cannot stall again (the M11 lesson; locked 2026-09-02)",
+        () -> begin
+            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
+            keys_set = Set{Symbol}()
+            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
+                    occursin("table residue", line) || (n += 1)
+                end
+            end
+            n
+        end),
     "L109_no_patch_marker_tags" => ("no PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- patch-tag tokens anywhere in src, comment lines included — constraint-bearing sentences stay as untagged comments (locked 2026-09-02)",
         () -> count_lines_all(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d"; roots=[SRC])),
     "L106_dead_codegen_defs_extinct" => ("the fifteen dead codegen definitions the march census found stay deleted (locked 2026-09-02)",
