@@ -54,20 +54,18 @@ include("bridge.jl")
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export wasm_bytes_length, wasm_bytes_get
-export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
+export preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
-export TypeRegistry, FunctionRegistry, register_function!
+export TypeRegistry, FunctionRegistry
 export add_string_global!, add_uninitialized_ref_global!, add_root_global_initializer!
-export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 # Soundness diagnostics + independent validation cross-check
-export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
+export WasmDiagnostic, WasmCompileError, WasmValidationError
 
 """
     _wt_default_validate() -> Bool
