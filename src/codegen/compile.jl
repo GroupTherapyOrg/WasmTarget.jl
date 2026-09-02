@@ -918,7 +918,7 @@ function _compile_closed_world_plan(functions::Vector;
     # which the Any-only patch pass below can't fix)
     create_jl_type_hierarchy!(mod, type_registry)
 
-    # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
+    # Census F2 CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
     # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
     # function's typed IR and COLLECT every reachable concrete struct / union member
     # so the DFS below numbers the closed world (real [low, high] ranges for isa/
@@ -993,7 +993,7 @@ function _compile_closed_world_plan(functions::Vector;
     end
     needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
 
-    # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
+    # LAZY constants: collect long (>64B) String/Symbol literals and pre-create
     # their init functions NOW — the same index-freeze constraint (functions cannot be
     # added during body compilation without shifting indices). dart constants.dart:454.
     for (_, _, _, code_info, _, _, _) in function_data
@@ -1815,7 +1815,7 @@ end
 """
     _collect_reachable_ir_types(function_data) -> Set{DataType}
 
-census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
+census F2 — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
 number every class of the component once, before codegen). Walks every function's
 typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
 types reachable from the IR so `assign_type_ids!` numbers the whole world in one

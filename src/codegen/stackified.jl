@@ -652,7 +652,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
     function compile_phi_value(val, phi_idx::Int,
                                temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{InstrBuilder,Union{WasmValType,Nothing},Int}
-        # parity(M2 -> march3) typed channel: emits into `pvb` and returns THE BUILDER
+        # Typed channel: emits into `pvb` and returns THE BUILDER
         # (pushed_type, npushed are its tracked byproducts) -- callers merge with
         # append_builder!, so the fragment's REAL stack effect transfers (no declared
         # pushes; the pv_ty===nothing guess that let an invalid module through WT's

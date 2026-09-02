@@ -120,7 +120,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int,Vector{Int}}(), # bound-invoke argument projections (assigned by plan)
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
-        Dict{Int, Int}()        # march15: exn_region_locals
+        Dict{Int, Int}()        # exn_region_locals
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -2321,7 +2321,7 @@ end
 """
     _narrow_generic_local!(b, local_idx, ssa_id, ctx) -> Bool
 
-PURE-901 (march4, builder-native — THE implementation): when a local has generic type
+PURE-901 (builder-native — THE implementation): when a local has generic type
 (anyref/structref/externref/eqref) but the SSA's Julia type maps to a concrete Wasm
 type, narrow the value on `b`'s stack (`ref.cast null` for refs — a no-op at runtime
 when correct, a trap on a real codegen bug — and THE funnel-unbox for join-refined
