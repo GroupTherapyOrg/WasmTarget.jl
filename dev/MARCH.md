@@ -240,8 +240,50 @@ Exit: downstream CI green; ExplicitImports green.
 ### Phase 9 — Close
 
 Promote every ratchet at 0 to a lock; refresh `dev/PARITY_MASTER.md`'s audit stamp and the changed
-rows of `dev/CERTIFICATION.md`. Deferred to the first build on the clean foundation: roadmap item 4
-(normalized frontend — its type-lattice join rules travel with it), item 3 (sidecar), item 5.
+rows of `dev/CERTIFICATION.md`.
+
+### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
+
+The three roadmap items the pathway had deferred are in: item 4 (normalized frontend boundary,
+`src/frontend/nir.jl`, converted consumer by consumer under `R29_raw_codeinfo_reads`), item 3 (the
+native sidecar prototype — a linear-memory `.wat` module linked by the host, dart's `ffi`.`memory`
+channel translator.dart:213-224, with the GC-array transfer as a quarantined scalar loop because dart
+has no bulk primitive either), and item 5 (UnifiedIR — measured unavailable on every installed Julia
+and upstream still a draft, JuliaLang/julia#62334; the deliverable is `test/shadow_compile.jl`, a
+two-frontend recorder/comparator whose `:unified` leg throws `UnifiedIRUnavailableError` rather than
+silently no-op'ing). Designs in the scratchpad `p10/DESIGN.md` were adversarially reviewed before
+execution.
+
+### Phase 11 — The formal layer (adopted 2026-09-02, from Keno's recommendation)
+
+JuliaLang/julia#61826 ships `SchedulerWake.tla`, a TLA+ model of the scheduler wake handshake that
+abstracts weak memory and lets TLC exhaust every interleaving — "sufficient to check the algorithmic
+claim". WasmTarget adopts the pattern and gates on it. `dev/formal/<Name>.tla` models the ACTUAL
+Julia algorithm (read from source, `formal(src/…)` anchor in the header and a one-line
+`# formal(dev/formal/<Name>.tla): <claim>` at the top of the modeled function), `MC<Name>.tla/.cfg`
+is a small instance with `TypeOK` plus the claim invariants and a deadlock check, and
+`MC<Name>Broken.cfg` flags a deliberately wrong variant (the realistic bug class) that TLC MUST
+reject — a model with no counterexample-producing variant is vacuous, the same rule the locks live
+by. `dev/formal/run_tlc.sh` runs every instance and fails if a Broken one passes; `formal.yml` runs
+it on every PR.
+
+Models in the march: `Stackifier` (well-scoped `br` targets, balanced labels, every edge realized
+once, the reject path never emits), `Diagnostics` (the two-tier automaton: no silent value, a trap
+needs a proof, an internal error is unreachable from the unsupported tier), `ClosedWorld` (fixpoint
+termination and completeness under any discovery order; failure is loud), `ClassIdDispatch` (isa ⇔
+range containment, nested ranges, selector slot uniqueness, the cascade rejects ties, and
+determinism — the open unsorted-`structs` iteration finding), `ConsultChain` (every call key reaches
+exactly one funnel or the loud reject; a declining funnel emits nothing — L104 lifted from symbols to
+keys), `Sidecar` (the ownership protocol: per-call scratch, no stale reads across calls, no GC
+reference in linear memory, aliasing handled).
+
+The rule from here on — for everything in this push and after: a change to a modeled algorithm
+updates the model FIRST and lands with TLC green; a new protocol or algorithm is modeled spec-first
+and the code is checked against the model, never the reverse; a TLC counterexample against the real
+algorithm is a finding to reproduce in Julia, never a reason to weaken the invariant; every landing
+answers "which model does this change, or which new model does it need?" (pure data or test-only
+changes say so explicitly); commit messages for algorithmic fixes narrate the protocol the way
+Keno's futex commit does — the exact shape that breaks, the invariant, and why the fix restores it.
 
 ## 5. Verification contract
 
@@ -252,6 +294,7 @@ rows of `dev/CERTIFICATION.md`. Deferred to the first build on the clean foundat
 | byte identity | `julia --project=. test/probe_bytes.jl` | 26–29 s | every pure restructuring |
 | family | `WT_PHASE=<name> julia --project=. test/runtests.jl` | 24–48 s | the family touched |
 | behavioral locks | `test/*.jl` testsets (negative controls, canary trip-wires) | per file | never in the ratchet |
+| formal | `bash dev/formal/run_tlc.sh` | seconds–minutes | every change to a modeled algorithm; every commit that touches `dev/formal` |
 | commit | `WT_SHARD=0,4 …` + the touched family's shard | 5–8 min | before each commit |
 | PR | CI matrix | 18–46 min | the authoritative full gate |
 
