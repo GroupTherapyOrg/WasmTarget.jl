@@ -46,7 +46,7 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
     type_registry.base_struct_idx !== nothing && (_ST_BASE_IDX[] = type_registry.base_struct_idx)
     # collect single-axis selectors: (func_ref, rows::Vector{(classId, entry_i)}, weight)
     packable = Tuple{Any,Vector{Tuple{Int,Int}},Int,Dict{Int,Vector{Int}},Int}[]
-    for (func_ref, dt) in dt_registry.tables
+    for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
         arity = Int(dt.arity)
         varying = Int[]
         for pos in 1:arity
@@ -210,7 +210,7 @@ dispatch_table.dart:461-470).
 function fill_selector_table_elements!(mod::WasmModule, dt_registry)
     dt_registry.selector_table_idx === nothing && return
     entries = Tuple{Int,UInt32}[]   # (position, wrapper_idx)
-    for (func_ref, positions) in dt_registry.selector_positions
+    for (func_ref, positions) in ordered_pairs(dt_registry.selector_positions, r -> selector_order_key(dt_registry, r))
         dt = dt_registry.tables[func_ref]
         for (pos, entry_i) in positions
             push!(entries, (pos, dt.entries[entry_i].wrapper_idx))

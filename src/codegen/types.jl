@@ -550,6 +550,27 @@ function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo
 end
 
 """
+    ordered_pairs(dict, keyfn) -> Vector{Pair}
+
+The ONE way to walk any registry dictionary whose keys hash by identity (types,
+type names, function objects, constant values): sorted by a key that is a
+function of the program, never of the process. Type hashes are address-based,
+so a raw walk orders differently per process AND per architecture — the same
+function compiled on x64 and aarch64 interned its type-name strings in a
+different order. dart numbers and emits everything from the program structure
+(class_info.dart:831 ClassIdNumbering; constants.dart's map is walked in
+insertion order).
+"""
+ordered_pairs(dict::AbstractDict, keyfn) = sort!(collect(dict); by = p -> keyfn(p.first))
+
+"""A type's program-determined order key: its printed name, then its defining module
+(two modules may define a `Foo`), then the wrapper's name for UnionAll bodies."""
+type_order_key(@nospecialize(T)) =
+    (string(T), T isa DataType ? string(T.name.module) : (T isa UnionAll ? string(Base.unwrap_unionall(T).name.module) : ""))
+
+typename_order_key(tn::Core.TypeName) = (string(tn.module), string(tn.name))
+
+"""
     is_shared_wasm_type(registry, wasm_type_idx, T) -> Bool
 
 Check if another Julia type in the registry shares the same WasmGC type index.
@@ -612,13 +633,13 @@ Serialize the type ID table to a Dict suitable for JSON output.
 function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
     result = Dict{String, Any}()
     ids = Dict{String, Int32}()
-    for (T, id) in registry.type_ids
+    for (T, id) in ordered_pairs(registry.type_ids, type_order_key)
         ids[string(T)] = id
     end
     result["type_ids"] = ids
 
     ranges = Dict{String, Any}()
-    for (T, (low, high)) in registry.type_ranges
+    for (T, (low, high)) in ordered_pairs(registry.type_ranges, type_order_key)
         ranges[string(T)] = Dict("low" => low, "high" => high)
     end
     result["type_ranges"] = ranges
@@ -649,7 +670,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 
     # Array types
     arrays = Dict{String, Int}()
-    for (T, idx) in registry.arrays
+    for (T, idx) in ordered_pairs(registry.arrays, type_order_key)
         arrays[string(T)] = Int(idx)
     end
     result["arrays"] = arrays
@@ -1618,10 +1639,10 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
 
     # Close Module ancestry before iterating the constant registry, then wire
     # exact parent identities. Root modules point to themselves.
-    for tn in keys(registry.typename_constant_globals)
+    for (tn, _) in ordered_pairs(registry.typename_constant_globals, typename_order_key)
         tn.module !== nothing && get_module_constant_global!(mod, registry, tn.module)
     end
-    for (value, module_global) in collect(registry.constant_globals)
+    for (value, module_global) in ordered_pairs(registry.constant_globals, v -> v isa Module ? string(v) : "")
         value isa Module || continue
         parent_global = get_module_constant_global!(mod, registry, parentmodule(value))
         module_idx = registry.structs[Module].wasm_type_idx
@@ -1630,7 +1651,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         struct_set!(b, module_idx, UInt32(3), AnyRef)
     end
 
-    for (type_val, dt_global_idx) in registry.type_constant_globals
+    for (type_val, dt_global_idx) in ordered_pairs(registry.type_constant_globals, type_order_key)
         type_val isa DataType || continue
 
         # Field 0: kind = TYPE_DATATYPE (0)
@@ -1722,13 +1743,16 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
         struct_set!(b, dt_type_idx, UInt32(3), ConcreteRef(svec_idx, true))  # field 3 = parameters
 
-        # Field 4: hash → i32 (use Julia's type hash)
+        # Field 4: hash → i32. Julia's DataType.hash is the host's objectid — a
+        # function of the host build (it differed between x64 and aarch64 for
+        # every type), not of the program; the module's value is the hash of the
+        # type's program identity (memhash is platform-independent).
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
             _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
-        i32_const!(b, Int64(Int32(hash(type_val) & 0x7FFFFFFF)))
+        i32_const!(b, Int64(Int32(hash(type_order_key(type_val)) & 0x7FFFFFFF)))
         struct_set!(b, dt_type_idx, UInt32(4), I32)  # field 4 = hash
 
         # Field 5: abstract → i32 (1 if abstract, 0 if concrete)
@@ -1781,7 +1805,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     end
 
     # Populate $JlTypeName fields
-    for (tn, tn_global_idx) in registry.typename_constant_globals
+    for (tn, tn_global_idx) in ordered_pairs(registry.typename_constant_globals, typename_order_key)
         # Fields 2 and 5 are interned Symbol objects, carrying their exact
         # content-derived metadata across ordinary calls.
         string_idx = get_string_struct_type!(mod, registry)
@@ -1907,8 +1931,9 @@ function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)
         push!(all_typed, T)
     end
 
-    # Create DataType globals for each (get_type_constant_global! is idempotent)
-    for T in all_typed
+    # Create DataType globals for each (get_type_constant_global! is idempotent),
+    # in program order — this is where the type-name strings get interned.
+    for T in sort!(collect(all_typed); by = type_order_key)
         T isa DataType || continue
         get_type_constant_global!(mod, registry, T)
     end
@@ -1981,7 +2006,7 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
     table_size = registry.type_lookup_table_size
 
     # For each concrete type with a DFS ID and a DataType global, populate the table
-    for (T, type_id) in registry.type_ids
+    for (T, type_id) in ordered_pairs(registry.type_ids, type_order_key)
         T isa DataType || continue
         haskey(registry.type_constant_globals, T) || continue
         type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds

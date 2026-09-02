@@ -65,6 +65,11 @@ DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}(),
 """Get the dispatch table for a function."""
 get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_ref, nothing)
 
+"""A selector's program-determined order key: its first entry's target function index
+(entries are built in registration order, which is itself index-ordered)."""
+selector_order_key(reg::DispatchTableRegistry, func_ref) =
+    minimum(Int(e.target_idx) for e in reg.tables[func_ref].entries)
+
 # ==================== Table Building ====================
 
 # tag-run: the declared supertype of a struct wasm type — read through the abstract
@@ -101,7 +106,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
     # (dispatch_table.dart:401-403 needsDispatch). The 2-8 machinery was proven at
     dt_registry = DispatchTableRegistry()
 
-    for (func_ref, infos) in func_registry.by_ref
+    for (func_ref, infos) in func_registry.by_ref   # a Vector: registration order
         length(infos) < threshold && continue
         # Owns closures: function values dispatch through the closure
         # VTABLE (call_ref), never the class-selector table — same split as dart.
@@ -243,7 +248,7 @@ function emit_dispatch_metadata!(mod::WasmModule,
     # parity(dispatch_table.dart:63 SelectorInfo.signature): the FNV hash-table apparatus (i32-array globals, per-table funcref
     # tables) is DELETED — the selector table is the only dispatch structure. All this
     # phase does now is create each selector's uniform call_indirect signature.
-    for (func_ref, dt) in dt_registry.tables
+    for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
         param_types = copy(dt.slot_types)   # the per-slot LUB (was uniform AnyRef)
         result_types = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
             WasmValType[dt.result_wasm_type] : WasmValType[]
@@ -261,7 +266,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                                   dt_registry::DispatchTableRegistry)
     isempty(dt_registry.tables) && return
 
-    for (func_ref, dt) in dt_registry.tables
+    for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
         param_types = copy(dt.slot_types)   # the per-slot LUB
         # Dispatch signature result type
         is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
@@ -287,7 +292,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             for (j, tid) in enumerate(entry.type_ids)
                 # Find the concrete Julia type for this typeId
                 concrete_type = nothing
-                for (T, id) in type_registry.type_ids
+                for (T, id) in ordered_pairs(type_registry.type_ids, type_order_key)
                     if id == tid
                         concrete_type = T
                         break
