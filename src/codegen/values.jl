@@ -1342,16 +1342,14 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif val isa GlobalRef
-        isdefined(val.mod, val.name) || throw(WasmCompileError(WasmDiagnostic(
-            :unsupported_global, string(val), "GlobalRef is not defined in its source module",
-            nothing, nothing)))
+        isdefined(val.mod, val.name) || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(val) is not defined in its source module"; detail=val,
+            soundness_fatal=true)
         actual_val = getfield(val.mod, val.name)
         if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
            !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
             globals = ctx.type_registry.mutable_constant_globals
-            globals === nothing && throw(WasmCompileError(WasmDiagnostic(
-                :unsupported_global, string(val),
-                "mutable GlobalRef identity registry is unavailable", nothing, nothing)))
+            globals === nothing && record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef identity registry is unavailable"; detail=string(val), soundness_fatal=true)
             if haskey(globals, actual_val)
                 global_idx, type_idx = globals[actual_val]
                 global_get!(b, global_idx, ConcreteRef(type_idx, true))
@@ -1362,10 +1360,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     "mutable GlobalRef initializer must produce exactly one value",
                     copy(init_b.v.stack), 0, "compile_value"))
                 init_type = only(init_b.v.stack)
-                init_type isa ConcreteRef || throw(WasmCompileError(WasmDiagnostic(
-                    :unsupported_global, string(val),
-                    "mutable GlobalRef initializer produced non-concrete type $init_type",
-                    nothing, nothing)))
+                init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
                 null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
                 ref_null!(null_b, Int64(init_type.type_idx),
                           ConcreteRef(init_type.type_idx, true))
@@ -1535,10 +1530,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
-            throw(WasmCompileError(WasmDiagnostic(
-                :unsupported_type, string(nameof(T)),
-                "closure constant of type $T has undefined captures; WT never fabricates capture values",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "closure constant of type $T has undefined captures; WT never fabricates capture values"; detail=string(nameof(T)), soundness_fatal=true)
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -1608,10 +1600,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 elseif expected === F64
                     f64_const!(b, 0.0)
                 else
-                    throw(WasmCompileError(WasmDiagnostic(
-                        :unsupported_type, string(typeof(mem)),
-                        "unoccupied Dict backing slot $i has non-nullable physical type $expected",
-                        nothing, nothing)))
+                    record_unsupported!(ctx, :unsupported_type, "unoccupied Dict backing slot $i has non-nullable physical type $expected"; detail=string(typeof(mem)), soundness_fatal=true)
                 end
             end
             return expected
@@ -1749,15 +1738,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # recursed compile_value to a StackOverflow. Guard by object identity
         # AND depth; refuse with a NAMED error so pipelines degrade honestly.
         if any(x -> x === val, _VALUE_COMPILE_STACK)
-            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-                "cyclic struct constant of type $(T) (object graph references itself)",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "cyclic struct constant of type $(T) (object graph references itself)"; detail=string(nameof(T)), soundness_fatal=true)
         end
         if length(_VALUE_COMPILE_STACK) > 200
             _tail = join((string(nameof(typeof(x))) for x in _VALUE_COMPILE_STACK[end-7:end]), " → ")
-            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-                "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))"; detail=string(nameof(T)), soundness_fatal=true)
         end
         push!(_VALUE_COMPILE_STACK, val)
         try
@@ -1781,10 +1766,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             struct_new!(b, type_idx)
             return b
         end
-        isempty(undefined_fields) || throw(WasmCompileError(WasmDiagnostic(
-            :unsupported_type, string(nameof(T)),
-            "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values",
-            nothing, nothing)))
+        isempty(undefined_fields) || record_unsupported!(ctx, :unsupported_type, "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values"; detail=string(nameof(T)), soundness_fatal=true)
 
         struct_type_def = ctx.mod.types[type_idx + 1]
         struct_type_def isa StructType || error("constant $T has no struct Wasm layout")

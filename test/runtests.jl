@@ -140,6 +140,8 @@ _wt_shard0() && include("module_builder_validation.jl")
 _wt_shard0() && include("host_boundary_types.jl")
 
 include("utils.jl")
+# a rejection names its statement and inline chain (dev/MARCH.md exit criterion 5)
+_wt_shard0() && include("diagnostic_attribution.jl")
 # formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
 _wt_shard0() && include("dispatch_method_error.jl")
 # formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
