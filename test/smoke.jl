@@ -135,6 +135,13 @@ _g("dicts", Any[
     ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
     # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
     ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
+    # copy of a String-keyed Dict: isbitstype(String) folds (no sizeof(String) branch)
+    # and the non-isbits Memory copy divides byte offsets by the reference stride
+    ("dict_str_copy_grow", (x::Int64) -> (d = copy(_SMOKE_DS); d["cc"] = x; length(d) * 10 + d["bb"]), Int64(3)),
+    # reference-element copies at offset 0 and above (stride 8 both sides)
+    ("vec_str_copy_push", (x::Int64) -> (w = copy(_SMOKE_VS); push!(w, "e"); length(w) * 10 + length(w[2]) + x), Int64(0)),
+    ("vec_str_slice", (x::Int64) -> (w = _SMOKE_VS[2:3]; length(w) * 10 + length(w[1]) + length(w[2]) + x), Int64(0)),
+    ("vec_str_copy_set", (x::Int64) -> (w = copy(_SMOKE_VS); w[2] = "zz"; length(_SMOKE_VS[2]) * 10 + length(w[2]) + x), Int64(0)),
 ])
 
 # ---- isa / typeassert against parametric abstracts on Any-typed values ---
@@ -152,6 +159,8 @@ const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
 const _SMOKE_VEC = Int64[1, 2, 3]
 const _SMOKE_VEC2 = Int64[4, 5, 6]
 const _SMOKE_SET = Set([1, 2, 3, 40])
+const _SMOKE_DS = Dict{String,Int64}("a" => 1, "bb" => 2)
+const _SMOKE_VS = ["a", "bb", "ccc", "dddd"]
 
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end

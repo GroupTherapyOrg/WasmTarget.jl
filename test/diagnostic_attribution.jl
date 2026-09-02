@@ -19,6 +19,9 @@ module DiagAttrib
     # The same construct reached through two inlined levels.
     @inline mid(x::Float64) = helper_uses_ccall(x) * 2.0
     outer2(x::Float64) = mid(x) - 1.0
+    # for the internal-tier test: an Int64 add inside an inlined helper
+    @inline bug_helper(x::Int64) = x + 1
+    bug_outer(x::Int64) = bug_helper(x) * 2
 end
 
 _first_diag(f, argtypes) = try
@@ -55,6 +58,31 @@ end
     @test occursin("helper_uses_ccall", fr[1])
     @test occursin("mid", fr[2])
     @test occursin("outer2", fr[end])
+end
+
+@testset "diagnostics: a codegen bug (the internal tier) is located the same way" begin
+    # inject a failure into one intrinsics-table row, compile through an inlined
+    # helper, restore the row
+    k = (WasmTarget.I64, WasmTarget.I64, :add_int)
+    saved = WasmTarget.INTRINSIC_BINOPS[k]
+    WasmTarget.INTRINSIC_BINOPS[k] = WasmTarget.BinOpEmit((b, ctx, jw) -> error("simulated codegen bug"), saved.result)
+    try
+        err = try
+            WasmTarget.compile(DiagAttrib.bug_outer, (Int64,))
+            nothing
+        catch e
+            e
+        end
+        @test err isa WasmTarget.WasmInternalError
+        @test err.stmt_idx > 0
+        @test occursin("add_int", err.stmt)
+        @test !isempty(err.frames) && occursin("bug_helper", err.frames[end - 1]) && occursin("bug_outer", err.frames[end])
+        @test err.cause isa ErrorException && occursin("simulated", err.cause.msg)
+        msg = sprint(showerror, err)
+        @test occursin("codegen bug", msg) && occursin("bug_helper", msg) && occursin("cause:", msg)
+    finally
+        WasmTarget.INTRINSIC_BINOPS[k] = saved
+    end
 end
 
 @testset "diagnostics: the 5-field constructor still builds a located-less report" begin

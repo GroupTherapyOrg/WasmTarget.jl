@@ -2787,7 +2787,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
                      obj_type.parameters[2] : obj_type.parameters[1]) : nothing
                 local _poob = _ctx_builder(ctx, "compile_call")
-                if _poo_idx !== nothing && _poo_el isa DataType && isbitstype(_poo_el)
+                if _poo_idx !== nothing && _poo_el isa Type
+                    # Julia's element stride: sizeof for an isbits element, 8 (a boxed
+                    # slot, Base.aligned_sizeof(Any)) for a reference element — the same
+                    # rule jl_genericmemory_copyto's lowering divides by
+                    local _poo_sz = memory_element_stride(_poo_el)
                     local _poo_it = infer_value_type(_poo_idx, ctx)
                     emit_value!(_poob, _poo_idx, ctx,
                                 (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ? I64 : I32)
@@ -2795,8 +2799,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         num!(_poob, Opcode.I64_EXTEND_I32_S)
                     i64_const!(_poob, Int64(1))
                     num!(_poob, Opcode.I64_SUB)
-                    if sizeof(_poo_el) != 1
-                        i64_const!(_poob, Int64(sizeof(_poo_el)))
+                    if _poo_sz != 1
+                        i64_const!(_poob, Int64(_poo_sz))
                         num!(_poob, Opcode.I64_MUL)
                     end
                 else

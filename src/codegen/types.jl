@@ -534,6 +534,17 @@ function get_type_id(registry::TypeRegistry, T::Type)::Int32
 end
 
 """
+    memory_element_stride(T) -> Int
+
+Julia's byte stride of a `Memory{T}` element, the unit `MemoryRef.ptr_or_offset` is
+counted in: `sizeof(T)` for an isbits element, 8 for a boxed reference slot
+(`Base.aligned_sizeof(Any)`). Every lowering that converts between a byte offset and an
+element index uses this one rule.
+"""
+memory_element_stride(@nospecialize(T)) =
+    (T isa DataType && isbitstype(T)) ? max(sizeof(T), 1) : 8
+
+"""
     registered_structs(registry::TypeRegistry) -> Vector{Pair{Type,StructInfo}}
 
 The ONE way to iterate the struct registry. `structs` is a `Dict` keyed by type
