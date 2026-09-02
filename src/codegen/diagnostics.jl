@@ -176,6 +176,7 @@ structural proof.
 Callers pass the SSA statement `idx` (already in scope at every codegen site) for
 source attribution. Pass `soundness_fatal=true` to force rejection.
 """
+# formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of the caller's soundness_fatal hint and CFG-proven reachability, classified here before any emission is attempted (parity: target.dart:719 two-tier diagnostics).
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)
