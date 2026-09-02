@@ -60,6 +60,35 @@ function _show_frames(io::IO, d::WasmDiagnostic)
     end
 end
 
+"""
+    WasmInternalError(func_name, stmt_idx, stmt, frames, cause)
+
+The internal tier (dart's own `throw`, target.dart:719): a codegen bug — a builder
+stack imbalance, an `error(...)`, a MethodError inside the compiler — raised while a
+statement was being compiled. It is NOT a diagnostic about the user's program, so it
+does not enter the ledger; but it is located exactly like one, so a compiler bug names
+the statement and inline chain it surfaced at. `cause` is the original exception.
+"""
+struct WasmInternalError <: Exception
+    func_name::String
+    stmt_idx::Int
+    stmt::String
+    frames::Vector{String}
+    cause::Any
+end
+
+function Base.showerror(io::IO, e::WasmInternalError)
+    print(io, "WasmInternalError: codegen bug while compiling `", e.func_name, "`")
+    if e.stmt_idx > 0
+        print(io, "\n  statement %", e.stmt_idx, ": ", e.stmt)
+        for (i, f) in enumerate(e.frames)
+            print(io, "\n  ", i == 1 ? "in " : " ← ", f)
+        end
+    end
+    print(io, "\n  cause: ")
+    showerror(io, e.cause)
+end
+
 _kind_phrase(k::Symbol) =
     k === :unsupported_method    ? "method" :
     k === :unsupported_intrinsic ? "intrinsic" :
@@ -200,6 +229,23 @@ function julia_loc(ctx, idx::Int)
     return nothing
 end
 
+# The ONE read of the compiled IR for attribution (its DebugInfo carries the
+# provenance); every located report — diagnostic or internal — goes through it.
+_ctx_ir(ctx) = try; ctx.code_info; catch; nothing; end
+
+"""
+    located_internal_error(ctx, idx, cause) -> WasmInternalError
+
+Wrap a non-diagnostic exception raised while statement `idx` was being compiled
+with the statement and its inline chain.
+"""
+function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
+    ci = _ctx_ir(ctx)
+    stmt = try; first(string(ci.code[idx]), 160); catch; ""; end
+    return WasmInternalError(_ctx_func_name(ctx), idx, stmt,
+                             ci === nothing ? String[] : stmt_frames(ci, idx), cause)
+end
+
 function _ctx_func_name(ctx)
     try
         ctx.func_ref !== nothing && return string(nameof(ctx.func_ref))
@@ -253,7 +299,7 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)
     idx > 0 || (idx = try; ctx.current_stmt_idx; catch; 0; end)   # helpers without an idx
-    local _ci = try; ctx.code_info; catch; nothing; end
+    local _ci = _ctx_ir(ctx)
     local _stmt = idx > 0 ? (try; first(string(_ci.code[idx]), 160); catch; ""; end) : ""
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail,

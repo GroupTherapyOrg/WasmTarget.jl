@@ -2825,6 +2825,13 @@ function _is_typelevel_foldable(@nospecialize(f))::Bool
     f === Base.promote_type   && return true
     (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
     f === Base.eltype && return true
+    # the type predicates Base branches on before pointer paths: a function of the
+    # type alone, the same on the host and in the module. Unfolded, `isbitstype(T)`
+    # kept unsafe_copyto!'s memmove branch alive for T = String, and its
+    # aligned_sizeof(String) rejected copy(::Dict{String,V}) at compile time.
+    f === Base.isbitstype && return true
+    f === Base.isprimitivetype && return true
+    f === Base.isconcretetype && return true
     (isdefined(Base, :_compute_eltype) && f === Base._compute_eltype) && return true
     # float/one fold only on a Type arg — concrete-eval fires ONLY on constant
     # args, so the value forms (one(::Float64)) never reach the fold here.

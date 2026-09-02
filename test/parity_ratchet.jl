@@ -1484,6 +1484,15 @@ const LOCKS = [
     "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions (locked 2026-09-02)",
         () -> count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
                           exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])),
+    "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement and inline chain; _compile_statement_located! has no other caller (locked 2026-09-02)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, stmt, idx, ctx)",
+                        "(err isa WasmCompileError || err isa WasmInternalError) && rethrow()",
+                        "throw(located_internal_error(ctx, idx, err))"]
+            callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")
+            count(p -> !occursin(p, src), required) + abs(callers - 1)
+        end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",

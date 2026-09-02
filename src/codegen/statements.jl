@@ -295,8 +295,21 @@ end
 Compile a single IR statement — dart's ONE code generator, ONE builder (Phase C): THE visitor emits directly into the caller's builder; the byte era's
 front seam and accumulator are gone.
 """
+# The one per-statement entry: every failure raised below it is located here — a
+# diagnostic through record_unsupported! (already attributed), and any OTHER
+# exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
+# the same statement and inline chain, so nothing surfaces without a site.
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
+    try
+        return _compile_statement_located!(b, stmt, idx, ctx)
+    catch err
+        (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
+        throw(located_internal_error(ctx, idx, err))
+    end
+end
+
+function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
     # Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
     # block boundaries — the next block is reachable via a different control flow path.
@@ -1835,16 +1848,17 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx
     length(expr.args) >= 10 || return nothing
         local _gmc_mt = infer_value_type(expr.args[6], ctx)
         local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
-        if _gmc_te isa DataType && isprimitivetype(_gmc_te) && sizeof(_gmc_te) in (1, 2, 4, 8) &&
-           infer_value_type(expr.args[8], ctx) === _gmc_mt
+        # any element kind: the byte offsets divide by Julia's element stride (sizeof
+        # for isbits, 8 for a boxed reference slot) — the rule :ptr_or_offset multiplies by
+        if _gmc_te isa Type && infer_value_type(expr.args[8], ctx) === _gmc_mt
             local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
-            local _gmc_sh = trailing_zeros(sizeof(_gmc_te))
+            local _gmc_sz = memory_element_stride(_gmc_te)
             local _gmc_off = a -> begin
                 emit_value!(b, a, ctx, I64)
                 num!(b, Opcode.I32_WRAP_I64)
-                if _gmc_sh > 0
-                    i32_const!(b, Int64(_gmc_sh))
-                    num!(b, Opcode.I32_SHR_U)
+                if _gmc_sz > 1
+                    i32_const!(b, Int64(_gmc_sz))
+                    num!(b, Opcode.I32_DIV_U)
                 end
             end
             emit_value!(b, expr.args[6], ctx, ConcreteRef(UInt32(_gmc_arr), true))
