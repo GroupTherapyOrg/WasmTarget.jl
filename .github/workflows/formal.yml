@@ -3,6 +3,11 @@ on:
   push:
     branches: [main]
   pull_request:
+# Only the newest push per branch runs; a superseded run is cancelled.
+concurrency:
+  group: formal-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tlc:
     runs-on: ubuntu-latest
