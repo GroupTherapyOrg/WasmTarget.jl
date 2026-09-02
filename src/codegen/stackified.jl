@@ -144,8 +144,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # its target: Julia's inlined reductions place the live loop inside that
     # span, entered by an unrelated edge (reduce(max, 1:n) compiled to a
     # function that returned an unset local on 1.13).
-    # Every edge of the folded CFG is realized exactly once; a block is
-    # dropped only when no path from the entry reaches it.
+    # formal(dev/formal/Stackifier.tla): every edge of the folded CFG is realized exactly
+    # once; a block is dropped only when no path from the entry reaches it.
     boundscheck_jumps = Set{Int}()  # Statement indices of GotoIfNot that always jump
     dead_regions = Set{Int}()       # Statement indices that are dead code
     dead_blocks = Set{Int}()        # Block indices unreachable from the entry
