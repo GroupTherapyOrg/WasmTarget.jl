@@ -4593,6 +4593,37 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
+    # parity(intrinsics.dart:1007 _inlineUnaryOperatorMap lookup): THE UNARY INTRINSICS
+    # TABLE ROUTE — mirrors the binop route above, right after it (same `_it_name`
+    # extraction, same `!is_128bit` guard). Bool routes FIRST, exactly as dart routes
+    # `boolType` ahead of any map lookup (intrinsics.dart:438-444): a `not_int` fed a
+    # comparison result is logical NOT (`i32.eqz`), structurally different from bitwise
+    # NOT (`const -1; xor`) and must never reach the int-typed table entry.
+    if _it_name === :not_int && length(args) == 1 && is_boolean_value(args[1], ctx)
+        _op1!(Opcode.I32_EQZ)
+        return append_builder!(b, fb)
+    elseif _it_name !== nothing && !is_128bit
+        local _ut_w = arg_type === Float64 ? F64 :
+                      arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
+        local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)
+        if _ut_result !== nothing
+            # (The rebox link, mirroring the binop route above.)
+            local _rbx_li2 = get(ctx.ssa_locals, idx, nothing)
+            if _rbx_li2 !== nothing
+                local _rbx_off2 = _rbx_li2 - ctx.n_params
+                if _rbx_off2 >= 0 && _rbx_off2 < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off2 + 1]) &&
+                   _ut_result in (I32, I64, F32, F64)
+                    (arg_type isa Type && isconcretetype(arg_type)) ||
+                        record_unsupported!(ctx, :unsupported_type,
+                            "intrinsic result boxing lacks a concrete Julia source type";
+                            idx=idx, detail=expr)
+                    emit_classid_box!(fb, ctx, _ut_result, arg_type)
+                end
+            end
+            return append_builder!(b, fb)
+        end
+    end
+
     # Match intrinsics by name
     if is_func(func, :add_int)
         # (non-128-bit handled by THE intrinsics table route above)
@@ -4867,23 +4898,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # For other cases (Int64<->UInt64, Int32<->UInt32, Int128<->UInt128),
         # bitcast is a no-op in Wasm (same representation)
 
-    elseif is_func(func, :neg_int)
-        if is_128bit
-            # 128-bit negation
-            emit_int128_neg!(fb, ctx, arg_type)
-        elseif is_32bit
-            # For simplicity, emit: i32.const -1, i32.xor, i32.const 1, i32.add
-            # Which is equivalent to: ~x + 1 = -x
-                i32_const!(fb, -1)  # -1 in signed LEB128
-                num!(fb, Opcode.I32_XOR)
-                i32_const!(fb, 1)
-                num!(fb, Opcode.I32_ADD)
-        else
-                i64_const!(fb, -1)  # -1 in signed LEB128
-                num!(fb, Opcode.I64_XOR)
-                i64_const!(fb, 1)
-                num!(fb, Opcode.I64_ADD)
-        end
+    elseif is_func(func, :neg_int)  # table residue: Int128 → quarantine tier
+        emit_int128_neg!(fb, ctx, arg_type)
 
     elseif is_func(func, :flipsign_int)
         _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
@@ -5046,26 +5062,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _op1!(is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
         end
 
-    elseif is_func(func, :not_int)
-        # Check if this is boolean negation (result of comparison)
-        # If so, use eqz instead of bitwise NOT
-        if length(args) == 1 && is_boolean_value(args[1], ctx)
-            # Boolean NOT: eqz turns 0->1, 1->0
-            _op1!(Opcode.I32_EQZ)
-        elseif is_128bit
-            # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
-            # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
-            emit_int128_not!(fb, ctx, arg_type)
-        else
-            # Bitwise NOT: x xor -1
-                if is_32bit
-                    i32_const!(fb, -1)  # -1
-                    num!(fb, Opcode.I32_XOR)
-                else
-                    i64_const!(fb, -1)  # -1
-                    num!(fb, Opcode.I64_XOR)
-                end
-        end
+    elseif is_func(func, :not_int)  # table residue: Int128 → quarantine tier
+        # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
+        # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
+        emit_int128_not!(fb, ctx, arg_type)
 
     # Shift operations
     # Note: Wasm requires shift amount to have same type as value being shifted
@@ -5134,27 +5134,15 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
 
     # Count leading/trailing zeros (used in Char conversion)
-    elseif is_func(func, :ctlz_int)
-        if is_128bit
-            emit_int128_ctlz!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_CLZ : Opcode.I64_CLZ)
-        end
+    elseif is_func(func, :ctlz_int)  # table residue: Int128 → quarantine tier
+        emit_int128_ctlz!(fb, ctx, arg_type)
 
-    elseif is_func(func, :cttz_int)
-        if is_128bit
-            emit_int128_cttz!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
-        end
+    elseif is_func(func, :cttz_int)  # table residue: Int128 → quarantine tier
+        emit_int128_cttz!(fb, ctx, arg_type)
 
     # Population count (number of set bits)
-    elseif is_func(func, :ctpop_int)
-        if is_128bit
-            emit_int128_ctpop!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
-        end
+    elseif is_func(func, :ctpop_int)  # table residue: Int128 → quarantine tier
+        emit_int128_ctpop!(fb, ctx, arg_type)
 
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
@@ -5234,9 +5222,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         append_builder!(fb, _bswb)
 
     # Float operations
-    elseif is_func(func, :neg_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_NEG : Opcode.F64_NEG)
-
     # Fused multiply-add: muladd_float(a, b, c) = a*b + c
     # WASM doesn't have native fma, so we implement as mul then add
     elseif is_func(func, :muladd_float)
@@ -5528,24 +5513,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # fptrunc(TargetType, value) - truncate Float64 to Float32
         # The source is always Float64, target is Float32
         _op1!(0xB6)  # f32.demote_f64
-
-    elseif is_func(func, :trunc_llvm)  # Truncate float towards zero (returns float)
-        _op1!(arg_type === Float32 ? Opcode.F32_TRUNC : Opcode.F64_TRUNC)
-
-    elseif is_func(func, :floor_llvm)  # Floor float
-        _op1!(arg_type === Float32 ? Opcode.F32_FLOOR : Opcode.F64_FLOOR)
-
-    elseif is_func(func, :ceil_llvm)  # Ceil float
-        _op1!(arg_type === Float32 ? Opcode.F32_CEIL : Opcode.F64_CEIL)
-
-    elseif is_func(func, :rint_llvm)  # Round to nearest even
-        _op1!(arg_type === Float32 ? Opcode.F32_NEAREST : Opcode.F64_NEAREST)
-
-    elseif is_func(func, :abs_float)  # Absolute value of float
-        _op1!(arg_type === Float32 ? Opcode.F32_ABS : Opcode.F64_ABS)
-
-    elseif is_func(func, :sqrt_llvm) || is_func(func, :sqrt_llvm_fast)  # Square root
-        _op1!(arg_type === Float32 ? Opcode.F32_SQRT : Opcode.F64_SQRT)
 
     # High-level operators (fallback)
     elseif is_func(func, :+)
