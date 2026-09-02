@@ -2232,6 +2232,7 @@ function _emit_typeerror_throw!(b::InstrBuilder, got, target::Type, idx::Int,
     return b
 end
 
+# formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(string(expr), 80))   # errors name the call
