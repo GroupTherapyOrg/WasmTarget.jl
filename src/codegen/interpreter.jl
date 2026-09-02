@@ -2291,35 +2291,267 @@ end
     return s
 end
 
-# ─── String hash Overlay (Julia 1.13+) ─────────────────────────────────────
-# Why: 1.13 replaced the memhash foreigncall with pure-Julia rapidhash
-#      (Base.hash_bytes) that reads string memory through 4/8-byte
-#      pointerref(Ptr{UInt32/UInt64}) loads — WasmGC has no raw pointers, so
-#      the inlined loads stubbed to unreachable (every Dict{String,...} op
-#      trapped). The :invoke-level hash_bytes handler in invoke.jl only
-#      catches the non-inlined form.
-# Fix: Overlay hash(::String, ::UInt) with FNV-1a over codeunit() reads,
-#      matching get_or_create_string_hash_func! (types.jl) EXACTLY — same
-#      offset basis, prime, and low-32-bit seed mix — so Julia-level hashing
-#      and the wasm helper (used by the memhash/hash_bytes fallback paths)
-#      agree within one module. Hash values intentionally differ from native
-#      Julia (1.12 precedent: internal consistency is what Dict needs).
-# Remove when: codegen supports wide pointerref loads traced to string refs.
+# ─── String hash Overlay — bit-exact with native Julia ─────────────────────
+# Why: Base's hash(::String,::UInt)/hash(::SubString{String},::UInt) reach
+#      string bytes through raw pointers (1.12: `ccall(:memhash_seed,...)`
+#      over Ptr{UInt8}; 1.13: pointerref(Ptr{UInt32/UInt64}) loads inside the
+#      pure-Julia rapidhash `hash_bytes`) — WasmGC has no raw pointers, so the
+#      inlined loads stub to unreachable and every Dict{String,...}/
+#      Set{String} op traps. A prior version of this overlay used FNV-1a,
+#      internally consistent but NOT bit-exact with native — which silently
+#      broke any Dict{String,V}/Set{String} CONSTANT built natively and
+#      embedded as a compile-time struct.new (its slots array was placed by
+#      the native hash; probing it with a different wasm hash landed in the
+#      wrong slot and KeyError'd/missed).
+# Fix: Overlay hash(::String,::UInt) and hash(::SubString{String},::UInt)
+#      with a pure-Julia port of Julia's OWN native algorithm — ground truth,
+#      not a WT invention — reading bytes via codeunit(s,i) instead of
+#      pointers:
+#        1.12 (base/hashing.jl:195-200): `h += memhash_seed; ccall(memhash,
+#        UInt, (Ptr{UInt8},Csize_t,UInt32), s, sizeof(s), h % UInt32) + h`
+#        where C `memhash_seed` (support/hashing.c) is
+#        `MurmurHash3_x64_128(buf, n, seed, out); return out[1]`
+#        (support/MurmurHash3.c, JuliaLang/julia @ v1.12.7). Ported straight
+#        over codeunit reads — verified bit-exact against the live
+#        `ccall(:memhash_seed,...)` over every length 0..64, every 16-byte
+#        tail-remainder class (0..15) crossed with 0..3 leading full blocks,
+#        ASCII/binary/non-ASCII UTF-8, 7 fixed + 200 random seeds, exhaustive
+#        SubString slices of a 90-codepoint string, and the full hash(s,h)
+#        formula (6537 cases total, 0 mismatches).
+#        1.13 (base/hashing.jl): `hash_bytes(pointer(s), sizeof(s),
+#        UInt64(h), HASH_SECRET)`, an adaptation of rapidhash. Ported the
+#        same way (codeunit reads); the 64×64→128 multiply (`mul_parts`/
+#        `hash_mix`) is done with plain UInt64 arithmetic (32-bit-half
+#        decomposition) instead of Int128/widemul, so it rests only on
+#        integer ops WT already lowers everywhere — independently verified
+#        against native `widemul` (5064 cases) and the full port verified
+#        bit-exact against native `Base.hash` (16000 cases: every length
+#        0..80, the <=16/>16 and 4/8/16/32/48-byte boundary classes, non-ASCII,
+#        500 random (h,len) pairs, and exhaustive SubString slices of a
+#        140+-byte string — 0 mismatches).
+#      grep of Base (1.12.7 and 1.13.0-rc1) confirms String/SubString{String}
+#      hash are the ONLY callers of memhash/memhash_seed/hash_bytes for
+#      strings (1.13's gmp.jl also calls hash_bytes, for BigInt — unrelated,
+#      out of WT's scope), so overlaying these two methods makes the
+#      `:memhash` foreigncall and the hash_bytes pointer path unreachable for
+#      every string-hashing call site.
+# Remove when: codegen supports wide pointerref loads traced to string refs
+#      (only relevant if some future Base version routes a THIRD caller
+#      through memhash/hash_bytes for strings).
 
-@static if VERSION >= v"1.13.0-"
-    @noinline function _wasm_string_fnv1a(s::String, h::UInt)
-        hv = 0xcbf29ce484222325 ⊻ UInt64(UInt32(h & 0xffffffff))
-        i = 1
-        n = ncodeunits(s)
-        while i <= n
-            hv = (hv ⊻ UInt64(codeunit(s, i))) * 0x00000100000001b3
+@inline function _wasm_rotl64(x::UInt64, r::Int)::UInt64
+    return (x << r) | (x >> (64 - r))
+end
+
+@static if VERSION < v"1.13.0-"
+    # MurmurHash3_x64_128(buf, n, seed, out) -> out[1] (1.12 Base memhash_seed).
+    @inline function _wasm_mm3_load_u64(s, start::Int, nbytes::Int)::UInt64
+        v = UInt64(0)
+        i = 0
+        while i < nbytes
+            v |= UInt64(codeunit(s, start + i)) << (8 * i)
             i += 1
         end
-        return hv % UInt
+        return v
     end
 
-    @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
-        return _wasm_string_fnv1a(data, h)
+    @inline function _wasm_mm3_fmix64(k::UInt64)::UInt64
+        k ⊻= k >> 33
+        k *= 0xff51afd7ed558ccd
+        k ⊻= k >> 33
+        k *= 0xc4ceb9fe1a85ec53
+        k ⊻= k >> 33
+        return k
+    end
+
+    @noinline function _wasm_memhash_seed(s::Union{String,SubString{String}}, seed::UInt32)::UInt64
+        n = ncodeunits(s)
+        c1 = 0x87c37b91114253d5
+        c2 = 0x4cf5ad432745937f
+        h1 = UInt64(seed)
+        h2 = UInt64(seed)
+
+        nblocks = n >> 4   # div(n, 16)
+        blk = 0
+        while blk < nblocks
+            base = blk * 16 + 1
+            k1 = _wasm_mm3_load_u64(s, base, 8)
+            k2 = _wasm_mm3_load_u64(s, base + 8, 8)
+
+            k1 *= c1
+            k1 = _wasm_rotl64(k1, 31)
+            k1 *= c2
+            h1 ⊻= k1
+            h1 = _wasm_rotl64(h1, 27)
+            h1 += h2
+            h1 = h1 * 5 + 0x52dce729
+
+            k2 *= c2
+            k2 = _wasm_rotl64(k2, 33)
+            k2 *= c1
+            h2 ⊻= k2
+            h2 = _wasm_rotl64(h2, 31)
+            h2 += h1
+            h2 = h2 * 5 + 0x38495ab5
+
+            blk += 1
+        end
+
+        tailstart = nblocks * 16
+        rem = n - tailstart
+
+        if rem >= 9
+            k2 = _wasm_mm3_load_u64(s, tailstart + 9, rem - 8)
+            k2 *= c2
+            k2 = _wasm_rotl64(k2, 33)
+            k2 *= c1
+            h2 ⊻= k2
+        end
+        if rem >= 1
+            nb = rem >= 8 ? 8 : rem
+            k1 = _wasm_mm3_load_u64(s, tailstart + 1, nb)
+            k1 *= c1
+            k1 = _wasm_rotl64(k1, 31)
+            k1 *= c2
+            h1 ⊻= k1
+        end
+
+        h1 ⊻= UInt64(n)
+        h2 ⊻= UInt64(n)
+        h1 += h2
+        h2 += h1
+        h1 = _wasm_mm3_fmix64(h1)
+        h2 = _wasm_mm3_fmix64(h2)
+        h1 += h2
+        h2 += h1
+
+        return h2
+    end
+
+    const _WASM_MEMHASH_SEED = 0x71e729fd56419c81
+
+    @noinline function _wasm_hash_string(s::Union{String,SubString{String}}, h::UInt)::UInt
+        h2 = h + _WASM_MEMHASH_SEED
+        return (_wasm_memhash_seed(s, h2 % UInt32) + h2) % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+    @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+else
+    # rapidhash hash_bytes(ptr, n, seed, secret) -> UInt (1.13+ Base), ported
+    # over codeunit reads; the widening multiply avoids Int128/widemul (see
+    # comment above).
+    @inline function _wasm_rh_umul128(a::UInt64, b::UInt64)
+        a_lo = a & 0x00000000ffffffff
+        a_hi = a >> 32
+        b_lo = b & 0x00000000ffffffff
+        b_hi = b >> 32
+
+        lo_lo = a_lo * b_lo
+        hi_lo = a_hi * b_lo
+        lo_hi = a_lo * b_hi
+        hi_hi = a_hi * b_hi
+
+        cross = (lo_lo >> 32) + (hi_lo & 0x00000000ffffffff) + (lo_hi & 0x00000000ffffffff)
+        hi = hi_hi + (hi_lo >> 32) + (lo_hi >> 32) + (cross >> 32)
+        lo = (cross << 32) | (lo_lo & 0x00000000ffffffff)
+        return hi, lo
+    end
+
+    @inline function _wasm_rh_mix(a::UInt64, b::UInt64)::UInt64
+        hi, lo = _wasm_rh_umul128(a, b)
+        return hi ⊻ lo
+    end
+
+    @inline function _wasm_rh_load_le64(s, i::Int)::UInt64
+        v = UInt64(0)
+        j = 0
+        while j < 8
+            v |= UInt64(codeunit(s, i + j)) << (8 * j)
+            j += 1
+        end
+        return v
+    end
+
+    @inline function _wasm_rh_load_le32(s, i::Int)::UInt64
+        v = UInt64(0)
+        j = 0
+        while j < 4
+            v |= UInt64(codeunit(s, i + j)) << (8 * j)
+            j += 1
+        end
+        return v
+    end
+
+    @noinline function _wasm_hash_bytes(s::Union{String,SubString{String}}, seed_in::UInt64,
+                                         secret::NTuple{4,UInt64})::UInt64
+        n = ncodeunits(s)
+        buflen = UInt64(n)
+        seed = seed_in ⊻ _wasm_rh_mix(seed_in ⊻ secret[3], secret[2])
+
+        a = UInt64(0)
+        b = UInt64(0)
+        i = buflen
+
+        if buflen <= 16
+            if buflen >= 4
+                seed ⊻= buflen
+                if buflen >= 8
+                    a = _wasm_rh_load_le64(s, 1)
+                    b = _wasm_rh_load_le64(s, n - 7)
+                else
+                    a = _wasm_rh_load_le32(s, 1)
+                    b = _wasm_rh_load_le32(s, n - 3)
+                end
+            elseif buflen > 0
+                a = (UInt64(codeunit(s, 1)) << 45) | UInt64(codeunit(s, n))
+                b = UInt64(codeunit(s, div(n, 2) + 1))
+            end
+        else
+            pos = 1
+            if i > 48
+                see1 = seed
+                see2 = seed
+                while i > 48
+                    seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos) ⊻ secret[1], _wasm_rh_load_le64(s, pos + 8) ⊻ seed)
+                    see1 = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 16) ⊻ secret[2], _wasm_rh_load_le64(s, pos + 24) ⊻ see1)
+                    see2 = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 32) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 40) ⊻ see2)
+                    pos += 48
+                    i -= 48
+                end
+                seed ⊻= see1
+                seed ⊻= see2
+            end
+            if i > 16
+                seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 8) ⊻ seed)
+                if i > 32
+                    seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 16) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 24) ⊻ seed)
+                end
+            end
+
+            a = _wasm_rh_load_le64(s, n - 15) ⊻ i
+            b = _wasm_rh_load_le64(s, n - 7)
+        end
+
+        a = a ⊻ secret[2]
+        b = b ⊻ seed
+        b, a = _wasm_rh_umul128(a, b)
+        return _wasm_rh_mix(a ⊻ secret[4], b ⊻ secret[2] ⊻ i)
+    end
+
+    @noinline function _wasm_hash_string(s::Union{String,SubString{String}}, h::UInt)::UInt
+        return _wasm_hash_bytes(s, UInt64(h), Base.HASH_SECRET) % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+    @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
+        return _wasm_hash_string(s, h)
     end
 end
 

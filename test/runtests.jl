@@ -189,6 +189,10 @@ _wt_shard0() && include("vararg_fixed_prefix.jl")
 _wt_shard0() && include("symbol_syntax_metadata.jl")
 _wt_shard0() && include("memmove_single_path.jl")
 _wt_shard0() && include("mutable_global_initialization.jl")
+# Ground-truth string hashing: hash(::String/::SubString{String}) now bit-exact
+# with native Julia (not merely internally consistent) — Dict{String,V}/
+# Set{String} CONSTANTS built natively resolve correctly from wasm.
+_wt_shard0() && include("string_hash_ground_truth.jl")
 _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
