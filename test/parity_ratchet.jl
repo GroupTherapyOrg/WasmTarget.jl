@@ -386,7 +386,7 @@ const LOCKS = [
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
+            required = ["function _invoke_kwerr_b", "emit_value!(bkw, Core.kwcall",
                         "args_tuple_type = Tuple{arg_julia_types...}",
                         "Int64(WASM_WORLD_AGE)", "_wt_exact_kwerr_exception"]
             count(p -> !occursin(p, invoke_src * test_src), required)
@@ -395,7 +395,7 @@ const LOCKS = [
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :throw_inexacterror", "payload = args[2:end]",
+            required = ["function _invoke_throw_inexacterror_b", "payload = args[2:end]",
                         "payload_type = Tuple{payload_types...}",
                         "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
                         "_wt_exact_inexact_exception"]
@@ -1407,6 +1407,9 @@ const LOCKS = [
             outside + max(total - 6, 0) +
                 (occursin("function compile_with_base", wt_src) ? 0 : 1)
         end),
+    "L115_invokes_dispatch_through_registry_only" => ("parity(intrinsics.dart:26-64 MemberIntrinsic/StaticIntrinsic; `_lookup` :75-100/:401-428): every invoke target compile_invoke! recognizes is resolved through ONE Method-keyed lookup (INVOKE_INTRINSICS) — a bare-Symbol `name === :sym` ladder arm can never coexist with it in invoke.jl (R20's floor, locked here so it cannot regress back above 0)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
