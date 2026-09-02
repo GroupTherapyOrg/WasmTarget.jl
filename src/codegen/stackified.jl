@@ -857,7 +857,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
             edge_julia_type = get(ctx.ssa_types, val.id, nothing)
             if edge_julia_type !== nothing
-                return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+                return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
             end
         elseif val isa Core.Argument
             # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.

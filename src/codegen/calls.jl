@@ -1125,16 +1125,16 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
         type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-        struct_rt = julia_to_wasm_type_concrete(arg_type, ctx)
+        struct_rt = get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true)
 
         # Pop y struct to local
         y_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, y_struct_local)
 
         # Pop x struct to local
         x_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, x_struct_local)
 
         # Get y's hi part to check sign
@@ -1156,12 +1156,12 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
 
         # Store negated x
         neg_x_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, neg_x_local)
 
         # Allocate result local
         result_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
 
         # if is_neg { result = neg_x } else { result = x }
         local_get!(bld, is_neg_local)
@@ -2101,7 +2101,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
             aw = AnyRef
         else
-            aw = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
+            aw = get_concrete_wasm_type(call_arg_types[j], ctx.mod, ctx.type_registry; for_local=true)
             emit_value!(bld, arg, ctx, aw;
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
         end
@@ -2606,7 +2606,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(type_idx))...])
         elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
             # Other reference types need typed select too
-            wasm_type = julia_to_wasm_type_concrete(val_type, ctx)
+            wasm_type = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry; for_local=true)
             if wasm_type isa ConcreteRef
                 select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(wasm_type.type_idx))...])
             else
@@ -3119,7 +3119,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         # The struct is on the stack, we need to convert struct fields to array
                         # Store in local, then create array from fields
                         tuple_local = length(ctx.locals) + ctx.n_params
-                        push!(ctx.locals, julia_to_wasm_type_concrete(obj_type, ctx))
+                        push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                         local_set!(_htb, tuple_local)
 
                         # Push all fields onto stack (account for typeId at field 0)
@@ -3181,7 +3181,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         if U isa Union
                             # Produce the value in the CANONICAL representation of the
                             # getfield's INFERRED SSA result type — that is exactly what
-                            # the SSA local was allocated as (julia_to_wasm_type_concrete),
+                            # the SSA local was allocated as (get_concrete_wasm_type),
                             # so the if-block result matches the local and there's no store
                             # mismatch. (Anchoring on Union{fieldtypes…} instead diverges
                             # from inference — e.g. Dates date-format parsing, where the
@@ -3193,7 +3193,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             _ssa_t = get(ctx.ssa_types, idx, nothing)
                             local Ueff
                             if _ssa_t isa Type && _ssa_t !== Union{}
-                                union_wasm = julia_to_wasm_type_concrete(_ssa_t, ctx)
+                                union_wasm = get_concrete_wasm_type(_ssa_t, ctx.mod, ctx.type_registry; for_local=true)
                                 Ueff = _ssa_t isa Union ? _ssa_t : U
                             else
                                 union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
@@ -3208,7 +3208,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             emit_value!(_hetb, obj_arg, ctx,
                                         ConcreteRef(UInt32(info.wasm_type_idx), true))
                             tuple_local = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, julia_to_wasm_type_concrete(obj_type, ctx))
+                            push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                             local_set!(_hetb, tuple_local)
 
                             # index (1-based i64) → 0-based i32 → idx_local
@@ -3226,7 +3226,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
                                 # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
                                 # Coerce the raw field value to U's canonical wasm rep.
-                                fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
+                                fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
                                 if union_wasm === AnyRef
                                     if fw === I64 || fw === I32 || fw === F32 || fw === F64
                                         # THE single-source box producer with the field's REAL classId
