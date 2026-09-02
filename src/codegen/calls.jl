@@ -4624,23 +4624,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
+    # parity(quarantine: julia_numeric_tier.jl): THE Int128/UInt128 REGISTRY ROUTE —
+    # dart2wasm has no 128-bit integer type, so this tier has no dart anchor to sit ahead
+    # of; it is reachable only when `is_128bit` (the intrinsics table routes above already
+    # consumed every non-128-bit op). Same nullable-return funnel shape as the tables.
+    if _it_name !== nothing && is_128bit
+        local _it128_result = emit_int128_op!(fb, ctx, _it_name, arg_type, expr, idx)
+        _it128_result !== nothing && return append_builder!(b, fb)
+    end
+
     # Match intrinsics by name
-    if is_func(func, :add_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit addition: (a_lo, a_hi) + (b_lo, b_hi)
-        # Stack has: [a_struct, b_struct], need to produce result_struct
-        # This is complex - need to extract fields, compute with carry, create new struct
-        emit_int128_add!(fb, ctx, arg_type)
-
-    elseif is_func(func, :sub_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit subtraction
-        emit_int128_sub!(fb, ctx, arg_type)
-
-    elseif is_func(func, :mul_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit multiplication (only need low 128 bits of result)
-        emit_int128_mul!(fb, ctx, arg_type)
+    # (add_int/sub_int/mul_int: non-128-bit handled by THE intrinsics table route above;
+    # 128-bit handled by THE Int128 registry route above.)
 
     # NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
     # The register-width handlers below detect overflow with sign-bit tricks at
@@ -4649,7 +4644,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # throwing OverflowError (lcm(Int8(-128), 1) divergent_throw family).
     # Compute in i32 on normalised inputs; flag = result fails the
     # sign/zero-extend round-trip at the JULIA width; value = wrapped result.
-    elseif is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
+    if is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
            (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int) ||
             is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int) ||
             is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int))
@@ -4898,9 +4893,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # For other cases (Int64<->UInt64, Int32<->UInt32, Int128<->UInt128),
         # bitcast is a no-op in Wasm (same representation)
 
-    elseif is_func(func, :neg_int)  # table residue: Int128 → quarantine tier
-        emit_int128_neg!(fb, ctx, arg_type)
-
+    # neg_int: non-128-bit handled by THE intrinsics table route above; 128-bit handled
+    # by THE Int128 registry route above.
     elseif is_func(func, :flipsign_int)
         _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
 
@@ -4910,29 +4904,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # of -x can sit in the i32 register as 128, and slt_int(128, 0) = false flips
     # checked_abs's overflow test (lcm(Int8(-128), 1) returned 128 instead of
     # throwing). Signed → sign-extend in register; unsigned → mask.
-    elseif is_func(func, :slt_int)  # signed less than
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_slt!(fb, ctx, arg_type)
-
-    elseif is_func(func, :sle_int)  # signed less or equal
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_sle!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ult_int)  # unsigned less than
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ult!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ule_int)  # unsigned less or equal
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ule!(fb, ctx, arg_type)
-
-    elseif is_func(func, :eq_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_eq!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ne_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ne!(fb, ctx, arg_type)
+    # slt_int/sle_int/ult_int/ule_int/eq_int/ne_int: non-128-bit handled by THE
+    # intrinsics table route above; 128-bit handled by THE Int128 registry route above.
 
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
     elseif is_func(func, :(===))
@@ -5042,112 +5015,77 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # Bitwise operations
     elseif is_func(func, :and_int)
-        if is_128bit
-            emit_int128_and!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-        end
+        # (128-bit handled by THE Int128 registry route above)
+        _op1!(is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
 
     elseif is_func(func, :or_int)
-        if is_128bit
-            emit_int128_or!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_OR : Opcode.I64_OR)
-        end
+        # (128-bit handled by THE Int128 registry route above)
+        _op1!(is_32bit ? Opcode.I32_OR : Opcode.I64_OR)
 
     elseif is_func(func, :xor_int)
-        if is_128bit
-            emit_int128_xor!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-        end
+        # (128-bit handled by THE Int128 registry route above)
+        _op1!(is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
 
-    elseif is_func(func, :not_int)  # table residue: Int128 → quarantine tier
-        # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
-        # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
-        emit_int128_not!(fb, ctx, arg_type)
+    # not_int: non-128-bit handled by THE intrinsics table route above (and the boolean
+    # NOT special case just above it); 128-bit handled by THE Int128 registry route above.
 
     # Shift operations
     # Note: Wasm requires shift amount to have same type as value being shifted
     # Julia often uses Int64/UInt64 shift amounts even for Int32 values
     elseif is_func(func, :shl_int)
-        if is_128bit
-            # 128-bit left shift: stack has [x_struct, n_i64]
-            emit_int128_shl!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                    _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
+        # (128-bit handled by THE Int128 registry route above)
+        if length(args) >= 2
+            shift_type = infer_value_type(args[2], ctx)
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                # Extend i32 shift amount to i64 (Wasm requires matching types)
+                _op1!(Opcode.I64_EXTEND_I32_S)
             end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
-                                 julia_width = _julia_int_width(arg_type, is_32bit),
-                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
         end
+        _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
 
     elseif is_func(func, :ashr_int)  # arithmetic shift right
-        if is_128bit
-            # 128-bit arithmetic right shift: stack has [x_struct, n_i64]. shl_int
-            # and lshr_int already special-cased 128-bit; ashr_int did not, so signed
-            # `Int128 >> n` fell through to the i64 guard and emitted `i64.shr_s` on
-            # the struct ref (validation: expected i64, found (ref null $int128) —
-            # WasmMakie TwicePrecision range/tick widemul path).
-            emit_int128_ashr!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    _op1!(Opcode.I32_WRAP_I64)
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
+        # (128-bit handled by THE Int128 registry route above)
+        if length(args) >= 2
+            shift_type = infer_value_type(args[2], ctx)
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                # Truncate i64 shift amount to i32
+                _op1!(Opcode.I32_WRAP_I64)
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                # Extend i32 shift amount to i64 (Wasm requires matching types)
+                _op1!(Opcode.I64_EXTEND_I32_S)
             end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
         end
+        _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
+                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
 
     elseif is_func(func, :lshr_int)  # logical shift right
-        if is_128bit
-            # 128-bit logical right shift: stack has [x_struct, n_i64]
-            emit_int128_lshr!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                    _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
+        # (128-bit handled by THE Int128 registry route above)
+        if length(args) >= 2
+            shift_type = infer_value_type(args[2], ctx)
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
+                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                # Extend i32 shift amount to i64 (Wasm requires matching types)
+                _op1!(Opcode.I64_EXTEND_I32_S)
             end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit),
-                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
         end
+        _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
 
-    # Count leading/trailing zeros (used in Char conversion)
-    elseif is_func(func, :ctlz_int)  # table residue: Int128 → quarantine tier
-        emit_int128_ctlz!(fb, ctx, arg_type)
-
-    elseif is_func(func, :cttz_int)  # table residue: Int128 → quarantine tier
-        emit_int128_cttz!(fb, ctx, arg_type)
-
-    # Population count (number of set bits)
-    elseif is_func(func, :ctpop_int)  # table residue: Int128 → quarantine tier
-        emit_int128_ctpop!(fb, ctx, arg_type)
+    # ctlz_int/cttz_int/ctpop_int: non-128-bit handled by THE intrinsics table route
+    # above; 128-bit handled by THE Int128 registry route above.
 
     # Byte swap (used in Char ↔ codepoint conversion)
     # WebAssembly has no native bswap — implement with bit manipulation
     elseif is_func(func, :bswap_int)
-        if is_128bit
+        if is_128bit  # quarantine: loud reject — not in INT128_OPS, no dart lowering exists
             # 128-bit byte-swap is unsupported: the i64 reversal sequence below would run on a
             # struct value → invalid wasm. Loud-reject (sound trap / strict reject) like the
             # Int128 div/rem guard, rather than emitting an invalid module. (Full impl = reverse
