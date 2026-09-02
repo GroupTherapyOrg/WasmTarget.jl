@@ -38,7 +38,7 @@ mutable struct TypeRegistry
     structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
     arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
-    string_struct_idx::Union{Nothing, UInt32} # parity(M9): the CLASSED string {classId, data} <: $JlBase
+    string_struct_idx::Union{Nothing, UInt32} # parity(class_info.dart:18 FieldIndex): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
     numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
@@ -403,7 +403,7 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
 
     # Also include primitive numeric types that may need boxing/dispatch
     # Include Nothing for BoxedNothing typeId
-    # parity(M9): String + Symbol are CLASSED now — they join the hierarchy so
+    # parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): String + Symbol are CLASSED now — they join the hierarchy so
     # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
               Float16, Float32, Float64, Nothing, String, Symbol)
@@ -1230,7 +1230,7 @@ end
 """
     get_string_struct_type!(mod, registry) -> UInt32
 
-parity(M9): the CLASSED string — dart: String IS an Object class. A Julia String value is
+parity(class_info.dart:18 FieldIndex): the CLASSED string — dart: String IS an Object class. A Julia String value is
 `(struct (field i32 classId) (field (mut i32) identityHash)
          (field (ref null \$strbytes) data) (field i32 syntaxFlags))`, SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
@@ -2135,7 +2135,7 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         return ConcreteRef(dt_idx, true)
     end
     if T === String || T === Symbol
-        # parity(M9): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
+        # parity(class_info.dart:18 FieldIndex): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
         # a class). Symbol shares the rep (its name string).
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)

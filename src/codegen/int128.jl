@@ -4,7 +4,10 @@
 # 128-bit integers are stored as structs with fields: lo (i64), hi (i64)
 # ============================================================================
 
-# parity(march 3, R5→floor): Int128/UInt128's concrete wasm type IS its registered
+# parity(quarantine: Int128/UInt128 have no dart equivalent — dart's `int` is a single
+# 64-bit value (translator.dart:346 `coreTypes.intClass: w.NumType.i64`), never a two-limb
+# struct; looked for a 128-bit integer representation in translator.dart/intrinsics.dart,
+# absent). Int128/UInt128's concrete wasm type IS its registered
 # two-i64 struct — resolved at the registration point, no post-hoc re-guess.
 _int128_structref(ctx, T::Type) = ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, T), true)
 
@@ -229,7 +232,10 @@ function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)
     return b
 end
 
-# parity(march 3, R2→0): the builder-native comparator core. With [a_struct, b_struct]
+# parity(quarantine: Int128/UInt128 comparison has no dart equivalent — dart's `int` is a
+# single 64-bit value compared with one i64 comparison opcode; looked for a multi-limb
+# integer comparator in intrinsics.dart's binary-operator emitters, absent). the
+# builder-native comparator core. With [a_struct, b_struct]
 # on `b`'s stack, spill to locals and extract (a_lo, a_hi, b_lo, b_hi) — the shared
 # preamble of slt/ult/eq. Returns the four value-local indices.
 function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)

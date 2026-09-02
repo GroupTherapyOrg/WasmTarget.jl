@@ -11,7 +11,7 @@ function _invoke_has_explicit_io(param_types)::Bool
     return first_type isa Type && first_type <: IO
 end
 
-# parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
+# parity(translator.dart:1597 Translator.convertType): emit a string-op ARG through the funnel — classed strings adjust to
 # their DATA array (op contract: these positions are strings; no type re-query).
 function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
     tracing(:strarg) && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
@@ -771,7 +771,7 @@ function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::In
 
     # Return result
     local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): results are CLASSED strings
 
     return b
 end
@@ -885,7 +885,7 @@ function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Return result
     local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): results are CLASSED strings
 
     return b
 end
@@ -982,7 +982,7 @@ function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::Inst
 
     # Return result
     local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): results are CLASSED strings
 
     return b
 end
@@ -1086,7 +1086,7 @@ function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext):
 
     # Return result
     local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): results are CLASSED strings
 
     return b
 end
@@ -1190,7 +1190,7 @@ function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext):
 
     # Return result
     local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): results are CLASSED strings
 
     return b
 end
@@ -1393,7 +1393,7 @@ function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::Inst
 
     end_block!(b)  # end else (not all whitespace)
     end_block!(b)  # end else (not empty)
-    emit_string_wrap!(b, ctx)   # parity(M9): the result is a CLASSED string
+    emit_string_wrap!(b, ctx)   # parity(class_info.dart:18 FieldIndex): the result is a CLASSED string
 
     return b
 end
@@ -1409,7 +1409,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
     io = get_io_imports()
     if io !== nothing
         b = _ctx_builder(ctx, "_compile_invoke_print")
-        # parity(M9): the io bridge consumes the DATA array — every string value
+        # parity(translator.dart:1597 Translator.convertType): the io bridge consumes the DATA array — every string value
         # funnels through the expected-type channel so classed strings unwrap here.
         _pr_str_arr = ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)
         for arg in args
@@ -2411,8 +2411,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
             end
 
-            # parity(M6/F3): numeric arith result → ref-typed SSA local ⇒ box through THE
-            # one producer (the scalar-replaced Core.Box cycle: unbox → op → box → store).
+            # parity(translator.dart:1621 Translator.convertType): numeric arith result → ref-typed SSA local ⇒ box through THE
+            # one producer, dart's boxing branch (the scalar-replaced Core.Box cycle: unbox → op → box → store).
             _f3_result_box! = () -> begin
                 local _dl = get(ctx.ssa_locals, idx, nothing)
                 _dl === nothing && return
@@ -2621,7 +2621,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Compile index arg and convert to 0-based
                 bchr = _ctx_builder(ctx, "compile_invoke")
                 idx_type = infer_value_type(args[2], ctx)
-                # parity(M9): the pre-pushed string is the CLASSED struct sitting UNDER
+                # parity(class_info.dart:18 FieldIndex): the pre-pushed string is the CLASSED struct sitting UNDER
                 # the index — save idx, read .data, reload idx.
                 _sc_idx = length(ctx.locals) + ctx.n_params
                 push!(ctx.locals, idx_type === Int64 || idx_type === Int ? I64 : I32)
@@ -3196,7 +3196,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             # show(nothing) → write "nothing"
                             call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
                         elseif arg_type === String || arg_type === Symbol
-                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(M9): funnel → DATA array
+                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
                             emit_jl_string_to_js!(bsh2, io.decode_idx)
                             call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
                         elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
@@ -3502,7 +3502,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if str_arg !== nothing
                     hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
                     emit_value!(bhb, str_arg, ctx,
-                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
+                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(translator.dart:1597 Translator.convertType): funnel → DATA
                     # len arg
                     if length(expr.args) >= 4
                         emit_value!(bhb, expr.args[4], ctx, I64)  # length i64

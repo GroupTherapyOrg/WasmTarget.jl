@@ -23,8 +23,8 @@ include("codegen/ir.jl")
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
-include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (replaces FNV, M8.4)
-include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
+include("codegen/selector_table.jl")   # parity(dispatch_table.dart:396 DispatchTable): the dart dispatch table (replaces FNV, M8.4)
+include("codegen/intrinsics_table.jl")  # parity(intrinsics.dart:437 _binaryOperatorMap): the dart intrinsics table
 include("codegen/compile.jl")
 include("codegen/structs.jl")
 include("codegen/closures.jl")   # the closure layouter consumers
@@ -72,8 +72,9 @@ export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_byte
 """
     _wt_default_validate() -> Bool
 
-parity(M4) — the wasm-tools DEMOTION (dart parity: dart2wasm ships no external validator;
-its builder IS the gate). Since 2026-07-01 every InstrBuilder hard-gates each emission
+parity(instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
+parity: dart2wasm ships no external validator; its builder IS the gate, verifying every emitted
+instruction's stack effect against its declared inputs/outputs). Since 2026-07-01 every InstrBuilder hard-gates each emission
 against the full subtype lattice (strict by default, mod threaded), so the module is valid
 BY CONSTRUCTION and the external `wasm-tools validate` pass is a redundant double-check —
 now OFF by default. Re-enable per-call (`validate=true`) or globally (`WT_VALIDATE=1`,

@@ -1,5 +1,5 @@
 # ============================================================================
-# parity(M8): THE DISPATCH TABLE registry — dart dispatch_table.dart
+# parity(dispatch_table.dart:396 DispatchTable): THE DISPATCH TABLE registry
 # ============================================================================
 #
 # Megamorphic dispatch (≥9 specializations of one generic function) routes through
@@ -38,7 +38,7 @@ Registry of dispatch tables for a module.
 """
 mutable struct DispatchTableRegistry
     tables::Dict{Any, DispatchTable}  # func_ref -> DispatchTable
-    # parity(M8.2): the dart selector bridge — single-axis tables dispatch via
+    # parity(translator.dart:911 callDispatchTable): the dart selector bridge — single-axis tables dispatch via
     # receiver.classId + offset into the ONE flat table (dispatch_table.dart:445-458);
     # multi-axis tables via the M8.3 cascade through the SAME table (FNV deleted, M8.4).
     selector_axis::Dict{Any,Int}                      # func_ref → dispatch-axis position
@@ -46,7 +46,11 @@ mutable struct DispatchTableRegistry
     selector_positions::Dict{Any,Vector{Tuple{Int,Int}}}  # func_ref → [(table_pos, entry_i)]
     selector_table_idx::Union{Nothing,UInt32}         # THE one flat funcref table
     selector_table_len::Int
-    # parity(M8.3): the multi-axis CASCADE — Julia multiple dispatch as composed
+    # parity(quarantine: Julia's multi-axis dispatch cascade composes two single-axis dart-shaped
+    # hops through the SAME table; dart selectors vary only on the receiver's classId by
+    # construction (dispatch_table.dart:391-458 SelectorInfo is single-axis), so no dart structure
+    # composes a second varying axis — looked in dispatch_table.dart and code_generator.dart's
+    # _virtualCall/PolymorphicDispatchers, absent): the multi-axis CASCADE — Julia multiple dispatch as composed
     # dart single-axis hops through the SAME table. Per func_ref: level-1 rows that
     # need a second hop, each = (l1_pos, axis2, offset2, rows2::[(pos2, entry_i)]).
     selector_cascades::Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
@@ -235,7 +239,7 @@ function emit_dispatch_metadata!(mod::WasmModule,
                                   type_registry::TypeRegistry,
                                   dt_registry::DispatchTableRegistry)
     isempty(dt_registry.tables) && return
-    # parity(M8.4): the FNV hash-table apparatus (i32-array globals, per-table funcref
+    # parity(dispatch_table.dart:63 SelectorInfo.signature): the FNV hash-table apparatus (i32-array globals, per-table funcref
     # tables) is DELETED — the selector table is the only dispatch structure. All this
     # phase does now is create each selector's uniform call_indirect signature.
     for (func_ref, dt) in dt_registry.tables
@@ -381,7 +385,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
     end
 
-    # parity(M8.2): fill the ONE selector table (positions were packed at metadata
+    # parity(dispatch_table.dart:800 output): fill the ONE selector table (positions were packed at metadata
     # time; wrapper indices only now exist). Contiguous runs → one segment each.
     fill_selector_table_elements!(mod, dt_registry)
 end

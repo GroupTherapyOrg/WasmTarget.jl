@@ -116,7 +116,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             end
             return static_wasm_type(inner, ctx)
         elseif val isa Symbol || val isa String
-            # parity(M9): String/Symbol constants are the CLASSED string struct
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa Type
@@ -429,7 +429,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
            maybe_wrap_closure!(b, ctx, from_julia)
             return b
         end
-        # parity(M9): the STRING arms — the classed string {classId,data} vs its byte
+        # parity(translator.dart:1597 convertType): the STRING arms — the classed string {classId,data} vs its byte
         # array. Ops consume/produce the array; values carry the class (dart: methods
         # read the class's array field; convertType adjusts at every boundary).
         local _ssi = ctx.type_registry.string_struct_idx
@@ -633,7 +633,7 @@ end
 """
     emit_string_wrap!(b, mod, registry)
 
-parity(M9) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
+parity(constants.dart:872 visitStringConstant) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
 byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The ONE
 place a string value is born; every string producer routes here.
 """
@@ -755,7 +755,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         return_!(b)
         return b
     end
-    # parity(M2): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
+    # parity(code_generator.dart:1372 visitReturnStatement): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
     # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
     # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an
     # ill-typed non-box concrete target now traps loudly instead of silently nulling).
@@ -985,7 +985,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
         emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :
         emit_type_id!(b, ctx.type_registry, T)
-    # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
+    # parity(wasm_builder/lib/src/builder/instructions.dart:494 _verifyTypes, :212 _stackTypes): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
     # THE narrow channel emits direct — the cast/unbox is tracked (the
@@ -1287,7 +1287,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             return b
         end
         # String constant via passive data segment + array.new_data
-        # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
+        # parity(constants.dart:872 visitStringConstant): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         n_bytes = ncodeunits(val)
 

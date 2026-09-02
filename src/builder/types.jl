@@ -321,7 +321,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # JS values are held as externref
         return ExternRef
     elseif T === String || T === Symbol || T <: AbstractString
-        # parity(M9): strings are CLASSED — {classId, data} <: $JlBase. The abstract
+        # parity(class_info.dart:18 FieldIndex): strings are CLASSED — {classId, data} <: $JlBase. The abstract
         # (module-less) rep is StructRef; concrete mappers give the $JlString ref.
         return StructRef
     elseif T <: Tuple

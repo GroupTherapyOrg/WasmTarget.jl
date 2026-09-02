@@ -1,4 +1,4 @@
-# parity(M1) ONE LOWERING: generate_complex_flow (the old strategy router) is GONE. The
+# parity(code_generator.dart:28 CodeGenerator) ONE LOWERING: generate_complex_flow (the old strategy router) is GONE. The
 # stackifier below is THE single lowering for every multi-block body, void included (dart
 # parity: one CodeGenerator, one structured lowering, no routing heuristic). The old routes it
 # absorbed: the 5-clause heuristic → generate_nested_conditionals (a documented multivar-phi
@@ -91,7 +91,7 @@ function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ct
     return b  # No extern_convert_any — struct ref is already anyref
 end
 
-"""parity(M11): THE flow front — the ONE seam where a stackified region's bytes
+"""parity(code_generator.dart:38 CodeGenerator.generate): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
 function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
     append_builder!(b, generate_stackified_flow(ctx, args...; kwargs...))   # typed merge
@@ -728,7 +728,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end
                 else
                     local_get!(pvb, get(temp_map, local_idx, local_idx))
-                    # parity(M10): the single-source-at-load contract — a join-refined
+                    # parity(translator.dart:1597 convertType): the single-source-at-load contract — a join-refined
                     # numeric riding a ref local narrows HERE too, and the reported type
                     # becomes the numeric so the phi store boxes through the funnel.
                     local _cpv_refined = get(ctx.ssa_types, val.id, Any)
@@ -876,7 +876,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         elseif val isa Float32
             return F32
         elseif val isa Symbol || val isa String
-            # parity(M9): String/Symbol constants are the CLASSED string struct
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa QuoteNode
@@ -1024,7 +1024,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # Check type compatibility before emitting local.set
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-                                # parity(M2) wrap+store: typed compile_phi_value → THE
+                                # parity(code_generator.dart:2149 visitVariableSet) wrap+store: typed compile_phi_value → THE
                                 # convert_type! funnel → local.set. Replaces the arm-chain +
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
                                 # (cpv takes needs_temp) + the "safety check" re-derivation.
@@ -1042,7 +1042,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
                                                 _edge_julia : nothing)
                                     end
-                                    # parity(M11.4): ALWAYS store — the `ty===nothing`
+                                    # parity(code_generator.dart:2149 visitVariableSet): ALWAYS store — the `ty===nothing`
                                     # skip orphaned the emitted value on the stack (the
                                     # escaping-closure double-load bug, second site).
                                     local_set!(b, local_idx)
@@ -1258,7 +1258,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # Check type compatibility before storing
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-                                # parity(M2) wrap+store: typed compile_phi_value → THE convert_type! funnel.
+                                # parity(code_generator.dart:2149 visitVariableSet) wrap+store: typed compile_phi_value → THE convert_type! funnel.
                                 pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
                                 if pv_n2 >= 2
                                     emit_phi_failure!(bb, "multi-value fallthrough phi cannot feed one local"; idx=i)
@@ -1270,7 +1270,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                             from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
                                                 _edge_julia : nothing)
                                     end
-                                    # parity(M11.4): ALWAYS store — an unknown-typed value
+                                    # parity(code_generator.dart:2149 visitVariableSet): ALWAYS store — an unknown-typed value
                                     # left on the stack (the old `ty===nothing` skip)
                                     # orphaned it: the escaping-closure double-load bug.
                                     local_set!(bb, local_idx)
@@ -1360,7 +1360,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(isdefined(term,:val) ? term.val : :undef)"
             end
             if isdefined(term, :val)
-                # parity(M2): THE single return-coercion path (emit_return_coerced!, same as
+                # parity(code_generator.dart:1372 visitReturnStatement): THE single return-coercion path (emit_return_coerced!, same as
                 # the block-statement ReturnNode site) — deletes this duplicated ladder
                 # (byte-scanned externref check + hand widening/casts + a numeric→ConcreteRef
                 # ref.null VALUE DROP; the single source boxes/converts properly).

@@ -396,7 +396,7 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
     if T === Union{}
         return I32
     elseif T === String || T === Symbol
-        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        # parity(class_info.dart:18 FieldIndex): the CLASSED string {classId, data} <: $JlBase
         type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
@@ -542,7 +542,7 @@ function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmVa
             return ConcreteRef(info.wasm_type_idx, true)
         end
     elseif T === String
-        # parity(M9): the CLASSED string {classId, data} <: $JlBase
+        # parity(class_info.dart:18 FieldIndex): the CLASSED string {classId, data} <: $JlBase
         type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(type_idx, true)
     elseif T === Int128 || T === UInt128
@@ -640,8 +640,8 @@ function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     return bytes
 end
 
-# parity(M10b): a CAST carries its target type — dart's `as T`
-# (code_generator.dart:3100 visitAsExpression: a statically-satisfied cast —
+# parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): a CAST carries its target type — dart's `as T`
+# (code_generator.dart:3170 visitAsExpression: a statically-satisfied cast —
 # `omitExplicitTypeChecks || node.isUnchecked` — is EXACTLY `wrap(operand,
 # expectedType)`: the operand through the one wrap channel, typed by the target).
 # `convert(T, x)` / `typeassert(x, T)` results that inference left erased refine
@@ -698,7 +698,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
-    # parity(M6/F3): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
     # a variable's local is typed by its REAL inferred type, not the erased Any). The
     # dormant Loop-C value-channel pass proves, conservatively, which Any-typed SSAs/phis
     # only ever carry one numeric type (the scalar-replaced Core.Box accumulator cycle);
@@ -738,7 +738,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     catch
         rethrow()
     end
-    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
@@ -753,7 +753,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
@@ -950,7 +950,7 @@ We need locals when:
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
-    # parity(M6/F3): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
     _numeric_joins = try
         # Parent side: record %new(Core.Box) contents types per capturing closure type
         # (feeds the closure-side seeding below when THAT closure's body compiles).
@@ -985,11 +985,11 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     catch
         rethrow()
     end
-    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
-    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
     # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
     # stay local-typing hints only (they poisoned print_to_string's string-carrying
     # accumulator when made visible).
@@ -1006,7 +1006,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
@@ -1368,7 +1368,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # will actually push on the stack. If the source value has a local,
             # that local's type is what will be on the stack (via local.get).
             effective_type = ssa_type
-            # parity(M6/F3): Any-but-really-numeric SSAs take their JOIN type (see above).
+            # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric SSAs take their JOIN type (see above).
             haskey(_numeric_joins, ssa_id) && (effective_type = _numeric_joins[ssa_id])
             if stmt isa Core.PiNode
                 narrowed_wasm = julia_to_wasm_type_concrete(ssa_type, ctx)
@@ -2357,7 +2357,7 @@ function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Int
         return true
     elseif concrete_wasm === I32 || concrete_wasm === I64 ||
            concrete_wasm === F32 || concrete_wasm === F64
-        # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
+        # parity(translator.dart:1597 Translator.convertType): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
         coerce_stack_top!(b, concrete_wasm, ctx; from_julia=ssa_julia_type)

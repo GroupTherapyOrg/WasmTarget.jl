@@ -1,5 +1,5 @@
 # ============================================================================
-# parity(M11.1): THE INTRINSICS TABLE — dart intrinsics.dart:28-71
+# parity(intrinsics.dart:437 _binaryOperatorMap): THE INTRINSICS TABLE
 # ============================================================================
 #
 # dart's model: a DECLARATIVE map (lhsType → rhsType → opName → emitter callback),

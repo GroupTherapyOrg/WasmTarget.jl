@@ -146,9 +146,9 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)
-    # parity(M9): params are the CLASSED string — every string push reads through
+    # parity(class_info.dart:18 FieldIndex): params are the CLASSED string — every string push reads through
     # to the DATA array (dart: methods read the class's array field).
-    # parity(M9): string-returning bodies publish the CLASSED string. The caller-visible
+    # parity(class_info.dart:18 FieldIndex): string-returning bodies publish the CLASSED string. The caller-visible
     # result type is $JlString; the array is saved through a dedicated extra local.
     function _wrap_result_str!(bb, scratch_idx)
         builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
@@ -490,7 +490,7 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         # Concatenate two UTF-8 byte arrays into a new array
         # local 0 = a (array ref), local 1 = b (array ref)
         # extra locals: local 2 = len_a, local 3 = result (array ref)
-        # parity(M9): params are CLASSED strings — unwrap once into array locals
+        # parity(class_info.dart:18 FieldIndex): params are CLASSED strings — unwrap once into array locals
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
         _a_data = 2 + length(extra_locals) - 2
@@ -1078,7 +1078,7 @@ function _compile_closed_world_plan(functions::Vector;
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
-        # parity(M8.2): pack single-axis selectors into the ONE dart table
+        # parity(dispatch_table.dart:501 DispatchTable.build): pack single-axis selectors into the ONE dart table
         pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
@@ -1109,7 +1109,7 @@ function _compile_closed_world_plan(functions::Vector;
             # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
             if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
-                # parity(M8.2): the dart virtual call — classId + offset + call_indirect
+                # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
                 body, locals = generate_selector_caller_body(
                     dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
                     caller_return_type=return_type, mod=mod, type_registry=type_registry)
