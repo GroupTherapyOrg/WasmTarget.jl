@@ -71,6 +71,12 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # exception to its OWN local; keyed by the region's enter_idx). :the_exception
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
     exn_region_locals::Dict{Int, Int}
+    # NIR boundary (parity: code_generator.dart:77 typeContext) — frontend/nir.jl's
+    # build_nir output, positionally aligned with code_info.code. Populated after the
+    # analyze_*!/allocate_*! passes below so it can reuse ctx.ssa_types/ctx.locals
+    # instead of re-deriving types (R3/R5 unaffected). code_info stays alongside it —
+    # not every consumer is NIR-converted yet (R29 tracks the migration per file).
+    nir::Vector{NirStmt}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -120,7 +126,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int,Vector{Int}}(), # bound-invoke argument projections (assigned by plan)
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
-        Dict{Int, Int}()        # exn_region_locals
+        Dict{Int, Int}(),       # exn_region_locals
+        NirStmt[]                # nir — filled in below, once locals/types exist
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
@@ -129,6 +136,9 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
     allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
     allocate_ssa_locals!(ctx)
     allocate_scratch_locals!(ctx)  # Extra locals for complex operations
+    # NIR boundary: built last so it can reuse ctx.ssa_types/ctx.locals/ctx.ssa_locals/
+    # ctx.phi_locals (all populated above) rather than re-deriving types.
+    ctx.nir = build_nir(code_info, ctx)
     return ctx
 end
 

@@ -162,6 +162,17 @@ const METRICS = [
     "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
                           roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
+    # ── Phase 10.1a: the normalized frontend boundary (frontend/nir.jl; PARITY_MASTER item
+    # 4 / DESIGN.md §10.1) — dart: AstCodeGenerator reads every node's type through ONE
+    # StaticTypeContext (code_generator.dart:77 typeContext, :135 getStaticType), never
+    # re-derived per visitor. R29 tracks per-file migration off raw CodeInfo reads onto the
+    # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
+    # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
+    # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ outside ir.jl — converted per file onto ctx.nir node dispatch (flow.jl/stackified.jl done: 2026-09-02)",
+        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
+    "R29b_code_info_identifier" => ("the `code_info` identifier reachable in codegen/ outside ir.jl — structural exit is 0 (CompilationContext no longer carries CodeInfo); flow.jl done: 2026-09-02",
+        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------

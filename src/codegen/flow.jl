@@ -4,7 +4,11 @@ For simple if-then-else patterns, we use the `if` instruction.
 """
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     b = _ctx_builder(ctx, "generate_structured")
-    code = ctx.code_info.code
+    # parity(code_generator.dart:77 typeContext): the raw statement array, via the NIR
+    # boundary (frontend/nir.jl) rather than ctx.code_info directly — has_try_catch/
+    # find_try_regions/generate_stackified_flow! are not NIR-converted yet (R29), so this
+    # hands them back exactly code_info.code without this file naming `code_info` itself.
+    code = nir_raw_code(ctx)
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
     # THE stackifier. Retired strategies this replaced: the nested-conditional

@@ -20,6 +20,12 @@ include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic fie
 include("codegen/interpreter.jl")
 include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
+
+# Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
+# Loads here (before codegen/types.jl and codegen/context.jl exist) by design — see
+# frontend/nir.jl's header comment.
+include("frontend/nir.jl")
+
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
