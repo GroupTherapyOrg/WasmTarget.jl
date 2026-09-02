@@ -1353,17 +1353,19 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # as SSA slot lookups / argument loads. Compile them as struct constants instead.
         inner = val.value
         if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
-            T = typeof(inner)
-            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-            type_idx = info.wasm_type_idx
-            _emit_tid!(T)
-            physical_fields = ctx.mod.types[type_idx + 1].fields
-            for (fi, field_name) in enumerate(fieldnames(T))
-                field_val = getfield(inner, field_name)
-                expected = physical_fields[Int(info.field_offset) + fi].valtype
-                emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
-            end
-            struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
+            # THE ensureConstant funnel (constants.dart:49/427-443 — ONE constantInfo map
+            # deduplicating every constant kind). SSAValue/Argument/SlotNumber are immutable
+            # single-Int64-field structs: their layout is fixed by the type (not by the
+            # runtime value), so `_const_init_bytes!`'s constant-expressibility guard always
+            # holds and the funnel always succeeds — there is no inline struct_new! fallback
+            # for these types (unlike the mutable/non-constant-field kinds elsewhere in this
+            # function, which keep one because their funnel attempt is genuinely conditional).
+            _cgir = ensure_constant_global!(ctx.mod, ctx.type_registry, inner)
+            _cgir === nothing && error(
+                "unreachable: $(typeof(inner)) constant funnel declined — its immutable " *
+                "single-Int layout is always constant-expressible")
+            _ciir = register_struct_type!(ctx.mod, ctx.type_registry, typeof(inner))
+            global_get!(b, _cgir, ConcreteRef(_ciir.wasm_type_idx, false))
         else
             emit_value!(b, inner, ctx)  # R17-floor: QuoteNode delegates before a consumer exists
         end
@@ -1512,7 +1514,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif typeof(val) <: Dict
-        # Dict constant with pre-populated data — materialize Memory fields as arrays
+        # Dict constant with pre-populated data — materialize Memory fields as arrays.
+        # parity(quarantine: mutable-identity floor — constants.dart:1152 visitMapConstant
+        # canonicalizes ONLY Dart's immutableMapClass, i.e. genuine `const` map literals;
+        # Julia's Dict has no immutable-literal form, so every Dict constant takes dart's
+        # ordinary non-const runtime map-instantiation shape (fresh struct.new), never
+        # ConstantCreator's Map<Constant,ConstantInfo> cache. R14 floor, never migratable.)
         T = typeof(val)
         K = keytype(val)
         V = valtype(val)
@@ -1593,6 +1600,12 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # Constant Vector{T} — emit as struct{data_array, size_tuple}
         # This handles global constant vectors like ascii_is_identifier_char :: Vector{Bool}
         # The data array must contain the actual values, not ref.null.
+        # parity(quarantine: mutable-identity floor — constants.dart:1128 visitListConstant
+        # canonicalizes ONLY Dart's immutableListClass, i.e. genuine `const` list literals;
+        # Julia's Vector has no immutable-literal form, so every Vector constant takes dart's
+        # ordinary non-const runtime list-instantiation shape (fresh struct.new for both the
+        # data array and this nested size tuple below), never ConstantCreator's cache. R14
+        # floor, never migratable.)
         T = typeof(val)
         elem_type = eltype(T)
 
@@ -1714,6 +1727,10 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             # Core.Box whose contents field is undefined. The nullable Any field's
             # null is the runtime undefined-reference sentinel consumed by the
             # existing isdefined/throw_undef_if_not lowering—not a fabricated value.
+            # parity(quarantine: mutable-identity floor — Core.Box is WT's captured-variable
+            # cell, dart's closures.dart:1102-1115 mutable box field; a closure cell is never
+            # a kernel `Constant` AST node, so it never enters constants.dart's canonicalization
+            # map on the dart side either. R14 floor, never migratable.)
             emit_struct_prefix!(b, ctx.type_registry, T, info)
             ref_null!(b, AnyRef)
             struct_new!(b, type_idx)

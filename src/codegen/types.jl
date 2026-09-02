@@ -935,6 +935,13 @@ packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer) =
 
 """
 Registry for functions within a module, enabling cross-function calls.
+
+parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+staticParamInfo): `by_ref` is the dart-shaped core — callee identity (a Julia
+function object, standing in for dart's `Reference`) keyed to its compiled
+`FunctionInfo` (dart's `w.BaseFunction` + param ABI). `functions` (name-keyed)
+exists only to serve `serialize_function_table` and the Julia-only fallback
+`get_function_by_export_name` below — never the identity-keyed lookup path.
 """
 mutable struct FunctionRegistry
     functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
@@ -1003,9 +1010,18 @@ function register_function!(registry::FunctionRegistry, name::String, func_ref, 
 end
 
 """
-Look up a function by name.
+Look up a function by name — the sole caller has already lost the func_ref
+(a GlobalRef from an anonymous/re-exported module whose `getfield` failed) and
+a name string is all that remains to key on.
+
+parity(quarantine: name-fallback for cross-module identity loss — dart
+resolves every callee purely by `Reference` identity (functions.dart:26,
+`FunctionCollector._functions`); WT has no identity left to key on once
+`getfield(func.mod, func.name)` cannot recover the Function object, so this
+linear string scan is the only recourse. Never used when a func_ref is in
+hand — see `get_function(registry, func_ref, arg_types)` above.
 """
-function get_function(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
+function get_function_by_export_name(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
     for (n, info) in registry.functions
         (n == name && !info.is_candidate) && return info   # candidates are dispatch-only
     end
@@ -1042,6 +1058,12 @@ end
 
 """
 Look up a function by reference and argument types (for dispatch).
+
+parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+staticParamInfo): the func_ref-keyed core — resolves a callee's identity to
+its compiled ABI, same shape as dart's `Reference` → `w.BaseFunction` map.
+The subtype/reverse-subtype passes below are Julia's dynamic-dispatch
+overload resolution filling in for dart's static single-target reference.
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                       expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo, Nothing}
