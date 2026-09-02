@@ -67,6 +67,9 @@ export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 # Soundness diagnostics + independent validation cross-check
 export WasmDiagnostic, WasmCompileError, WasmValidationError
+# The builder surface framework hosts (Therapy, Snapshot) drive qualified — API, not
+# namespace: the dart2wasm analogue is wasm_builder's public package interface.
+public add_type!, register_vector_type!, FuncRef, Bridge
 
 """
     _wt_default_validate() -> Bool
