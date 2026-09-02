@@ -38,6 +38,7 @@ include("codegen/flow.jl")
 include("codegen/stackified.jl")
 include("codegen/statements.jl")
 include("codegen/values.jl")
+include("codegen/builtins.jl")  # parity(intrinsics.dart:401 KernelNodes._lookup): identity-keyed Core/Base builtin registry
 include("codegen/calls.jl")
 include("codegen/invoke.jl")
 include("codegen/helpers.jl")
