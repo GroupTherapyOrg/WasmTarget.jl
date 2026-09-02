@@ -88,6 +88,7 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (F32, F32, :le_float)  => BinOpEmit(Opcode.F32_LE,  I32),
     (F32, F32, :gt_float)  => BinOpEmit(Opcode.F32_GT,  I32),
     (F32, F32, :ge_float)  => BinOpEmit(Opcode.F32_GE,  I32),
+    (F32, F32, :copysign_float) => BinOpEmit(Opcode.F32_COPYSIGN, F32),
     (F32, F32, :min_float) => BinOpEmit(Opcode.F32_MIN, F32),
     (F32, F32, :min_float_fast) => BinOpEmit(Opcode.F32_MIN, F32),
     (F32, F32, :max_float) => BinOpEmit(Opcode.F32_MAX, F32),
@@ -106,5 +107,77 @@ function emit_intrinsic_binop!(b::InstrBuilder, lhs_ty::WasmValType,
     e = get(INTRINSIC_BINOPS, (lhs_ty, rhs_ty, op), nothing)
     e === nothing && return nothing
     num!(b, e.opcode)
+    return e.result
+end
+
+# ============================================================================
+# parity(intrinsics.dart:474 _unaryOperatorMap, :1007 _inlineUnaryOperatorMap
+# lookup): THE UNARY INTRINSICS TABLE
+# ============================================================================
+#
+# dart's unary map is keyed on the operand's canonical wasm type and an op
+# name, and its values are CALLBACKS — most are one instruction, but two of
+# dart's seven entries emit two instructions (`~` = const -1; xor, `unary-`
+# = const -1; mul, intrinsics.dart:477-484). The result type is
+# `_unaryResultMap[op]` when present, else the operand type (intrinsics.dart:
+# 578-583, :1010). Unary ops are not migrated yet in `emit_intrinsic_binop!`'s
+# docstring above — this table is that migration.
+
+"""One typed unary-op emission: a callback (operand already on the stack) + result type."""
+struct UnOpEmit
+    emit!::Function          # (b::InstrBuilder) -> Nothing
+    result::WasmValType
+end
+
+# (operand wasm type, julia op symbol) → emission.
+const INTRINSIC_UNOPS = Dict{Tuple{WasmValType,Symbol},UnOpEmit}(
+    # ── count leading/trailing zeros, population count (i32/i64) ──────────
+    (I32, :ctlz_int)  => UnOpEmit(b -> num!(b, Opcode.I32_CLZ),    I32),
+    (I64, :ctlz_int)  => UnOpEmit(b -> num!(b, Opcode.I64_CLZ),    I64),
+    (I32, :cttz_int)  => UnOpEmit(b -> num!(b, Opcode.I32_CTZ),    I32),
+    (I64, :cttz_int)  => UnOpEmit(b -> num!(b, Opcode.I64_CTZ),    I64),
+    (I32, :ctpop_int) => UnOpEmit(b -> num!(b, Opcode.I32_POPCNT), I32),
+    (I64, :ctpop_int) => UnOpEmit(b -> num!(b, Opcode.I64_POPCNT), I64),
+    # ── float unary (f32/f64) ──────────────────────────────────────────────
+    (F32, :neg_float)      => UnOpEmit(b -> num!(b, Opcode.F32_NEG),     F32),
+    (F64, :neg_float)      => UnOpEmit(b -> num!(b, Opcode.F64_NEG),     F64),
+    (F32, :abs_float)      => UnOpEmit(b -> num!(b, Opcode.F32_ABS),     F32),
+    (F64, :abs_float)      => UnOpEmit(b -> num!(b, Opcode.F64_ABS),     F64),
+    (F32, :sqrt_llvm)      => UnOpEmit(b -> num!(b, Opcode.F32_SQRT),    F32),
+    (F64, :sqrt_llvm)      => UnOpEmit(b -> num!(b, Opcode.F64_SQRT),    F64),
+    (F32, :sqrt_llvm_fast) => UnOpEmit(b -> num!(b, Opcode.F32_SQRT),    F32),
+    (F64, :sqrt_llvm_fast) => UnOpEmit(b -> num!(b, Opcode.F64_SQRT),    F64),
+    (F32, :floor_llvm)     => UnOpEmit(b -> num!(b, Opcode.F32_FLOOR),   F32),
+    (F64, :floor_llvm)     => UnOpEmit(b -> num!(b, Opcode.F64_FLOOR),   F64),
+    (F32, :ceil_llvm)      => UnOpEmit(b -> num!(b, Opcode.F32_CEIL),    F32),
+    (F64, :ceil_llvm)      => UnOpEmit(b -> num!(b, Opcode.F64_CEIL),    F64),
+    (F32, :trunc_llvm)     => UnOpEmit(b -> num!(b, Opcode.F32_TRUNC),   F32),
+    (F64, :trunc_llvm)     => UnOpEmit(b -> num!(b, Opcode.F64_TRUNC),   F64),
+    (F32, :rint_llvm)      => UnOpEmit(b -> num!(b, Opcode.F32_NEAREST), F32),
+    (F64, :rint_llvm)      => UnOpEmit(b -> num!(b, Opcode.F64_NEAREST), F64),
+    # ── bitwise NOT (i32/i64): dart's `~` = const -1; xor (intrinsics.dart:481-484) ──
+    (I32, :not_int) => UnOpEmit(b -> (i32_const!(b, -1); num!(b, Opcode.I32_XOR)), I32),
+    (I64, :not_int) => UnOpEmit(b -> (i64_const!(b, -1); num!(b, Opcode.I64_XOR)), I64),
+    # ── integer negation (i32/i64) — COMMIT A keeps WT's current sequence
+    #    byte-identical (~x + 1); COMMIT B switches to dart's `unary-` form
+    #    (const -1; mul, intrinsics.dart:477-480).
+    (I32, :neg_int) => UnOpEmit(b -> (i32_const!(b, -1); num!(b, Opcode.I32_XOR);
+                                       i32_const!(b, 1);  num!(b, Opcode.I32_ADD)), I32),
+    (I64, :neg_int) => UnOpEmit(b -> (i64_const!(b, -1); num!(b, Opcode.I64_XOR);
+                                       i64_const!(b, 1);  num!(b, Opcode.I64_ADD)), I64),
+)
+
+"""
+    emit_intrinsic_unop!(b, operand_ty, op) -> Union{WasmValType,Nothing}
+
+THE unary dispatch point (dart's `_inlineUnaryOperatorMap` lookup, intrinsics.dart:1007).
+Operand is on the stack at `operand_ty`. Returns the result type, or `nothing` when the
+table has no entry — nullable-return fall-through (the caller keeps its legacy arm/ladder
+until the family migrates).
+"""
+function emit_intrinsic_unop!(b::InstrBuilder, operand_ty::WasmValType, op::Symbol)::Union{WasmValType,Nothing}
+    e = get(INTRINSIC_UNOPS, (operand_ty, op), nothing)
+    e === nothing && return nothing
+    e.emit!(b)
     return e.result
 end

@@ -106,6 +106,13 @@ _c("f32_eq",   (x::Float32,y::Float32) -> x == y, Float32, Float32)
 _c("f32_ne",   (x::Float32,y::Float32) -> x != y, Float32, Float32)
 _c("f32_lt",   (x::Float32,y::Float32) -> x < y, Float32, Float32)
 _c("f32_le",   (x::Float32,y::Float32) -> x <= y, Float32, Float32)
+# every op × width the diagonal table claims (a Float32 copysign gap once hid a regression)
+_c("f64_copysign", (x::Float64,y::Float64) -> copysign(x, y), Float64, Float64)
+_c("f32_copysign", (x::Float32,y::Float32) -> copysign(x, y), Float32, Float32)
+_c("f64_min",  (x::Float64,y::Float64) -> min(x, y), Float64, Float64)
+_c("f32_min",  (x::Float32,y::Float32) -> min(x, y), Float32, Float32)
+_c("f64_max",  (x::Float64,y::Float64) -> max(x, y), Float64, Float64)
+_c("f32_max",  (x::Float32,y::Float32) -> max(x, y), Float32, Float32)
 
 # narrow-width pairs (i32-mapped, exercise the narrow-pair normalization
 # ahead of the table route)
