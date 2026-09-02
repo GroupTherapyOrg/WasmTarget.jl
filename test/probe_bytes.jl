@@ -172,6 +172,24 @@ _c("f64_from_i64",    (x::Int64) -> Float64(x), Int64)
 _c("i64_from_f64_unsafe", (x::Float64) -> Base.unsafe_trunc(Int64, x), Float64)
 _c("reinterpret_u64_f64", (x::Float64) -> reinterpret(UInt64, x), Float64)
 
+# Phase 3.3/3.4c-ii conversions-registry coverage (calls.jl's ten sext_int/
+# zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/fpext/fptrunc/bitcast arms →
+# INTRINSIC_CONVERSIONS registry, julia_numeric_tier.jl): narrow-source sext/
+# zext/sitofp, narrow-target trunc, the first uitofp/fptoui probes, standard
+# (non-Float16) fpext/fptrunc, and both bitcast shapes (float<->int reinterpret,
+# same-width int<->int no-op).
+_c("sext_i8_to_i64",      (x::Int8) -> Int64(x), Int8)
+_c("zext_u8_to_u64",      (x::UInt8) -> UInt64(x), UInt8)
+_c("trunc_i64_to_i8",     (x::Int64) -> x % Int8, Int64)
+_c("sitofp_i16_f64",      (x::Int16) -> Float64(x), Int16)
+_c("uitofp_u32_f64",      (x::UInt32) -> Float64(x), UInt32)
+_c("fptosi_f32_i32_unsafe", (x::Float32) -> Base.unsafe_trunc(Int32, x), Float32)
+_c("fptoui_f64_u64_unsafe", (x::Float64) -> Base.unsafe_trunc(UInt64, x), Float64)
+_c("fpext_f32_f64",       (x::Float32) -> Float64(x), Float32)
+_c("fptrunc_f64_f32",     (x::Float64) -> Float32(x), Float64)
+_c("reinterpret_i32_f32", (x::Float32) -> reinterpret(Int32, x), Float32)
+_c("reinterpret_i64_u64", (x::UInt64) -> reinterpret(Int64, x), UInt64)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Quarantine tier (`src/codegen/julia_numeric_tier.jl`, Julia-only —
 #    no dart equivalent): Int128, checked overflow, muladd, mixed-width

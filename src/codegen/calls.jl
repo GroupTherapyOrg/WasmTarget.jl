@@ -155,18 +155,15 @@ function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilation
     julia_width < 32 || return fb
     bld = _sub_builder(fb, ctx, "_emit_normalise_narrow_pair!", 2)
     li = UInt32(allocate_local!(ctx, I32))
-    function norm!()
-        if signed
-            num!(bld, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-        else
-            i32_const!(bld, Int64((1 << julia_width) - 1))
-            num!(bld, Opcode.I32_AND)
-        end
-    end
-    local_set!(bld, li)   # [a]
-    norm!()               # [a*]
-    local_get!(bld, li)   # [a*, b]
-    norm!()               # [a*, b*]
+    # normalise_narrow! (julia_numeric_tier.jl) classifies width from a Type, not an
+    # Int — synthesize a representative one; `normalise_narrow!` only reads its width
+    # class (8 vs 16), never its own signedness, so Int8/UInt8 (and Int16/UInt16) are
+    # interchangeable here.
+    julia_type = julia_width == 8 ? (signed ? Int8 : UInt8) : (signed ? Int16 : UInt16)
+    local_set!(bld, li)                              # [a]
+    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*]
+    local_get!(bld, li)                               # [a*, b]
+    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*, b*]
     append_builder!(fb, bld)
     return fb
 end
@@ -1731,111 +1728,6 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
         end
     end
     append_builder!(fb, bld)
-    return nothing
-end
-
-"""
-    _compile_call_fpext(args, fb, ctx)
-
-Extracted handler for fpext (float precision extension).
-Modifies `bytes` in-place.
-"""
-function _compile_call_fpext(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
-    # fpext(TargetType, value) - extend to Float64
-    source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float32
-    if source_type === Float16
-        # Float16 (i32 on stack) → Float64
-        # Convert Float16 bit pattern to Float32 bit pattern using integer ops,
-        # then reinterpret as f32 and promote to f64.
-        # Float16: 1 sign, 5 exp, 10 mantissa
-        # Float32: 1 sign, 8 exp, 23 mantissa
-        # For normalized: f32_bits = (sign<<31) | ((exp+112)<<23) | (mant<<13)
-        # For zero: f32_bits = sign<<31
-        # For inf/nan: f32_bits = (sign<<31) | (0xff<<23) | (mant<<13)
-        #
-        # We use a branchless approach for normalized values with special-case
-        # handling for zero and inf/nan via select.
-        #
-        # Stack: [i32 = Float16 bits]
-        # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
-
-        bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
-        # Save the Float16 bits to a temp local
-        local_idx = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        h_local = local_idx
-        local_tee!(bld, h_local)
-
-        # Extract sign: (h >> 15) << 31
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(15))
-        num!(bld, Opcode.I32_SHR_U)
-        i32_const!(bld, Int64(31))
-        num!(bld, Opcode.I32_SHL)
-        # Stack: [h, sign_bit]
-
-        # Extract exp: (h >> 10) & 0x1f
-        local_idx2 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        sign_local = local_idx2
-        local_set!(bld, sign_local)
-
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(10))
-        num!(bld, Opcode.I32_SHR_U)
-        i32_const!(bld, Int64(0x1f))
-        num!(bld, Opcode.I32_AND)
-
-        local_idx3 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        exp_local = local_idx3
-        local_set!(bld, exp_local)
-
-        # Extract mant: h & 0x3ff
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(0x3ff))
-        num!(bld, Opcode.I32_AND)
-
-        local_idx4 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        mant_local = local_idx4
-        local_set!(bld, mant_local)
-
-        # Build f32 bits for normalized case:
-        # sign_bit | ((exp + 112) << 23) | (mant << 13)
-        local_get!(bld, sign_local)
-
-        local_get!(bld, exp_local)
-        i32_const!(bld, Int64(112))
-        num!(bld, Opcode.I32_ADD)
-        i32_const!(bld, Int64(23))
-        num!(bld, Opcode.I32_SHL)
-        num!(bld, Opcode.I32_OR)
-
-        local_get!(bld, mant_local)
-        i32_const!(bld, Int64(13))
-        num!(bld, Opcode.I32_SHL)
-        num!(bld, Opcode.I32_OR)
-        # Stack: [normalized_f32_bits]
-
-        # Handle zero case: if exp==0 && mant==0, use sign_bit only
-        # Handle inf/nan: if exp==0x1f, use sign|(0xff<<23)|(mant<<13)
-        # For simplicity in codegen context (timing values are always small
-        # positive normalized floats), the normalized formula works.
-        # Zero maps to exp+112=112 which is a tiny denormal in f32 ≈ 0.
-        # This is acceptable for validation and practical correctness.
-
-        # Reinterpret i32 → f32, then promote f32 → f64
-        num!(bld, Opcode.F32_REINTERPRET_I32)  # 0xBE
-        num!(bld, 0xBB)  # f64.promote_f32
-        append_builder!(fb, bld)
-    else
-        # Float32 → Float64 (standard case)
-        let bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
-            num!(bld, 0xBB)  # f64.promote_f32
-            append_builder!(fb, bld)
-        end
-    end
     return nothing
 end
 
@@ -5019,6 +4911,43 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
+    # parity(quarantine: julia_numeric_tier.jl): THE conversions registry route —
+    # sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/fpext/fptrunc/bitcast.
+    # No dart anchor (dart coerces only through convertType, translator.dart:1597,
+    # and the dart:_wasm shims, intrinsics.dart:710-929). Target-type resolution for
+    # sext_int/zext_int/trunc_int stays HERE, not in the registry file, so L77's
+    # three literal diagnostic messages keep their home; sitofp/uitofp/fptosi/
+    # fptoui pass args[1] unresolved exactly as the arms did; bitcast passes the
+    # raw type reference and resolves inside `emit_conversion!`. Same nullable-
+    # return funnel shape as the routes above; for these ten ops the funnel is
+    # EXHAUSTIVE (their calls.jl arms are deleted).
+    if _it_name in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi,
+                    :fptoui, :fpext, :fptrunc, :bitcast)
+        local _cv_julia_dst = length(args) >= 1 ? args[1] : nothing
+        if _it_name === :sext_int || _it_name === :zext_int || _it_name === :trunc_int
+            local _cv_target_ref = _cv_julia_dst
+            _cv_julia_dst = _cv_target_ref isa GlobalRef && isdefined(_cv_target_ref.mod, _cv_target_ref.name) ?
+                getfield(_cv_target_ref.mod, _cv_target_ref.name) : _cv_target_ref
+            if !(_cv_julia_dst isa Type)
+                if _it_name === :sext_int
+                    record_unsupported!(ctx, :unsupported_type,
+                        "sext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                elseif _it_name === :zext_int
+                    record_unsupported!(ctx, :unsupported_type,
+                        "zext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                else
+                    record_unsupported!(ctx, :unsupported_type,
+                        "trunc_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                end
+            end
+        end
+        local _cv_julia_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        local _cv_src_wide = length(args) >= 2 && get_phi_edge_wasm_type(args[2], ctx) === I64
+        local _cv_result = emit_conversion!(fb, ctx, _it_name, _cv_julia_src, _cv_julia_dst, idx;
+                                            src_already_wide=_cv_src_wide)
+        _cv_result !== nothing && return append_builder!(b, fb)
+    end
+
     # Match intrinsics by name
     # (add_int/sub_int/mul_int: non-128-bit handled by THE intrinsics table route above;
     # 128-bit handled by THE Int128 registry route above.)
@@ -5030,63 +4959,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # sdiv_int/udiv_int/srem_int/urem_int (+ checked_* aliases, I32/I64): THE
     # intrinsics table route above (guard + opcode, same as this arm used to do).
 
-    # Bitcast (reinterpret bits between types)
-    if is_func(func, :bitcast)
-        # Bitcast reinterprets bits between same-size types
-        # Need to emit reinterpret instructions for float<->int conversions
-        # args = [target_type, source_value]
-        # Get the target type - it's the first actual argument (args[1] after extracting args[2:end])
-        target_type_ref = length(args) >= 1 ? args[1] : nothing
-        source_val = length(args) >= 2 ? args[2] : nothing
-
-        # Determine target type from the GlobalRef or type literal
-        target_type = if target_type_ref isa GlobalRef
-            # Try to get the actual type from the GlobalRef
-            if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")
-                Int64
-            elseif target_type_ref.name === :UInt64
-                UInt64
-            elseif target_type_ref.name === :Int32 || target_type_ref.name === Symbol("Base.Int32")
-                Int32
-            elseif target_type_ref.name === :UInt32
-                UInt32
-            elseif target_type_ref.name === :Float64
-                Float64
-            elseif target_type_ref.name === :Float32
-                Float32
-            elseif target_type_ref.name === :Int128
-                Int128
-            elseif target_type_ref.name === :UInt128
-                UInt128
-            elseif isdefined(target_type_ref.mod, target_type_ref.name)
-                getfield(target_type_ref.mod, target_type_ref.name)
-            else
-                record_unsupported!(ctx, :unsupported_type,
-                    "reinterpret target GlobalRef is not defined"; idx=idx, detail=target_type_ref)
-            end
-        elseif target_type_ref isa DataType
-            target_type_ref
-        else
-            Any
-        end
-
-        # Determine source type
-        source_type = source_val !== nothing ? infer_value_type(source_val, ctx) : Any
-
-        # Emit appropriate reinterpret instruction if needed
-        if source_type === Float64 && (target_type === Int64 || target_type === UInt64)
-            _op1!(Opcode.I64_REINTERPRET_F64)
-        elseif (source_type === Int64 || source_type === UInt64) && target_type === Float64
-            _op1!(Opcode.F64_REINTERPRET_I64)
-        elseif source_type === Float32 && (target_type === Int32 || target_type === UInt32)
-            _op1!(Opcode.I32_REINTERPRET_F32)
-        elseif (source_type === Int32 || source_type === UInt32) && target_type === Float32
-            _op1!(Opcode.F32_REINTERPRET_I32)
-        end
-        # STACK-003: Char is stored as Julia's internal representation (UTF-8 packed UInt32),
-        # so bitcast(UInt32, Char) and bitcast(Char, UInt32) are no-ops (same as Int32<->UInt32).
-        # For other cases (Int64<->UInt64, Int32<->UInt32, Int128<->UInt128),
-        # bitcast is a no-op in Wasm (same representation)
+    # bitcast: THE julia_numeric_tier.jl conversions registry route above.
 
     # neg_int: non-128-bit handled by THE intrinsics table route above; 128-bit handled
     # by THE Int128 registry route above.
@@ -5102,7 +4975,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # intrinsics table route above; 128-bit handled by THE Int128 registry route above.
 
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
-    elseif is_func(func, :(===))
+    if is_func(func, :(===))
         _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
 
     elseif is_func(func, :(!==))
@@ -5224,277 +5097,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # Float operations: muladd_float/fma_float/have_fma: THE julia_numeric_tier.jl
     # FMA_OPS registry route above.
 
-    # Type conversions
-    elseif is_func(func, :sext_int)  # Sign extend
-        # sext_int(TargetType, value) - first arg is target type
-        target_type_ref = args[1]
-        # Extract actual type from GlobalRef if needed
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "sext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-        local _sxb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the operand
-        if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            # Skip extend if source is already i64 (e.g., from widened phi local)
-            src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
-            if src_wasm !== I64
-                # A narrow source must be renormalised at its JULIA
-                # width first — sext_int(Int64, x::Int8) with register value 128
-                # otherwise widens to 128 instead of -128.
-                local _sx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-                if _sx_src === Int8
-                    num!(_sxb, Opcode.I32_EXTEND8_S)
-                elseif _sx_src === Int16
-                    num!(_sxb, Opcode.I32_EXTEND16_S)
-                elseif _sx_src === UInt8
-                    i32_const!(_sxb, Int64(0xff)); num!(_sxb, Opcode.I32_AND)
-                elseif _sx_src === UInt16
-                    i32_const!(_sxb, Int64(0xffff)); num!(_sxb, Opcode.I32_AND)
-                end
-                num!(_sxb, Opcode.I64_EXTEND_I32_S)
-            end
-        elseif target_type === Int128 || target_type === UInt128
-            # Sign-extending to 128-bit - create struct with (typeId, lo=value, hi=sign_extension)
-            # The value is already on the stack (i64)
-            source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-
-            # If source is 32-bit, sign-extend to 64-bit first
-            # Bool also maps to i32
-            if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8 || source_type === Bool
-                num!(_sxb, Opcode.I64_EXTEND_I32_S)
-            end
-
-            # Now we have i64 on stack (the lo part)
-            # Need to duplicate it to compute the hi part (sign extension)
-            # Use a scratch local: store, load twice
-            scratch_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, I64)
-
-            # Store to scratch
-            local_tee!(_sxb, scratch_idx)
-
-            # Compute hi = lo >> 63 (arithmetic shift, gives 0 or -1)
-            i64_const!(_sxb, 63)  # 63
-            num!(_sxb, Opcode.I64_SHR_S)
-
-            # Stack: [hi]. Need [typeId, lo, hi] for struct.new
-            # Save hi to scratch, then push typeId, lo, hi
-            scratch2_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, I64)
-            local_set!(_sxb, scratch2_idx)
-
-            # Stack: [] — push in struct field order: typeId, lo, hi
-            i32_const!(_sxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
-            local_get!(_sxb, scratch_idx)
-            local_get!(_sxb, scratch2_idx)
-
-            # Create the 128-bit struct (typeId, lo, hi)
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_sxb, type_idx)   # mod-resolved fields
-        end
-        # If extending to 32-bit (Int32), it's a no-op since small types already map to i32
-        append_builder!(fb, _sxb)
-
-    elseif is_func(func, :zext_int)  # Zero extend
-        # zext_int(TargetType, value) - first arg is target type
-        target_type_ref = args[1]
-        # Extract actual type from GlobalRef if needed
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "zext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-        # P3 gap da22976c7cd6: sub-32-bit values live in i32 locals that can
-        # carry dirty high bits (e.g. `0x01 + 0xff` leaves 0x100 — add_int does
-        # not re-narrow). zext_int takes the BITS of the source width, so mask
-        # to that width before extending (`x << Int64(0x01 + x)` shifted by 256
-        # instead of 0 — over-shift gave 0 where native wraps the count).
-        _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
-        _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
-                   (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
-        local _zxb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the operand
-        if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            # Skip extend if source is already i64 (e.g., from widened phi local)
-            src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
-            if src_wasm_z !== I64
-                if _zx_mask != 0
-                    i32_const!(_zxb, _zx_mask)
-                    num!(_zxb, Opcode.I32_AND)
-                end
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            end
-        elseif target_type === Int32 || target_type === UInt32
-            # Same-register-class extension: mask the source width so dirty
-            # carry bits don't leak into the wider type
-            if _zx_mask != 0 && get_phi_edge_wasm_type(args[2], ctx) !== I64
-                i32_const!(_zxb, _zx_mask)
-                num!(_zxb, Opcode.I32_AND)
-            end
-        elseif target_type === Int128 || target_type === UInt128
-            # Extending to 128-bit - create struct with (typeId, lo=value, hi=0)
-            # The value is already on the stack (i64), need to create 128-bit struct
-            source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
-
-            # If source is 32-bit or narrower, extend to 64-bit first
-            # Bool also maps to i32, so include it here
-            # P3 da22976c7cd6: 8/16-bit sources also live in i32 — mask their
-            # width (dirty carry bits) before the unsigned extend
-            if _zx_mask != 0
-                i32_const!(_zxb, _zx_mask)
-                num!(_zxb, Opcode.I32_AND)
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            end
-
-            # Now we have i64 on stack (the lo part)
-            # Save lo to scratch, push typeId, restore lo, then push hi=0
-            _zext_scratch = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I64)
-            local_set!(_zxb, _zext_scratch)
-            i32_const!(_zxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
-            local_get!(_zxb, _zext_scratch)
-            # Push 0 for hi part
-            i64_const!(_zxb, 0)
-
-            # Create the 128-bit struct (typeId, lo, hi)
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_zxb, type_idx)   # mod-resolved fields
-        end
-        # If extending to 32-bit (UInt32/Int32), it's a no-op since small types already map to i32
-        append_builder!(fb, _zxb)
-
-    elseif is_func(func, :trunc_int)  # Truncate to smaller type
-        # trunc_int(TargetType, value)
-        target_type_ref = args[1]
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "trunc_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-
-        # Determine source and target WASM bit widths
-        # Also check actual Wasm type — widened phi locals may be I64
-        # even though Julia type says UInt32
-        source_is_64bit = source_type === Int64 || source_type === UInt64 || source_type === Int
-        if !source_is_64bit && length(args) >= 2
-            src_wasm_t = get_phi_edge_wasm_type(args[2], ctx)
-            if src_wasm_t === I64
-                source_is_64bit = true
-            end
-        end
-        target_is_32bit = target_type === Int32 || target_type === UInt32 ||
-                          target_type === Int16 || target_type === UInt16 ||
-                          target_type === Int8 || target_type === UInt8 ||
-                          target_type === Bool || target_type === Char
-
-        local _trb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the source
-        if source_type === Int128 || source_type === UInt128
-            # Truncating from 128-bit - extract lo part
-            source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
-            struct_get!(_trb, source_type_idx, UInt32(1), I64)  # Field 1 = lo (0=typeId)
-
-            # Now we have i64, may need to wrap to i32
-            if target_is_32bit
-                num!(_trb, Opcode.I32_WRAP_I64)
-            end
-        elseif source_is_64bit && target_is_32bit
-            # i64 to i32 truncation (includes UInt8, Int8, UInt16, Int16 targets)
-            num!(_trb, Opcode.I32_WRAP_I64)
-        end
-        # i64 to i64 or i32 to i32 is a no-op
-        # P3 gap 40da73b299fc (2nd find): sub-32-bit targets must be width-
-        # normalised — bare i32.wrap_i64 is 32-bit truncation, so the
-        # InexactError round-trip `zext(trunc(x)) == x` compared x against
-        # itself and let out-of-range values through silently. Unsigned
-        # targets zero-mask; signed targets sign-extend (so sext consumers
-        # and the return marshalling read the right value directly).
-        if target_type === Bool
-            i32_const!(_trb, 1)
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === UInt8
-            i32_const!(_trb, Int64(0xFF))
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === UInt16
-            i32_const!(_trb, Int64(0xFFFF))
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === Int8
-            num!(_trb, Opcode.I32_EXTEND8_S)
-        elseif target_type === Int16
-            num!(_trb, Opcode.I32_EXTEND16_S)
-        end
-        append_builder!(fb, _trb)
-
-    elseif is_func(func, :sitofp)  # Signed int to float
-        # sitofp(TargetType, value) - first arg is target type, second is value
-        # Need to check: target float type (first arg) and source int type (second arg)
-        target_type = args[1]  # Float32 or Float64
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
-                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
-                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
-
-        # P3 gap 40ed488e7f10: narrow signed values can sit in the i32 register
-        # zero-extended (e.g. a width-masked shl leaves Int8(-8) as 0xF8), but
-        # the signed convert reads the full register. Sign-extend at the
-        # consumer, same convention as the comparison normalisation.
-        if source_type === Int8
-            _op1!(Opcode.I32_EXTEND8_S)
-        elseif source_type === Int16
-            _op1!(Opcode.I32_EXTEND16_S)
-        end
-
-        if target_type === Float32
-            _op1!(source_is_32bit ? Opcode.F32_CONVERT_I32_S : Opcode.F32_CONVERT_I64_S)
-        else  # Float64
-            _op1!(source_is_32bit ? Opcode.F64_CONVERT_I32_S : Opcode.F64_CONVERT_I64_S)
-        end
-
-    elseif is_func(func, :uitofp)  # Unsigned int to float
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
-                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
-                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
-
-        if target_type === Float32
-            _op1!(source_is_32bit ? Opcode.F32_CONVERT_I32_U : Opcode.F32_CONVERT_I64_U)
-        else  # Float64
-            _op1!(source_is_32bit ? Opcode.F64_CONVERT_I32_U : Opcode.F64_CONVERT_I64_U)
-        end
-
-    elseif is_func(func, :fptosi)  # Float to signed int
-        # fptosi(TargetType, value) - first arg is target type
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
-        source_is_f32 = source_type === Float32
-
-        if target_type === Int32 || target_type === Int16 || target_type === Int8
-            _op1!(source_is_f32 ? Opcode.I32_TRUNC_F32_S : Opcode.I32_TRUNC_F64_S)
-        else  # Int64
-            _op1!(source_is_f32 ? Opcode.I64_TRUNC_F32_S : Opcode.I64_TRUNC_F64_S)
-        end
-
-    elseif is_func(func, :fptoui)  # Float to unsigned int
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
-        source_is_f32 = source_type === Float32
-
-        if target_type === UInt32 || target_type === UInt16 || target_type === UInt8
-            _op1!(source_is_f32 ? Opcode.I32_TRUNC_F32_U : Opcode.I32_TRUNC_F64_U)
-        else  # UInt64
-            _op1!(source_is_f32 ? Opcode.I64_TRUNC_F32_U : Opcode.I64_TRUNC_F64_U)
-        end
-
-    elseif is_func(func, :fpext)  # Float precision extension
-        _compile_call_fpext(args, fb, ctx)
-
-    elseif is_func(func, :fptrunc)  # Float precision truncation (Float64 → Float32)
-        # fptrunc(TargetType, value) - truncate Float64 to Float32
-        # The source is always Float64, target is Float32
-        _op1!(0xB6)  # f32.demote_f64
+    # Type conversions: sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/
+    # fpext/fptrunc: THE julia_numeric_tier.jl conversions registry route above.
 
     # High-level operators (fallback)
     elseif is_func(func, :+)
