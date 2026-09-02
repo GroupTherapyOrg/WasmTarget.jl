@@ -187,6 +187,62 @@ _c("muladd_f64",   (x::Float64,y::Float64,z::Float64) -> muladd(x, y, z), Float6
 _c("shl_mixed",    (x::UInt32,n::Int64) -> x << n, UInt32, Int64)
 _c("bswap_i64",    (x::Int64) -> bswap(x), Int64)
 
+# CHECKED_OPS: add/sub/mul on every width Phase 3.4c-i's registry handles
+# (Int64/Int32/UInt64 register-width path; Int8/Int16 narrow-normalise path).
+_c("checked_add_i32", (x::Int32,y::Int32) -> Base.checked_add(x, y), Int32, Int32)
+_c("checked_add_u64", (x::UInt64,y::UInt64) -> Base.checked_add(x, y), UInt64, UInt64)
+_c("checked_add_i8",  (x::Int8,y::Int8) -> Base.checked_add(x, y), Int8, Int8)
+_c("checked_add_i16", (x::Int16,y::Int16) -> Base.checked_add(x, y), Int16, Int16)
+_c("checked_sub_i64", (x::Int64,y::Int64) -> Base.checked_sub(x, y), Int64, Int64)
+_c("checked_sub_i32", (x::Int32,y::Int32) -> Base.checked_sub(x, y), Int32, Int32)
+_c("checked_sub_u64", (x::UInt64,y::UInt64) -> Base.checked_sub(x, y), UInt64, UInt64)
+_c("checked_sub_i8",  (x::Int8,y::Int8) -> Base.checked_sub(x, y), Int8, Int8)
+_c("checked_sub_i16", (x::Int16,y::Int16) -> Base.checked_sub(x, y), Int16, Int16)
+_c("checked_mul_i32", (x::Int32,y::Int32) -> Base.checked_mul(x, y), Int32, Int32)
+_c("checked_mul_u64", (x::UInt64,y::UInt64) -> Base.checked_mul(x, y), UInt64, UInt64)
+_c("checked_mul_i8",  (x::Int8,y::Int8) -> Base.checked_mul(x, y), Int8, Int8)
+_c("checked_mul_i16", (x::Int16,y::Int16) -> Base.checked_mul(x, y), Int16, Int16)
+
+# SHIFT_OPS: <<, >>, >>> on every register width with both a matching-width
+# and a mismatched-width (Int64 vs Int32) shift-count operand — exercises the
+# count-coercion/saturation ahead of `_emit_shift_guarded!` (shl_mixed above
+# already covers UInt32 << with an Int64 count).
+_c("shl_i64_c64",  (x::Int64,n::Int64) -> x << n, Int64, Int64)
+_c("shl_i64_c32",  (x::Int64,n::Int32) -> x << n, Int64, Int32)
+_c("shl_i32_c64",  (x::Int32,n::Int64) -> x << n, Int32, Int64)
+_c("shl_i32_c32",  (x::Int32,n::Int32) -> x << n, Int32, Int32)
+_c("shl_u64_c64",  (x::UInt64,n::Int64) -> x << n, UInt64, Int64)
+_c("shl_u64_c32",  (x::UInt64,n::Int32) -> x << n, UInt64, Int32)
+_c("shl_u32_c32",  (x::UInt32,n::Int32) -> x << n, UInt32, Int32)
+_c("shr_i64_c64",  (x::Int64,n::Int64) -> x >> n, Int64, Int64)
+_c("shr_i64_c32",  (x::Int64,n::Int32) -> x >> n, Int64, Int32)
+_c("shr_i32_c64",  (x::Int32,n::Int64) -> x >> n, Int32, Int64)
+_c("shr_i32_c32",  (x::Int32,n::Int32) -> x >> n, Int32, Int32)
+_c("shr_u64_c64",  (x::UInt64,n::Int64) -> x >> n, UInt64, Int64)
+_c("shr_u64_c32",  (x::UInt64,n::Int32) -> x >> n, UInt64, Int32)
+_c("shr_u32_c64",  (x::UInt32,n::Int64) -> x >> n, UInt32, Int64)
+_c("shr_u32_c32",  (x::UInt32,n::Int32) -> x >> n, UInt32, Int32)
+_c("ushr_i64_c64", (x::Int64,n::Int64) -> x >>> n, Int64, Int64)
+_c("ushr_i64_c32", (x::Int64,n::Int32) -> x >>> n, Int64, Int32)
+_c("ushr_i32_c64", (x::Int32,n::Int64) -> x >>> n, Int32, Int64)
+_c("ushr_i32_c32", (x::Int32,n::Int32) -> x >>> n, Int32, Int32)
+_c("ushr_u64_c64", (x::UInt64,n::Int64) -> x >>> n, UInt64, Int64)
+_c("ushr_u64_c32", (x::UInt64,n::Int32) -> x >>> n, UInt64, Int32)
+_c("ushr_u32_c64", (x::UInt32,n::Int64) -> x >>> n, UInt32, Int64)
+_c("ushr_u32_c32", (x::UInt32,n::Int32) -> x >>> n, UInt32, Int32)
+
+# FMA_OPS: muladd/fma on both float widths (fma missing entirely from the
+# prior corpus — `have_fma` is exercised implicitly, it takes no runtime arg).
+_c("muladd_f32", (x::Float32,y::Float32,z::Float32) -> muladd(x, y, z), Float32, Float32, Float32)
+_c("fma_f64",     (x::Float64,y::Float64,z::Float64) -> fma(x, y, z), Float64, Float64, Float64)
+_c("fma_f32",     (x::Float32,y::Float32,z::Float32) -> fma(x, y, z), Float32, Float32, Float32)
+
+# MISC_OPS: bswap (remaining widths) and flipsign.
+_c("bswap_i32",  (x::Int32) -> bswap(x), Int32)
+_c("bswap_u16",  (x::UInt16) -> bswap(x), UInt16)
+_c("flipsign_i64", (x::Int64,y::Int64) -> flipsign(x, y), Int64, Int64)
+_c("flipsign_i32", (x::Int32,y::Int32) -> flipsign(x, y), Int32, Int32)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Invoke/foreigncall registry keys (kwerr, throw_inexacterror, memoryrefnew
 #    via Vector, jl_string_ptr via string ops) — println EXCLUDED: it requires

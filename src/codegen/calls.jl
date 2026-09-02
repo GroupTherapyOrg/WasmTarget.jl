@@ -644,6 +644,371 @@ function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector
 end
 
 """
+    _compile_call_checked_narrow!(fb, ctx, func, arg_type, is_32bit)
+
+Extracted handler for checked_s{add,sub,mul}_int / checked_u{add,sub,mul}_int
+when the JULIA operand width is < 32 bits (Int8/UInt8/Int16/UInt16). The
+register-width overflow tricks in `_compile_call_checked_add!`/`_sub!`/
+`_compile_call_checked_mul` detect overflow with sign-bit tests at bit 31/63 —
+a narrow op can never overflow the wide i32 register, so the flag would stay
+false (e.g. `checked_abs(Int8(-128))` used to leak 128 instead of throwing
+OverflowError — the `lcm(Int8(-128), 1)` divergent_throw family). Computed in
+i32 on normalised inputs; flag = result fails the sign/zero-extend round-trip
+at the JULIA width; value = wrapped result. A pure move of the arm that used
+to gate the head of the `is_func` ladder (was a combined `if is_32bit &&
+_julia_int_width(...) < 32 && (is_func(...) || ...)`, checked before any of
+checked_sadd/ssub/smul_int's own branches).
+"""
+function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
+                                       func, arg_type, is_32bit::Bool)::Nothing
+    local _ncw = _julia_int_width(arg_type, is_32bit)
+    local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
+                       is_func(func, :checked_smul_int)
+    local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
+                   (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
+                   Opcode.I32_MUL
+    _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
+    local _nc_r = UInt32(allocate_local!(ctx, I32))
+    local _ncb = _sub_builder(fb, ctx, "compile_call", 2)   # [a*, b*] normalised pair
+    num!(_ncb, _nc_op)
+    local_set!(_ncb, _nc_r)
+    # helper: push wrapped-to-width copy of result
+    local _nc_norm! = function ()
+        local_get!(_ncb, _nc_r)
+        if _nc_signed
+            num!(_ncb, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+        else
+            i32_const!(_ncb, Int64((1 << _ncw) - 1))
+            num!(_ncb, Opcode.I32_AND)
+        end
+    end
+    local _nc_tt = Tuple{Int32, Bool}
+    if !haskey(ctx.type_registry.structs, _nc_tt)
+        register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
+    end
+    local _nc_info = ctx.type_registry.structs[_nc_tt]
+    emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
+    _nc_norm!()                                           # field 1: wrapped value
+    _nc_norm!()                                           # flag: wrapped != raw
+    local_get!(_ncb, _nc_r)
+    num!(_ncb, Opcode.I32_NE)
+    struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields
+    append_builder!(fb, _ncb)
+    return nothing
+end
+
+"""
+    _compile_call_checked_add!(fbref, ctx, func, is_128bit, is_32bit, idx)
+
+Extracted handler for checked_sadd_int / checked_uadd_int (register-width
+path — narrow width routes through `_compile_call_checked_narrow!` instead).
+checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag). Overflow
+detection: ((a ^ result) & (b ^ result)) has sign bit set. `fbref` is a
+`Ref{InstrBuilder}` (not a plain `fb`) because the is_128bit branch REPLACES
+the builder with a fresh stub-only one — exactly as the original inline `fb =
+_ctx_builder(...)` reassignment did (a plain argument can only be appended
+to, not swapped out from under the caller).
+"""
+function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                    func, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+    if is_128bit
+        local _cadd128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_cadd128, ctx)
+        emit_unsupported_stub!(ctx, _cadd128, :unsupported_method,
+            "128-bit checked addition (Int128/UInt128)"; idx=idx)
+        fbref[] = _cadd128
+    else
+        is_signed = is_func(func, :checked_sadd_int)
+        local_type = is_32bit ? I32 : I64
+        local_a = allocate_local!(ctx, local_type)
+        local_b = allocate_local!(ctx, local_type)
+        local_result = allocate_local!(ctx, local_type)
+        local _caddb = _sub_builder(fbref[], ctx, "compile_call", 2)   # [a, b]
+
+        # Save b, save a, compute a+b, save result
+        local_set!(_caddb, local_b)
+        local_tee!(_caddb, local_a)
+        local_get!(_caddb, local_b)
+        num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+        local_set!(_caddb, local_result)
+
+        local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
+                           ctx.type_registry.structs[_cadd_tt] :
+                           register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
+        emit_struct_prefix!(_caddb, ctx.type_registry, _cadd_tt, _cadd_info)
+        # Push result back for tuple field 1
+        local_get!(_caddb, local_result)
+
+        # Compute overflow flag
+        if is_signed
+            # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
+            local_get!(_caddb, local_a)
+            local_get!(_caddb, local_result)
+            num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            local_get!(_caddb, local_b)
+            local_get!(_caddb, local_result)
+            num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            num!(_caddb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+            if is_32bit
+                i32_const!(_caddb, 31)
+                num!(_caddb, Opcode.I32_SHR_U)
+            else
+                i64_const!(_caddb, 63)
+                num!(_caddb, Opcode.I64_SHR_U)
+                num!(_caddb, Opcode.I32_WRAP_I64)
+            end
+        else
+            # Unsigned: overflow = result < a
+            local_get!(_caddb, local_result)
+            local_get!(_caddb, local_a)
+            num!(_caddb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+        end
+
+        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        local tuple_info = ctx.type_registry.structs[tuple_type]
+        struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        append_builder!(fbref[], _caddb)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_checked_sub!(fbref, ctx, func, is_128bit, is_32bit, idx)
+
+Extracted handler for checked_ssub_int / checked_usub_int (register-width
+path — narrow width routes through `_compile_call_checked_narrow!` instead).
+checked_ssub_int(a, b) -> Tuple{T, Bool}. Signed overflow: ((a ^ b) & (a ^
+result)) has sign bit set. Same `Ref{InstrBuilder}` reassignment need as
+`_compile_call_checked_add!` — see its docstring.
+"""
+function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                    func, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+    if is_128bit
+        local _csub128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_csub128, ctx)
+        emit_unsupported_stub!(ctx, _csub128, :unsupported_method,
+            "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
+        fbref[] = _csub128
+    else
+        is_signed = is_func(func, :checked_ssub_int)
+        local_type = is_32bit ? I32 : I64
+        local_a = allocate_local!(ctx, local_type)
+        local_b = allocate_local!(ctx, local_type)
+        local_result = allocate_local!(ctx, local_type)
+        local _csubb = _sub_builder(fbref[], ctx, "compile_call", 2)   # [a, b]
+
+        # Save b, save a, compute a-b, save result
+        local_set!(_csubb, local_b)
+        local_tee!(_csubb, local_a)
+        local_get!(_csubb, local_b)
+        num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+        local_set!(_csubb, local_result)
+
+        local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
+                           ctx.type_registry.structs[_csub_tt] :
+                           register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
+        emit_struct_prefix!(_csubb, ctx.type_registry, _csub_tt, _csub_info)
+        # Push result back for tuple field 1
+        local_get!(_csubb, local_result)
+
+        if is_signed
+            # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_b)
+            num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_result)
+            num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            num!(_csubb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+            if is_32bit
+                i32_const!(_csubb, 31)
+                num!(_csubb, Opcode.I32_SHR_U)
+            else
+                i64_const!(_csubb, 63)
+                num!(_csubb, Opcode.I64_SHR_U)
+                num!(_csubb, Opcode.I32_WRAP_I64)
+            end
+        else
+            # Unsigned: overflow = a < b
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_b)
+            num!(_csubb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+        end
+
+        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        local tuple_info = ctx.type_registry.structs[tuple_type]
+        struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        append_builder!(fbref[], _csubb)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_checked!(fbref, ctx, func, args, is_128bit, is_32bit, arg_type, idx) -> WasmValType
+
+THE checked-overflow dispatch — CHECKED_OPS's single implementation (all 6
+keys forward here; op identity is re-derived via `is_func`, mirroring the
+original ladder's own repeated `is_func(func, :checked_..._int)` tests rather
+than trusting a symbol-equality shortcut). Narrow Julia widths route through
+`_compile_call_checked_narrow!` first (checked BEFORE add/sub/mul dispatch,
+exactly as the original combined `if` guard did); mul goes through the
+pre-existing `_compile_call_checked_mul` unchanged (its is_128bit branch
+stubs on the EXISTING builder, unlike add/sub's fresh-builder discard — a
+pre-existing asymmetry, preserved as-is, not unified).
+"""
+function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                func, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
+    local _narrow = is_32bit && _julia_int_width(arg_type, is_32bit) < 32
+    if _narrow
+        _compile_call_checked_narrow!(fbref[], ctx, func, arg_type, is_32bit)
+    elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
+        _compile_call_checked_mul(func, args, fbref[], ctx, is_128bit, is_32bit)
+    elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
+        _compile_call_checked_add!(fbref, ctx, func, is_128bit, is_32bit, idx)
+    else
+        _compile_call_checked_sub!(fbref, ctx, func, is_128bit, is_32bit, idx)
+    end
+    local _tt = (_narrow || is_32bit) ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+    return ConcreteRef(UInt32(ctx.type_registry.structs[_tt].wasm_type_idx), true)
+end
+
+"""
+    _compile_call_shift!(fb, ctx, args, arg_type, is_32bit, kind) -> WasmValType
+
+THE shift dispatch — SHIFT_OPS's single implementation for `:shl`/`:ashr`/
+`:lshr` (128-bit operands are fully handled by THE Int128 registry route
+before this is ever reached). Shift-COUNT coercion first (Julia often uses an
+Int64/UInt64 amount even for an Int32 value — Wasm requires the amount and
+the value to share a type): shl/lshr saturate an oversized i64 amount down to
+i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
+unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
+`_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
+"""
+function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext, args, arg_type,
+                              is_32bit::Bool, kind::Symbol)::WasmValType
+    if length(args) >= 2
+        shift_type = infer_value_type(args[2], ctx)
+        if kind === :ashr
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                num!(fb, Opcode.I32_WRAP_I64)
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+            end
+        else   # :shl / :lshr
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+            end
+        end
+    end
+    if kind === :shl
+        _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
+    elseif kind === :ashr
+        _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
+                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
+    else
+        _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
+    end
+    return is_32bit ? I32 : I64
+end
+
+"""
+    _compile_call_bswap!(fb, ctx, is_128bit, is_32bit, idx) -> WasmValType
+
+Extracted handler for `bswap_int`. WebAssembly has no native bswap —
+implemented with bit manipulation. 128-bit is a loud reject (the i64
+reversal sequence would run on a struct value → invalid wasm); the reject
+already early-returns from `compile_call!` in the original arm (mirrored
+here via the nullable-return funnel instead — MISC_OPS's caller returns
+immediately on any non-`nothing` result either way, so the observable
+control flow is identical).
+"""
+function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
+                              is_128bit::Bool, is_32bit::Bool, idx::Int)::WasmValType
+    if is_128bit   # quarantine: loud reject — not in INT128_OPS, no dart lowering exists
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+            "128-bit byte-swap (Int128/UInt128)"; idx=idx)
+        return is_32bit ? I32 : I64   # nominal — dead past `unreachable`
+    end
+    # Allocate a scratch local to hold the input value (need it 4 times)
+    scratch_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, is_32bit ? I32 : I64)
+    local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the input
+    # Store input value
+    local_set!(_bswb, scratch_local)
+    if is_32bit
+        # i32 bswap: reverse 4 bytes
+        # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
+        # Part 1: (x >> 24) & 0xFF — top byte to bottom
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(24))
+        num!(_bswb, Opcode.I32_SHR_U)
+        i32_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I32_AND)
+        # Part 2: (x >> 8) & 0xFF00
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHR_U)
+        i32_const!(_bswb, Int64(0xFF00))
+        num!(_bswb, Opcode.I32_AND)
+        num!(_bswb, Opcode.I32_OR)
+        # Part 3: (x << 8) & 0xFF0000
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHL)
+        i32_const!(_bswb, Int64(0xFF0000))
+        num!(_bswb, Opcode.I32_AND)
+        num!(_bswb, Opcode.I32_OR)
+        # Part 4: x << 24 — bottom byte to top
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(24))
+        num!(_bswb, Opcode.I32_SHL)
+        num!(_bswb, Opcode.I32_OR)
+    else
+        # i64 bswap: reverse 8 bytes
+        # Same pattern but with 8 byte positions
+        local_get!(_bswb, scratch_local)
+        i64_const!(_bswb, Int64(56))
+        num!(_bswb, Opcode.I64_SHR_U)
+        i64_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I64_AND)
+        for (shift, mask) in [(40, 0xFF00), (24, 0xFF0000), (8, 0xFF000000),
+                               (-8, 0xFF00000000), (-24, 0xFF0000000000),
+                               (-40, 0xFF000000000000)]
+            local_get!(_bswb, scratch_local)
+            if shift > 0
+                i64_const!(_bswb, Int64(shift))
+                num!(_bswb, Opcode.I64_SHR_U)
+            else
+                i64_const!(_bswb, Int64(-shift))
+                num!(_bswb, Opcode.I64_SHL)
+            end
+            i64_const!(_bswb, Int64(mask))
+            num!(_bswb, Opcode.I64_AND)
+            num!(_bswb, Opcode.I64_OR)
+        end
+        # Last part: x << 56 (no mask needed)
+        local_get!(_bswb, scratch_local)
+        i64_const!(_bswb, Int64(56))
+        num!(_bswb, Opcode.I64_SHL)
+        num!(_bswb, Opcode.I64_OR)
+    end
+    append_builder!(fb, _bswb)
+    return is_32bit ? I32 : I64
+end
+
+"""
     _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
 
 Extracted handler for checked_smul_int / checked_umul_int.
@@ -744,12 +1109,14 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
 end
 
 """
-    _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type) -> WasmValType
 
-Extracted handler for flipsign_int.
-Modifies `bytes` in-place.
+Extracted handler for flipsign_int. Modifies `bytes` in-place; returns the
+pushed result's WasmValType (the structref for is_128bit — `struct_rt` was
+already computed here for the locals below, so the caller reuses it instead
+of a second `julia_to_wasm_type_concrete` call; a plain I32/I64 otherwise).
 """
-function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::WasmValType
     # flipsign_int(x, y) returns -x if y < 0, otherwise x
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
@@ -848,7 +1215,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         num!(bld, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
     end
     append_builder!(fb, bld)
-    return nothing
+    return is_128bit ? struct_rt : (is_32bit ? I32 : I64)
 end
 
 _egal_num_eqop(w::WasmValType)::UInt8 =
@@ -4633,192 +5000,38 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         _it128_result !== nothing && return append_builder!(b, fb)
     end
 
+    # parity(quarantine: julia_numeric_tier.jl): THE Julia-only numeric registries route —
+    # checked overflow, mixed-width shifts, muladd/fma/have_fma, bswap/flipsign. No dart
+    # anchor for any of these (dart's `int` wraps silently on overflow, is uniformly i64,
+    # and dart2wasm has no fma/bswap intrinsic — intrinsics.dart:710-929 has no entries for
+    # them). Same nullable-return funnel shape as the Int128 route just above; unlike that
+    # route this one is NOT gated on `is_128bit` (checked_sadd_int et al. reject 128-bit
+    # operands from INSIDE the registry, exactly as the arms they replace did — shl_int/
+    # ashr_int/lshr_int's is_128bit case is already fully consumed by THE Int128 route above
+    # and never reaches here).
+    if _it_name !== nothing
+        local _jnfbref = Ref(fb)
+        local _jn_result = emit_julia_numeric!(_jnfbref, ctx, _it_name, func, args, arg_type,
+                                               is_128bit, is_32bit, idx)
+        if _jn_result !== nothing
+            fb = _jnfbref[]
+            return append_builder!(b, fb)
+        end
+    end
+
     # Match intrinsics by name
     # (add_int/sub_int/mul_int: non-128-bit handled by THE intrinsics table route above;
     # 128-bit handled by THE Int128 registry route above.)
 
-    # NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
-    # The register-width handlers below detect overflow with sign-bit tricks at
-    # bit 31/63 — but a narrow op can never overflow the wide register, so the
-    # flag stayed false and e.g. checked_abs(Int8(-128)) leaked 128 instead of
-    # throwing OverflowError (lcm(Int8(-128), 1) divergent_throw family).
-    # Compute in i32 on normalised inputs; flag = result fails the
-    # sign/zero-extend round-trip at the JULIA width; value = wrapped result.
-    if is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
-           (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int) ||
-            is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int) ||
-            is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int))
-        local _ncw = _julia_int_width(arg_type, is_32bit)
-        local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
-                           is_func(func, :checked_smul_int)
-        local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
-                       (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
-                       Opcode.I32_MUL
-        _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
-        local _nc_r = UInt32(allocate_local!(ctx, I32))
-        local _ncb = _ctx_builder(ctx, "compile_call")
-        num!(_ncb, _nc_op)
-        local_set!(_ncb, _nc_r)
-        # helper: push wrapped-to-width copy of result
-        local _nc_norm! = function ()
-            local_get!(_ncb, _nc_r)
-            if _nc_signed
-                num!(_ncb, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-            else
-                i32_const!(_ncb, Int64((1 << _ncw) - 1))
-                num!(_ncb, Opcode.I32_AND)
-            end
-        end
-        local _nc_tt = Tuple{Int32, Bool}
-        if !haskey(ctx.type_registry.structs, _nc_tt)
-            register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
-        end
-        local _nc_info = ctx.type_registry.structs[_nc_tt]
-        emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
-        _nc_norm!()                                           # field 1: wrapped value
-        _nc_norm!()                                           # flag: wrapped != raw
-        local_get!(_ncb, _nc_r)
-        num!(_ncb, Opcode.I32_NE)
-        struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields
-        append_builder!(fb, _ncb)
-
-    # checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
-    elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
-        _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
-
-    # checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
-    elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
-        if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit checked addition (Int128/UInt128)"; idx=idx)
-        else
-            is_signed = is_func(func, :checked_sadd_int)
-            local_type = is_32bit ? I32 : I64
-            local_a = allocate_local!(ctx, local_type)
-            local_b = allocate_local!(ctx, local_type)
-            local_result = allocate_local!(ctx, local_type)
-            local _caddb = _sub_builder(fb, ctx, "compile_call", 2)   # [a, b]
-
-            # Save b, save a, compute a+b, save result
-            local_set!(_caddb, local_b)
-            local_tee!(_caddb, local_a)
-            local_get!(_caddb, local_b)
-            num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-            local_set!(_caddb, local_result)
-
-            local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
-                               ctx.type_registry.structs[_cadd_tt] :
-                               register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
-            emit_struct_prefix!(_caddb, ctx.type_registry, _cadd_tt, _cadd_info)
-            # Push result back for tuple field 1
-            local_get!(_caddb, local_result)
-
-            # Compute overflow flag
-            if is_signed
-                # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
-                local_get!(_caddb, local_a)
-                local_get!(_caddb, local_result)
-                num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                local_get!(_caddb, local_b)
-                local_get!(_caddb, local_result)
-                num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                num!(_caddb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-                if is_32bit
-                    i32_const!(_caddb, 31)
-                    num!(_caddb, Opcode.I32_SHR_U)
-                else
-                    i64_const!(_caddb, 63)
-                    num!(_caddb, Opcode.I64_SHR_U)
-                    num!(_caddb, Opcode.I32_WRAP_I64)
-                end
-            else
-                # Unsigned: overflow = result < a
-                local_get!(_caddb, local_result)
-                local_get!(_caddb, local_a)
-                num!(_caddb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
-            end
-
-            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            if !haskey(ctx.type_registry.structs, tuple_type)
-                register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            end
-            tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields
-            append_builder!(fb, _caddb)
-        end
-
-    # checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
-    elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
-        if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
-        else
-            is_signed = is_func(func, :checked_ssub_int)
-            local_type = is_32bit ? I32 : I64
-            local_a = allocate_local!(ctx, local_type)
-            local_b = allocate_local!(ctx, local_type)
-            local_result = allocate_local!(ctx, local_type)
-            local _csubb = _sub_builder(fb, ctx, "compile_call", 2)   # [a, b]
-
-            # Save b, save a, compute a-b, save result
-            local_set!(_csubb, local_b)
-            local_tee!(_csubb, local_a)
-            local_get!(_csubb, local_b)
-            num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-            local_set!(_csubb, local_result)
-
-            local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
-                               ctx.type_registry.structs[_csub_tt] :
-                               register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
-            emit_struct_prefix!(_csubb, ctx.type_registry, _csub_tt, _csub_info)
-            # Push result back for tuple field 1
-            local_get!(_csubb, local_result)
-
-            if is_signed
-                # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_b)
-                num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_result)
-                num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                num!(_csubb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-                if is_32bit
-                    i32_const!(_csubb, 31)
-                    num!(_csubb, Opcode.I32_SHR_U)
-                else
-                    i64_const!(_csubb, 63)
-                    num!(_csubb, Opcode.I64_SHR_U)
-                    num!(_csubb, Opcode.I32_WRAP_I64)
-                end
-            else
-                # Unsigned: overflow = a < b
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_b)
-                num!(_csubb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
-            end
-
-            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            if !haskey(ctx.type_registry.structs, tuple_type)
-                register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            end
-            tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields
-            append_builder!(fb, _csubb)
-        end
+    # checked_s{add,sub,mul}_int/checked_u{add,sub,mul}_int (narrow-width AND
+    # register-width paths, incl. the 128-bit reject stubs): THE julia_numeric_tier.jl
+    # CHECKED_OPS registry route above.
 
     # sdiv_int/udiv_int/srem_int/urem_int (+ checked_* aliases, I32/I64): THE
     # intrinsics table route above (guard + opcode, same as this arm used to do).
 
     # Bitcast (reinterpret bits between types)
-    elseif is_func(func, :bitcast)
+    if is_func(func, :bitcast)
         # Bitcast reinterprets bits between same-size types
         # Need to emit reinterpret instructions for float<->int conversions
         # args = [target_type, source_value]
@@ -4877,8 +5090,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # neg_int: non-128-bit handled by THE intrinsics table route above; 128-bit handled
     # by THE Int128 registry route above.
-    elseif is_func(func, :flipsign_int)
-        _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    # flipsign_int: THE julia_numeric_tier.jl MISC_OPS registry route above.
 
     # Comparison operations
     # Ordered comparisons OBSERVE the full register width, so narrow
@@ -4999,156 +5211,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # (not_int also has the boolean NOT special case just above it); 128-bit handled
     # by THE Int128 registry route above.
 
-    # Shift operations
-    # Note: Wasm requires shift amount to have same type as value being shifted
-    # Julia often uses Int64/UInt64 shift amounts even for Int32 values
-    elseif is_func(func, :shl_int)
-        # (128-bit handled by THE Int128 registry route above)
-        if length(args) >= 2
-            shift_type = infer_value_type(args[2], ctx)
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                # Extend i32 shift amount to i64 (Wasm requires matching types)
-                _op1!(Opcode.I64_EXTEND_I32_S)
-            end
-        end
-        _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
-                             julia_width = _julia_int_width(arg_type, is_32bit),
-                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
-
-    elseif is_func(func, :ashr_int)  # arithmetic shift right
-        # (128-bit handled by THE Int128 registry route above)
-        if length(args) >= 2
-            shift_type = infer_value_type(args[2], ctx)
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                # Truncate i64 shift amount to i32
-                _op1!(Opcode.I32_WRAP_I64)
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                # Extend i32 shift amount to i64 (Wasm requires matching types)
-                _op1!(Opcode.I64_EXTEND_I32_S)
-            end
-        end
-        _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
-                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
-
-    elseif is_func(func, :lshr_int)  # logical shift right
-        # (128-bit handled by THE Int128 registry route above)
-        if length(args) >= 2
-            shift_type = infer_value_type(args[2], ctx)
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                # Extend i32 shift amount to i64 (Wasm requires matching types)
-                _op1!(Opcode.I64_EXTEND_I32_S)
-            end
-        end
-        _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
-                             julia_width = _julia_int_width(arg_type, is_32bit),
-                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
+    # Shift operations: shl_int/ashr_int/lshr_int (128-bit handled by THE Int128
+    # registry route above; the register-width path is THE julia_numeric_tier.jl
+    # SHIFT_OPS registry route above).
 
     # ctlz_int/cttz_int/ctpop_int: non-128-bit handled by THE intrinsics table route
     # above; 128-bit handled by THE Int128 registry route above.
 
-    # Byte swap (used in Char ↔ codepoint conversion)
-    # WebAssembly has no native bswap — implement with bit manipulation
-    elseif is_func(func, :bswap_int)
-        if is_128bit  # quarantine: loud reject — not in INT128_OPS, no dart lowering exists
-            # 128-bit byte-swap is unsupported: the i64 reversal sequence below would run on a
-            # struct value → invalid wasm. Loud-reject (sound trap / strict reject) like the
-            # Int128 div/rem guard, rather than emitting an invalid module. (Full impl = reverse
-            # 16 bytes = bswap each i64 limb + swap lo/hi; deferred — niche op.)
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit byte-swap (Int128/UInt128)"; idx=idx)
-            return append_builder!(b, fb)
-        end
-        # Allocate a scratch local to hold the input value (need it 4 times)
-        scratch_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, is_32bit ? I32 : I64)
-        local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the input
-        # Store input value
-        local_set!(_bswb, scratch_local)
-        if is_32bit
-            # i32 bswap: reverse 4 bytes
-            # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
-            # Part 1: (x >> 24) & 0xFF — top byte to bottom
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(24))
-            num!(_bswb, Opcode.I32_SHR_U)
-            i32_const!(_bswb, Int64(0xFF))
-            num!(_bswb, Opcode.I32_AND)
-            # Part 2: (x >> 8) & 0xFF00
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(8))
-            num!(_bswb, Opcode.I32_SHR_U)
-            i32_const!(_bswb, Int64(0xFF00))
-            num!(_bswb, Opcode.I32_AND)
-            num!(_bswb, Opcode.I32_OR)
-            # Part 3: (x << 8) & 0xFF0000
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(8))
-            num!(_bswb, Opcode.I32_SHL)
-            i32_const!(_bswb, Int64(0xFF0000))
-            num!(_bswb, Opcode.I32_AND)
-            num!(_bswb, Opcode.I32_OR)
-            # Part 4: x << 24 — bottom byte to top
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(24))
-            num!(_bswb, Opcode.I32_SHL)
-            num!(_bswb, Opcode.I32_OR)
-        else
-            # i64 bswap: reverse 8 bytes
-            # Same pattern but with 8 byte positions
-            local_get!(_bswb, scratch_local)
-            i64_const!(_bswb, Int64(56))
-            num!(_bswb, Opcode.I64_SHR_U)
-            i64_const!(_bswb, Int64(0xFF))
-            num!(_bswb, Opcode.I64_AND)
-            for (shift, mask) in [(40, 0xFF00), (24, 0xFF0000), (8, 0xFF000000),
-                                   (-8, 0xFF00000000), (-24, 0xFF0000000000),
-                                   (-40, 0xFF000000000000)]
-                local_get!(_bswb, scratch_local)
-                if shift > 0
-                    i64_const!(_bswb, Int64(shift))
-                    num!(_bswb, Opcode.I64_SHR_U)
-                else
-                    i64_const!(_bswb, Int64(-shift))
-                    num!(_bswb, Opcode.I64_SHL)
-                end
-                i64_const!(_bswb, Int64(mask))
-                num!(_bswb, Opcode.I64_AND)
-                num!(_bswb, Opcode.I64_OR)
-            end
-            # Last part: x << 56 (no mask needed)
-            local_get!(_bswb, scratch_local)
-            i64_const!(_bswb, Int64(56))
-            num!(_bswb, Opcode.I64_SHL)
-            num!(_bswb, Opcode.I64_OR)
-        end
-        append_builder!(fb, _bswb)
+    # bswap_int (used in Char ↔ codepoint conversion): THE julia_numeric_tier.jl
+    # MISC_OPS registry route above.
 
-    # Float operations
-    # Fused multiply-add: muladd_float(a, b, c) = a*b + c
-    # WASM doesn't have native fma, so we implement as mul then add
-    elseif is_func(func, :muladd_float)
-        # Stack has [a, b, c], we need to compute a*b + c
-        # First multiply a*b, then add c
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    # fma_float: hardware FMA intrinsic. WASM has no scalar FMA instruction,
-    # so emit mul+add. This branch is dead code when have_fma returns false,
-    # but WASM requires structurally valid bytecode for both branches.
-    elseif is_func(func, :fma_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    # have_fma: runtime FMA availability check. WASM has no scalar FMA,
-    # so always return false. The type argument (Float64) is not on the stack.
-    elseif is_func(func, :have_fma)
-            i32_const!(fb, 0)  # false — WASM has no hardware FMA
+    # Float operations: muladd_float/fma_float/have_fma: THE julia_numeric_tier.jl
+    # FMA_OPS registry route above.
 
     # Type conversions
     elseif is_func(func, :sext_int)  # Sign extend
