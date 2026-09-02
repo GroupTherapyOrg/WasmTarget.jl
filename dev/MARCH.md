@@ -276,7 +276,32 @@ rows of `dev/CERTIFICATION.md`.
 | locks | 102 → **114**; every one negative-tested before it counted |
 | size | src 39,052 → 38,542 lines (the frontend boundary, the registries, the dispatch guards and the formal anchors are in; the ladders, the bespoke string builders, the FNV hash, the Dict special case and the dead resolver are out); `compile_call!` 4,583 → **2,977**, `compile_invoke!` and `compile_foreigncall!` are consult sites over registries |
 | docs | `dev/PARITY_MASTER.md` (architecture rows for registries, determinism, the frontend boundary and the formal layer; roadmap items 3–5 updated), `dev/CERTIFICATION.md` (eight revalidation rows) |
-| gates | smoke 70/70 on 1.12.7 and 1.13.0-rc1, 235 probes byte-identical to their recorded baseline, 25 TLC instances (every Broken variant rejected), shard-0 `Pkg.test` green on both Julias locally; the CI matrix on the final head is the authoritative record (link in the PARITY_MASTER audit stamp) |
+| gates | smoke 70/70 on 1.12.7 and 1.13.0-rc1, 235 probes byte-identical to their recorded baseline, 23 TLC instances (every Broken variant rejected), shard-0 `Pkg.test` green on both Julias locally; the CI matrix on the final head is the authoritative record (link in the PARITY_MASTER audit stamp) |
+
+### Exit criterion 5, closed for real (2026-09-02, after the overnight push)
+
+"A failure names its site" was **not** met by the overnight push, and it showed: a
+`copy(Dict{String,Int})` reject reported `cd2 at none:10` with detail `(Core.sizeof)(String)`
+— the root function and a misleading argument — for a statement that lived eight inlined
+frames down in `Base.aligned_sizeof(::Type{String}) @ runtime_internals.jl:576`. Half an hour
+was lost locating it. The CodeInfo's DebugInfo had carried the inline chain all along
+(`Base.IRShow.buildLineInfoNode`); the diagnostics read only the root's line.
+
+Now (`053d3608`): `WasmDiagnostic` is structured — statement index, the statement, and the
+inline chain innermost-first — and `julia_loc` is the innermost frame; `showerror` prints the
+chain. The context records the statement being compiled, so a rejection raised inside a
+helper without an `idx` is attributed too; the ten direct `throw(WasmCompileError(…))` sites
+with a context went through the funnel (**L118**); and the internal tier — a codegen bug — is
+wrapped as `WasmInternalError` with the same statement and chain by the ONE per-statement entry
+(**L119**). `test/diagnostic_attribution.jl` proves both tiers on 1.12 and 1.13.
+
+The proof it works: with the chain visible, `copy(Dict{String,V})` went from misattributed to
+fixed in one sitting (`1572f686`) — `isbitstype`/`isprimitivetype`/`isconcretetype` join the
+interpreter's fold whitelist, and `memory_element_stride` is the one byte-stride rule
+(`sizeof(T)` isbits, 8 boxed) shared by `:ptr_or_offset` and `jl_genericmemory_copyto`, which
+also fixed reference-element copies at any offset (`Vector{String}` slices). JuliaLowering.jl
+(c42f) was evaluated as the provenance source: experimental, 1.13-DEV-only, provenance before
+inference; DebugInfo is what reaches typed IR today, and it is what the chain decodes.
 
 ### Phase 10 — result (2026-09-02)
 

@@ -21,7 +21,7 @@ behavior, the lock is incomplete. Never turn an old claim into work without repr
 - WasmTarget revision: **`19590294`** (branch `wt-p0-strict-hygiene`)
 - dart2wasm oracle: dart-lang/sdk **`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`**
 - Ratchet: `julia --project=. test/parity_ratchet.jl` **passes** (115 locks, every one negative-tested)
-- Formal harness: `dev/formal/run_tlc.sh` **passes** (25 TLC instances, every Broken variant rejected)
+- Formal harness: `dev/formal/run_tlc.sh` **passes** (23 TLC instances, every Broken variant rejected)
 - Probe corpus: 235 modules **byte-identical** across processes and architectures (x64 = aarch64)
 - CI for that exact revision: **green** on the full matrix ([run 33640400934](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/33640400934)); formal models ([run 33640400918](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/33640400918))
 
