@@ -212,50 +212,6 @@ function analyze_blocks(code)
     return blocks
 end
 
-"""
-Check if this code contains a loop (has backward jumps).
-"""
-function has_loop(ctx::AbstractCompilationContext)
-    return any(ctx.loop_headers)
-end
-
-"""
-Check if there's a conditional BEFORE the first loop that jumps PAST the first loop.
-This pattern requires special handling (the stackifier instead of generate_loop_code).
-Example: if/else where each branch has its own loop (like float_to_string).
-"""
-function has_branch_past_first_loop(ctx::AbstractCompilationContext, code)
-    if !any(ctx.loop_headers)
-        return false
-    end
-
-    # Find first loop header and its back-edge
-    first_header = findfirst(ctx.loop_headers)
-    back_edge_idx = nothing
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode && stmt.label == first_header
-            back_edge_idx = i
-            break
-        end
-    end
-    if back_edge_idx === nothing
-        return false
-    end
-
-    # Check for conditionals BEFORE the first loop that jump PAST its back-edge
-    for i in 1:(first_header - 1)
-        stmt = code[i]
-        if stmt isa Core.GotoIfNot
-            target = stmt.dest
-            if target > back_edge_idx
-                # This conditional jumps past the first loop - complex pattern
-                return true
-            end
-        end
-    end
-
-    return false
-end
 
 """
 Find merge points - targets of multiple forward jumps.
@@ -295,14 +251,6 @@ function find_merge_points(code)
     end
 
     return merge_points
-end
-
-"""
-Check if the control flow has || or && patterns (merge points from short-circuit evaluation).
-"""
-function has_short_circuit_patterns(code)
-    merge_points = find_merge_points(code)
-    return !isempty(merge_points)
 end
 
 """

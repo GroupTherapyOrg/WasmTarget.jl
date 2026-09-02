@@ -2380,21 +2380,3 @@ function get_wasm_global_idx(val, ctx::AbstractCompilationContext)::Union{Int, N
 end
 
 # ============================================================================
-# SimpleCodeInfo — lightweight CodeInfo for WASM self-hosting
-# ============================================================================
-
-"""
-Lightweight replacement for Core.CodeInfo that can be constructed in WASM.
-Core.CodeInfo has complex fields (DebugInfo, MethodInstance) that can't be
-serialized as WasmGC constants. SimpleCodeInfo has only the fields needed
-for compilation: code, ssavaluetypes, ssaflags, slottypes, nargs.
-"""
-struct SimpleCodeInfo
-    code::Vector{Any}
-    ssavaluetypes::Vector{Any}
-    ssaflags::Vector{UInt32}
-    slottypes::Any  # Nothing for MVP
-    nargs::UInt64
-end
-
-# ============================================================================

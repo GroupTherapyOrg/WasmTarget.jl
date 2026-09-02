@@ -59,9 +59,6 @@ DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}(),
     Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
         Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}())
 
-"""Check if a function has a hash dispatch table."""
-has_dispatch_table(reg::DispatchTableRegistry, func_ref) = haskey(reg.tables, func_ref)
-
 """Get the dispatch table for a function."""
 get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_ref, nothing)
 

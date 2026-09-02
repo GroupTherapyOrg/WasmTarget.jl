@@ -34,23 +34,4 @@ function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true, interp=nothing)
     return code_info, return_type
 end
 
-"""
-Extract the return type from IR.
-"""
-function get_return_type(code_info)
-    # The return type is in the slottypes or can be inferred from the last statement
-    return code_info.rettype
-end
 
-"""
-Get parameter types from code_info.
-"""
-function get_param_types(code_info)
-    # First slot is the function itself, rest are parameters
-    # slottypes[1] is typeof(f), slottypes[2:end] are param types
-    if hasfield(typeof(code_info), :slottypes) && code_info.slottypes !== nothing
-        return code_info.slottypes[2:end]
-    else
-        return []
-    end
-end

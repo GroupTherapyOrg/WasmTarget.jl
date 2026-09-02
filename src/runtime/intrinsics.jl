@@ -69,9 +69,3 @@ function get_wasm_opcode(intrinsic::Symbol, is_64bit::Bool)::UInt8
     end
 end
 
-"""
-Check if an intrinsic is supported.
-"""
-function is_supported_intrinsic(intrinsic::Symbol)::Bool
-    return haskey(INTRINSIC_MAPPING, intrinsic) || haskey(FLOAT_INTRINSIC_MAPPING, intrinsic)
-end

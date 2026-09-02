@@ -217,13 +217,13 @@ const METRICS = [
             end
             n
         end),
-    "R23_dead_codegen_defs" => ("named definitions still present from the 17 dead-codegen list",
+    "R23_dead_codegen_defs" => ("named definitions still present from the dead-codegen list (15; two JS-template names were census false positives)",
         () -> begin
             dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
                           "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
                           "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
                           "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
-                          "_dv", "f64bits", "has_dispatch_table", "get_string_ref_array_type!"]
+                          "has_dispatch_table", "get_string_ref_array_type!"]
             all_src = join((read(joinpath(dir, f), String)
                             for (dir, _, files) in walkdir(SRC)
                             for f in files if endswith(f, ".jl")), "\n")
