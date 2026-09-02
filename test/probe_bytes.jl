@@ -377,6 +377,52 @@ end
 _c("stress_arraymut", _wt_stress_arraymut_probe)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 8. Constant materialization (dev/MARCH.md Phase 4.4, R14 fresh_constant_structs):
+#    a literal Vector, tuple-of-strings, and nested-struct constant. Vector is
+#    mutable so it takes the GlobalRef → compile_module_initializer path (the
+#    mutable-identity floor); the tuple and struct are immutable so the GlobalRef
+#    branch recurses straight into compile_value on the value itself (the tuple
+#    and general-struct funnel-fallback sites).
+#
+#    NO Dict probe here: a Dict{Int64,Int64} constant (same mutable-identity
+#    floor as Vector) was found to compile to NON-DETERMINISTIC wasm bytes
+#    across separate `julia` process runs — identical Dict contents, but
+#    embedded type/function-index LEB128 values shift between runs (confirmed:
+#    stable within one process, unstable across ~1-in-3 fresh processes).
+#    Runtime behavior is correct (differential-verified: native == wasm), so
+#    this is a byte-reproducibility bug, not a soundness bug, but it makes a
+#    Dict probe unusable for this lane. Prime suspect: `ctx.type_registry.structs`
+#    (a plain `Dict{Type,StructInfo}`, whose Type-keyed iteration order is not
+#    guaranteed process-stable) is walked WITHOUT a deterministic sort at
+#    calls.jl:1891 (`for (_ot, _oi) in ctx.type_registry.structs` ->
+#    `ensure_type_id!` for every type sharing a wasm_type_idx — a lazy
+#    SEQUENTIAL id assignment, so iteration order picks which type gets which
+#    id) and similarly at dispatch.jl:75, structs.jl:1189, values.jl:495,
+#    types.jl:521 (only types.jl:600's `sort(collect(...), by=wasm_type_idx)`
+#    is safe). Flagged for a dedicated fix outside Phase 4.4's scope (calls.jl/
+#    dispatch.jl/structs.jl are outside this phase's file list).
+# ─────────────────────────────────────────────────────────────────────────────
+
+const _WT_CONST_VEC = Int64[1, 2, 3]
+_wt_const_vector_probe() = _WT_CONST_VEC
+_c("const_vector", _wt_const_vector_probe)
+
+const _WT_CONST_TUPLE = ("a", "b", "c")
+_wt_const_tuple_probe() = _WT_CONST_TUPLE
+_c("const_tuple_strings", _wt_const_tuple_probe)
+
+struct _WTProbeInner
+    x::Int64
+end
+struct _WTProbeOuter
+    inner::_WTProbeInner
+    y::Int64
+end
+const _WT_CONST_STRUCT = _WTProbeOuter(_WTProbeInner(7), 9)
+_wt_const_nested_struct_probe() = _WT_CONST_STRUCT
+_c("const_nested_struct", _wt_const_nested_struct_probe)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Driver
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -5605,13 +5605,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
         # try looking up by name string in func_registry. This handles import stubs
         # like compiled_get_prop_string_id referenced from re-exported modules.
+        # parity(quarantine: getfield already lost the func_ref here — dart never
+        # does this, it resolves every callee by Reference identity
+        # (functions.dart:26) — see get_function_by_export_name's own anchor).
         # WASMMAKIE E-003: the name match MUST also match arity — with broad
         # registries (65 canvas ops incl. names like width/height/fill/stroke/
         # rect/save/translate) the bare-name redirect hijacked unrelated
         # same-named calls and emitted arity-mismatched call instructions
         # (validation: 'not enough arguments on the stack').
         if called_func === nothing
-            target_by_name = get_function(ctx.func_registry, string(func.name))
+            target_by_name = get_function_by_export_name(ctx.func_registry, string(func.name))
             if target_by_name !== nothing && length(target_by_name.arg_types) == length(args)
                 called_func = target_by_name.func_ref
             end
