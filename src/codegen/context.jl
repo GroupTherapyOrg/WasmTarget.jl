@@ -48,6 +48,10 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
     # compile_statement reads and resets this to skip LOCAL_SET in dead code.
     last_stmt_was_stub::Bool
+    # The SSA statement being compiled (set by compile_statement!), so every
+    # diagnostic — including ones raised deep inside helpers that carry no idx —
+    # is attributed to a statement and its inline chain (dart's located reporter).
+    current_stmt_idx::Int
     # Slot variable locals for unoptimized IR (may_optimize=false).
     # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
     # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
@@ -118,6 +122,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{WasmValType, Int}(), # boxing_scratch_locals
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
         false,                  # last_stmt_was_stub 
+        0,                      # current_stmt_idx
         Dict{Int, Int}(),       # slot_locals (unoptimized IR slot variables)
         dispatch_registry,      # Tier 2 hash dispatch
         nothing,                # typeof scratch local (allocated on demand)

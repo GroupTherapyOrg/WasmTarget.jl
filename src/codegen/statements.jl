@@ -296,7 +296,7 @@ Compile a single IR statement — dart's ONE code generator, ONE builder (Phase 
 front seam and accumulator are gone.
 """
 function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
-
+    ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
     # Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
     # block boundaries — the next block is reachable via a different control flow path.
@@ -439,9 +439,9 @@ function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompil
         # MIGRATED: straight-line global.get/local.set via typed methods on `b`; the
         # value_bytes safety-scan stays a local buffer (byte-inspecting) then bridges via
         # emit_raw!. `bytes` stays empty for this branch (trailing common code appends after).
-        isdefined(stmt.mod, stmt.name) || throw(WasmCompileError(WasmDiagnostic(
-            :unsupported_global, string(stmt), "GlobalRef is not defined in its source module",
-            nothing, nothing)))
+        isdefined(stmt.mod, stmt.name) || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(stmt) is not defined in its source module"; idx=idx, detail=stmt,
+            soundness_fatal=true)
         val = getfield(stmt.mod, stmt.name)
         local _gv_b = _compile_value_b(val, ctx)
         append_builder!(b, _gv_b)

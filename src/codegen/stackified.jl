@@ -1317,8 +1317,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # this arm used to emit nothing)
                 set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
                 dest_block in loop_headers ||
-                    throw(WasmCompileError(WasmDiagnostic(:unsupported_control_flow, "backward always-taken boundscheck jump",
-                        "target block $dest_block is not a loop header", nothing, nothing)))
+                    record_unsupported!(ctx, :unsupported_control_flow,
+                        "backward always-taken boundscheck jump whose target block $dest_block is not a loop header";
+                        idx=terminator_idx, detail=term, soundness_fatal=true)
                 br!(b, get_loop_label(dest_block))
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed

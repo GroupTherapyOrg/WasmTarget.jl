@@ -890,7 +890,7 @@ const LOCKS = [
             all_src = compile_src * context_src * types_src * values_src
             required = ["mutable_constant_globals", "module_init_functions",
                         "finalize_module_initializers!", "function_wasm_signature",
-                        "GlobalRef is not defined in its source module"]
+                        "is not defined in its source module"]
             forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
                          "If we can't evaluate, might be a type reference"]
             count(p -> !occursin(p, all_src), required) +
@@ -1481,6 +1481,9 @@ const LOCKS = [
             end
             n
         end),
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions (locked 2026-09-02)",
+        () -> count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
+                          exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
