@@ -4918,13 +4918,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # (non-128-bit handled by THE intrinsics table route above)
         emit_int128_ne!(fb, ctx, arg_type)
 
-    # Float comparison operations
-    elseif is_func(func, :gt_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_GT : Opcode.F64_GT)
-
-    elseif is_func(func, :ge_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_GE : Opcode.F64_GE)
-
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
     elseif is_func(func, :(===))
         _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
@@ -5241,18 +5234,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         append_builder!(fb, _bswb)
 
     # Float operations
-    elseif is_func(func, :add_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    elseif is_func(func, :sub_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_SUB : Opcode.F64_SUB)
-
-    elseif is_func(func, :mul_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-
-    elseif is_func(func, :div_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_DIV : Opcode.F64_DIV)
-
     elseif is_func(func, :neg_float)
         _op1!(arg_type === Float32 ? Opcode.F32_NEG : Opcode.F64_NEG)
 
@@ -5565,15 +5546,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     elseif is_func(func, :sqrt_llvm) || is_func(func, :sqrt_llvm_fast)  # Square root
         _op1!(arg_type === Float32 ? Opcode.F32_SQRT : Opcode.F64_SQRT)
-
-    elseif is_func(func, :copysign_float)  # Copy sign
-        _op1!(arg_type === Float32 ? Opcode.F32_COPYSIGN : Opcode.F64_COPYSIGN)
-
-    elseif is_func(func, :min_float) || is_func(func, :min_float_fast)
-        _op1!(arg_type === Float32 ? Opcode.F32_MIN : Opcode.F64_MIN)
-
-    elseif is_func(func, :max_float) || is_func(func, :max_float_fast)
-        _op1!(arg_type === Float32 ? Opcode.F32_MAX : Opcode.F64_MAX)
 
     # High-level operators (fallback)
     elseif is_func(func, :+)
