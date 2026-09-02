@@ -128,10 +128,13 @@ _g("dicts", Any[
     ("dict_const_get", (x::Int64) -> _SMOKE_DICT[x] + get(_SMOKE_DICT, x + 100, -1), Int64(2)),
     ("dict_const_grow", (x::Int64) -> (d = copy(_SMOKE_DICT); d[x + 50] = 7; length(d) + d[x + 50]), Int64(3)),
     ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
+    # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
+    ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
 ])
 const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
 const _SMOKE_VEC = Int64[1, 2, 3]
 const _SMOKE_VEC2 = Int64[4, 5, 6]
+const _SMOKE_SET = Set([1, 2, 3, 40])
 
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end

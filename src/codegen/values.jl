@@ -1561,8 +1561,14 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     ref_null!(b, expected)
                 elseif expected isa ConcreteRef && expected.nullable
                     ref_null!(b, Int64(expected.type_idx), expected)
-                elseif isbitstype(elem_type)
-                    emit_value!(b, zero(elem_type), ctx, expected; from_julia=elem_type)
+                elseif expected === I32
+                    i32_const!(b, 0)
+                elseif expected === I64
+                    i64_const!(b, 0)
+                elseif expected === F32
+                    f32_const!(b, 0.0f0)
+                elseif expected === F64
+                    f64_const!(b, 0.0)
                 else
                     throw(WasmCompileError(WasmDiagnostic(
                         :unsupported_type, string(typeof(mem)),
