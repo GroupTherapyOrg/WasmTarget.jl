@@ -93,6 +93,7 @@ function _dispatch_supertype_idx(idx::UInt32, registry)::Union{UInt32, Nothing}
     return registry.base_struct_idx
 end
 
+# formal(dev/formal/ClassIdDispatch.tla): first-fit packing is collision-free, every tuple WITH a specialization resolves to it (one hop or the two-axis cascade), and a receiver tuple WITHOUT one traps (span reservation + classId span guard + wrapper slot check: MissingMethodTraps)
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
                                 threshold::Int=2)::DispatchTableRegistry
@@ -274,10 +275,13 @@ function emit_dispatch_wrappers!(mod::WasmModule,
         end
 
         wrapper_indices = UInt32[]
+        # the level-1 dispatch axis: verified by the guarded classId index itself
+        local _axis = get(dt_registry.selector_axis, dt.func_ref, 0)
         for (entry_i, entry) in enumerate(dt.entries)
             local _wr_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                             WasmValType[dt.result_wasm_type] : WasmValType[]
             b = InstrBuilder(copy(dt.slot_types), _wr_res; func_name="emit_dispatch_wrappers!", mod=mod)
+            local _tsig = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
@@ -289,13 +293,36 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                         break
                     end
                 end
+                local _tparam = (_tsig isa FuncType && j <= length(_tsig.params)) ? _tsig.params[j] : AnyRef
+
+                # parity(quarantine: dart's wrapper only downcasts, code_generator.dart:2028
+                # _virtualCall — the receiver statically has the member; a Julia dynamic
+                # call is routed by the level-1 axis alone, so every OTHER classed slot must
+                # carry exactly this entry's class or the call is a MethodError): a struct
+                # of identical layout passes ref.cast but is a different Julia type, so
+                # compare the classId, not the wasm type.
+                if j != _axis && _tparam isa ConcreteRef &&
+                   (dt.slot_types[j] isa ConcreteRef || dt.slot_types[j] === AnyRef) &&
+                   concrete_type isa DataType && haskey(type_registry.structs, concrete_type) &&
+                   type_registry.structs[concrete_type].field_offset > 0 &&
+                   type_registry.base_struct_idx !== nothing
+                    local _base = type_registry.base_struct_idx
+                    local_get!(b, UInt32(j - 1))
+                    ref_cast!(b, Int64(_base), false)
+                    struct_get!(b, UInt32(_base), UInt32(0), I32)   # field 0 = classId
+                    i32_const!(b, Int64(tid))
+                    num!(b, Opcode.I32_NE)
+                    if_!(b)
+                    unreachable!(b)   # structural trap: MethodError — another class at a non-dispatch slot
+                    end_block!(b)
+                end
 
                 local_get!(b, UInt32(j - 1))
 
                 if dt.slot_types[j] isa ConcreteRef
                     # tag-run: a struct-LUB slot arrives as the JOIN ref — downcast to
                     # the TARGET's declared param (a within-hierarchy refinement)
-                    local _tsig_lub = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
+                    local _tsig_lub = _tsig
                     if _tsig_lub isa FuncType && j <= length(_tsig_lub.params)
                         local _tpl = _tsig_lub.params[j]
                         _tpl isa ConcreteRef && _tpl.type_idx != dt.slot_types[j].type_idx &&
@@ -308,8 +335,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # declared param — the tid-resolved struct can differ from what the
                     # body actually takes (the classed-string vs byte-array split broke
                     # the search family at threshold=2: cast (ref 7), param (ref null 5)).
-                    local _tsig_ft = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
-                    local _tp = (_tsig_ft isa FuncType && j <= length(_tsig_ft.params)) ? _tsig_ft.params[j] : AnyRef
+                    local _tp = _tparam
                     if _tp in (I32, I64, F32, F64)
                         # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
                         emit_classid_unbox!(b, mod, type_registry, _tp)

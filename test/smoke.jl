@@ -209,9 +209,16 @@ _g("strings_classed", Any[
 # ---- dispatch (multiple methods / types) ----------------------------------
 _disp(x::Int64) = x * 2
 _disp(x::Float64) = x + 0.5
+# formal(dev/formal/ClassIdDispatch.tla) DispatchExact: four classed receivers through the ONE
+# selector table — rows packed with the whole span reserved, the classId span guard in front of
+# call_indirect (the MethodError-trap fix; test/dispatch_method_error.jl has the trap side).
+struct _SmA x::Int32 end; struct _SmB x::Int32 end; struct _SmC x::Int32 end; struct _SmD x::Int32 end
+_smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _smd(a::_SmD) = Int32(4)
+@noinline _smd_fwd(x::Any)::Int32 = _smd(x)
 _g("dispatch", Any[
     ("dispatch_int", (x::Int64) -> _disp(x), Int64(5)),
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
+    ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
 ])
 
 # ---- filtered folds (was the #1 SILENT MISCOMPILE: _InitialValue sentinel through
