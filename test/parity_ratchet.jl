@@ -153,10 +153,13 @@ const METRICS = [
     "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
                           exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
-    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+ arms in statements.jl compile_foreigncall! dispatch",
+    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+, or an `if`/`elseif`-headed `name === :\\w+`/`name in (:` arm, anywhere in statements.jl compile_foreigncall! dispatch (want 0: every foreigncall symbol dispatches through FOREIGN_LOWERINGS only)",
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            count(line -> occursin(r"(_fc_sym|fname|cfn) === :\w+", line) && !_iscomment(line),
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
                   split(stmt_src, '\n'))
         end),
     "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
@@ -596,7 +599,7 @@ const LOCKS = [
             forbidden = ["jl_type_unionall` (no lowering)",
                          "get_concrete_wasm_type(Union{}"]
             required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
-                        "elseif _fc_sym === :jl_type_unionall",
+                        ":jl_type_unionall => _fc_jl_type_unionall!",
                         "ref_test!(b, Int64(unionall_idx), false)",
                         "A bottom producer has no runtime value to classify or coerce",
                         "bottom phi source has no terminating statement"]
@@ -826,9 +829,10 @@ const LOCKS = [
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
-                        "backing_type === String || backing_type === Symbol"]
+                        "backing_type === String || backing_type === Symbol",
+                        ":memmove => _fc_memmove!", ":memcpy => _fc_memmove!"]
             count(p -> !occursin(p, stmt_src), required) +
-                abs(length(collect(eachmatch(r"if \(name === :memmove \|\| name === :memcpy\)", stmt_src))) - 1)
+                abs(length(collect(eachmatch(r"function _fc_memmove!\(", stmt_src))) - 1)
         end),
     "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
         () -> begin
@@ -837,7 +841,8 @@ const LOCKS = [
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             all_src = types_src * values_src * stmt_src
             required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
-                        "name in (:jl_is_operator, :jl_is_syntactic_operator)",
+                        ":jl_is_operator => _fc_operator_flags!",
+                        ":jl_is_syntactic_operator => _fc_operator_flags!",
                         "dynamically-created Symbol lacks operator metadata"]
             forbidden = [":name_is_operator", ":singleton_is_operator",
                          "ASCII-only operator"]
@@ -874,7 +879,7 @@ const LOCKS = [
             all_src = types_src * values_src * calls_src * stmt_src
             required = ["get_module_constant_global!", "_closed_world_isvisible",
                         "emit_closed_world_isvisible!", "name_visible_main",
-                        "_fc_sym === :jl_module_parent", "_fc_sym === :jl_module_name"]
+                        ":jl_module_parent => _fc_jl_module_parent!", ":jl_module_name => _fc_jl_module_name!"]
             forbidden = ["Module constant — empty struct", "module_name (mut string ref)",
                          "module_name → string"]
             count(p -> !occursin(p, all_src), required) +
@@ -904,9 +909,9 @@ const LOCKS = [
             required = ["const _UTF8PROC_PROPERTY_DATA",
                         "get_or_create_unicode_property_func!",
                         "needs_unicode_properties && get_or_create_unicode_property_func!",
-                        "_fc_sym === :utf8proc_category",
-                        "_fc_sym === :utf8proc_charwidth",
-                        "name === :jl_id_start_char", "name === :jl_id_char"]
+                        ":utf8proc_category => _fc_utf8proc_category!",
+                        ":utf8proc_charwidth => _fc_utf8proc_charwidth!",
+                        ":jl_id_start_char => _fc_jl_id_start_char!", ":jl_id_char => _fc_jl_id_char!"]
             forbidden = ["assume valid, conservative", "true = always a grapheme break"]
             all_src = types_src * compile_src * stmt_src
             count(p -> !occursin(p, all_src), required) +
@@ -1367,6 +1372,15 @@ const LOCKS = [
             first_arm = findnext(l -> occursin(r"is_func\(func, :", l) && !_iscomment(l), lines, start)
             (first_builtin === nothing || first_arm === nothing) && return 1000
             first_builtin < first_arm ? 0 : 1
+        end),
+    "L114_foreigncalls_dispatch_through_registry_only" => ("compile_foreigncall! has exactly one consult point — FOREIGN_LOWERINGS — and its body carries no name-keyed arm; parity(intrinsics.dart:607) the FFI call codegen's helper-table dispatch (also :685 the arg-count table, :1018 the direct-call funnel) never hand-writes a name ladder either, locked here (2026-09-02)",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
+                  split(stmt_src, '\n'))
         end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
