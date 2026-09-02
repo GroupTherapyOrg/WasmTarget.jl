@@ -1958,48 +1958,15 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 ctx.last_stmt_was_stub = true
                 return append_builder!(b, bte)
 
-            # Julia 1.13: hash_bytes(ptr, len, seed, secret) replaces memhash foreigncall
-            # Trace ptr back to jl_string_ptr to find original string, then use FNV-1a helper
-            elseif name === :hash_bytes
-                bhb = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                str_arg = nothing
-                # args: [CodeInstance/MI, func_ref, ptr, len, seed, secret]
-                if length(expr.args) >= 3
-                    ptr_arg = expr.args[3]
-                    if ptr_arg isa Core.SSAValue
-                        ptr_stmt = ctx.code_info.code[ptr_arg.id]
-                        if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
-                            ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
-                            if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
-                                str_arg = ptr_stmt.args[6]
-                            end
-                        end
-                    end
-                end
-                if str_arg !== nothing
-                    hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-                    emit_value!(bhb, str_arg, ctx,
-                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(translator.dart:1597 Translator.convertType): funnel → DATA
-                    # len arg
-                    if length(expr.args) >= 4
-                        emit_value!(bhb, expr.args[4], ctx, I64)  # length i64
-                    else
-                        i64_const!(bhb, 0)
-                    end
-                    # seed arg (UInt64 → i32)
-                    if length(expr.args) >= 5
-                        emit_value!(bhb, expr.args[5], ctx, I32)   # funnel: I64/UInt64 narrow via convert_type!
-                    else
-                        i32_const!(bhb, 0)
-                    end
-                    call!(bhb, hash_func_idx, WasmValType[], WasmValType[])
-                else
-                    record_unsupported!(ctx, :unsupported_method,
-                        "hash_bytes source is not traceable to a Wasm string"; idx=idx, detail=expr)
-                    unreachable!(bhb)  # structural trap after recorded unsupported
-                    ctx.last_stmt_was_stub = true
-                end
-                return append_builder!(b, bhb)
+            # Julia 1.13: hash_bytes(ptr, len, seed, secret) — Base's
+            # hash(::String,::UInt)/hash(::SubString{String},::UInt) are now
+            # overlaid with a pure-Julia, bit-exact-with-native port of
+            # rapidhash (interpreter.jl, "String hash Overlay"), so this
+            # :invoke is never reached: grep of Base (1.13.0-rc1) confirms
+            # hash(String/SubString{String}) are the only string-hashing
+            # callers of hash_bytes. Falling through to the terminal
+            # :unsupported_method below is intentionally loud if some future
+            # Base version proves that wrong.
 
             # ================================================================
             # Struct constructor via :invoke — immutable structs with only

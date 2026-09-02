@@ -118,6 +118,11 @@ _g("anyarray_boxing", Any[
 ])
 
 # ---- dicts ----------------------------------------------------------------
+# Native-built Dict{String,Int} CONSTANT: slots/keys/vals are embedded verbatim
+# (compile_memory_elements!, values.jl) at their NATIVE hash-placed positions,
+# so this only resolves in wasm when hash(::String) is bit-exact with native
+# (ground-truth string hashing; see string_hash_ground_truth.jl).
+const _SMOKE_HASH_DS = Dict("a" => 1, "bb" => 2, "ccc" => 3)
 _g("dicts", Any[
     ("dict_get", (x::Int64) -> (d = Dict(1 => 10, 2 => 20, 3 => 30); get(d, x, 0)), Int64(2)),
     ("dict_build", (n::Int64) -> (d = Dict{Int64,Int64}(); for i in 1:n; d[i] = i * i; end; sum(values(d))), Int64(4)),
@@ -130,6 +135,7 @@ _g("dicts", Any[
     ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
     # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
     ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
+    ("dict_str_const_lookup", () -> _SMOKE_HASH_DS["bb"]),
 ])
 const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
 const _SMOKE_VEC = Int64[1, 2, 3]

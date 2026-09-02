@@ -1830,52 +1830,6 @@ function _fc_jl_hrtime!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractComp
         return b
 end
 
-function _fc_memhash!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-        # Trace the pointer argument back to jl_string_ptr to find the original string
-        str_arg = nothing
-        if length(expr.args) >= 6
-            ptr_arg = expr.args[6]
-            if ptr_arg isa Core.SSAValue
-                ptr_stmt = ctx.code_info.code[ptr_arg.id]
-                if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
-                    ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
-                    if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
-                        str_arg = ptr_stmt.args[6]  # The original string argument
-                    end
-                end
-            end
-        end
-
-        if str_arg !== nothing
-            # Get or create the string hash helper function
-            hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-            # Push args: string array ref, length (i64), seed (i32)
-            emit_value!(b, str_arg, ctx,
-                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(translator.dart:1597 convertType): funnel → DATA
-            if length(expr.args) >= 7
-                len_arg = expr.args[7]
-                emit_value!(b, len_arg, ctx, I64)  # length as i64
-            else
-                i64_const!(b, 0)
-            end
-            if length(expr.args) >= 8
-                seed_arg = expr.args[8]
-                # seed may be i64 from SSA — wrap to i32
-                seed_type = infer_value_type(seed_arg, ctx)
-                emit_value!(b, seed_arg, ctx,
-                            (seed_type === UInt64 || seed_type === Int64 || seed_type === Int) ? I64 : I32)
-                if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
-            else
-                i32_const!(b, 0)
-            end
-            call!(b, hash_func_idx, WasmValType[], WasmValType[I64])
-            return b
-        end
-        # If we can't trace the string, fall through to unreachable
-    return nothing
-end
 
 function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     length(expr.args) >= 10 || return nothing
@@ -2318,7 +2272,6 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_symbol_n => _fc_jl_symbol_n!,
     :jl_get_current_task => _fc_jl_get_current_task!,
     :jl_hrtime => _fc_jl_hrtime!,
-    :memhash => _fc_memhash!,
     :jl_genericmemory_copyto => _fc_jl_genericmemory_copyto!,
     :jl_type_intersection => _fc_jl_type_intersection!,
     :jl_value_ptr => _fc_jl_value_ptr!,

@@ -876,36 +876,11 @@ function _compile_closed_world_plan(functions::Vector;
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # Pre-create string hash helper function if any function uses memhash.
-    # This must happen BEFORE function index assignment, because adding functions during
-    # body compilation would shift indices and break cross-function calls.
-    needs_string_hash = false
-    for (_, _, _, code_info, _, _, _) in function_data
-        if code_info !== nothing
-            for stmt in code_info.code
-                if stmt isa Expr && stmt.head === :foreigncall && length(stmt.args) >= 1
-                    fc_sym = extract_foreigncall_name(stmt.args[1])
-                    if fc_sym === :memhash
-                        needs_string_hash = true
-                        break
-                    end
-                end
-                # Julia 1.13: hash_bytes replaces memhash foreigncall
-                if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
-                    callee = stmt.args[2]
-                    callee_name = callee isa GlobalRef ? callee.name : nothing
-                    if callee_name === :hash_bytes
-                        needs_string_hash = true
-                        break
-                    end
-                end
-            end
-        end
-        needs_string_hash && break
-    end
-    if needs_string_hash
-        get_or_create_string_hash_func!(mod, type_registry)
-    end
+    # String hashing needs no pre-created helper function: hash(::String,::UInt)/
+    # hash(::SubString{String},::UInt) are overlaid with a pure-Julia,
+    # bit-exact-with-native port of the native algorithm (interpreter.jl,
+    # "String hash Overlay") that compiles through the ordinary :invoke path
+    # like any other Julia function — no special-cased wasm helper needed.
 
     # Pre-create the shared utf8proc property table/helper before function-index
     # assignment. Both category and character width read the same packed byte.

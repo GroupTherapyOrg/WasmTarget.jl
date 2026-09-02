@@ -82,8 +82,6 @@ mutable struct TypeRegistry
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
-    # String hash helper function index for Dict{String,...} support
-    string_hash_func_idx::Union{Nothing, UInt32}
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
@@ -137,7 +135,6 @@ TypeRegistry() = TypeRegistry(
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,  # string_hash_func_idx
     nothing,  # unicode_property_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
@@ -161,7 +158,6 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing,            # type_ids, type_ranges
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,  # string_hash_func_idx
     nothing,  # unicode_property_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
@@ -1369,111 +1365,6 @@ function get_or_create_unicode_property_func!(mod::WasmModule,
                         WasmValType[arr_ref], builder_code(b))
     registry.unicode_property_func_idx = idx
     return idx
-end
-
-"""
-    get_or_create_string_hash_func!(mod, registry) → UInt32
-
-Lazily create a Wasm helper function that computes FNV-1a hash
-over a byte array (string). Used by Dict{String,...} to replace the C memhash
-foreigncall. Returns the function index.
-
-Signature: (ref null \$str_arr, i64 len, i32 seed) → i64
-Algorithm: FNV-1a with offset_basis XOR seed, iterating min(len, array.len) bytes.
-"""
-function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    if registry.string_hash_func_idx !== nothing
-        return registry.string_hash_func_idx
-    end
-
-    str_type_idx = get_string_array_type!(mod, registry)
-
-    # Function params: (ref null $str_arr, i64, i32) → (i64)
-    params = WasmValType[ConcreteRef(str_type_idx, true), I64, I32]
-    results = WasmValType[I64]
-    # Extra locals: 0=hash(i64), 1=i(i32), 2=array_len(i32)
-    locals = WasmValType[I64, I32, I32]
-
-    # Build the body via the typed InstrBuilder. Locals: params (ref,i64,i32) + extras (i64,i32,i32).
-    b = InstrBuilder(WasmValType[ConcreteRef(str_type_idx, true), I64, I32, I64, I32, I32],
-                     results; func_name="get_or_create_string_hash_func!")
-
-    # FNV-1a offset basis: 14695981039346656037 (0xcbf29ce484222325)
-    # FNV-1a prime: 1099511628211 (0x00000100000001b3)
-
-    # hash = FNV_OFFSET_BASIS XOR (i64.extend_i32_u seed)
-    i64_const!(b, Int64(-3750763034362895579))  # 14695981039346656037 as signed
-    local_get!(b, UInt32(2))  # param 2 = seed (i32)
-    num!(b, Opcode.I64_EXTEND_I32_U)
-    num!(b, Opcode.I64_XOR)
-    local_set!(b, UInt32(3))  # local 0 (offset 3) = hash
-
-    # array_len = array.len(arr)
-    local_get!(b, UInt32(0))  # param 0 = arr
-    array_len!(b)
-    local_set!(b, UInt32(5))  # local 2 (offset 5) = array_len
-
-    # Clamp array_len to min(len, array_len)
-    # if len < array_len (as unsigned): array_len = i32.wrap(len)
-    local_get!(b, UInt32(1))  # param 1 = len (i64)
-    local_get!(b, UInt32(5))  # array_len
-    num!(b, Opcode.I64_EXTEND_I32_U)
-    num!(b, Opcode.I64_LT_U)
-    if_!(b)  # void block
-    local_get!(b, UInt32(1))  # len
-    num!(b, Opcode.I32_WRAP_I64)
-    local_set!(b, UInt32(5))  # array_len = i32(len)
-    end_block!(b)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, UInt32(4))  # local 1 (offset 4) = i
-
-    # block $break
-    break_label = block!(b)  # void
-
-    # loop $continue
-    continue_label = loop!(b)  # void
-
-    # if i >= array_len: branch to the symbolic break label
-    local_get!(b, UInt32(4))  # i
-    local_get!(b, UInt32(5))  # array_len
-    num!(b, Opcode.I32_GE_U)
-    br_if!(b, break_label)
-
-    # byte = array.get_u(arr, i)
-    local_get!(b, UInt32(0))  # arr
-    local_get!(b, UInt32(4))  # i
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    # hash = (hash XOR byte) * FNV_PRIME
-    num!(b, Opcode.I64_EXTEND_I32_U)  # byte → i64
-    local_get!(b, UInt32(3))  # hash
-    num!(b, Opcode.I64_XOR)
-    i64_const!(b, Int64(1099511628211))  # FNV prime
-    num!(b, Opcode.I64_MUL)
-    local_set!(b, UInt32(3))  # hash = result
-
-    # i++
-    local_get!(b, UInt32(4))  # i
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, UInt32(4))  # i = i + 1
-
-    # branch to the symbolic continue label
-    br!(b, continue_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # return hash
-    local_get!(b, UInt32(3))  # hash
-    end_block!(b)  # end function
-
-    body = builder_code(b)
-    func_idx = add_function!(mod, params, results, locals, body)
-    registry.string_hash_func_idx = func_idx
-    return func_idx
 end
 
 """
