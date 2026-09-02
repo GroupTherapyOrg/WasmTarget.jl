@@ -121,7 +121,7 @@ function _no_wrap_after_i32_op(bytes::Vector{UInt8})
 end
 
 @testset "Loop-1 cleanup backfills (migrated emitters, post-fix_* deletion guards)" begin
-    @testset "L1.a consecutive local.set (emit_phi_local_set!)" begin
+    @testset "L1.a consecutive local.set of the same or related values" begin
         @test compare_julia_wasm(bf_swap, Int64(5), Int64(9)).pass
         @test compare_julia_wasm(bf_dualassign, Int64(7)).pass
     end
