@@ -20,7 +20,7 @@ function _wt_logical_cpus()
 end
 # A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
 # (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
-if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1" && get(ENV, "WT_PHASE", "") == ""
     nshards = max(1, min(_wt_logical_cpus(), 16))
     if nshards > 1
         @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
@@ -112,7 +112,7 @@ const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
     isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
 end
 _wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
-_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on codegen shard 0
+_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == ""   # shard-0-only QA excluded from WT_PHASE runs
 # Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
 _wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
@@ -455,11 +455,34 @@ function _phase_owner(n::Int)
 end
 function _run_phases()
     println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
-    owner = _phase_owner(_WT_NSHARDS)
-    for (i, (name, pf)) in enumerate(_PHASES)
-        owner[i] == _WT_SHARD || continue
-        t = @elapsed pf()
-        println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+    # WT_PHASE=<substring> selector: run phases matching substring (case-insensitive), skip shard assignment
+    phase_filter = get(ENV, "WT_PHASE", "")
+    if phase_filter != ""
+        filter_lower = lowercase(phase_filter)
+        matches = Int[]
+        for (i, (name, _)) in enumerate(_PHASES)
+            occursin(filter_lower, lowercase(name)) && push!(matches, i)
+        end
+        if isempty(matches)
+            println("ERROR: No phases match WT_PHASE=\"$phase_filter\". Available phases:")
+            for (name, _) in _PHASES
+                println("  ", name)
+            end
+            exit(1)
+        end
+        for i in matches
+            name, pf = _PHASES[i]
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
+    else
+        # Normal sharded mode: use LPT bin-packing
+        owner = _phase_owner(_WT_NSHARDS)
+        for (i, (name, pf)) in enumerate(_PHASES)
+            owner[i] == _WT_SHARD || continue
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
     end
 end
 
