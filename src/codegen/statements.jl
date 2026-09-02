@@ -1247,6 +1247,40 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
 end
 
 """
+    _task_ssa_used_unsafely(code, ssa_id) -> Bool
+
+`jl_get_current_task`'s phantom-value contract (below, in `compile_foreigncall!`)
+holds ONLY for `rand()`'s narrow use: reading/writing the current task's
+`rngState0..3` fields, which are redirected to Wasm globals instead of a real
+`Task` object. Any OTHER consumer of the phantom SSA (e.g. a `===` reentrant-lock
+check inside `readline`'s IOStream lock path, `Base.lock(io.lock)`) would try to
+emit a value that was never produced — a silent absent-value gap, not a wrong
+value, but the same "correct-or-loud" violation. Scan every statement for a
+reference to `ssa_id` and reject unless it is exactly the safe getfield/setfield!
+pattern.
+"""
+function _task_ssa_used_unsafely(code::Vector{Any}, ssa_id::Int)::Bool
+    _is_safe_rng_access(stmt) =
+        stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
+        (is_func(stmt.args[1], :getfield) || is_func(stmt.args[1], :setfield!)) &&
+        stmt.args[2] isa Core.SSAValue && stmt.args[2].id == ssa_id &&
+        (stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]) in
+            (:rngState0, :rngState1, :rngState2, :rngState3)
+    _refs(x) = x isa Core.SSAValue ? x.id == ssa_id :
+               x isa Expr ? any(_refs, x.args) :
+               x isa Core.PhiNode ? any(i -> isassigned(x.values, i) && _refs(x.values[i]), 1:length(x.values)) :
+               x isa Core.PiNode ? _refs(x.val) :
+               x isa Core.ReturnNode ? (isdefined(x, :val) && _refs(x.val)) :
+               x isa Core.GotoIfNot ? _refs(x.cond) :
+               false
+    for stmt in code
+        _is_safe_rng_access(stmt) && continue
+        _refs(stmt) && return true
+    end
+    return false
+end
+
+"""
 Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
@@ -2008,6 +2042,13 @@ function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
     # Task SSA is used by getfield/setfield for rngState0..3 (Xoshiro256++ RNG)
     # We handle those field accesses as Wasm global reads/writes in compile_call.
     if name === :jl_get_current_task
+        if _task_ssa_used_unsafely(ctx.code_info.code, idx)
+            record_unsupported!(ctx, :unsupported_method,
+                "current_task() (Task identity / scheduler state) used outside the rand() RNG-state field pattern";
+                idx=idx, detail=expr, soundness_fatal=true)
+            ctx.last_stmt_was_stub = true
+            return b
+        end
         # No bytecode needed — the Task value is phantom.
         # Mark this SSA so it doesn't get stored to a local.
         return b

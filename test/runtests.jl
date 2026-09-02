@@ -189,6 +189,10 @@ _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
 _wt_shard0() && include("no_fabricated_values.jl")
+# Phase 6.3 (dev/MARCH.md): dart's two-tier diagnostics — a construct WT cannot
+# represent must reject through record_unsupported! (classified WasmCompileError),
+# never leak an internal StackImbalanceError.
+_wt_shard0() && include("capability_negative_controls.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()
@@ -208,6 +212,23 @@ mutable struct InterpValue; tag::Int32; int_val::Int64; float_val::Float64; bool
 struct TestPair{T}; first::T; second::T; end
 mutable struct TestCounter; value::Int64; end
 mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
+# Phase 6.1 regression fixture: `node.next = nothing` (no branch, no PiNode) lowers
+# the RHS as GlobalRef(Main, :nothing) in typed IR, not a literal `nothing` —
+# confirmed via code_typed. setfield! on a Union{TestNode,Nothing} field must
+# recognize this form (is_nothing_value, unions.jl) and null the field with ITS OWN
+# concrete type (ref.null $TestNode), not the generic bottom `ref.null none`
+# (tracked as AnyRef — a concrete-struct field sink then rejects it with a
+# StackImbalanceError at struct_set!). Regression for the crash reproduced by
+# `MathOptInterface.Utilities.Model{Float64}()` (calls.jl compile_call! setfield!).
+# @noinline + top-level (matches _g1_objid below): inlined into a single closure,
+# Julia's SROA scalar-replaces the `next` field down to pure phi/dataflow and never
+# exercises the setfield!/getfield codegen this regresses; nested inside a @testset
+# it becomes a captured closure and the compiled export hits a JS-boundary
+# marshaling mismatch instead.
+@noinline function _wt_clear_next!(node::TestNode)
+    node.next = nothing
+    return node.next === nothing
+end
 struct TestPoint2D; x::Float64; y::Float64; end
 struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 # WASMTARGET-FUZZ: structs with 128-bit fields — register as int128 struct ref
@@ -4860,6 +4881,18 @@ begin
             end
             @test compare_julia_wasm(f_list, Int64(5)).pass
             @test compare_julia_wasm(f_list, Int64(10)).pass
+        end
+
+        @testset "setfield! nulls a Union{Struct,Nothing} field (GlobalRef nothing, not literal)" begin
+            # _wt_clear_next! (top-level, above TestPoint2D): the Phase 6.1 setfield!
+            # regression fixture — see its docstring for the crash it guards against.
+            f_clear_and_reset_next(n::Int64) = begin
+                head = TestNode(n, TestNode(n + 1, nothing))
+                cleared = _wt_clear_next!(head) ? Int64(1) : Int64(0)
+                head.next = TestNode(n + 2, nothing)
+                cleared * Int64(100) + head.next.value
+            end
+            @test compare_julia_wasm(f_clear_and_reset_next, Int64(7)).pass
         end
 
         @testset "Nested structs" begin

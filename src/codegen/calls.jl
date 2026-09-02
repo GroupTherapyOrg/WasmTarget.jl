@@ -3907,31 +3907,25 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         _sf_wasm_fi + 1 <= length(_sf_ct.fields)) ?
                         _sf_ct.fields[_sf_wasm_fi + 1].valtype : nothing
                     _sf_expected === nothing && error("setfield! target has no physical Wasm field type")
-                    if field_type === Any
-                        emit_value!(_sfsb, value_arg, ctx, _sf_expected)
-                    else
-                        # When value is nothing and field is ref-typed,
-                        # compile_value(nothing) emits i32_const 0 which fails
-                        # struct_set validation. Emit ref.null none instead.
-                        if is_nothing_value(value_arg, ctx)
-                            field_wasm = julia_to_wasm_type(field_type)
-                            if field_wasm === I32 || field_wasm === I64 || field_wasm === F32 || field_wasm === F64
-                                emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                            from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
-                            else
-                                # Ref-typed field: ref.null none (bottom of internal ref hierarchy)
-                                ref_null_none!(_sfsb)
-                            end
-                        else
-                            emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                        from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
-                        end
-                    end
-
+                    # Route the value through the ONE coercion funnel (emit_value!'s own
+                    # val===nothing early exit, values.jl:905-912) instead of hand-rolling
+                    # scalar-vs-ref / nothing-vs-not branches here. `is_nothing_value`
+                    # recognizes GlobalRef aliases (e.g. `Mod.nothing`) and SSA/PiNode-proven
+                    # null edges that a bare `val === nothing` check misses; substituting the
+                    # literal lets emit_value! null a ref-typed field with its EXACT physical
+                    # type (ConcreteRef → typed `ref.null $T`) instead of falling through to a
+                    # numeric zero that then gets classId-boxed and ref.cast into the field's
+                    # unrelated concrete struct type — invalid at runtime. (Previously this site
+                    # used `ref_null_none!`, whose bottom-type null is tracked as AnyRef — sound
+                    # only when the field's physical type IS exactly AnyRef; a narrower
+                    # ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
+                    # `single_variable::Union{Nothing,VariableIndex}`, then rejected it.)
+                    local _sf_val = is_nothing_value(value_arg, ctx) ? nothing : value_arg
+                    local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
                     # setfield! returns the value — use compile_value to match SSA return type
-                    emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     append_builder!(fb, _sfsb)
                     return append_builder!(b, fb)
                 end

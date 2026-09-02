@@ -814,6 +814,25 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         return append_builder!(b, wb)
     end
 
+    # Host-capability / dynamic-reflection reject — caught HERE, at MethodInstance
+    # identity, before any recursion into the callee's body (dart2wasm has no
+    # equivalent: `Core.eval` is outside a closed-world compilation target).
+    # `Core.eval`'s body is runtime reflection (world-age bump + toplevel eval) that
+    # WT tries to recurse into and partially compile, surfacing as an internal
+    # StackImbalanceError on the OUTER call's result type instead of a classified
+    # diagnostic (Phase 6.2). Reject at the call site instead, before the invariant
+    # gets a chance to trip.
+    if mi isa Core.MethodInstance && mi.def isa Method
+        local _iv_m = mi.def
+        if _iv_m.module === Core && _iv_m.name === :eval
+            record_unsupported!(ctx, :unsupported_method,
+                "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
+                idx=idx, detail=expr, soundness_fatal=true)
+            ctx.last_stmt_was_stub = true
+            return append_builder!(b, fb)
+        end
+    end
+
     if mi isa Core.MethodInstance && mi.def isa Method &&
        mi.def.name in (:_closed_world_isvisible, :isvisible) && length(args) == 3
         symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
