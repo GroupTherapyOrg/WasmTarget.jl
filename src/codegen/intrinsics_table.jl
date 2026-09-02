@@ -70,9 +70,13 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (F64, F64, :ne_float)  => BinOpEmit(Opcode.F64_NE,  I32),
     (F64, F64, :lt_float)  => BinOpEmit(Opcode.F64_LT,  I32),
     (F64, F64, :le_float)  => BinOpEmit(Opcode.F64_LE,  I32),
+    (F64, F64, :gt_float)  => BinOpEmit(Opcode.F64_GT,  I32),
+    (F64, F64, :ge_float)  => BinOpEmit(Opcode.F64_GE,  I32),
     (F64, F64, :copysign_float) => BinOpEmit(Opcode.F64_COPYSIGN, F64),
     (F64, F64, :min_float) => BinOpEmit(Opcode.F64_MIN, F64),
+    (F64, F64, :min_float_fast) => BinOpEmit(Opcode.F64_MIN, F64),
     (F64, F64, :max_float) => BinOpEmit(Opcode.F64_MAX, F64),
+    (F64, F64, :max_float_fast) => BinOpEmit(Opcode.F64_MAX, F64),
     # ── f32 × f32 ────────────────────────────────────────────────────────
     (F32, F32, :add_float) => BinOpEmit(Opcode.F32_ADD, F32),
     (F32, F32, :sub_float) => BinOpEmit(Opcode.F32_SUB, F32),
@@ -82,6 +86,12 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (F32, F32, :ne_float)  => BinOpEmit(Opcode.F32_NE,  I32),
     (F32, F32, :lt_float)  => BinOpEmit(Opcode.F32_LT,  I32),
     (F32, F32, :le_float)  => BinOpEmit(Opcode.F32_LE,  I32),
+    (F32, F32, :gt_float)  => BinOpEmit(Opcode.F32_GT,  I32),
+    (F32, F32, :ge_float)  => BinOpEmit(Opcode.F32_GE,  I32),
+    (F32, F32, :min_float) => BinOpEmit(Opcode.F32_MIN, F32),
+    (F32, F32, :min_float_fast) => BinOpEmit(Opcode.F32_MIN, F32),
+    (F32, F32, :max_float) => BinOpEmit(Opcode.F32_MAX, F32),
+    (F32, F32, :max_float_fast) => BinOpEmit(Opcode.F32_MAX, F32),
 )
 
 """
