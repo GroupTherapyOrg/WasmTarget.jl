@@ -17,11 +17,13 @@ behavior, the lock is incomplete. Never turn an old claim into work without repr
 
 ## Audit stamp
 
-- Audit date: **2026-07-22**
-- WasmTarget revision: **`3a93ae24`**
+- Audit date: **2026-09-02** (the finishing march, PR #122; previous stamp 2026-07-22 at `3a93ae24`)
+- WasmTarget revision: **`19590294`** (branch `wt-p0-strict-hygiene`)
 - dart2wasm oracle: dart-lang/sdk **`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`**
-- Ratchet: `julia --project=. test/parity_ratchet.jl` **passes**
-- CI for that exact revision: **green** ([run 29357985108](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/29357985108))
+- Ratchet: `julia --project=. test/parity_ratchet.jl` **passes** (117 locks, every one negative-tested)
+- Formal harness: `dev/formal/run_tlc.sh` **passes** (25 TLC instances, every Broken variant rejected)
+- Probe corpus: 235 modules **byte-identical** across processes and architectures (x64 = aarch64)
+- CI for that exact revision: **green** on the full matrix ([run 33640400934](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/33640400934)); formal models ([run 33640400918](https://github.com/GroupTherapyOrg/WasmTarget.jl/actions/runs/33640400918))
 
 dart2wasm is a structural design oracle, not a feature checklist. Julia and Dart have different
 language semantics. A dart2wasm-shaped implementation is accepted only when native Julia is the
