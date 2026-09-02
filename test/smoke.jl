@@ -122,7 +122,16 @@ _g("dicts", Any[
     ("dict_get", (x::Int64) -> (d = Dict(1 => 10, 2 => 20, 3 => 30); get(d, x, 0)), Int64(2)),
     ("dict_build", (n::Int64) -> (d = Dict{Int64,Int64}(); for i in 1:n; d[i] = i * i; end; sum(values(d))), Int64(4)),
     ("dict_haskey", (x::Int64) -> (d = Dict(1 => 1, 2 => 2); haskey(d, x) ? 1 : 0), Int64(2)),
+    # native-built constants: only occupied slots are serialized (unoccupied isbits
+    # slots held host heap garbage — process-varying bytes), and a constant Vector
+    # read only through .size registers its struct on demand
+    ("dict_const_get", (x::Int64) -> _SMOKE_DICT[x] + get(_SMOKE_DICT, x + 100, -1), Int64(2)),
+    ("dict_const_grow", (x::Int64) -> (d = copy(_SMOKE_DICT); d[x + 50] = 7; length(d) + d[x + 50]), Int64(3)),
+    ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
 ])
+const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
+const _SMOKE_VEC = Int64[1, 2, 3]
+const _SMOKE_VEC2 = Int64[4, 5, 6]
 
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end

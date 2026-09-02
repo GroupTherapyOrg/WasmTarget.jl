@@ -812,52 +812,12 @@ function _compile_closed_world_plan(functions::Vector;
             end
         end
 
-        # Register types used in parameters (skip WasmGlobal)
+        # Register the signature's types (skip WasmGlobal)
         for (i, T) in enumerate(arg_types)
-            if i in global_args
-                continue
-            end
-            if is_closure_type(T)
-                register_closure_type!(mod, type_registry, T)
-            elseif T === Symbol
-                # Symbol is represented as a string (byte array), not a struct
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                # Vector (1-D only — matrices use register_matrix_type! below)
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: AbstractVector && T isa DataType
-                # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: AbstractArray
-                # Multi-dimensional arrays (Matrix, etc.) - register as struct
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
+            i in global_args && continue
+            register_reachable_type!(mod, type_registry, T)
         end
-
-        # Register return type
-        if is_closure_type(return_type)
-            register_closure_type!(mod, type_registry, return_type)
-        elseif return_type === Symbol
-            # Symbol is represented as a string (byte array), not a struct
-            get_string_struct_type!(mod, type_registry)
-        elseif is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            # Vector (1-D only — matrices use register_matrix_type! below)
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractVector && return_type isa DataType
-            # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractArray
-            # Multi-dimensional arrays (Matrix, etc.) - register as struct
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
+        register_reachable_type!(mod, type_registry, return_type)
 
         push!(function_data, (f, arg_types, name, code_info, return_type, global_args, is_closure))
     end

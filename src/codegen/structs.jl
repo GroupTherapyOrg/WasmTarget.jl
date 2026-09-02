@@ -1049,6 +1049,33 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
 end
 
 """
+    register_reachable_type!(mod, registry, T)
+
+parity(class_info.dart:666 ClassInfoCollector.collect): the ONE registrar for a
+Julia type that codegen will read as a wasm struct — signatures, and field reads
+that reach a type before any other site registered it. Each representation has
+its own registrar; this picks it. Types without a struct representation are a
+no-op.
+"""
+function register_reachable_type!(mod::WasmModule, registry::TypeRegistry, @nospecialize(T))::Nothing
+    T === Union{} && return nothing
+    if is_closure_type(T)
+        register_closure_type!(mod, registry, T)
+    elseif T === Symbol || T === String
+        get_string_struct_type!(mod, registry)
+    elseif is_struct_type(T)
+        register_struct_type!(mod, registry, T)
+    elseif T <: Vector
+        register_vector_type!(mod, registry, T)
+    elseif T <: AbstractVector && T isa DataType
+        register_struct_type!(mod, registry, T)
+    elseif T <: AbstractArray
+        register_matrix_type!(mod, registry, T)
+    end
+    return nothing
+end
+
+"""
 Register a Vector{T} type as a WasmGC struct with mutable size.
 
 Vectors are stored as WasmGC structs with two fields:
