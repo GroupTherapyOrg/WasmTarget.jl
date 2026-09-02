@@ -1331,9 +1331,11 @@ const LOCKS = [
             end
             n = 0
             for name in models
-                for inst in ("MC$(name).tla", "MC$(name).cfg", "MC$(name)Broken.cfg")
+                for inst in ("MC$(name).tla", "MC$(name).cfg")
                     isfile(joinpath(formal, inst)) || (n += 1)
                 end
+                # at least one counterexample-producing variant (MC<Name>[Variant]Broken.cfg)
+                any(f -> startswith(f, "MC$(name)") && endswith(f, "Broken.cfg"), readdir(formal)) || (n += 1)
                 name in anchors || (n += 1)
             end
             n + count(a -> !(a in models), anchors)
