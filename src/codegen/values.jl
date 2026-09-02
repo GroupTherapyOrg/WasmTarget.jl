@@ -492,7 +492,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 local _cvg = ctx.type_registry.closure_vtable_globals
                 local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
                     local _tcj = nothing
-                    for (T, info) in ctx.type_registry.structs
+                    for (T, info) in registered_structs(ctx.type_registry)
                         if info.wasm_type_idx == to.type_idx && is_closure_type(T)
                             _tcj = T; break
                         end

@@ -1186,7 +1186,7 @@ function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeR
         end
     end
 
-    for (T, info) in registry.structs
+    for (T, info) in registered_structs(registry)
         type_idx = info.wasm_type_idx
         type_idx + 1 > length(mod.types) && continue
         ct = mod.types[type_idx + 1]

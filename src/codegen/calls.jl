@@ -1888,7 +1888,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 if is_shared_wasm_type(ctx.type_registry, target_wasm_isa.type_idx, check_type)
                     local _tid = ensure_type_id!(ctx.type_registry, check_type)
                     # Also ensure all types sharing this index get IDs
-                    for (_ot, _oi) in ctx.type_registry.structs
+                    for (_ot, _oi) in registered_structs(ctx.type_registry)
                         if _oi.wasm_type_idx == target_wasm_isa.type_idx && _ot !== check_type
                             ensure_type_id!(ctx.type_registry, _ot)
                         end
