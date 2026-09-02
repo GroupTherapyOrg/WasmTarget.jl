@@ -41,14 +41,14 @@ mutable struct TypeRegistry
     string_struct_idx::Union{Nothing, UInt32} # parity(M9): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
-    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # PURE-325: box types for numeric→externref returns
-    # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
+    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
+    # Type constant globals — each unique Type value gets a unique Wasm global
     # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
     type_constant_globals::Union{Nothing, Dict{Type, UInt32}}  # Type value -> Wasm global index
-    # PURE-4149: TypeName constant globals — each unique TypeName gets a unique Wasm global
+    # TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
     typename_constant_globals::Union{Nothing, Dict{Core.TypeName, UInt32}}  # TypeName -> Wasm global index
-    # PURE-9025: DFS type ID assignment for runtime dispatch
+    # DFS type ID assignment for runtime dispatch
     type_ids::Union{Nothing, Dict{Type, Int32}}  # Concrete type -> unique DFS integer ID
     type_ranges::Union{Nothing, Dict{Type, Tuple{Int32, Int32}}}  # Abstract/concrete type -> [low, high] DFS range
     # dart class_info.dart: Top carries classId; Object extends it with the
@@ -57,14 +57,14 @@ mutable struct TypeRegistry
     base_struct_idx::Union{Nothing, UInt32}    # $JlTop = {classId:i32}
     object_struct_idx::Union{Nothing, UInt32}  # $JlObject <: Top = {classId, identityHash}
     identity_counter_global::Union{Nothing, UInt32}
-    # PURE-9028: BoxedNothing struct type and singleton global
+    # BoxedNothing struct type and singleton global
     nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
     nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
-    # PURE-9063: Type lookup table — typeId (i32) → DataType struct ref
+    # Type lookup table — typeId (i32) → DataType struct ref
     type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $JlDataType)))
     type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
-    type_lookup_table_size::Int32  # WBUILD-4000: Table size at creation time (guards late-arriving types)
-    # PURE-9063: $JlType hierarchy struct type indices
+    type_lookup_table_size::Int32  # Table size at creation time (guards late-arriving types)
+    # $JlType hierarchy struct type indices
     jl_type_idx::Union{Nothing, UInt32}       # $JlType = (struct (field $kind i32))
     jl_datatype_idx::Union{Nothing, UInt32}   # $JlDataType (sub $JlType) — most Julia types
     jl_union_idx::Union{Nothing, UInt32}      # $JlUnion (sub $JlType) — flat union of types
@@ -72,7 +72,7 @@ mutable struct TypeRegistry
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
-    # PURE-9065: String hash helper function index for Dict{String,...} support
+    # String hash helper function index for Dict{String,...} support
     string_hash_func_idx::Union{Nothing, UInt32}
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
@@ -375,7 +375,7 @@ function get_datatype_type_idx(registry::TypeRegistry)::UInt32
 end
 
 # ============================================================================
-# PURE-9025: DFS Type ID Assignment
+# DFS Type ID Assignment
 # ============================================================================
 
 """
@@ -402,7 +402,7 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
     extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
 
     # Also include primitive numeric types that may need boxing/dispatch
-    # PURE-9028: Include Nothing for BoxedNothing typeId
+    # Include Nothing for BoxedNothing typeId
     # parity(M9): String + Symbol are CLASSED now — they join the hierarchy so
     # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
@@ -619,7 +619,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 end
 
 """builder-native (THE implementation): push the type's DFS id as i32.
-E2E-001: uses ensure_type_id! so types registered after assign_type_ids!()
+Uses ensure_type_id! so types registered after assign_type_ids!()
 (isa checks / struct constants) still get unique, matching typeIds."""
 function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
     i32_const!(b, Int64(ensure_type_id!(registry, T)))
@@ -708,7 +708,7 @@ function emit_typeof!(b::InstrBuilder, base_idx::UInt32)
     return b
 end
 
-# PURE-9063: Kind constants for $JlType.$kind field
+# Kind constants for $JlType.$kind field
 const JL_TYPE_KIND_DATATYPE  = Int32(0)
 
 """
@@ -833,7 +833,7 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_typevar_idx = add_type!(mod, jl_typevar)
     registry.jl_typevar_idx = jl_typevar_idx
 
-    # PURE-9064: Register Julia type system types as StructInfo entries
+    # Register Julia type system types as StructInfo entries
     # so that isa(x, Union), getfield(::DataType, :parameters), PiNode narrowing, etc.
     # all work through the existing codegen paths.
     # field_offset=1 because field 0 is always $kind (like typeId for user structs)
@@ -1092,7 +1092,7 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
         end
     end
 
-    # PURE-320: Try reverse subtype match (registered <: actual).
+    # Try reverse subtype match (registered <: actual).
     # This handles cases where infer_value_type returns abstract types (e.g., Type)
     # but the function was registered with concrete types (e.g., Type{SourceFile}).
     for info in infos
@@ -1310,7 +1310,7 @@ end
 """
     get_or_create_string_hash_func!(mod, registry) → UInt32
 
-PURE-9065: Lazily create a Wasm helper function that computes FNV-1a hash
+Lazily create a Wasm helper function that computes FNV-1a hash
 over a byte array (string). Used by Dict{String,...} to replace the C memhash
 foreigncall. Returns the function index.
 
@@ -1413,7 +1413,7 @@ function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry
 end
 
 """
-PURE-325: Get or create a box struct type for a numeric Wasm type.
+Get or create a box struct type for a numeric Wasm type.
 Used when a function returning ExternRef needs to return a numeric value.
 The box struct has a single field of the numeric type, allowing the value
 to be wrapped as a GC reference and converted to externref.
@@ -1422,7 +1422,7 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     if haskey(registry.numeric_boxes, wasm_type)
         return registry.numeric_boxes[wasm_type]
     end
-    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    # Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
     # Declare `sub $JlBase` AT CREATION (dart class_info.dart:288 — every class
     # struct subtypes its super at definition). This lets the strict builder use
@@ -1460,7 +1460,7 @@ function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_ty
 end
 
 """
-PURE-9028: Get or create the BoxedNothing struct type.
+Get or create the BoxedNothing struct type.
 BoxedNothing has only typeId:i32 (no value field) — a singleton type.
 """
 function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
@@ -1476,7 +1476,7 @@ function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
-PURE-9028: Get or create a singleton global holding the BoxedNothing instance.
+Get or create a singleton global holding the BoxedNothing instance.
 Returns the global index. The global is initialized with struct.new \$BoxedNothing(typeId).
 """
 function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
@@ -1496,7 +1496,7 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
-PURE-4151 + PURE-9063: Get or create a Wasm global for a Type constant value.
+Get or create a Wasm global for a Type constant value.
 
 Each unique Julia Type (e.g., Int64, String, Number) gets a unique Wasm global
 holding a struct instance. This ensures that `ref.eq` correctly
@@ -1528,7 +1528,7 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # Cache
     registry.type_constant_globals[type_val] = global_idx
 
-    # PURE-4149: Recursively ensure globals exist for the entire type hierarchy.
+    # Recursively ensure globals exist for the entire type hierarchy.
     # This creates globals for supertypes, TypeNames, and parameter types
     # so that field access works at runtime.
     if type_val isa DataType
@@ -1612,7 +1612,7 @@ Create a start function that populates type constant global fields for all
 type constant globals. Called at the end of compile_module, after all
 Type globals have been created.
 
-PURE-9063: When \$JlType hierarchy is available, populates \$JlDataType fields:
+When \$JlType hierarchy is available, populates \$JlDataType fields:
   kind=0, name→\$JlTypeName, super→\$JlType, parameters→\$JlSVec, hash, abstract, dfs_low, dfs_high
 And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
@@ -1647,7 +1647,7 @@ function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)
 end
 
 """
-PURE-9063: Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
+Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
 """
 function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     dt_type_idx = registry.jl_datatype_idx
@@ -1916,7 +1916,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
     end
 
-    # PURE-9063: Populate the type lookup table (typeId → DataType struct ref)
+    # Populate the type lookup table (typeId → DataType struct ref)
     populate_type_lookup_table!(b, registry)
 
     isempty(builder_code(b)) && return
@@ -1928,7 +1928,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
 end
 
 # ============================================================================
-# PURE-9063: Full $JlType Hierarchy — Type Lookup Table
+# Full $JlType Hierarchy — Type Lookup Table
 # ============================================================================
 
 """
@@ -1996,7 +1996,7 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 
     global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
     registry.type_lookup_global = global_idx
-    registry.type_lookup_table_size = table_size  # WBUILD-4000: record for OOB guard
+    registry.type_lookup_table_size = table_size  # record for OOB guard
 end
 
 """
@@ -2018,7 +2018,7 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
     table_global = registry.type_lookup_global
     arr_type_idx = registry.type_lookup_array_idx
 
-    # WBUILD-4000: Compute table size (must match create_type_lookup_table! sizing).
+    # Compute table size (must match create_type_lookup_table! sizing).
     # Types registered after create_type_lookup_table! (via ensure_type_id! during body
     # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
     table_size = registry.type_lookup_table_size
@@ -2125,12 +2125,12 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
     if T === Union{}
         throw(ArgumentError("Union{} has no runtime Wasm value type"))
     end
-    # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
+    # Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
-    # PURE-4151: Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
+    # Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
     # multi-variant unions that map to AnyRef (via julia_to_wasm_type), not single DataType refs.
     if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
-        # PURE-9063: Use $JlDataType when hierarchy is available
+        # Use $JlDataType when hierarchy is available
         dt_idx = get_datatype_type_idx(registry)
         return ConcreteRef(dt_idx, true)
     end
@@ -2266,14 +2266,14 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
             return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=false)
         end
     elseif T === Core.SimpleVector
-        # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
+        # Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
         # This ensures field access on DataType.parameters returns the correct type.
         if registry.jl_svec_idx !== nothing
             return ConcreteRef(registry.jl_svec_idx, true)
         end
         return ArrayRef
     elseif T === Core.TypeName
-        # PURE-9064: Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
+        # Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
         if registry.jl_typename_idx !== nothing
             return ConcreteRef(registry.jl_typename_idx, true)
         end
