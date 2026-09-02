@@ -617,6 +617,22 @@ function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
 end
 
 """
+    concrete_class_ids(registry, T) -> Vector{Int32}
+
+The exact closed-world answer to `isa(x, T)` for a non-concrete `T`: the class ids of
+every numbered concrete type `C` with `C <: T` — Julia's own subtyping is the ground
+truth, so a parametric abstract (`AbstractVector` = `AbstractArray{T,1}`) is answered
+exactly, where the DFS range keyed by the base `AbstractArray` cannot distinguish it
+from a Matrix. `emit_classid_membership!` compresses a contiguous set back to dart's
+range window (class_info.dart:831 getConcreteClassIdRange).
+"""
+function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
+    registry.type_ids === nothing && return Int32[]
+    ids = Int32[id for (C, id) in ordered_pairs(registry.type_ids, type_order_key) if C isa Type && C <: T]
+    return sort!(ids)
+end
+
+"""
     get_type_range(registry::TypeRegistry, T::Type) -> Union{Tuple{Int32, Int32}, Nothing}
 
 Return the DFS [low, high] range for an abstract type, or nothing if not assigned.
@@ -2299,7 +2315,14 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 return ConcreteRef(info.wasm_type_idx, true)
             end
         else
-            # Matrix and higher-dim arrays: register as struct
+            # Matrix and higher-dim arrays: register as struct — CONCRETE ones. An
+            # abstract or UnionAll array type (AbstractVector, AbstractArray,
+            # AbstractMatrix{Float64}, …) has no struct of its own; it is the join,
+            # anyref (dart's top type for an unresolved class), narrowed at use by
+            # the cast machinery. (AbstractVector once reached the matrix registrar
+            # here — ndims of the UnionAll is 1 — and every Pi typed by it ref.cast to
+            # a bogus struct: `xs[1]::AbstractVector` trapped "illegal cast".)
+            (T isa DataType && isconcretetype(T)) || return AnyRef
             if haskey(registry.structs, T)
                 info = registry.structs[T]
                 return ConcreteRef(info.wasm_type_idx, true)

@@ -1979,15 +1979,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
         elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
                ctx.type_registry.base_struct_idx !== nothing
-            # DFS range check for anyref/structref polymorphic values
-            # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
-            local _range = get_type_range(ctx.type_registry, check_type)
-            # The DFS range OR the lazily recorded extra ids (the model's IsaWT in
-            # dev/formal/ClassIdDispatch.tla): an ancestor with no early descendant has no
-            # range but still owns the extras ensure_type_id! recorded on it.
-            local _extras = ctx.type_registry.type_extra_ids === nothing ? Int32[] :
-                get(ctx.type_registry.type_extra_ids, check_type isa DataType && !isempty(check_type.parameters) ? check_type.name.wrapper : check_type, Int32[])
-            if _range !== nothing || !isempty(_extras)
+            # classId membership for anyref/structref polymorphic values: the exact
+            # closed-world set of concrete classes <: check_type (Julia's subtyping is
+            # the ground truth; a DFS range keyed by the base could not answer
+            # `AbstractVector`, and a parametric abstract's extras were never
+            # recorded), compressed to dart's range window when contiguous.
+            local _ids = concrete_class_ids(ctx.type_registry, check_type)
+            if !isempty(_ids)
                 local _base_idx = ctx.type_registry.base_struct_idx
                 # Guard against JlType hierarchy refs.
                 # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
@@ -2003,12 +2001,10 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 else_!(bld)
                 local_get!(bld, _isa_guard_local)
                 emit_typeof!(bld, _base_idx)
-                # dart's 3-instruction unsigned window via THE single range discriminator
-                # (was tee + ge_s/le_s/and with a temp local); extras-only when no range.
-                emit_classid_ranges!(bld, ctx, _range, _extras)
+                emit_classid_membership!(bld, ctx, _ids)
                 end_block!(bld)
             else
-                # Neither a DFS range nor a lazily numbered subtype — return false
+                # no concrete class of the closed world is a subtype — constant false
                 drop!(bld)
                 i32_const!(bld, 0)
             end
