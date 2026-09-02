@@ -1316,6 +1316,28 @@ const LOCKS = [
                 occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
             end
         end),
+    "L111_formal_models_paired_and_anchored" => ("every TLA+ model dev/formal/<Name>.tla has its MC<Name>.tla + MC<Name>.cfg instance AND an MC<Name>Broken.cfg instance TLC must reject (a model with no counterexample-producing variant is vacuous), and is anchored by a formal(dev/formal/<Name>.tla) line in src or test; every formal( anchor names a model that exists (locked 2026-09-02)",
+        () -> begin
+            formal = joinpath(ROOT, "dev", "formal")
+            isdir(formal) || return 0
+            models = [f[1:end-4] for f in readdir(formal)
+                      if endswith(f, ".tla") && !startswith(f, "MC")]
+            anchors = Set{String}()
+            for root in (SRC, joinpath(ROOT, "test")), (dir, _, files) in walkdir(root), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"formal\(dev/formal/([A-Za-z0-9_]+)\.tla\)", read(joinpath(dir, f), String))
+                    push!(anchors, m.captures[1])
+                end
+            end
+            n = 0
+            for name in models
+                for inst in ("MC$(name).tla", "MC$(name).cfg", "MC$(name)Broken.cfg")
+                    isfile(joinpath(formal, inst)) || (n += 1)
+                end
+                name in anchors || (n += 1)
+            end
+            n + count(a -> !(a in models), anchors)
+        end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
