@@ -158,13 +158,10 @@ const INTRINSIC_UNOPS = Dict{Tuple{WasmValType,Symbol},UnOpEmit}(
     # ── bitwise NOT (i32/i64): dart's `~` = const -1; xor (intrinsics.dart:481-484) ──
     (I32, :not_int) => UnOpEmit(b -> (i32_const!(b, -1); num!(b, Opcode.I32_XOR)), I32),
     (I64, :not_int) => UnOpEmit(b -> (i64_const!(b, -1); num!(b, Opcode.I64_XOR)), I64),
-    # ── integer negation (i32/i64) — COMMIT A keeps WT's current sequence
-    #    byte-identical (~x + 1); COMMIT B switches to dart's `unary-` form
-    #    (const -1; mul, intrinsics.dart:477-480).
-    (I32, :neg_int) => UnOpEmit(b -> (i32_const!(b, -1); num!(b, Opcode.I32_XOR);
-                                       i32_const!(b, 1);  num!(b, Opcode.I32_ADD)), I32),
-    (I64, :neg_int) => UnOpEmit(b -> (i64_const!(b, -1); num!(b, Opcode.I64_XOR);
-                                       i64_const!(b, 1);  num!(b, Opcode.I64_ADD)), I64),
+    # ── integer negation (i32/i64): dart's `unary-` = const -1; mul
+    #    (intrinsics.dart:477-480).
+    (I32, :neg_int) => UnOpEmit(b -> (i32_const!(b, -1); num!(b, Opcode.I32_MUL)), I32),
+    (I64, :neg_int) => UnOpEmit(b -> (i64_const!(b, -1); num!(b, Opcode.I64_MUL)), I64),
 )
 
 """
