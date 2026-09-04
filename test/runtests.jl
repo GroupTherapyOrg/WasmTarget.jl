@@ -20,7 +20,7 @@ function _wt_logical_cpus()
 end
 # A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
 # (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
-if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1" && get(ENV, "WT_PHASE", "") == ""
     nshards = max(1, min(_wt_logical_cpus(), 16))
     if nshards > 1
         @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
@@ -112,7 +112,7 @@ const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
     isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
 end
 _wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
-_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on codegen shard 0
+_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == ""   # shard-0-only QA excluded from WT_PHASE runs
 # Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
 _wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
@@ -132,13 +132,24 @@ using Dates: Dates, @dateformat_str
 # Package-level QA runs first so structural failures surface
 # before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
 _wt_shard0() && include("test_aqua.jl")
+_wt_shard0() && include("test_explicit_imports.jl")
 _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
 _wt_shard0() && include("m11_intrinsics_table.jl")
 _wt_shard0() && include("module_builder_validation.jl")
+_wt_shard0() && include("host_boundary_types.jl")
 
 include("utils.jl")
+# a rejection names its statement and inline chain (dev/MARCH.md exit criterion 5)
+_wt_shard0() && include("diagnostic_attribution.jl")
+# formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
+_wt_shard0() && include("dispatch_method_error.jl")
+# formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
+_wt_shard0() && include("lazy_classid_isa.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
+# Phase 10.2 prototype: native linear-memory sidecar (dev/PARITY_MASTER.md item 3).
+# Node-differential, run once (shard 0 only) like the other fixture suites above.
+_wt_shard0() && include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
 _wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
 _wt_shard0() && include("recursive_groups.jl")
 _wt_shard0() && include("apply_iterate_soundness.jl")
@@ -184,10 +195,19 @@ _wt_shard0() && include("vararg_fixed_prefix.jl")
 _wt_shard0() && include("symbol_syntax_metadata.jl")
 _wt_shard0() && include("memmove_single_path.jl")
 _wt_shard0() && include("mutable_global_initialization.jl")
+# Ground-truth string hashing: hash(::String/::SubString{String}) now bit-exact
+# with native Julia (not merely internally consistent) — Dict{String,V}/
+# Set{String} CONSTANTS built natively resolve correctly from wasm.
+_wt_shard0() && include("string_hash_ground_truth.jl")
 _wt_shard0() && include("reinterpret_array_semantics.jl")
 _wt_shard0() && include("storage_relative_pointer_soundness.jl")
 _wt_shard0() && include("real_bottom_exceptions.jl")
 _wt_shard0() && include("no_fabricated_values.jl")
+# Phase 6.3 (dev/MARCH.md): dart's two-tier diagnostics — a construct WT cannot
+# represent must reject through record_unsupported! (classified WasmCompileError),
+# never leak an internal StackImbalanceError.
+_wt_shard0() && include("capability_negative_controls.jl")
+_wt_shard0() && include("unknown_ir_heads.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_shard0()
@@ -207,6 +227,23 @@ mutable struct InterpValue; tag::Int32; int_val::Int64; float_val::Float64; bool
 struct TestPair{T}; first::T; second::T; end
 mutable struct TestCounter; value::Int64; end
 mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
+# Phase 6.1 regression fixture: `node.next = nothing` (no branch, no PiNode) lowers
+# the RHS as GlobalRef(Main, :nothing) in typed IR, not a literal `nothing` —
+# confirmed via code_typed. setfield! on a Union{TestNode,Nothing} field must
+# recognize this form (is_nothing_value, unions.jl) and null the field with ITS OWN
+# concrete type (ref.null $TestNode), not the generic bottom `ref.null none`
+# (tracked as AnyRef — a concrete-struct field sink then rejects it with a
+# StackImbalanceError at struct_set!). Regression for the crash reproduced by
+# `MathOptInterface.Utilities.Model{Float64}()` (calls.jl compile_call! setfield!).
+# @noinline + top-level (matches _g1_objid below): inlined into a single closure,
+# Julia's SROA scalar-replaces the `next` field down to pure phi/dataflow and never
+# exercises the setfield!/getfield codegen this regresses; nested inside a @testset
+# it becomes a captured closure and the compiled export hits a JS-boundary
+# marshaling mismatch instead.
+@noinline function _wt_clear_next!(node::TestNode)
+    node.next = nothing
+    return node.next === nothing
+end
 struct TestPoint2D; x::Float64; y::Float64; end
 struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 # WASMTARGET-FUZZ: structs with 128-bit fields — register as int128 struct ref
@@ -454,11 +491,34 @@ function _phase_owner(n::Int)
 end
 function _run_phases()
     println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
-    owner = _phase_owner(_WT_NSHARDS)
-    for (i, (name, pf)) in enumerate(_PHASES)
-        owner[i] == _WT_SHARD || continue
-        t = @elapsed pf()
-        println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+    # WT_PHASE=<substring> selector: run phases matching substring (case-insensitive), skip shard assignment
+    phase_filter = get(ENV, "WT_PHASE", "")
+    if phase_filter != ""
+        filter_lower = lowercase(phase_filter)
+        matches = Int[]
+        for (i, (name, _)) in enumerate(_PHASES)
+            occursin(filter_lower, lowercase(name)) && push!(matches, i)
+        end
+        if isempty(matches)
+            println("ERROR: No phases match WT_PHASE=\"$phase_filter\". Available phases:")
+            for (name, _) in _PHASES
+                println("  ", name)
+            end
+            exit(1)
+        end
+        for i in matches
+            name, pf = _PHASES[i]
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
+    else
+        # Normal sharded mode: use LPT bin-packing
+        owner = _phase_owner(_WT_NSHARDS)
+        for (i, (name, pf)) in enumerate(_PHASES)
+            owner[i] == _WT_SHARD || continue
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
     end
 end
 
@@ -4836,6 +4896,18 @@ begin
             end
             @test compare_julia_wasm(f_list, Int64(5)).pass
             @test compare_julia_wasm(f_list, Int64(10)).pass
+        end
+
+        @testset "setfield! nulls a Union{Struct,Nothing} field (GlobalRef nothing, not literal)" begin
+            # _wt_clear_next! (top-level, above TestPoint2D): the Phase 6.1 setfield!
+            # regression fixture — see its docstring for the crash it guards against.
+            f_clear_and_reset_next(n::Int64) = begin
+                head = TestNode(n, TestNode(n + 1, nothing))
+                cleared = _wt_clear_next!(head) ? Int64(1) : Int64(0)
+                head.next = TestNode(n + 2, nothing)
+                cleared * Int64(100) + head.next.value
+            end
+            @test compare_julia_wasm(f_clear_and_reset_next, Int64(7)).pass
         end
 
         @testset "Nested structs" begin

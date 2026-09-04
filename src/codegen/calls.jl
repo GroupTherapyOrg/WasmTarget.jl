@@ -5,7 +5,7 @@
 """
     _is_externref_value(val, ctx) -> Bool
 
-PURE-904: Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
+Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
 """
 function _is_externref_value(val, ctx::AbstractCompilationContext)::Bool
@@ -40,7 +40,7 @@ end
 """
     _is_typeof_ssa(val, ctx) -> Bool
 
-PURE-9026: Check if a value is an SSAValue whose defining statement is a typeof() call.
+Check if a value is an SSAValue whose defining statement is a typeof() call.
 """
 function _is_typeof_ssa(val, ctx::AbstractCompilationContext)::Bool
     if !(val isa Core.SSAValue)
@@ -60,7 +60,7 @@ end
 """
     _resolve_type_const(val, ctx) -> Union{DataType, Nothing}
 
-PURE-9026: If val is a Type constant (GlobalRef to a type, or a direct Type value),
+If val is a Type constant (GlobalRef to a type, or a direct Type value),
 return the DataType. Otherwise return nothing.
 """
 function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
@@ -79,7 +79,7 @@ end
 """
     _ensure_typeof_scratch_local!(ctx) -> UInt32
 
-PURE-9063: Allocate (or return cached) a scratch i32 local for typeof struct lookups.
+Allocate (or return cached) a scratch i32 local for typeof struct lookups.
 The local stores the typeId temporarily while the lookup array ref is pushed.
 """
 function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
@@ -103,7 +103,7 @@ end
 """
     _sub_builder(fb, ctx, name, n) -> InstrBuilder
 
-march17: a fragment that consumes the parent's top `n` stack values DECLARES them
+A fragment that consumes the parent's top `n` stack values DECLARES them
 (seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
 """
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
@@ -155,18 +155,15 @@ function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilation
     julia_width < 32 || return fb
     bld = _sub_builder(fb, ctx, "_emit_normalise_narrow_pair!", 2)
     li = UInt32(allocate_local!(ctx, I32))
-    function norm!()
-        if signed
-            num!(bld, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-        else
-            i32_const!(bld, Int64((1 << julia_width) - 1))
-            num!(bld, Opcode.I32_AND)
-        end
-    end
-    local_set!(bld, li)   # [a]
-    norm!()               # [a*]
-    local_get!(bld, li)   # [a*, b]
-    norm!()               # [a*, b*]
+    # normalise_narrow! (julia_numeric_tier.jl) classifies width from a Type, not an
+    # Int — synthesize a representative one; `normalise_narrow!` only reads its width
+    # class (8 vs 16), never its own signedness, so Int8/UInt8 (and Int16/UInt16) are
+    # interchangeable here.
+    julia_type = julia_width == 8 ? (signed ? Int8 : UInt8) : (signed ? Int16 : UInt16)
+    local_set!(bld, li)                              # [a]
+    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*]
+    local_get!(bld, li)                               # [a*, b]
+    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*, b*]
     append_builder!(fb, bld)
     return fb
 end
@@ -182,7 +179,7 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     info === nothing && error("exception layout is unavailable for $ErrT")
     emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
-    struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields (march3)
+    struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields
     global_set!(bld, exn_global)
     global_get!(bld, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bld, ExternRef); throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
     return bld
@@ -644,25 +641,396 @@ function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector
 end
 
 """
-    _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
+    _compile_call_checked_narrow!(fb, ctx, op, arg_type, is_32bit)
 
-Extracted handler for checked_smul_int / checked_umul_int.
-Modifies `bytes` in-place.
+Extracted handler for checked_s{add,sub,mul}_int / checked_u{add,sub,mul}_int
+when the JULIA operand width is < 32 bits (Int8/UInt8/Int16/UInt16). The
+register-width overflow tricks in `_compile_call_checked_add!`/`_sub!`/
+`_compile_call_checked_mul` detect overflow with sign-bit tests at bit 31/63 —
+a narrow op can never overflow the wide i32 register, so the flag would stay
+false (e.g. `checked_abs(Int8(-128))` used to leak 128 instead of throwing
+OverflowError — the `lcm(Int8(-128), 1)` divergent_throw family). Computed in
+i32 on normalised inputs; flag = result fails the sign/zero-extend round-trip
+at the JULIA width; value = wrapped result. A pure move of the arm that used
+to gate the head of the `is_func` ladder (was a combined `if is_32bit &&
+_julia_int_width(...) < 32 && (is_func(...) || ...)`, checked before any of
+checked_sadd/ssub/smul_int's own branches). `op` is the ALREADY-DISPATCHED
+CHECKED_OPS key (R19: a data test against the Symbol the registry looked up
+by, not a re-derivation via `is_func`).
 """
-function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
+                                       op::Symbol, arg_type, is_32bit::Bool)::Nothing
+    local _ncw = _julia_int_width(arg_type, is_32bit)
+    local _nc_signed = op === :checked_sadd_int || op === :checked_ssub_int ||
+                       op === :checked_smul_int
+    local _nc_op = (op === :checked_sadd_int || op === :checked_uadd_int) ? Opcode.I32_ADD :
+                   (op === :checked_ssub_int || op === :checked_usub_int) ? Opcode.I32_SUB :
+                   Opcode.I32_MUL
+    _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
+    local _nc_r = UInt32(allocate_local!(ctx, I32))
+    local _ncb = _sub_builder(fb, ctx, "compile_call", 2)   # [a*, b*] normalised pair
+    num!(_ncb, _nc_op)
+    local_set!(_ncb, _nc_r)
+    # helper: push wrapped-to-width copy of result
+    local _nc_norm! = function ()
+        local_get!(_ncb, _nc_r)
+        if _nc_signed
+            num!(_ncb, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+        else
+            i32_const!(_ncb, Int64((1 << _ncw) - 1))
+            num!(_ncb, Opcode.I32_AND)
+        end
+    end
+    local _nc_tt = Tuple{Int32, Bool}
+    if !haskey(ctx.type_registry.structs, _nc_tt)
+        register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
+    end
+    local _nc_info = ctx.type_registry.structs[_nc_tt]
+    emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
+    _nc_norm!()                                           # field 1: wrapped value
+    _nc_norm!()                                           # flag: wrapped != raw
+    local_get!(_ncb, _nc_r)
+    num!(_ncb, Opcode.I32_NE)
+    struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields
+    append_builder!(fb, _ncb)
+    return nothing
+end
+
+"""
+    _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx)
+
+Extracted handler for checked_sadd_int / checked_uadd_int (register-width
+path — narrow width routes through `_compile_call_checked_narrow!` instead).
+checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag). Overflow
+detection: ((a ^ result) & (b ^ result)) has sign bit set. `fbref` is a
+`Ref{InstrBuilder}` (not a plain `fb`) because the is_128bit branch REPLACES
+the builder with a fresh stub-only one — exactly as the original inline `fb =
+_ctx_builder(...)` reassignment did (a plain argument can only be appended
+to, not swapped out from under the caller). `op` is the ALREADY-DISPATCHED
+CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
+"""
+function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
     if is_128bit
-        # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
-        # (natively returns a value, so a silent trap would diverge).
-        empty!(bytes)  # PURE-908: clear pre-pushed args
-        emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                               "128-bit checked multiply (Int128/UInt128)")
+        local _cadd128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_cadd128, ctx)
+        emit_unsupported_stub!(ctx, _cadd128, :unsupported_method,
+            "128-bit checked addition (Int128/UInt128)"; idx=idx)
+        fbref[] = _cadd128
     else
-        is_signed = is_func(func, :checked_smul_int)
+        is_signed = op === :checked_sadd_int
         local_type = is_32bit ? I32 : I64
         local_a = allocate_local!(ctx, local_type)
         local_b = allocate_local!(ctx, local_type)
         local_result = allocate_local!(ctx, local_type)
-        bld = _sub_builder(fb, ctx, "_compile_call_checked_mul", 2)   # march17: the operands
+        local _caddb = _sub_builder(fbref[], ctx, "compile_call", 2)   # [a, b]
+
+        # Save b, save a, compute a+b, save result
+        local_set!(_caddb, local_b)
+        local_tee!(_caddb, local_a)
+        local_get!(_caddb, local_b)
+        num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
+        local_set!(_caddb, local_result)
+
+        local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
+                           ctx.type_registry.structs[_cadd_tt] :
+                           register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
+        emit_struct_prefix!(_caddb, ctx.type_registry, _cadd_tt, _cadd_info)
+        # Push result back for tuple field 1
+        local_get!(_caddb, local_result)
+
+        # Compute overflow flag
+        if is_signed
+            # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
+            local_get!(_caddb, local_a)
+            local_get!(_caddb, local_result)
+            num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            local_get!(_caddb, local_b)
+            local_get!(_caddb, local_result)
+            num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            num!(_caddb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+            if is_32bit
+                i32_const!(_caddb, 31)
+                num!(_caddb, Opcode.I32_SHR_U)
+            else
+                i64_const!(_caddb, 63)
+                num!(_caddb, Opcode.I64_SHR_U)
+                num!(_caddb, Opcode.I32_WRAP_I64)
+            end
+        else
+            # Unsigned: overflow = result < a
+            local_get!(_caddb, local_result)
+            local_get!(_caddb, local_a)
+            num!(_caddb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+        end
+
+        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        local tuple_info = ctx.type_registry.structs[tuple_type]
+        struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        append_builder!(fbref[], _caddb)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx)
+
+Extracted handler for checked_ssub_int / checked_usub_int (register-width
+path — narrow width routes through `_compile_call_checked_narrow!` instead).
+checked_ssub_int(a, b) -> Tuple{T, Bool}. Signed overflow: ((a ^ b) & (a ^
+result)) has sign bit set. Same `Ref{InstrBuilder}` reassignment need as
+`_compile_call_checked_add!` — see its docstring. `op` is the ALREADY-
+DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
+"""
+function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+    if is_128bit
+        local _csub128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_csub128, ctx)
+        emit_unsupported_stub!(ctx, _csub128, :unsupported_method,
+            "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
+        fbref[] = _csub128
+    else
+        is_signed = op === :checked_ssub_int
+        local_type = is_32bit ? I32 : I64
+        local_a = allocate_local!(ctx, local_type)
+        local_b = allocate_local!(ctx, local_type)
+        local_result = allocate_local!(ctx, local_type)
+        local _csubb = _sub_builder(fbref[], ctx, "compile_call", 2)   # [a, b]
+
+        # Save b, save a, compute a-b, save result
+        local_set!(_csubb, local_b)
+        local_tee!(_csubb, local_a)
+        local_get!(_csubb, local_b)
+        num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
+        local_set!(_csubb, local_result)
+
+        local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
+                           ctx.type_registry.structs[_csub_tt] :
+                           register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
+        emit_struct_prefix!(_csubb, ctx.type_registry, _csub_tt, _csub_info)
+        # Push result back for tuple field 1
+        local_get!(_csubb, local_result)
+
+        if is_signed
+            # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_b)
+            num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_result)
+            num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
+            num!(_csubb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
+            if is_32bit
+                i32_const!(_csubb, 31)
+                num!(_csubb, Opcode.I32_SHR_U)
+            else
+                i64_const!(_csubb, 63)
+                num!(_csubb, Opcode.I64_SHR_U)
+                num!(_csubb, Opcode.I32_WRAP_I64)
+            end
+        else
+            # Unsigned: overflow = a < b
+            local_get!(_csubb, local_a)
+            local_get!(_csubb, local_b)
+            num!(_csubb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
+        end
+
+        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+        if !haskey(ctx.type_registry.structs, tuple_type)
+            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
+        end
+        local tuple_info = ctx.type_registry.structs[tuple_type]
+        struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        append_builder!(fbref[], _csubb)
+    end
+    return nothing
+end
+
+"""
+    _compile_call_checked!(fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx) -> WasmValType
+
+THE checked-overflow dispatch — CHECKED_OPS's single implementation (all 6
+keys forward here). `op` is the Symbol CHECKED_OPS was already keyed and
+dispatched on (R19: a data test against that Symbol, never a re-derivation
+via `is_func` — the Dict lookup in `emit_julia_numeric!` is the one place op
+identity is decided). Narrow Julia widths route through
+`_compile_call_checked_narrow!` first (checked BEFORE add/sub/mul dispatch,
+exactly as the original combined `if` guard did); mul goes through the
+pre-existing `_compile_call_checked_mul` unchanged (its is_128bit branch
+stubs on the EXISTING builder, unlike add/sub's fresh-builder discard — a
+pre-existing asymmetry, preserved as-is, not unified).
+"""
+function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                op::Symbol, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
+    local _narrow = is_32bit && _julia_int_width(arg_type, is_32bit) < 32
+    if _narrow
+        _compile_call_checked_narrow!(fbref[], ctx, op, arg_type, is_32bit)
+    elseif op === :checked_smul_int || op === :checked_umul_int
+        _compile_call_checked_mul(op, args, fbref[], ctx, is_128bit, is_32bit)
+    elseif op === :checked_sadd_int || op === :checked_uadd_int
+        _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx)
+    else
+        _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx)
+    end
+    local _tt = (_narrow || is_32bit) ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
+    return ConcreteRef(UInt32(ctx.type_registry.structs[_tt].wasm_type_idx), true)
+end
+
+"""
+    _compile_call_shift!(fb, ctx, args, arg_type, is_32bit, kind) -> WasmValType
+
+THE shift dispatch — SHIFT_OPS's single implementation for `:shl`/`:ashr`/
+`:lshr` (128-bit operands are fully handled by THE Int128 registry route
+before this is ever reached). Shift-COUNT coercion first (Julia often uses an
+Int64/UInt64 amount even for an Int32 value — Wasm requires the amount and
+the value to share a type): shl/lshr saturate an oversized i64 amount down to
+i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
+unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
+`_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
+"""
+function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext, args, arg_type,
+                              is_32bit::Bool, kind::Symbol)::WasmValType
+    if length(args) >= 2
+        shift_type = infer_value_type(args[2], ctx)
+        if kind === :ashr
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                num!(fb, Opcode.I32_WRAP_I64)
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+            end
+        else   # :shl / :lshr
+            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
+            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+            end
+        end
+    end
+    if kind === :shl
+        _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
+    elseif kind === :ashr
+        _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
+                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
+    else
+        _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
+                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
+    end
+    return is_32bit ? I32 : I64
+end
+
+"""
+    _compile_call_bswap!(fb, ctx, is_128bit, is_32bit, idx) -> WasmValType
+
+Extracted handler for `bswap_int`. WebAssembly has no native bswap —
+implemented with bit manipulation. 128-bit is a loud reject (the i64
+reversal sequence would run on a struct value → invalid wasm); the reject
+already early-returns from `compile_call!` in the original arm (mirrored
+here via the nullable-return funnel instead — MISC_OPS's caller returns
+immediately on any non-`nothing` result either way, so the observable
+control flow is identical).
+"""
+function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
+                              is_128bit::Bool, is_32bit::Bool, idx::Int)::WasmValType
+    if is_128bit   # quarantine: loud reject — not in INT128_OPS, no dart lowering exists
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+            "128-bit byte-swap (Int128/UInt128)"; idx=idx)
+        return is_32bit ? I32 : I64   # nominal — dead past `unreachable`
+    end
+    # Allocate a scratch local to hold the input value (need it 4 times)
+    scratch_local = length(ctx.locals) + ctx.n_params
+    push!(ctx.locals, is_32bit ? I32 : I64)
+    local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the input
+    # Store input value
+    local_set!(_bswb, scratch_local)
+    if is_32bit
+        # i32 bswap: reverse 4 bytes
+        # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
+        # Part 1: (x >> 24) & 0xFF — top byte to bottom
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(24))
+        num!(_bswb, Opcode.I32_SHR_U)
+        i32_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I32_AND)
+        # Part 2: (x >> 8) & 0xFF00
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHR_U)
+        i32_const!(_bswb, Int64(0xFF00))
+        num!(_bswb, Opcode.I32_AND)
+        num!(_bswb, Opcode.I32_OR)
+        # Part 3: (x << 8) & 0xFF0000
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHL)
+        i32_const!(_bswb, Int64(0xFF0000))
+        num!(_bswb, Opcode.I32_AND)
+        num!(_bswb, Opcode.I32_OR)
+        # Part 4: x << 24 — bottom byte to top
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(24))
+        num!(_bswb, Opcode.I32_SHL)
+        num!(_bswb, Opcode.I32_OR)
+    else
+        # i64 bswap: reverse 8 bytes
+        # Same pattern but with 8 byte positions
+        local_get!(_bswb, scratch_local)
+        i64_const!(_bswb, Int64(56))
+        num!(_bswb, Opcode.I64_SHR_U)
+        i64_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I64_AND)
+        for (shift, mask) in [(40, 0xFF00), (24, 0xFF0000), (8, 0xFF000000),
+                               (-8, 0xFF00000000), (-24, 0xFF0000000000),
+                               (-40, 0xFF000000000000)]
+            local_get!(_bswb, scratch_local)
+            if shift > 0
+                i64_const!(_bswb, Int64(shift))
+                num!(_bswb, Opcode.I64_SHR_U)
+            else
+                i64_const!(_bswb, Int64(-shift))
+                num!(_bswb, Opcode.I64_SHL)
+            end
+            i64_const!(_bswb, Int64(mask))
+            num!(_bswb, Opcode.I64_AND)
+            num!(_bswb, Opcode.I64_OR)
+        end
+        # Last part: x << 56 (no mask needed)
+        local_get!(_bswb, scratch_local)
+        i64_const!(_bswb, Int64(56))
+        num!(_bswb, Opcode.I64_SHL)
+        num!(_bswb, Opcode.I64_OR)
+    end
+    append_builder!(fb, _bswb)
+    return is_32bit ? I32 : I64
+end
+
+"""
+    _compile_call_checked_mul(op, args, fb, ctx, is_128bit, is_32bit)
+
+Extracted handler for checked_smul_int / checked_umul_int. `op` is the
+ALREADY-DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via
+`is_func`. Modifies `bytes` in-place.
+"""
+function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+    if is_128bit
+        # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
+        # (natively returns a value, so a silent trap would diverge).
+        empty!(bytes)
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+                               "128-bit checked multiply (Int128/UInt128)")
+    else
+        is_signed = op === :checked_smul_int
+        local_type = is_32bit ? I32 : I64
+        local_a = allocate_local!(ctx, local_type)
+        local_b = allocate_local!(ctx, local_type)
+        local_result = allocate_local!(ctx, local_type)
+        bld = _sub_builder(fb, ctx, "_compile_call_checked_mul", 2)   # the operands
 
         # Save b, save a, compute a*b, save result
         local_set!(bld, local_b)
@@ -737,19 +1105,21 @@ function _compile_call_checked_mul(func, args, fb::InstrBuilder, ctx::AbstractCo
             register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         end
         tuple_info = ctx.type_registry.structs[tuple_type]
-        struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fb, bld)
     end
     return nothing
 end
 
 """
-    _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type) -> WasmValType
 
-Extracted handler for flipsign_int.
-Modifies `bytes` in-place.
+Extracted handler for flipsign_int. Modifies `bytes` in-place; returns the
+pushed result's WasmValType (the structref for is_128bit — `struct_rt` was
+already computed here for the locals below, so the caller reuses it instead
+of a second `get_concrete_wasm_type` call; a plain I32/I64 otherwise).
 """
-function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
+function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::WasmValType
     # flipsign_int(x, y) returns -x if y < 0, otherwise x
     # Formula: (x xor signbit) - signbit where signbit = y >> 63 (all 1s if negative)
     # We need both x and y on stack, but they've been pushed as: [x, y]
@@ -761,16 +1131,16 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         # For 128-bit, check if y's hi word is negative
         # flipsign_int(x, y) = y < 0 ? -x : x
         type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
-        struct_rt = julia_to_wasm_type_concrete(arg_type, ctx)
+        struct_rt = get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true)
 
         # Pop y struct to local
         y_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, y_struct_local)
 
         # Pop x struct to local
         x_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, x_struct_local)
 
         # Get y's hi part to check sign
@@ -792,12 +1162,12 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
 
         # Store negated x
         neg_x_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, neg_x_local)
 
         # Allocate result local
         result_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, julia_to_wasm_type_concrete(arg_type, ctx))
+        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
 
         # if is_neg { result = neg_x } else { result = x }
         local_get!(bld, is_neg_local)
@@ -848,7 +1218,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         num!(bld, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
     end
     append_builder!(fb, bld)
-    return nothing
+    return is_128bit ? struct_rt : (is_32bit ? I32 : I64)
 end
 
 _egal_num_eqop(w::WasmValType)::UInt8 =
@@ -961,7 +1331,7 @@ Modifies `bytes` in-place.
 """
 function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
     bld = _ctx_builder(ctx, "_compile_call_egaleq")
-    # march17: the two operands are already on fb — declare them (the width by arm)
+    # The two operands are already on fb — declare them (the width by arm)
     if !is_128bit
         local _sw = arg_type === Float64 ? F64 : arg_type === Float32 ? F32 :
                     isempty(fb.v.stack) ? AnyRef : fb.v.stack[end]
@@ -1088,7 +1458,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
         # Also check for local.get of ref-typed local
         local arg1_wasm_is_ref = arg1_is_ref
         local arg2_wasm_is_ref = arg2_is_ref
-        # PURE-9064: Detect anyref/externref from actual wasm type, not just arg_type === Any.
+        # Detect anyref/externref from actual wasm type, not just arg_type === Any.
         # Abstract types like Type, DataType etc. also map to AnyRef.
         local _arg1_wasm = julia_to_wasm_type(arg_type)
         local _arg2_wasm = julia_to_wasm_type(arg2_type)
@@ -1113,7 +1483,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
             # Check arg1's Wasm type when:
             # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
             # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
-            # - arg_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            # - arg_type === Any (Any maps to externref, must check actual local type)
             if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
@@ -1121,7 +1491,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                 local _a1_wt = static_wasm_type(args[1], ctx)
                 arg1_wasm_is_ref = is_nothing_value(args[1], ctx) || _wt_is_ref(_a1_wt)
                 arg1_is_externref = (_a1_wt === ExternRef)
-                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                # Override local type check if Julia type maps to anyref/externref
                 if arg1_is_anyref || arg1_is_externref
                     arg1_wasm_is_ref = true
                 end
@@ -1129,21 +1499,21 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
             # Check arg2's Wasm type when:
             # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
             # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
-            # - arg2_type === Any (PURE-046: Any maps to externref, must check actual local type)
+            # - arg2_type === Any (Any maps to externref, must check actual local type)
             if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
                 # dart2wasm carries the wasm type with the value: derive ref-ness and
                 # externref-ness from the inferred type instead of scanning the bytes.
                 local _a2_wt = static_wasm_type(args[2], ctx)
                 arg2_wasm_is_ref = is_nothing_value(args[2], ctx) || _wt_is_ref(_a2_wt)
                 arg2_is_externref = (_a2_wt === ExternRef)
-                # PURE-046/9064: Override local type check if Julia type maps to anyref/externref
+                # Override local type check if Julia type maps to anyref/externref
                 if arg2_is_anyref || arg2_is_externref
                     arg2_wasm_is_ref = true
                 end
             end
         end
         if arg1_wasm_is_ref && arg2_wasm_is_ref
-            # PURE-324: For immutable structs, === means VALUE equality (field-by-field),
+            # For immutable structs, === means VALUE equality (field-by-field),
             # not identity. WasmGC ref.eq is identity comparison, so we must emit
             # struct.get for each field and compare with the appropriate opcode.
             local _do_struct_egal = false
@@ -1184,7 +1554,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                     elseif egal_wt === F64
                         num!(bld, Opcode.F64_EQ)
                     elseif egal_wt === ExternRef
-                        # PURE-6024: externref fields need conversion to eqref for ref.eq
+                        # externref fields need conversion to eqref for ref.eq
                         local egal_tmp = allocate_local!(ctx, EqRef)
                         any_convert_extern!(bld)
                         ref_cast!(bld, EqRef, true)
@@ -1207,7 +1577,7 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                     i32_const!(bld, 1)
                 end
             elseif arg1_is_anyref && arg2_is_anyref
-                # PURE-9064: Both anyref — cast to eqref before ref.eq
+                # Both anyref — cast to eqref before ref.eq
                 # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
                 local tmp_eq_a = allocate_local!(ctx, EqRef)
                 ref_cast!(bld, EqRef, true)
@@ -1242,14 +1612,14 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
                 ref_cast!(bld, EqRef, true)
                 num!(bld, Opcode.REF_EQ)
             elseif arg1_is_anyref
-                # PURE-9064: arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
+                # arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
                 local tmp_eq_a2 = allocate_local!(ctx, EqRef)
                 local_set!(bld, tmp_eq_a2)
                 ref_cast!(bld, EqRef, true)
                 local_get!(bld, tmp_eq_a2)
                 num!(bld, Opcode.REF_EQ)
             elseif arg2_is_anyref
-                # PURE-9064: arg2 anyref (top of stack): cast to eqref
+                # arg2 anyref (top of stack): cast to eqref
                 ref_cast!(bld, EqRef, true)
                 num!(bld, Opcode.REF_EQ)
             else
@@ -1368,111 +1738,6 @@ function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationCo
 end
 
 """
-    _compile_call_fpext(args, fb, ctx)
-
-Extracted handler for fpext (float precision extension).
-Modifies `bytes` in-place.
-"""
-function _compile_call_fpext(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
-    # fpext(TargetType, value) - extend to Float64
-    source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float32
-    if source_type === Float16
-        # Float16 (i32 on stack) → Float64
-        # Convert Float16 bit pattern to Float32 bit pattern using integer ops,
-        # then reinterpret as f32 and promote to f64.
-        # Float16: 1 sign, 5 exp, 10 mantissa
-        # Float32: 1 sign, 8 exp, 23 mantissa
-        # For normalized: f32_bits = (sign<<31) | ((exp+112)<<23) | (mant<<13)
-        # For zero: f32_bits = sign<<31
-        # For inf/nan: f32_bits = (sign<<31) | (0xff<<23) | (mant<<13)
-        #
-        # We use a branchless approach for normalized values with special-case
-        # handling for zero and inf/nan via select.
-        #
-        # Stack: [i32 = Float16 bits]
-        # Strategy: extract sign, exp, mant; build f32 bits; reinterpret; promote
-
-        bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
-        # Save the Float16 bits to a temp local
-        local_idx = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        h_local = local_idx
-        local_tee!(bld, h_local)
-
-        # Extract sign: (h >> 15) << 31
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(15))
-        num!(bld, Opcode.I32_SHR_U)
-        i32_const!(bld, Int64(31))
-        num!(bld, Opcode.I32_SHL)
-        # Stack: [h, sign_bit]
-
-        # Extract exp: (h >> 10) & 0x1f
-        local_idx2 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        sign_local = local_idx2
-        local_set!(bld, sign_local)
-
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(10))
-        num!(bld, Opcode.I32_SHR_U)
-        i32_const!(bld, Int64(0x1f))
-        num!(bld, Opcode.I32_AND)
-
-        local_idx3 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        exp_local = local_idx3
-        local_set!(bld, exp_local)
-
-        # Extract mant: h & 0x3ff
-        local_get!(bld, h_local)
-        i32_const!(bld, Int64(0x3ff))
-        num!(bld, Opcode.I32_AND)
-
-        local_idx4 = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
-        mant_local = local_idx4
-        local_set!(bld, mant_local)
-
-        # Build f32 bits for normalized case:
-        # sign_bit | ((exp + 112) << 23) | (mant << 13)
-        local_get!(bld, sign_local)
-
-        local_get!(bld, exp_local)
-        i32_const!(bld, Int64(112))
-        num!(bld, Opcode.I32_ADD)
-        i32_const!(bld, Int64(23))
-        num!(bld, Opcode.I32_SHL)
-        num!(bld, Opcode.I32_OR)
-
-        local_get!(bld, mant_local)
-        i32_const!(bld, Int64(13))
-        num!(bld, Opcode.I32_SHL)
-        num!(bld, Opcode.I32_OR)
-        # Stack: [normalized_f32_bits]
-
-        # Handle zero case: if exp==0 && mant==0, use sign_bit only
-        # Handle inf/nan: if exp==0x1f, use sign|(0xff<<23)|(mant<<13)
-        # For simplicity in codegen context (timing values are always small
-        # positive normalized floats), the normalized formula works.
-        # Zero maps to exp+112=112 which is a tiny denormal in f32 ≈ 0.
-        # This is acceptable for validation and practical correctness.
-
-        # Reinterpret i32 → f32, then promote f32 → f64
-        num!(bld, Opcode.F32_REINTERPRET_I32)  # 0xBE
-        num!(bld, 0xBB)  # f64.promote_f32
-        append_builder!(fb, bld)
-    else
-        # Float32 → Float64 (standard case)
-        let bld = _sub_builder(fb, ctx, "_compile_call_fpext", 1)
-            num!(bld, 0xBB)  # f64.promote_f32
-            append_builder!(fb, bld)
-        end
-    end
-    return nothing
-end
-
-"""
     _compile_call_isa(args, fb, ctx)
 
 Extracted handler for isa() type checking.
@@ -1540,7 +1805,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # Value is already on stack — check if it's actually a ref type
         local isa2_val_wasm = nothing
         if value_arg isa Core.SSAValue
-            # parity(M10): the load (_narrow_generic_local!) delivers the SSA's REFINED
+            # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the load (_narrow_generic_local!) delivers the SSA's REFINED
             # type — when the join proved a numeric, the value on stack IS that numeric
             # regardless of the (anyref) local. The refined type drives the fold.
             local _isa2_refined = get(ctx.ssa_types, value_arg.id, Any)
@@ -1557,13 +1822,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
             end
         elseif value_arg isa Core.Argument
-            # PURE-325: Also handle function parameters (not just SSA values)
+            # Also handle function parameters (not just SSA values)
             # Core.Argument(1) is the function object for non-closures, so
             # actual args start at Argument(2) → arg_types[1].
             local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
                 local _arg_jtype = ctx.arg_types[arg_idx_isa]
-                # PURE-9030: Check if this param was promoted to anyref for Union dispatch
+                # Check if this param was promoted to anyref for Union dispatch
                 if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
                     isa2_val_wasm = AnyRef
                 else
@@ -1576,8 +1841,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             drop!(bld)
             i32_const!(bld, 1)
         elseif isa2_val_wasm === ExternRef
-            # PURE-324: Value is externref (Any-typed field). Need proper type check.
-            # PURE-9032: For Exception subtypes with DFS typeIds, use typeId comparison
+            # Value is externref (Any-typed field). Need proper type check.
+            # For Exception subtypes with DFS typeIds, use typeId comparison
             # instead of ref.test (which can't distinguish structurally identical types
             # due to Wasm type canonicalization).
             local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
@@ -1591,7 +1856,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
                 if target_wasm isa ConcreteRef
                     any_convert_extern!(bld)
-                    # PURE-325: Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
+                    # Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
                     ref_test!(bld, Int64(target_wasm.type_idx), false)
                 elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
                     local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
@@ -1607,7 +1872,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 end
             end
         elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
-            # PURE-9030: anyref/structref value — use ref.test to check concrete box type.
+            # anyref/structref value — use ref.test to check concrete box type.
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
             local _ck_box_wasm = julia_to_wasm_type(check_type)
@@ -1622,14 +1887,14 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 emit_isa_classid!(bld, ctx, _box_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
-                # E2E-001: When multiple Julia types share the same WasmGC type index
+                # When multiple Julia types share the same WasmGC type index
                 # (due to identical field layouts), ref.test can't distinguish them.
                 # Use typeId field comparison: save value → ref.test layout → if match,
                 # reload → ref.cast → struct.get typeId → compare with target's ID.
                 if is_shared_wasm_type(ctx.type_registry, target_wasm_isa.type_idx, check_type)
                     local _tid = ensure_type_id!(ctx.type_registry, check_type)
                     # Also ensure all types sharing this index get IDs
-                    for (_ot, _oi) in ctx.type_registry.structs
+                    for (_ot, _oi) in registered_structs(ctx.type_registry)
                         if _oi.wasm_type_idx == target_wasm_isa.type_idx && _ot !== check_type
                             ensure_type_id!(ctx.type_registry, _ot)
                         end
@@ -1654,7 +1919,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
             elseif check_type === String || check_type === Symbol || check_type <: AbstractString
-                # parity(M9): strings are CLASSED — isa tests the string struct
+                # parity(class_info.dart:18 FieldIndex): strings are CLASSED — isa tests the string struct
                 local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                 ref_test!(bld, Int64(_str_idx), false)
             else
@@ -1697,7 +1962,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
             # Boxed externref — test each numeric box type that is a subtype of check_type
             local _boxes = UInt32[]
-            for (wt, box_idx) in ctx.type_registry.numeric_boxes
+            for (wt, box_idx) in ordered_pairs(ctx.type_registry.numeric_boxes, string)
                 local _jt2 = get(_wasm_julia, wt, nothing)
                 _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
             end
@@ -1714,13 +1979,15 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
         elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
                ctx.type_registry.base_struct_idx !== nothing
-            # PURE-9027: DFS range check for anyref/structref polymorphic values
-            # Value is on stack (anyref/structref) — extract typeId, check low <= id <= high
-            local _range = get_type_range(ctx.type_registry, check_type)
-            if _range !== nothing
-                local _low, _high = _range
+            # classId membership for anyref/structref polymorphic values: the exact
+            # closed-world set of concrete classes <: check_type (Julia's subtyping is
+            # the ground truth; a DFS range keyed by the base could not answer
+            # `AbstractVector`, and a parametric abstract's extras were never
+            # recorded), compressed to dart's range window when contiguous.
+            local _ids = concrete_class_ids(ctx.type_registry, check_type)
+            if !isempty(_ids)
                 local _base_idx = ctx.type_registry.base_struct_idx
-                # PURE-9064: Guard against JlType hierarchy refs.
+                # Guard against JlType hierarchy refs.
                 # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
                 # hierarchy structs ($JlDataType, $JlUnion, etc.) since they don't
                 # inherit from $JlBase. Use ref.test first; if not $JlBase, return false.
@@ -1734,14 +2001,10 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 else_!(bld)
                 local_get!(bld, _isa_guard_local)
                 emit_typeof!(bld, _base_idx)
-                # dart's 3-instruction unsigned window via THE single range discriminator
-                # (was tee + ge_s/le_s/and with a temp local).
-                emit_classid_ranges!(bld, ctx, _low, _high,
-                    ctx.type_registry.type_extra_ids === nothing ? Int32[] :
-                    get(ctx.type_registry.type_extra_ids, check_type isa DataType && !isempty(check_type.parameters) ? check_type.name.wrapper : check_type, Int32[]))
+                emit_classid_membership!(bld, ctx, _ids)
                 end_block!(bld)
             else
-                # No DFS range for this abstract type — return false
+                # no concrete class of the closed world is a subtype — constant false
                 drop!(bld)
                 i32_const!(bld, 0)
             end
@@ -1755,18 +2018,6 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         i32_const!(bld, 0)
     end
     append_builder!(fb, bld)
-    return nothing
-end
-
-"""
-    _compile_call_symbol(args, fb, ctx)
-
-Extracted handler for Symbol(x) conversion.
-Modifies `bytes` in-place.
-"""
-function _compile_call_symbol(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
-    # Compile the argument — it's already a string array in WasmGC
-    append_builder!(fb, _compile_value_b(args[1], ctx))
     return nothing
 end
 
@@ -1842,7 +2093,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
             aw = AnyRef
         else
-            aw = julia_to_wasm_type_concrete(call_arg_types[j], ctx)
+            aw = get_concrete_wasm_type(call_arg_types[j], ctx.mod, ctx.type_registry; for_local=true)
             emit_value!(bld, arg, ctx, aw;
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
         end
@@ -1899,7 +2150,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
 end
 
 """
-Compile a function call expression — dart visitor shape (march4): emits INTO the caller's builder.
+Compile a function call expression — dart visitor shape; emits INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
@@ -1973,65 +2224,28 @@ function _emit_typeerror_throw!(b::InstrBuilder, got, target::Type, idx::Int,
     return b
 end
 
+# formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
 function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
-    set_context!(fb, first(string(expr), 80))   # march17: errors name the call
+    set_context!(fb, first(string(expr), 80))   # errors name the call
     # A call may consume values stack-threaded by the enclosing statement fragment.
     # Preserve that tracked input across this second fragment boundary just as
     # compile_statement! preserves the parent builder's input. Without it, Julia
     # 1.13 escaping-closure arithmetic emits valid operand bytes but the validator
     # sees an empty fragment stack and reports a false underflow.
     isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
-    _boxed_operand_unboxed = false   # march13: FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
+    _boxed_operand_unboxed = false   # FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
     func = expr.args[1]
     args = expr.args[2:end]
 
-    # `Core.invoke_in_world(world, f, args...)` selects a method in Julia's
-    # mutable world-age model. A WT module is already one immutable collected
-    # world, so the exact lowering is the ordinary closed-world call to `f`;
-    # the captured world token has no runtime state to mutate.
-    if (func === Core.invoke_in_world ||
-        (is_func(func, :invoke_in_world) && func isa GlobalRef && func.mod === Core)) &&
-       length(args) >= 2
-        # The intrinsic's Julia SSA result is `Any`, but that is a consumer-side
-        # widening, not the callee's return contract. Do not use it to reject the
-        # concrete collected target; statement storage will box/widen afterward.
-        had_result = haskey(ctx.ssa_types, idx)
-        old_result = get(ctx.ssa_types, idx, Any)
-        delete!(ctx.ssa_types, idx)
-        try
-            return compile_call!(b, Expr(:call, args[2], args[3:end]...), idx, ctx)
-        finally
-            had_result && (ctx.ssa_types[idx] = old_result)
-        end
-    end
-
-    if is_func(func, :isdefinedglobal) && length(args) == 2
-        module_owner = _trace_field_owner(args[1], :module, ctx)
-        name_owner = _trace_field_owner(args[2], :singletonname, ctx)
-        if module_owner !== nothing && isequal(module_owner, name_owner)
-            tn_idx = ctx.type_registry.jl_typename_idx
-            tn_idx === nothing && error("JlTypeName layout is unavailable")
-            ib = _ctx_builder(ctx, "compile_call.isdefinedglobal_typename")
-            emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-            struct_get!(ib, tn_idx, UInt32(6), I32)
-            append_builder!(b, ib)
-            return b
-        end
-    end
-
-
-    if (is_func(func, :isvisible) || is_func(func, :_closed_world_isvisible)) &&
-       length(args) == 3
-        symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
-        parent_owner = _trace_field_owner(args[2], :module, ctx)
-        if symbol_owner !== nothing && isequal(symbol_owner, parent_owner)
-            vb = _ctx_builder(ctx, "compile_call.closed_world_isvisible")
-            emit_closed_world_isvisible!(vb, args[1], args[2], args[3], symbol_owner, ctx)
-            append_builder!(b, vb)
-            return b
-        end
+    # THE identity-keyed Core/Base builtin funnel (builtins.jl) — covers
+    # invoke_in_world/isdefinedglobal/isvisible/check_world_bounded here,
+    # BEFORE the SSAValue→GlobalRef callee resolution just below, exactly
+    # matching their historical position (an SSA-indirect call to one of
+    # these has never been recognized here and still isn't).
+    let _bl = _try_builtin_lowering!(b, fb, ctx, expr, idx, args, func)
+        _bl === nothing || return _bl
     end
 
     if is_func(func, :getglobal) && length(args) >= 2
@@ -2048,20 +2262,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # Base normally answers this by walking Julia's mutable BindingPartition
-    # history. A WT module has one immutable collection world, so TypeName
-    # constants carry the already-resolved answer. This is the single runtime
-    # route; no Binding object or partial partition chain exists in Wasm.
-    if (is_func(func, :check_world_bounded) ||
-        is_func(func, :_closed_world_type_bounds)) && length(args) == 1 &&
-       get_ssa_type(ctx, args[1]) === Core.TypeName
-        wb = _ctx_builder(ctx, "compile_call.check_world_bounded")
-        emit_closed_world_type_bounds!(wb, args[1], ctx)
-        append_builder!(b, wb)
-        return b
-    end
-
-    # PURE-6024: Resolve indirect calls through SSAValue callees.
+    # Resolve indirect calls through SSAValue callees.
     # Unoptimized IR (may_optimize=false) produces patterns like:
     #   %1 = Base.add_int   (GlobalRef, type=Core.Const(Core.Intrinsics.add_int))
     #   %2 = (%1)(x, y)     (call with SSAValue(1) as callee)
@@ -2084,23 +2285,102 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # P3 gap 450889a9cb7e: `getglobal(mod, :name)` builtin (how typed IR reads
-    # const module globals like Base.Ryu.DIGIT_TABLE16) had NO handler and fell
-    # through to the unknown-call stub → every Ryu string(::Float64) trapped.
-    # With constant module + symbol args, resolve at compile time and compile
-    # the VALUE — compile_value materializes vector/struct/scalar constants.
-    if is_func(func, :getglobal) && length(args) >= 2
-        _gg_mod = args[1] isa QuoteNode ? args[1].value :
-                  args[1] isa GlobalRef ? (isdefined(args[1].mod, args[1].name) ?
-                                           getfield(args[1].mod, args[1].name) : args[1]) :
-                  args[1]
-        _gg_name = args[2] isa QuoteNode ? args[2].value : args[2]
-        if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
-           isconst(_gg_mod, _gg_name)
-            _gg_val = getglobal(_gg_mod, _gg_name)
-            emit_value!(fb, _gg_val, ctx, static_wasm_type(_gg_val, ctx))
-            return append_builder!(b, fb)
+    # THE identity-keyed Core/Base builtin funnel (builtins.jl) again, now on
+    # the SSAValue-resolved callee — covers every remaining self-contained
+    # arm that compiles its own operands and independently returns (dart's
+    # nullable-return entry-funnel shape). `getfield`/`getproperty` and
+    # `setfield!`/`setproperty!` stay OUT of the registry: each has more than
+    # one call-site fragment below interleaved with non-`is_func` raw identity
+    # checks (closure self-capture skip, `:signal` skip, the Core.Box capture
+    # write) that must keep their CURRENT relative order against those raw
+    # checks; folding them into one dict entry dispatched from a single early
+    # point would silently reorder them. `ifelse` and `typeassert` also stay
+    # OUT: their diagnostic message / helper-call text is pinned VERBATIM in
+    # THIS file by ratchet locks L38_no_known_value_substitutions and
+    # L57_exact_typeassert_exception, which read only `calls.jl`'s own source.
+    let _bl = _try_builtin_lowering!(b, fb, ctx, expr, idx, args, func)
+        _bl === nothing || return _bl
+    end
+
+    # Special case for ifelse - needs different argument order
+    if is_func(func, :ifelse) && length(args) == 3
+        # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
+        # Julia ifelse(cond, true_val, false_val)
+        # Compile each value separately to check for empty results. Loop C: capture the
+        # pushed type (emission byproduct) for the true/false EMIT pushes (was a re-guess).
+        # The cond keeps infer_value_wasm_type — that's a pure pre-emit type QUERY (drives the
+        # cond_is_ref SELECT-vs-fallback decision below), legitimate dart-style type knowledge,
+        # NOT the redundant re-guess-at-emit the typed channel deletes.
+        local _tv_b = _compile_value_b(args[2], ctx)   # true_val
+        local _fv_b = _compile_value_b(args[3], ctx)   # false_val
+        local _cv_b = _compile_value_b(args[1], ctx)   # cond
+
+        # the condition must push an i32, not a ref.
+        # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
+        # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
+        # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
+        # constant containing those bytes) was misclassified as a ref and the SELECT
+        # was silently dropped, leaving only the true-branch value. In a gcd loop
+        # phi-update this froze the loop-carried value → infinite loop (gap
+        # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
+        cond_wasm_type = static_wasm_type(args[1], ctx)
+        cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
+                      cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
+                      cond_wasm_type === AnyRef || cond_wasm_type === EqRef
+
+        # A non-i32 condition is invalid Julia lowering for `ifelse`; never choose
+        # one arm and fabricate a result.
+        if cond_is_ref
+            record_unsupported!(ctx, :value_stub,
+                "ifelse condition did not lower to i32"; idx=idx, detail=expr,
+                soundness_fatal=true)
         end
+
+        local _ieb = _ctx_builder(ctx, "compile_call")
+        # Empty value emission is a compiler error, never permission to select an
+        # arbitrary arm or synthesize a zero/null value.
+        if isempty(_tv_b.instrs) || isempty(_fv_b.instrs) || isempty(_cv_b.instrs)
+            record_unsupported!(ctx, :value_stub,
+                "ifelse operand emitted no runtime value"; idx=idx, detail=expr,
+                soundness_fatal=true)
+        end
+
+        # All three values are non-empty, emit proper select — typed merges
+        append_builder!(_ieb, _tv_b)
+        append_builder!(_ieb, _fv_b)
+        append_builder!(_ieb, _cv_b)
+
+        # Determine the type of the values for select
+        val_type = infer_value_type(args[2], ctx)
+
+        # For reference types (like Int128/UInt128 structs), need typed select.
+        # The result-type operand after `0x63` (ref null heaptype) is a
+        # SIGNED LEB128 — heaptype is either a negative abstract-type code
+        # (anyref = -18, etc.) or a non-negative type index, and WASM uses
+        # signed encoding for both so a parser can tell them apart. Using
+        # `encode_leb128_unsigned` for a type index whose low 7 bits have
+        # bit 6 set (e.g. 84) emits a single byte `0x54` that the browser
+        # then interprets as the signed value -44: "Unknown heap type -44".
+        if val_type === Int128 || val_type === UInt128
+            # Use select_t with the struct type
+            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, val_type)
+            # Encode (ref null type_idx) for nullable struct ref
+            select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(type_idx))...])
+        elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
+            # Other reference types need typed select too
+            wasm_type = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry; for_local=true)
+            if wasm_type isa ConcreteRef
+                select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(wasm_type.type_idx))...])
+            else
+                # Fall back to untyped select for value types
+                select!(_ieb)
+            end
+        else
+            # Value types (i32, i64, f32, f64) use untyped select
+            select!(_ieb)
+        end
+        append_builder!(fb, _ieb)
+        return append_builder!(b, fb)
     end
 
     # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
@@ -2142,7 +2422,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_idx = ctx.signal_ssa_setters[idx]
         value_arg = args[3]
         local _setb = _ctx_builder(ctx, "compile_call")
-        # march14 (wrap tail): the signal cell's declared type IS the expected
+        # The signal cell's declared type IS the expected
         emit_value!(_setb, value_arg, ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)
         global_set!(_setb, global_idx)
 
@@ -2217,7 +2497,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # march16 slice D: a DYNAMIC function-value call — the callee is a runtime value
+    # A DYNAMIC function-value call — the callee is a runtime value
     # whose static type is erased or a union containing only Function subtypes. Ride
     # the closure vtable: the OBJECT
     # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
@@ -2281,185 +2561,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # Special case for ifelse - needs different argument order
-    if is_func(func, :ifelse) && length(args) == 3
-        # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
-        # Julia ifelse(cond, true_val, false_val)
-        # Compile each value separately to check for empty results. Loop C: capture the
-        # pushed type (emission byproduct) for the true/false EMIT pushes (was a re-guess).
-        # The cond keeps infer_value_wasm_type — that's a pure pre-emit type QUERY (drives the
-        # cond_is_ref SELECT-vs-fallback decision below), legitimate dart-style type knowledge,
-        # NOT the redundant re-guess-at-emit the typed channel deletes.
-        local _tv_b = _compile_value_b(args[2], ctx)   # true_val
-        local _fv_b = _compile_value_b(args[3], ctx)   # false_val
-        local _cv_b = _compile_value_b(args[1], ctx)   # cond
-
-        # PURE-036y / P2-batch10: the condition must push an i32, not a ref.
-        # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
-        # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
-        # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
-        # constant containing those bytes) was misclassified as a ref and the SELECT
-        # was silently dropped, leaving only the true-branch value. In a gcd loop
-        # phi-update this froze the loop-carried value → infinite loop (gap
-        # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
-        cond_wasm_type = static_wasm_type(args[1], ctx)
-        cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
-                      cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
-                      cond_wasm_type === AnyRef || cond_wasm_type === EqRef
-
-        # A non-i32 condition is invalid Julia lowering for `ifelse`; never choose
-        # one arm and fabricate a result.
-        if cond_is_ref
-            record_unsupported!(ctx, :value_stub,
-                "ifelse condition did not lower to i32"; idx=idx, detail=expr,
-                soundness_fatal=true)
-        end
-
-        local _ieb = _ctx_builder(ctx, "compile_call")
-        # Empty value emission is a compiler error, never permission to select an
-        # arbitrary arm or synthesize a zero/null value.
-        if isempty(_tv_b.instrs) || isempty(_fv_b.instrs) || isempty(_cv_b.instrs)
-            record_unsupported!(ctx, :value_stub,
-                "ifelse operand emitted no runtime value"; idx=idx, detail=expr,
-                soundness_fatal=true)
-        end
-
-        # All three values are non-empty, emit proper select — typed merges
-        append_builder!(_ieb, _tv_b)
-        append_builder!(_ieb, _fv_b)
-        append_builder!(_ieb, _cv_b)
-
-        # Determine the type of the values for select
-        val_type = infer_value_type(args[2], ctx)
-
-        # For reference types (like Int128/UInt128 structs), need typed select.
-        # The result-type operand after `0x63` (ref null heaptype) is a
-        # SIGNED LEB128 — heaptype is either a negative abstract-type code
-        # (anyref = -18, etc.) or a non-negative type index, and WASM uses
-        # signed encoding for both so a parser can tell them apart. Using
-        # `encode_leb128_unsigned` for a type index whose low 7 bits have
-        # bit 6 set (e.g. 84) emits a single byte `0x54` that the browser
-        # then interprets as the signed value -44: "Unknown heap type -44".
-        if val_type === Int128 || val_type === UInt128
-            # Use select_t with the struct type
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, val_type)
-            # Encode (ref null type_idx) for nullable struct ref
-            select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(type_idx))...])
-        elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
-            # Other reference types need typed select too
-            wasm_type = julia_to_wasm_type_concrete(val_type, ctx)
-            if wasm_type isa ConcreteRef
-                select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(wasm_type.type_idx))...])
-            else
-                # Fall back to untyped select for value types
-                select!(_ieb)
-            end
-        else
-            # Value types (i32, i64, f32, f64) use untyped select
-            select!(_ieb)
-        end
-        append_builder!(fb, _ieb)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for Core.sizeof - returns byte size
-    # For strings/arrays, this is the array length
-    if is_func(func, :sizeof) && length(args) == 1
-        arg = args[1]
-        arg_type = infer_value_type(arg, ctx)
-
-        if arg_type === String || arg_type <: AbstractVector || arg_type === Any
-            # For strings and arrays, sizeof is the array length
-            local _szb = _ctx_builder(ctx, "compile_call")
-            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
-            emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-            array_len!(_szb)
-            # array.len returns i32, extend to i64 for Julia's Int
-            num!(_szb, Opcode.I64_EXTEND_I32_S)
-            append_builder!(fb, _szb)
-            return append_builder!(b, fb)
-        end
-        # For other types, fall through to error
-    end
-
-    # PURE-9032: ncodeunits(s) → array.len for string byte arrays
-    # Handles AbstractString fields from exception structs (e.g., e.msg)
-    if is_func(func, :ncodeunits) && length(args) == 1
-        arg = args[1]
-        arg_type = infer_value_type(arg, ctx)
-        if arg_type === String || arg_type <: AbstractString
-            local _ncb = _ctx_builder(ctx, "compile_call")
-            # march12 (wrap tail): ONE 4-arg wrap replaces the sniff+cast ladder
-            emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-            array_len!(_ncb)
-            # Return as Int (i64) to match Julia's ncodeunits return type
-            num!(_ncb, Opcode.I64_EXTEND_I32_S)
-            append_builder!(fb, _ncb)
-            return append_builder!(b, fb)
-        end
-    end
-
-    # Special case for length - returns character count for strings, element count for arrays
-    if is_func(func, :length) && length(args) == 1
-        arg = args[1]
-        arg_type = infer_value_type(arg, ctx)
-
-        if arg_type === String
-            # For strings, length is the array length (each char is one element)
-            local _lnb = _ctx_builder(ctx, "compile_call")
-            # march12 (wrap tail): ONE 4-arg wrap — the tracked type replaces the
-            # ssa-local externref sniff; the funnel's string arm lands the DATA array
-            emit_value!(_lnb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-            array_len!(_lnb)
-            # array.len returns i32, extend to i64 for Julia's Int
-            num!(_lnb, Opcode.I64_EXTEND_I32_S)
-            append_builder!(fb, _lnb)
-            return append_builder!(b, fb)
-        elseif arg_type <: Array
-            # For Vector/Array, length is v.size[1] (logical size from struct field 2)
-            # Vector is now a struct with (typeId, ref, size) where size is Tuple{Int64}
-            # NOTE: Only matches Array{T,N} (Vector, Matrix), NOT other AbstractVector
-            # subtypes like StepRange, SubArray, ReinterpretArray — those fall through
-            # to cross-function call handling so their specific length() methods compile.
-            if haskey(ctx.type_registry.structs, arg_type)
-                info = ctx.type_registry.structs[arg_type]
-                local _lnb2 = _ctx_builder(ctx, "compile_call")
-
-                # Get the vector struct
-                emit_value!(_lnb2, arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-
-                # Get field 2 (size tuple; field 0 = typeId, field 1 = ref)
-                struct_get!(_lnb2, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
-
-                # Get field 1 of the size tuple (the Int64 value; field 0 = typeId)
-                # Size tuple is Tuple{Int64}
-                size_tuple_type = Tuple{Int64}
-                if haskey(ctx.type_registry.structs, size_tuple_type)
-                    size_info = ctx.type_registry.structs[size_tuple_type]
-                    struct_get!(_lnb2, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
-                end
-                append_builder!(fb, _lnb2)
-                return append_builder!(b, fb)
-            end
-        end
-        # For other types, fall through to error
-    end
-
-    # Runtime-length tuple arity comes from its immutable size tuple.
-    if is_func(func, :nfields) && length(args) == 1
-        local tuple_type = get_ssa_type(ctx, args[1])
-        if is_runtime_vararg_tuple_type(tuple_type)
-            local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            local size_info = ctx.type_registry.structs[Tuple{Int64}]
-            local nb = _ctx_builder(ctx, "compile_call")
-            emit_value!(nb, args[1], ctx, ConcreteRef(info.wasm_type_idx, true))
-            struct_get!(nb, info.wasm_type_idx, wasm_field_idx(info, 2),
-                        ConcreteRef(size_info.wasm_type_idx, true))
-            struct_get!(nb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
-            return append_builder!(b, nb)
-        end
-    end
-
     # Special case for getfield/getproperty - struct/tuple field access
     # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
     # rather than Core.getfield(obj, :field)
@@ -2483,7 +2584,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             array_get!(tb, arr_idx, ew; signed=packed_array_signedness(E))
             return append_builder!(b, tb)
         end
-        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read) through the box's REAL struct type.
         local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
         if obj_type === Core.Box && _mb_fld === :contents
@@ -2551,7 +2652,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             return append_builder!(b, fb)
         end
 
-        # PURE-9043: Handle Task.rngState0..3 field access → Wasm global.get
+        # Handle Task.rngState0..3 field access → Wasm global.get
         # Julia's rand() accesses task-local Xoshiro state via getfield(task, :rngStateN)
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
@@ -2582,18 +2683,28 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             else
                 field_ref
             end
+            # parity(class_info.dart:666 ClassInfoCollector.collect): dart's struct for a
+            # class exists before any field read; WT registers lazily, so the read
+            # itself registers through the one type chain (a constant Vector read only
+            # through .size never reached any other registrar).
+            if obj_type isa DataType && isconcretetype(obj_type) && obj_type <: Array
+                register_reachable_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
 
             if field_sym === :ref
                 # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
                 local _refb = _ctx_builder(ctx, "compile_call")
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
-                    # march14 (wrap tail): typed arrival when the struct is registered
+                    # Typed arrival when the struct is registered
                     emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
                 else
-                    # parity(M11): an unregistered struct previously emitted an INCOMPLETE
+                    # parity(class_info.dart:666 ClassInfoCollector.collect): an unregistered struct previously emitted an INCOMPLETE
                     # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
+                    # dart's closed-world fixpoint registers every reachable class's struct
+                    # BEFORE codegen begins, so this situation cannot arise there; WT's
+                    # late/dynamic frontend lacks that guarantee, so it rejects instead.
                     record_unsupported!(ctx, :unsupported_type, "field access on an unregistered struct type"; idx=idx)
                     unreachable!(_refb)
                 end
@@ -2605,7 +2716,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local _szfb = _ctx_builder(ctx, "compile_call")
                 if haskey(ctx.type_registry.structs, obj_type)
                     info = ctx.type_registry.structs[obj_type]
-                    # march14 (wrap tail): typed arrival when the struct is registered
+                    # Typed arrival when the struct is registered
                     emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
                 else
@@ -2628,7 +2739,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
 
-            # PURE-325: AbstractArray subtypes that are pure structs (e.g., UnitRange)
+            # AbstractArray subtypes that are pure structs (e.g., UnitRange)
             # have named fields like :start, :stop — handle via struct_get
             if isconcretetype(obj_type) && isstructtype(obj_type)
                 if !haskey(ctx.type_registry.structs, obj_type)
@@ -2639,9 +2750,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     field_idx = findfirst(==(field_sym), info.field_names)
                     if field_idx !== nothing
                         local _sfb = _ctx_builder(ctx, "compile_call")
-                        # march14 (wrap tail): the object arrives AS the registered struct
+                        # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
                     end
@@ -2676,7 +2787,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
                      obj_type.parameters[2] : obj_type.parameters[1]) : nothing
                 local _poob = _ctx_builder(ctx, "compile_call")
-                if _poo_idx !== nothing && _poo_el isa DataType && isbitstype(_poo_el)
+                if _poo_idx !== nothing && _poo_el isa Type
+                    # Julia's element stride: sizeof for an isbits element, 8 (a boxed
+                    # slot, Base.aligned_sizeof(Any)) for a reference element — the same
+                    # rule jl_genericmemory_copyto's lowering divides by
+                    local _poo_sz = memory_element_stride(_poo_el)
                     local _poo_it = infer_value_type(_poo_idx, ctx)
                     emit_value!(_poob, _poo_idx, ctx,
                                 (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ? I64 : I32)
@@ -2684,8 +2799,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         num!(_poob, Opcode.I64_EXTEND_I32_S)
                     i64_const!(_poob, Int64(1))
                     num!(_poob, Opcode.I64_SUB)
-                    if sizeof(_poo_el) != 1
-                        i64_const!(_poob, Int64(sizeof(_poo_el)))
+                    if _poo_sz != 1
+                        i64_const!(_poob, Int64(_poo_sz))
                         num!(_poob, Opcode.I64_MUL)
                     end
                 else
@@ -2735,19 +2850,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     field_ref
                 end
 
-                # P2-batch20: positional getfield(x, i::Integer) — see struct branch
+                # Positional getfield(x, i::Integer) — see struct branch
                 field_idx = field_sym isa Integer ?
                     (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                     return append_builder!(b, fb)
                 end
             end
         end
 
-        # PURE-9064: Handle Type{T} constants for DataType field access.
+        # Handle Type{T} constants for DataType field access.
         # When a DataType constant (e.g., Vector{Int64}) appears in IR, infer_value_type
         # returns Type{Vector{Int64}}. Unwrap to DataType for struct field access, since
         # DataType is registered in the JlType hierarchy with fields like :name, :parameters.
@@ -2773,7 +2888,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 field_ref
             end
 
-            # P2-batch20: getfield(x, i::Integer) — positional access (gap
+            # getfield(x, i::Integer) — positional access (gap
             # 8f5c0002bb71). Julia field order == info.field_names order.
             field_idx = field_sym isa Integer ?
                 (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
@@ -2781,7 +2896,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if field_idx !== nothing
                 local _sfgb = _ctx_builder(ctx, "compile_call")
                 set_context!(_sfgb, first(string(expr), 120))
-                # march14: the typed wrap subsumes the PURE-701 structref-narrow helper
+                # The typed wrap subsumes the structref-narrow helper
                 emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                 local _sfg_wfi = wasm_field_idx(info, field_idx)
                 local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
@@ -2821,7 +2936,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 if field_idx === :dynamic
                     # Dynamic tuple indexing - only supported for homogeneous tuples (NTuple)
                     # Check if all elements have the same type
-                    # PURE-605: Guard against types without definite field count (e.g., Vararg tuples)
+                    # Guard against types without definite field count (e.g., Vararg tuples)
                     elem_types = obj_type isa DataType && isconcretetype(obj_type) ?
                         fieldtypes(obj_type) : ()
                     if length(elem_types) > 0 && all(t -> t === elem_types[1], elem_types)
@@ -2857,7 +2972,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         # The struct is on the stack, we need to convert struct fields to array
                         # Store in local, then create array from fields
                         tuple_local = length(ctx.locals) + ctx.n_params
-                        push!(ctx.locals, julia_to_wasm_type_concrete(obj_type, ctx))
+                        push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                         local_set!(_htb, tuple_local)
 
                         # Push all fields onto stack (account for typeId at field 0)
@@ -2894,7 +3009,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         local_get!(_htb, idx_local)
                         array_get!(_htb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
-                        # PURE-036bc: If array element type is ExternRef (e.g., elem_type=Any),
+                        # If array element type is ExternRef (e.g., elem_type=Any),
                         # array_get returns externref. Downstream code may ref_cast to a struct
                         # type, which requires anyref input. Add any_convert_extern.
                         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
@@ -2919,7 +3034,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         if U isa Union
                             # Produce the value in the CANONICAL representation of the
                             # getfield's INFERRED SSA result type — that is exactly what
-                            # the SSA local was allocated as (julia_to_wasm_type_concrete),
+                            # the SSA local was allocated as (get_concrete_wasm_type),
                             # so the if-block result matches the local and there's no store
                             # mismatch. (Anchoring on Union{fieldtypes…} instead diverges
                             # from inference — e.g. Dates date-format parsing, where the
@@ -2931,7 +3046,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             _ssa_t = get(ctx.ssa_types, idx, nothing)
                             local Ueff
                             if _ssa_t isa Type && _ssa_t !== Union{}
-                                union_wasm = julia_to_wasm_type_concrete(_ssa_t, ctx)
+                                union_wasm = get_concrete_wasm_type(_ssa_t, ctx.mod, ctx.type_registry; for_local=true)
                                 Ueff = _ssa_t isa Union ? _ssa_t : U
                             else
                                 union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
@@ -2946,7 +3061,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             emit_value!(_hetb, obj_arg, ctx,
                                         ConcreteRef(UInt32(info.wasm_type_idx), true))
                             tuple_local = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, julia_to_wasm_type_concrete(obj_type, ctx))
+                            push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                             local_set!(_hetb, tuple_local)
 
                             # index (1-based i64) → 0-based i32 → idx_local
@@ -2964,7 +3079,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
                                 # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
                                 # Coerce the raw field value to U's canonical wasm rep.
-                                fw = julia_to_wasm_type_concrete(elem_types[i + 1], ctx)
+                                fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
                                 if union_wasm === AnyRef
                                     if fw === I64 || fw === I32 || fw === F32 || fw === F64
                                         # THE single-source box producer with the field's REAL classId
@@ -3005,503 +3120,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         end
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
-                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # march14: typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)  # PURE-9024
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
                     return append_builder!(b, fb)
                 end
             end
-        end
-    end
-
-    # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
-    # arrays have no undefined representation and are always assigned. Reference
-    # arrays encode Julia's undefined slot as null and require an actual load.
-    if is_func(func, :memoryref_isassigned) && !isempty(args)
-        ref_arg = args[1]
-        ref_type = get_ssa_type(ctx, ref_arg)
-        elem_type = if ref_type isa DataType && ref_type.name.name === :GenericMemoryRef
-            ref_type.parameters[2]
-        elseif ref_type isa DataType && ref_type.name.name === :MemoryRef
-            ref_type.parameters[1]
-        else
-            Any
-        end
-        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        arr_def = ctx.mod.types[array_type_idx + 1]
-        elem_wasm = arr_def isa ArrayType ? arr_def.elem.valtype : AnyRef
-        mib = _ctx_builder(ctx, "compile_call.memoryref_isassigned")
-        emit_value!(mib, ref_arg, ctx)  # R17-floor: consumes MemoryRef's tracked (array,index) multi-value representation
-        if _wt_is_ref(elem_wasm)
-            array_get!(mib, array_type_idx, elem_wasm;
-                       signed=packed_array_signedness(elem_type))
-            ref_is_null!(mib); num!(mib, Opcode.I32_EQZ)
-        else
-            drop!(mib) # index
-            drop!(mib) # array
-            i32_const!(mib, 1)
-        end
-        append_builder!(fb, mib)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for memoryrefget - array element access
-    # memoryrefget(ref, ordering, boundscheck) where ref is from memoryrefnew
-    if is_func(func, :memoryrefget) && length(args) >= 1
-        ref_arg = args[1]
-        ref_type = infer_value_type(ref_arg, ctx)
-
-        # PURE-9065: Nothing-typed memory — always returns nothing (i32.const 0).
-        # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
-        if ref_type isa DataType && (
-            (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
-            (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
-            # Compile ref_arg to push [array_ref, i32_index], then drop both
-            emit_value!(fb, ref_arg, ctx)  # R17-floor: MemoryRef{Nothing} is a deliberate two-value emission
-            drop!(fb)  # drop i32_index
-            drop!(fb)  # drop array_ref
-            i32_const!(fb, 0)
-            return append_builder!(b, fb)
-        end
-
-        # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
-        # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-        # PURE-045: Also handle Memory types for direct array access patterns
-        elem_type = Int32  # default
-        if ref_type isa DataType
-            if ref_type.name.name === :MemoryRef
-                elem_type = ref_type.parameters[1]
-            elseif ref_type.name.name === :GenericMemoryRef
-                # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
-                elem_type = ref_type.parameters[2]
-            elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
-                # Memory{T} - element type is first parameter
-                elem_type = ref_type.parameters[1]
-            elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
-                # GenericMemory{atomicity, T, addrspace} - element type is second parameter
-                elem_type = ref_type.parameters[2]
-            end
-        end
-
-        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
-        # When cross-function calls use abstract arg types (e.g., Vector instead of
-        # Vector{Any}), code_typed returns bare MemoryRef (UnionAll) instead of
-        # MemoryRef{Any} (DataType). The elem_type stays as default Int32.
-        # Fix: use the memoryrefget result's own SSA type as the element type.
-        if elem_type === Int32 && !(ref_type isa DataType)
-            ssa_result_type = get(ctx.ssa_types, idx, Any)
-            # If the SSA result type is itself a MemoryRef/array type (UnionAll),
-            # the element type is unknown — default to Any
-            if ssa_result_type isa UnionAll || ssa_result_type === Any
-                elem_type = Any
-            elseif ssa_result_type !== Int32
-                elem_type = ssa_result_type
-            end
-        end
-
-        # Get or create array type for this element type
-        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-        # The ref SSA value from memoryrefnew will have compiled to [array_ref, i32_index]
-        # We need to compile ref_arg which will leave [array_ref, i32_index] on stack
-        local _mrgb = _ctx_builder(ctx, "compile_call")
-        emit_value!(_mrgb, ref_arg, ctx)  # R17-floor: memoryrefget consumes the emitted (array,index) pair
-
-        array_get!(_mrgb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
-
-        # Note: if elem_type is Any, array.get returns externref and the SSA local
-        # is also typed as externref (fixed in analyze_ssa_types!). No cast needed here.
-        append_builder!(fb, _mrgb)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for memoryrefoffset - get the 1-based offset of a MemoryRef
-    # This is used by push!, resize!, and other dynamic array operations
-    # Fresh MemoryRefs (from Core.memoryref, getfield(vec, :ref)) have offset 1
-    # Indexed MemoryRefs (from memoryrefnew(ref, index, bc)) have offset = index
-    if is_func(func, :memoryrefoffset) && length(args) >= 1
-        ref_arg = args[1]
-
-        # Check if this ref came from a memoryrefnew with an index
-        local _mrob = _ctx_builder(ctx, "compile_call")
-        if ref_arg isa Core.SSAValue && haskey(ctx.memoryref_offsets, ref_arg.id)
-            # This MemoryRef has a recorded offset - compile the index value
-            index_val = ctx.memoryref_offsets[ref_arg.id]
-            idx_type = infer_value_type(index_val, ctx)
-            emit_value!(_mrob, index_val, ctx,
-                        (idx_type === Int64 || idx_type === Int) ? I64 : I32)
-
-            # Ensure result is i64 (Julia's Int)
-            if idx_type !== Int64 && idx_type !== Int
-                # Convert to i64 if needed
-                num!(_mrob, Opcode.I64_EXTEND_I32_S)
-            end
-        else
-            # Fresh MemoryRef - offset is always 1
-            i64_const!(_mrob, 1)  # 1
-        end
-        append_builder!(fb, _mrob)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for memoryrefset! - array element assignment
-    # memoryrefset!(ref, value, ordering, boundscheck) -> stores value in array
-    # In Julia, setindex! returns the stored value, so we need to return it too
-    if is_func(func, :memoryrefset!) && length(args) >= 2
-        ref_arg = args[1]
-        value_arg = args[2]
-        ref_type = infer_value_type(ref_arg, ctx)
-
-        # PURE-9065: Nothing-typed memory — storing nothing is a no-op.
-        # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then done.
-        # Don't push a result — Nothing has no Wasm representation to keep on the stack.
-        if ref_type isa DataType && (
-            (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
-            (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
-            emit_value!(fb, ref_arg, ctx)  # R17-floor: MemoryRef{Nothing} pair is consumed without a scalar sink
-            drop!(fb)  # drop i32_index
-            drop!(fb)  # drop array_ref
-            return append_builder!(b, fb)
-        end
-
-        # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
-        # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-        # PURE-045: Also handle Memory types for direct array access patterns
-        elem_type = Int32  # default
-        if ref_type isa DataType
-            if ref_type.name.name === :MemoryRef
-                elem_type = ref_type.parameters[1]
-            elseif ref_type.name.name === :GenericMemoryRef
-                # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
-                elem_type = ref_type.parameters[2]
-            elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
-                # Memory{T} - element type is first parameter
-                elem_type = ref_type.parameters[1]
-            elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
-                # GenericMemory{atomicity, T, addrspace} - element type is second parameter
-                elem_type = ref_type.parameters[2]
-            end
-        end
-
-        # PURE-902: Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
-        # Same logic as memoryrefget: when ref_type is a bare UnionAll MemoryRef,
-        # infer element type from SSA result type or default to Any.
-        if elem_type === Int32 && !(ref_type isa DataType)
-            ssa_result_type = get(ctx.ssa_types, idx, Any)
-            if ssa_result_type isa UnionAll || ssa_result_type === Any
-                elem_type = Any
-            elseif ssa_result_type !== Int32
-                elem_type = ssa_result_type
-            end
-        end
-
-        # Get or create array type for this element type
-        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-        # Compile ref_arg which will leave [array_ref, i32_index] on stack
-        local _msb = _ctx_builder(ctx, "compile_call")
-        emit_value!(_msb, ref_arg, ctx)  # R17-floor: memoryrefset consumes the emitted (array,index) pair
-
-        # Compile the value to store - we need it twice (for array.set and return)
-        # First compile gets the value on stack for array.set
-        local _mv_b = _compile_value_b(value_arg, ctx)
-        local mset_val_ty = isempty(_mv_b.v.stack) ? nothing : _mv_b.v.stack[end]
-        # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
-        # PURE-045: Check the actual wasm element type, not just elem_type === Any
-        # Abstract types like CallInfo also map to ExternRef
-        # PHASE-1-004: AnyRef arrays (Memory{Any}) need numeric→anyref boxing via struct.new
-        local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-        if wasm_elem_type === AnyRef
-            # AnyRef array element — box numeric values to anyref via struct.new.
-            # dart2wasm carries the type with the value rather than scanning bytes.
-            local mset_src_wasm_any = mset_val_ty
-            local is_numeric_mset_any = mset_src_wasm_any === I64 || mset_src_wasm_any === I32 || mset_src_wasm_any === F64 || mset_src_wasm_any === F32
-            local is_already_anyref = mset_src_wasm_any === AnyRef || mset_src_wasm_any === StructRef || mset_src_wasm_any isa ConcreteRef
-            if is_numeric_mset_any
-                emit_numeric_to_anyref!(_msb, value_arg, mset_src_wasm_any, ctx)
-            else
-                append_builder!(_msb, _mv_b)
-                # march16: a KNOWN closure erasing into a Memory{Any} slot wraps into
-                # the closure OBJECT (dart convertType at the erasure seam)
-                maybe_wrap_closure!(_msb, ctx, infer_value_type(value_arg, ctx))
-                if !is_already_anyref && mset_src_wasm_any === ExternRef
-                    any_convert_extern!(_msb)
-                end
-            end
-        elseif wasm_elem_type === ExternRef
-            # Determine source value's wasm type to decide conversion.
-            # dart2wasm carries the type with the value rather than scanning bytes.
-            local mset_src_wasm = mset_val_ty
-            local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
-            local is_already_externref_mset = mset_src_wasm === ExternRef
-            if is_numeric_mset
-                emit_numeric_to_externref!(_msb, value_arg, mset_src_wasm, ctx)
-            else
-                append_builder!(_msb, _mv_b)
-                # PURE-048: Skip extern_convert_any if value is already externref.
-                # externref is NOT a subtype of anyref, so extern_convert_any would fail.
-                if !is_already_externref_mset
-                    extern_convert_any!(_msb)
-                end
-            end
-        elseif wasm_elem_type isa ConcreteRef
-            # PURE-045: Array of concrete ref types (e.g., struct or array refs)
-            # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
-            # march3 (typed): numeric-typed value into a ref-typed array slot → ref.null
-            # (the const first-byte gate + LOCAL_GET LEB walk are the tracked type now)
-            if mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
-                ref_null!(_msb, Int64(wasm_elem_type.type_idx), ConcreteRef(UInt32(wasm_elem_type.type_idx), true))
-            else
-                append_builder!(_msb, _mv_b)
-                # PURE-6025: If value is externref but array element is concrete ref,
-                # convert externref → anyref → ref.cast (ref null $elem_type)
-                if mset_val_ty === ExternRef
-                    any_convert_extern!(_msb)
-                    ref_cast!(_msb, Int64(wasm_elem_type.type_idx), true)
-                end
-            end
-        else
-            # TRUE-INT-002-impl2: When storing nothing (i32_const 0) into an i64 array
-            # (e.g., Union{Nothing, Int64} element type), emit i64_const 0 instead.
-            # compile_value(nothing) always produces i32_const 0, but array_set expects
-            # the element type — i64 for Union{Nothing, Int64} arrays.
-            if wasm_elem_type === I64 && mset_val_ty === I32
-                i64_const!(_msb, 0)  # i64 value 0
-            elseif wasm_elem_type === F64 && mset_val_ty === I32
-                f64_const!(_msb, 0.0)
-            else
-                append_builder!(_msb, _mv_b)
-            end
-        end
-
-        # array.set consumes [array_ref, i32_index, value] and returns nothing
-        array_set!(_msb, array_type_idx, AnyRef)
-
-        # Julia's memoryrefset! returns the stored value, so push it again
-        # This is needed because compile_statement may add LOCAL_SET after this
-        # PURE-6024: Only emit return value if SSA has a local to store it in.
-        # Without this guard, the return value (e.g., i32.const 0 for nothing)
-        # is left on the stack when the SSA has no allocated local, causing
-        # "values remaining on stack at end of block" validation errors.
-        if haskey(ctx.ssa_locals, idx)
-            local _rv2_b = _compile_value_b(value_arg, ctx)
-            local ret_val_ty = isempty(_rv2_b.v.stack) ? nothing : _rv2_b.v.stack[end]
-            append_builder!(_msb, _rv2_b)
-            # PURE-3113: If the SSA local is externref but the return value is a concrete ref,
-            # emit extern_convert_any. The compile_statement safety check can't catch this
-            # because has_gc_prefix=true (from array_set above) skips the trailing local_get
-            # check, and the SSA type check sees Julia type (Any→ExternRef) matching the local.
-            local mset_ret_local = ctx.ssa_locals[idx]
-            local mset_ret_arr_idx = mset_ret_local - ctx.n_params + 1
-            if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals)
-                local mset_ret_local_type = ctx.locals[mset_ret_arr_idx]
-                if mset_ret_local_type === ExternRef
-                    # Check if return value is a concrete ref (not already externref)
-                    local mset_ret_src_wasm = nothing
-                    if length(ret_val_bytes) >= 2 && ret_val_bytes[1] == Opcode.LOCAL_GET
-                        local mset_src_idx = 0
-                        local mset_shift = 0
-                        local mset_pos = 2
-                        while mset_pos <= length(ret_val_bytes)
-                            byt = ret_val_bytes[mset_pos]
-                            mset_src_idx |= (Int(byt & 0x7f) << mset_shift)
-                            mset_shift += 7
-                            mset_pos += 1
-                            (byt & 0x80) == 0 && break
-                        end
-                        if mset_pos - 1 == length(ret_val_bytes) && mset_src_idx >= ctx.n_params
-                            local mset_src_arr = mset_src_idx - ctx.n_params + 1
-                            if mset_src_arr >= 1 && mset_src_arr <= length(ctx.locals)
-                                mset_ret_src_wasm = ctx.locals[mset_src_arr]
-                            end
-                        end
-                    end
-                    if mset_ret_src_wasm isa ConcreteRef || mset_ret_src_wasm === StructRef || mset_ret_src_wasm === ArrayRef || mset_ret_src_wasm === AnyRef
-                        extern_convert_any!(_msb)
-                    end
-                end
-            end
-        end
-        append_builder!(fb, _msb)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for Core.memorynew - creates a new Memory{T} backing store
-    # memorynew(Memory{T}, size) -> Memory{T}
-    # In WasmGC, Memory{T} IS an array, so this compiles to array.new_default
-    if is_func(func, :memorynew) && length(args) >= 2
-        mem_type = args[1]  # Memory{T} type (compile-time constant)
-        size_arg = args[2]  # size (may be literal or SSA)
-
-        # Extract element type from Memory{T}
-        elem_type = if mem_type isa DataType && mem_type <: Memory
-            if mem_type.name.name === :Memory && length(mem_type.parameters) >= 1
-                mem_type.parameters[1]
-            elseif mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
-                mem_type.parameters[2]
-            else
-                Int32  # default
-            end
-        else
-            Int32  # default
-        end
-
-        arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-        # Compile size argument
-        # WasmGC arrays are fixed-size — they cannot be resized after creation.
-        # Julia's push!/append! with _growend! handles growth by creating new arrays,
-        # but we enforce a minimum capacity so that small initial allocations
-        # (e.g., Vector{T}() which uses memorynew(Memory{T}, 0)) have room for
-        # initial push! operations before needing the first growth.
-        min_capacity = 16
-        local _mnb = _ctx_builder(ctx, "compile_call")
-        if size_arg isa Int || size_arg isa Int64
-            # Literal size - emit as i32 constant with minimum capacity
-            actual_size = max(Int64(size_arg), min_capacity)
-            i32_const!(_mnb, actual_size)
-        else
-            # SSA or other expression - compile, convert to i32, apply minimum
-            emit_value!(_mnb, size_arg, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
-            num!(_mnb, Opcode.I32_WRAP_I64)
-            # Ensure minimum capacity: max(size, min_capacity)
-            local cap_check_local = allocate_local!(ctx, I32)
-            local_tee!(_mnb, cap_check_local)
-            i32_const!(_mnb, Int64(min_capacity))
-            local_get!(_mnb, cap_check_local)
-            i32_const!(_mnb, Int64(min_capacity))
-            num!(_mnb, Opcode.I32_GE_S)
-            select!(_mnb)  # select(size, min_cap, size >= min_cap)
-        end
-
-        array_new_default!(_mnb, arr_type_idx)
-        append_builder!(fb, _mnb)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for Core.memoryref - creates MemoryRef from Memory
-    # memoryref(memory::Memory{T}) -> MemoryRef{T}
-    # In WasmGC, this is a no-op since Memory IS the array
-    if is_func(func, :memoryref) && length(args) == 1
-        # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
-        emit_value!(fb, args[1], ctx)  # R17-floor: memoryref identity preserves its array representation
-        return append_builder!(b, fb)
-    end
-
-    # Special case for memoryrefnew - handle both patterns:
-    # 1. memoryrefnew(memory) -> MemoryRef (for Vector allocation, just pass through)
-    # 2. memoryrefnew(base_ref, index, boundscheck) -> MemoryRef at offset
-    if is_func(func, :memoryrefnew)
-        if length(args) == 1
-            # Single arg: just wrapping a Memory - pass through the array reference
-            # This is a "fresh" MemoryRef with offset 1
-            emit_value!(fb, args[1], ctx)  # R17-floor: one-arg memoryrefnew preserves representation
-            return append_builder!(b, fb)
-        elseif length(args) >= 2
-            base_ref = args[1]
-            index = args[2]
-
-            # Record the offset for this MemoryRef SSA so memoryrefoffset can use it
-            ctx.memoryref_offsets[idx] = index
-
-            # PURE-9065: For Nothing-typed MemoryRef, check if result is used.
-            # If the SSA has no local and no subsequent statement references it,
-            # skip bytecode to avoid orphaning [array_ref, i32_index] on the stack.
-            ssa_type_mr = get(ctx.ssa_types, idx, Any)
-            is_nothing_ref_mr = ssa_type_mr isa DataType && (
-                (ssa_type_mr.name.name === :MemoryRef && length(ssa_type_mr.parameters) >= 1 && ssa_type_mr.parameters[1] === Nothing) ||
-                (ssa_type_mr.name.name === :GenericMemoryRef && length(ssa_type_mr.parameters) >= 2 && ssa_type_mr.parameters[2] === Nothing))
-            if is_nothing_ref_mr && !haskey(ctx.ssa_locals, idx)
-                # Check if any subsequent statement uses this SSA
-                ssa_used = false
-                for j in (idx+1):length(ctx.code_info.code)
-                    s = ctx.code_info.code[j]
-                    if s isa Expr
-                        for a in s.args
-                            if a isa Core.SSAValue && a.id == idx
-                                ssa_used = true
-                                break
-                            end
-                        end
-                    end
-                    ssa_used && break
-                end
-                if !ssa_used
-                    return append_builder!(b, fb)  # Skip — orphaned MemoryRef{Nothing}
-                end
-            end
-
-            # Compile the base array reference
-            local _mrnb = _ctx_builder(ctx, "compile_call")
-            emit_value!(_mrnb, base_ref, ctx)  # R17-floor: base may itself be a virtual MemoryRef pair
-
-            # Compile and convert index to i32 (Julia uses 1-based Int64, Wasm uses 0-based i32)
-            emit_value!(_mrnb, index, ctx)  # R17-floor: actual index width selects the explicit wrap below
-
-            # PURE-6027: Check BOTH Julia type AND actual WASM type for i64→i32 wrap.
-            # infer_value_type may return Any/Union while the actual local is i64.
-            idx_type = infer_value_type(index, ctx)
-            idx_wasm = get_phi_edge_wasm_type(index, ctx)
-            if idx_type === Int64 || idx_type === Int || idx_wasm === I64
-                # Convert to i32 and subtract 1 for 0-based indexing
-                num!(_mrnb, Opcode.I32_WRAP_I64)  # i64 -> i32
-            end
-            i32_const!(_mrnb, 1)  # 1
-            num!(_mrnb, Opcode.I32_SUB)  # index - 1 for 0-based
-
-            # Now stack has [array_ref, i32_index] which is what memoryrefget needs
-            append_builder!(fb, _mrnb)
-            return append_builder!(b, fb)
-        end
-    end
-
-    # Special case for Core.tuple - tuple creation
-    if is_func(func, :tuple) && length(args) > 0
-        # Infer tuple type from arguments
-        elem_types = Type[infer_value_type(arg, ctx) for arg in args]
-        tuple_type = Tuple{elem_types...}
-
-        # Register tuple type
-        if !haskey(ctx.type_registry.structs, tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-        end
-
-        if haskey(ctx.type_registry.structs, tuple_type)
-            info = ctx.type_registry.structs[tuple_type]
-
-            local _tupb = _ctx_builder(ctx, "compile_call")
-            emit_struct_prefix!(_tupb, ctx.type_registry, tuple_type, info)
-
-            # Push all tuple elements with type safety for externref fields
-            # PURE-142: Core.tuple args may be phi locals typed as i64 but
-            # struct field expects externref (Any-typed tuple element)
-            struct_type_def = ctx.mod.types[info.wasm_type_idx + 1]
-            for (fi, arg) in enumerate(args)
-                # march3 (typed): the first-byte const scans + LOCAL_GET LEB decodes are
-                # gone — arg_ty (the tracked emission type) decides; const-vs-local is an
-                # ir/-level kind test (dart looks at node kinds, never at bytes).
-                local _ab = _compile_value_b(arg, ctx)
-                local arg_ty = isempty(_ab.v.stack) ? nothing : _ab.v.stack[end]
-                expected_wasm = nothing
-                # Account for typeId at field 0: struct_type_def.fields is 1-indexed,
-                # wasm field for Julia field fi is at position fi + field_offset
-                local wasm_fi = fi + Int(info.field_offset)
-                if struct_type_def isa StructType && wasm_fi <= length(struct_type_def.fields)
-                    expected_wasm = struct_type_def.fields[wasm_fi].valtype
-                end
-                expected_wasm isa WasmValType || error("tuple field $fi has no physical Wasm type")
-                append_builder!(_tupb, _ab)
-                if arg_ty !== nothing && arg_ty !== expected_wasm
-                    local _tuple_jt = _value_julia_type(arg, ctx)
-                    coerce_stack_top!(_tupb, expected_wasm, ctx;
-                                      from_julia=(_tuple_jt isa Type && isconcretetype(_tuple_jt)) ? _tuple_jt : nothing)
-                end
-            end
-
-            # struct.new
-            struct_new!(_tupb, info.wasm_type_idx)   # mod-resolved fields (march3)
-
-            append_builder!(fb, _tupb)
-            return append_builder!(b, fb)
         end
     end
 
@@ -3516,11 +3139,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
         field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
 
-        # PURE-9043: Handle Task.rngState0..3 field assignment → Wasm global.set
+        # Handle Task.rngState0..3 field assignment → Wasm global.set
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
-                emit_value!(fb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)   # march14
+                emit_value!(fb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)
                 global_set!(fb, rng_global)
                 return append_builder!(b, fb)
             end
@@ -3551,7 +3174,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if obj_type <: AbstractArray
             field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
             if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
-                # PURE-325: setfield!(vector, :ref, new_memref) — update data array
+                # setfield!(vector, :ref, new_memref) — update data array
                 # :ref is field index 1 in the Vector struct (field 0 = typeId)
                 # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
                 value_has_local = false
@@ -3571,7 +3194,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     local_get!(_vrb, temp_local)
                     struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
@@ -3602,7 +3225,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
                 # Now compile obj (struct ref)
                 emit_value!(_vsb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                # If obj_arg's local is structref, insert ref.cast null before struct_set
                                 emit_ref_cast_if_structref!(_vsb, obj_arg, info.wasm_type_idx, ctx)
 
                 # Load value from local
@@ -3626,14 +3249,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
                 field_idx = findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    # PURE-045: Check if field is Any type (maps to externref in Wasm)
+                    # Check if field is Any type (maps to externref in Wasm)
                     field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
 
                     # struct.set expects: [ref, value]
                     local _sfsb = _ctx_builder(ctx, "compile_call")
                     emit_value!(_sfsb, obj_arg, ctx,
                                 ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    # PURE-701: If obj_arg's local is structref, insert ref.cast null before struct_set
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_sfsb, obj_arg, info.wasm_type_idx, ctx)
 
                     # Use the registered physical field type as the sole sink
@@ -3645,31 +3268,25 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         _sf_wasm_fi + 1 <= length(_sf_ct.fields)) ?
                         _sf_ct.fields[_sf_wasm_fi + 1].valtype : nothing
                     _sf_expected === nothing && error("setfield! target has no physical Wasm field type")
-                    if field_type === Any
-                        emit_value!(_sfsb, value_arg, ctx, _sf_expected)
-                    else
-                        # PURE-6024: When value is nothing and field is ref-typed,
-                        # compile_value(nothing) emits i32_const 0 which fails
-                        # struct_set validation. Emit ref.null none instead.
-                        if is_nothing_value(value_arg, ctx)
-                            field_wasm = julia_to_wasm_type(field_type)
-                            if field_wasm === I32 || field_wasm === I64 || field_wasm === F32 || field_wasm === F64
-                                emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                            from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
-                            else
-                                # Ref-typed field: ref.null none (bottom of internal ref hierarchy)
-                                ref_null_none!(_sfsb)
-                            end
-                        else
-                            emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                        from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
-                        end
-                    end
-
+                    # Route the value through the ONE coercion funnel (emit_value!'s own
+                    # val===nothing early exit, values.jl:905-912) instead of hand-rolling
+                    # scalar-vs-ref / nothing-vs-not branches here. `is_nothing_value`
+                    # recognizes GlobalRef aliases (e.g. `Mod.nothing`) and SSA/PiNode-proven
+                    # null edges that a bare `val === nothing` check misses; substituting the
+                    # literal lets emit_value! null a ref-typed field with its EXACT physical
+                    # type (ConcreteRef → typed `ref.null $T`) instead of falling through to a
+                    # numeric zero that then gets classId-boxed and ref.cast into the field's
+                    # unrelated concrete struct type — invalid at runtime. (Previously this site
+                    # used `ref_null_none!`, whose bottom-type null is tracked as AnyRef — sound
+                    # only when the field's physical type IS exactly AnyRef; a narrower
+                    # ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
+                    # `single_variable::Union{Nothing,VariableIndex}`, then rejected it.)
+                    local _sf_val = is_nothing_value(value_arg, ctx) ? nothing : value_arg
+                    local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
                     # setfield! returns the value — use compile_value to match SSA return type
-                    emit_value!(_sfsb, value_arg, ctx, _sf_expected;
-                                from_julia=(field_type isa Type && isconcretetype(field_type)) ? field_type : nothing)
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     append_builder!(fb, _sfsb)
                     return append_builder!(b, fb)
                 end
@@ -3686,75 +3303,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Fall through for other struct types - will hit error
     end
 
-    # Core.donotdelete — compiler fence preventing DCE. No WASM output needed.
-    # Arguments were already evaluated by the caller's IR; we just skip emitting.
-    # Used by WASM import stubs (Canvas2D, etc.) to keep calls alive in optimized IR.
-    if is_func(func, :donotdelete) || (func isa GlobalRef && func.name === :donotdelete && func.mod === Core)
-        return append_builder!(b, fb)
-    end
-
-    # Special case for compilerbarrier - just pass through the value
-    if is_func(func, :compilerbarrier)
-        # compilerbarrier(kind, value) - first arg is a symbol, second is the value
-        # We only want the value (second arg)
-        if length(args) >= 2
-            emit_value!(fb, args[2], ctx, static_wasm_type(args[2], ctx))
-        end
-        return append_builder!(b, fb)
-    end
-
-    # Runtime Union construction is Dart's RTI union node: a real $JlUnion
-    # containing the two runtime type operands. This is the dynamic counterpart
-    # of get_type_constant_global!(Union{A,B}); no host type fabrication occurs.
-    if is_func(func, :apply_type) && length(args) == 3
-        union_ctor = args[1] === Union ||
-            (args[1] isa GlobalRef && isdefined(args[1].mod, args[1].name) &&
-             getfield(args[1].mod, args[1].name) === Union)
-        if union_ctor
-            union_idx = ctx.type_registry.jl_union_idx
-            jl_type_idx = ctx.type_registry.jl_type_idx
-            (union_idx === nothing || jl_type_idx === nothing) &&
-                error("runtime Union construction requires the JlType hierarchy")
-            ub = _ctx_builder(ctx, "compile_apply_type_union")
-            i32_const!(ub, 1) # TYPE_UNION
-            expected_type = ConcreteRef(jl_type_idx, true)
-            emit_value!(ub, args[2], ctx, expected_type)
-            emit_value!(ub, args[3], ctx, expected_type)
-            struct_new!(ub, union_idx,
-                        WasmValType[I32, expected_type, expected_type])
-            append_builder!(fb, ub)
-            return append_builder!(b, fb)
-        end
-    end
-
-    # typeof(x) returns the one $JlDataType representation.  The closed-world
-    # planner materializes both the lookup table and every reachable static type
-    # global before function bodies are emitted.
-    if is_func(func, :typeof) && length(args) >= 1
-        arg = args[1]
-        arg_type = infer_value_type(arg, ctx)
-        ctx.type_registry.type_lookup_global === nothing &&
-            error("typeof lowering requires the canonical type lookup table")
-        base_idx = ctx.type_registry.base_struct_idx
-        base_idx === nothing && error("typeof lowering requires the canonical object base")
-
-        local _tofb = _ctx_builder(ctx, "compile_call")
-        if arg_type !== nothing && isconcretetype(arg_type)
-            haskey(ctx.type_registry.type_constant_globals, arg_type) ||
-                error("closed-world typeof is missing the static type global for $arg_type")
-            dt_global = ctx.type_registry.type_constant_globals[arg_type]
-            global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-        else
-            actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
-            actual_type === ExternRef && any_convert_extern!(_tofb)
-            temp_local = _ensure_typeof_scratch_local!(ctx)
-            emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
-        end
-        append_builder!(fb, _tofb)
-        return append_builder!(b, fb)
-    end
-
-    # Core.typeassert(x, T) — dart's CHECKED cast (census F4, march5; emitAsCheck,
+    # Core.typeassert(x, T) — dart's CHECKED cast (census F4; emitAsCheck,
     # types.dart:437-481: is-check, throw on mismatch). Statically-proven casts stay
     # pass-through (the common case — inference already narrowed). A runtime check
     # emits when the value is a GC ref and the target has a DFS classId range:
@@ -3821,87 +3370,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     end
 
-    # Special case for string/symbol equality/identity comparison (=== and !==)
-    # Must be handled before generic argument pushing since strings/symbols are refs, not integers
-    # Symbol uses same array<i32> representation as String, so ref.eq would fail (reference equality)
-    if (is_func(func, :(===)) || is_func(func, :(!==))) && length(args) == 2
-        arg1_type = infer_value_type(args[1], ctx)
-        arg2_type = infer_value_type(args[2], ctx)
-        if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
-            local _seqb = _ctx_builder(ctx, "compile_call")
-            append_builder!(_seqb, compile_string_equal_b(args[1], args[2], ctx))
-            if is_func(func, :(!==))
-                # Negate the result for !==
-                num!(_seqb, Opcode.I32_EQZ)
-            end
-            append_builder!(fb, _seqb)
-            return append_builder!(b, fb)
-        end
-
-        # PURE-9063: typeof(x) === Type — compare DataType struct refs with ref.eq
-        # Detect when one arg comes from typeof() and the other is a Type constant
-        arg1_is_typeof = _is_typeof_ssa(args[1], ctx)
-        arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
-        arg1_is_type_const = _resolve_type_const(args[1], ctx)
-        arg2_is_type_const = _resolve_type_const(args[2], ctx)
-        if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
-           (arg2_is_typeof && arg1_is_type_const !== nothing)
-            ctx.type_registry.type_lookup_global === nothing &&
-                error("typeof identity comparison requires the canonical type lookup table")
-            local _toeqb = _ctx_builder(ctx, "compile_call")
-            if arg1_is_typeof
-                emit_value!(_toeqb, args[1], ctx)  # R17-floor: dynamic egal classifies the actual operand
-                haskey(ctx.type_registry.type_constant_globals, arg2_is_type_const) ||
-                    error("closed-world typeof identity is missing the type global for $arg2_is_type_const")
-                dt_global = ctx.type_registry.type_constant_globals[arg2_is_type_const]
-                global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-            else
-                emit_value!(_toeqb, args[2], ctx)  # R17-floor: dynamic egal classifies the actual operand
-                haskey(ctx.type_registry.type_constant_globals, arg1_is_type_const) ||
-                    error("closed-world typeof identity is missing the type global for $arg1_is_type_const")
-                dt_global = ctx.type_registry.type_constant_globals[arg1_is_type_const]
-                global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-            end
-            num!(_toeqb, Opcode.REF_EQ)
-            if is_func(func, :(!==))
-                num!(_toeqb, Opcode.I32_EQZ)
-            end
-            append_builder!(fb, _toeqb)
-            return append_builder!(b, fb)
-        end
-
-        # Special case: comparing ref type with nothing - use ref.is_null
-        arg1_is_nothing = is_nothing_value(args[1], ctx)
-        arg2_is_nothing = is_nothing_value(args[2], ctx)
-
-        if (arg1_is_nothing && is_ref_type_or_union(arg2_type)) ||
-           (arg2_is_nothing && is_ref_type_or_union(arg1_type))
-            # Compile the non-nothing ref argument (typed channel)
-            local _nv_b = _compile_value_b(arg1_is_nothing ? args[2] : args[1], ctx)
-            local _nv_ty = isempty(_nv_b.v.stack) ? nothing : _nv_b.v.stack[end]
-            # typed channel: numeric values can never be null — the emission's own type
-            # answers (was a LOCAL_GET LEB decode + const first-byte scan + static re-guess).
-            local is_numeric_val = _nv_ty === I32 || _nv_ty === I64 || _nv_ty === F32 || _nv_ty === F64
-            local _neqb = _ctx_builder(ctx, "compile_call")
-            if is_numeric_val
-                # Numeric value can never be nothing
-                # === nothing → false (0), !== nothing → true (1)
-                i32_const!(_neqb, is_func(func, :(!==)) ? 1 : 0)
-                append_builder!(fb, _neqb)
-                return append_builder!(b, fb)
-            end
-            append_builder!(_neqb, _nv_b)   # typed merge
-            # ref.is_null checks if ref is null (returns i32 1 for null, 0 otherwise)
-            ref_is_null!(_neqb)
-            if is_func(func, :(!==))
-                # Negate for !== (we want true when NOT null)
-                num!(_neqb, Opcode.I32_EQZ)
-            end
-            append_builder!(fb, _neqb)
-            return append_builder!(b, fb)
-        end
-    end
-
     # Determine argument type for opcode selection (do this BEFORE compiling args)
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
     is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
@@ -3909,16 +3377,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
     is_128bit = arg_type === Int128 || arg_type === UInt128
 
-    # PURE-046: If arg_type is Any/abstract but the intrinsic expects numeric operands,
+    # If arg_type is Any/abstract but the intrinsic expects numeric operands,
     # the code is type-confused (externref being used as numeric). Emit unreachable
-    # since we can't convert externref to i64 in Wasm.
-    is_numeric_intrinsic = is_func(func, :eq_int) || is_func(func, :ne_int) ||
-                           is_func(func, :slt_int) || is_func(func, :sle_int) ||
-                           is_func(func, :ult_int) || is_func(func, :ule_int) ||
-                           is_func(func, :add_int) || is_func(func, :sub_int) ||
-                           is_func(func, :mul_int) ||
-                           is_func(func, :not_int) || is_func(func, :or_int) ||
-                           is_func(func, :xor_int) || is_func(func, :and_int)
+    # since we can't convert externref to i64 in Wasm. (See intrinsics_table.jl's
+    # NUMERIC_INTRINSIC_ARG_OPS for why this stays a curated int-only Set rather
+    # than a raw INTRINSIC_BINOPS/UNOPS membership query.)
+    is_numeric_intrinsic = is_numeric_intrinsic_arg(func)
     if is_numeric_intrinsic && (arg_type === Any ||
                                  (!isprimitivetype(arg_type) && !is_128bit && !(arg_type <: Integer)))
         # An Any/externref value used in a numeric intrinsic (boxing / type instability).
@@ -3928,7 +3392,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     end
 
-    # PURE-324: Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
+    # Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
     # add_ptr, sub_ptr, and pointerref push their own args (or trace back to string ref),
     # so they must NOT have args pre-pushed by the generic loop below.
     if func isa GlobalRef && func.name === :add_ptr
@@ -3949,9 +3413,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             idx_ssa === nothing && (idx_ssa = length(args) >= 2 ? args[2] : 1)
             local _prsb = _ctx_builder(ctx, "compile_call")
             string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            # parity(M9): the classed string → its DATA array (the funnel adjusts)
+            # parity(translator.dart:1597 Translator.convertType): the classed string → its DATA array (the funnel adjusts)
             emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
-            emit_value!(_prsb, idx_ssa, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
+            emit_value!(_prsb, idx_ssa, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
             num!(_prsb, Opcode.I32_WRAP_I64)
             i32_const!(_prsb, 1)
             num!(_prsb, Opcode.I32_SUB)
@@ -4192,7 +3656,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                 idx=idx, detail=expr)
             unreachable!(_prub); append_builder!(fb, _prub)  # structural trap after recorded unsupported
         end
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
     elseif func isa GlobalRef && func.name === :pointerset
         # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
@@ -4205,7 +3669,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _psb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
-            emit_value!(_psb, _ps_ptr, ctx, I64)   # march14: the wrap-to-i32 follows — the value is an I64 index
+            emit_value!(_psb, _ps_ptr, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
             num!(_psb, Opcode.I32_WRAP_I64)
             emit_value!(_psb, args[2], ctx, I32)
             array_set!(_psb, _ps_arr_t, I32)
@@ -4374,11 +3838,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             record_unsupported!(ctx, :unsupported_method, "un-lowerable pushfirst!/array-mutation call shape"; idx=idx)
             unreachable!(_psub); append_builder!(fb, _psub)
         end
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
     end
 
-    # PURE-325: Int128 checked/div/rem arithmetic can't be compiled (struct args on
+    # Int128 checked/div/rem arithmetic can't be compiled (struct args on
     # stack would mismatch i64 ops). Emit unreachable BEFORE pushing args.
     if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
@@ -4396,13 +3860,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # These are compile-time type parameters, not runtime values
     # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
     # (they get compiled to i32 type tags and compared)
-    # PURE-325: Skip arg-pushing for Core._expr — its handler manages its own args
-    # PURE-905: Skip arg-pushing for cross-call candidates — the cross-call handler
+    # Skip arg-pushing for cross-call candidates — the cross-call handler
     # at line ~20714 pushes args with type bridging. Pre-pushing here causes duplicate
     # args on the stack (e.g., setindex! gets 6 args instead of 3).
     # Cross-call candidates are GlobalRef functions found in the func_registry that
-    # aren't handled by a specific earlier handler (intrinsics, ===, _expr, etc.).
-    is_expr_call = is_func(func, :_expr)
+    # aren't handled by a specific earlier handler (intrinsics, ===, etc.) — Core._expr
+    # never reaches this point at all: THE identity-keyed builtin funnel (builtins.jl)
+    # claims it, self-contained args and all, before the ladder above even starts.
     is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
     # Arithmetic over an escaping mutable capture reaches us as a local-backed
     # `getfield(box, :contents)` SSA plus another operand. The numeric fallback
@@ -4424,7 +3888,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             (p.args[3] isa QuoteNode ? p.args[3].value : p.args[3]) === :contents
     end
     owns_captured_arithmetic = is_materialized_generic_arithmetic && has_box_contents_operand
-    _skip_arg_prepush = is_expr_call
+    _skip_arg_prepush = false
     if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
             !is_numeric_intrinsic && !is_equality_comparison &&
             !owns_captured_arithmetic
@@ -4443,12 +3907,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _skip_arg_prepush = _target !== nothing
         end
     end
-    # PURE-7012: Reorder muladd_float args for correct WASM stack order.
+    # THE single callee-identity extraction (GlobalRef name / Core.IntrinsicFunction
+    # Symbol) — the intrinsics-table route and the quarantine-tier registry route
+    # below reuse this SAME local instead of re-deriving it a second time, so the
+    # muladd/fma reorder gate right below and their eventual FMA_OPS dispatch can
+    # never disagree about which call this is (R19: a data test against `_it_name`,
+    # never a fresh `is_func` probe).
+    local _it_name = func isa GlobalRef ? func.name :
+                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+
+    # Reorder muladd_float/fma_float args for correct WASM stack order.
     # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
     # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
     # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
     _push_args = args
-    if (is_func(func, :muladd_float) || is_func(func, :fma_float)) && length(args) == 3
+    if (_it_name === :muladd_float || _it_name === :fma_float) && length(args) == 3
         _push_args = Any[args[3], args[1], args[2]]
     end
     for arg in _push_args
@@ -4469,7 +3942,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             continue
         end
         local _ia_ty = emit_value!(fb, arg, ctx)  # R17-floor: generic intrinsic normalization consumes actual width
-        # PURE-6027: Fix i32/i64 mismatch for numeric intrinsics — driven by the
+        # Fix i32/i64 mismatch for numeric intrinsics — driven by the
         # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
             _actual_wasm = _ia_ty
@@ -4500,7 +3973,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
         # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
         local _generic_arith = is_generic_arithmetic
-        # parity(M10): when the SSA's REFINED type is already numeric (the join),
+        # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): when the SSA's REFINED type is already numeric (the join),
         # the LOAD (_narrow_generic_local!) is THE single unbox source — appending a
         # second unbox here double-converted. Only unbox when the type is truly erased.
         local _aa_refined_numeric = arg isa Core.SSAValue &&
@@ -4508,9 +3981,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !_aa_refined_numeric
             local _aa_target = is_32bit ? I32 : I64
             emit_classid_unbox!(fb, ctx, _aa_target; nullable=true)
-            _boxed_operand_unboxed = true   # march13: function-scoped (the tail rebox keys on this)
+            _boxed_operand_unboxed = true   # function-scoped (the tail rebox keys on this)
         end
-        # PURE-904: Unbox externref args for numeric intrinsics.
+        # Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
         if is_numeric_intrinsic && _is_externref_value(arg, ctx)
@@ -4520,7 +3993,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # PURE-046: For numeric intrinsics, verify the compiled args don't contain externref
+    # For numeric intrinsics, verify the compiled args don't contain externref
     # (this catches cases where Julia type inference says Int64 but actual struct field is Any)
     if is_numeric_intrinsic && length(args) > 0
         # typed channel: a ref-typed emission feeding a numeric intrinsic = boxed/Any operand
@@ -4531,7 +4004,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local arg1_ssa = args[1]
             if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
                 # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
                     "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                 return append_builder!(b, fb)
@@ -4541,33 +4014,39 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # Migration helper: emit ONE no-immediate numeric/cmp/conv op into `bytes`
     # via a scratch InstrBuilder (byte-identical to push!(bytes, op)).
-    # march17: DIRECT emission — the one-instruction fragment wrapper was a
+    # DIRECT emission — the one-instruction fragment wrapper was a
     # migration artifact; the fresh builder's empty stack underflowed by design
     # and the merge papered over it (7k+ harvest errors from this one idiom).
     _op1! = (op::UInt8) -> num!(fb, op)
 
-    # parity(M11.2): THE INTRINSICS TABLE ROUTE (dart intrinsics.dart) — one
+    # parity(intrinsics.dart:995 _binaryOperatorMap lookup): THE INTRINSICS TABLE ROUTE — one
     # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
-    # emit here; the chain below keeps only what the table can't express
-    # (128-bit, checked-overflow, unary, ===, conversions) and shrinks with M11.
-    local _it_name = func isa GlobalRef ? func.name :
-                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+    # emit here via `emit_intrinsic_binop!` (the ONE production caller — see
+    # intrinsics_table.jl); the chain below keeps only what the table can't
+    # express (128-bit, checked-overflow, unary, ===, conversions) and shrinks
+    # with M11. (`_it_name` is already in scope — hoisted above, ahead of the
+    # muladd/fma arg-reorder gate, so there is only ONE extraction site.)
     if _it_name !== nothing && !is_128bit
         # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
         local _it_w = arg_type === Float64 ? F64 :
                       arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
-        local _it_e = get(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name), nothing)
-        if _it_e !== nothing
-            # Comparisons observe FULL register width — narrow pairs (Int8/Int16 on
-            # i32) normalise first (sign-extend for signed/equality, mask for
-            # unsigned; P2-batch13/14 semantics carried into the table route).
-            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int)
-                _emit_normalise_narrow_pair!(fb, ctx, true, _julia_int_width(arg_type, is_32bit))
-            elseif is_32bit && _it_name in (:ult_int, :ule_int)
-                _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
+        if haskey(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name))
+            # Comparisons and div/rem observe FULL register width — narrow pairs
+            # (Int8/Int16 on i32) normalise first (sign-extend for signed/equality/
+            # signed-div-rem, mask for unsigned; semantics carried into the table
+            # route — same signed/unsigned choice the retired arms used).
+            # This is the callers' wrap channel that `emit_intrinsic_binop!`'s
+            # contract assumes (operands already at their table types).
+            local _dw = _julia_int_width(arg_type, is_32bit)
+            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int,
+                                         :sdiv_int, :srem_int, :checked_sdiv_int, :checked_srem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, true, _dw)
+            elseif is_32bit && _it_name in (:ult_int, :ule_int,
+                                             :udiv_int, :urem_int, :checked_udiv_int, :checked_urem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, false, _dw)
             end
-            _op1!(_it_e.opcode)
-            # march13 (the rebox link): a numeric intrinsic whose SSA LOCAL is
+            local _it_result = emit_intrinsic_binop!(fb, _it_w, _it_w, _it_name, ctx, _dw)
+            # (The rebox link): a numeric intrinsic whose SSA LOCAL is
             # ref-typed (the boxed accumulator: Any-joined phi) must REBOX its
             # result — keyed on the REAL local type, never inference (the sink's
             # re-guess said anyref≡anyref while raw i64 sat on the stack).
@@ -4575,352 +4054,142 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             if _rbx_li !== nothing
                 local _rbx_off = _rbx_li - ctx.n_params
                 if _rbx_off >= 0 && _rbx_off < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off + 1]) &&
-                   _it_e.result in (I32, I64, F32, F64)
+                   _it_result in (I32, I64, F32, F64)
                     (arg_type isa Type && isconcretetype(arg_type)) ||
                         record_unsupported!(ctx, :unsupported_type,
                             "intrinsic result boxing lacks a concrete Julia source type";
                             idx=idx, detail=expr)
-                    emit_classid_box!(fb, ctx, _it_e.result, arg_type)
+                    emit_classid_box!(fb, ctx, _it_result, arg_type)
                 end
             end
             return append_builder!(b, fb)
         end
     end
 
+    # parity(intrinsics.dart:1007 _inlineUnaryOperatorMap lookup): THE UNARY INTRINSICS
+    # TABLE ROUTE — mirrors the binop route above, right after it (same `_it_name`
+    # extraction, same `!is_128bit` guard). Bool routes FIRST, exactly as dart routes
+    # `boolType` ahead of any map lookup (intrinsics.dart:438-444): a `not_int` fed a
+    # comparison result is logical NOT (`i32.eqz`), structurally different from bitwise
+    # NOT (`const -1; xor`) and must never reach the int-typed table entry.
+    if _it_name === :not_int && length(args) == 1 && is_boolean_value(args[1], ctx)
+        _op1!(Opcode.I32_EQZ)
+        return append_builder!(b, fb)
+    elseif _it_name !== nothing && !is_128bit
+        local _ut_w = arg_type === Float64 ? F64 :
+                      arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
+        local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)
+        if _ut_result !== nothing
+            # (The rebox link, mirroring the binop route above.)
+            local _rbx_li2 = get(ctx.ssa_locals, idx, nothing)
+            if _rbx_li2 !== nothing
+                local _rbx_off2 = _rbx_li2 - ctx.n_params
+                if _rbx_off2 >= 0 && _rbx_off2 < length(ctx.locals) && _wt_is_ref(ctx.locals[_rbx_off2 + 1]) &&
+                   _ut_result in (I32, I64, F32, F64)
+                    (arg_type isa Type && isconcretetype(arg_type)) ||
+                        record_unsupported!(ctx, :unsupported_type,
+                            "intrinsic result boxing lacks a concrete Julia source type";
+                            idx=idx, detail=expr)
+                    emit_classid_box!(fb, ctx, _ut_result, arg_type)
+                end
+            end
+            return append_builder!(b, fb)
+        end
+    end
+
+    # parity(quarantine: julia_numeric_tier.jl): THE Int128/UInt128 REGISTRY ROUTE —
+    # dart2wasm has no 128-bit integer type, so this tier has no dart anchor to sit ahead
+    # of; it is reachable only when `is_128bit` (the intrinsics table routes above already
+    # consumed every non-128-bit op). Same nullable-return funnel shape as the tables.
+    if _it_name !== nothing && is_128bit
+        local _it128_result = emit_int128_op!(fb, ctx, _it_name, arg_type, expr, idx)
+        _it128_result !== nothing && return append_builder!(b, fb)
+    end
+
+    # parity(quarantine: julia_numeric_tier.jl): THE Julia-only numeric registries route —
+    # checked overflow, mixed-width shifts, muladd/fma/have_fma, bswap/flipsign. No dart
+    # anchor for any of these (dart's `int` wraps silently on overflow, is uniformly i64,
+    # and dart2wasm has no fma/bswap intrinsic — intrinsics.dart:710-929 has no entries for
+    # them). Same nullable-return funnel shape as the Int128 route just above; unlike that
+    # route this one is NOT gated on `is_128bit` (checked_sadd_int et al. reject 128-bit
+    # operands from INSIDE the registry, exactly as the arms they replace did — shl_int/
+    # ashr_int/lshr_int's is_128bit case is already fully consumed by THE Int128 route above
+    # and never reaches here).
+    if _it_name !== nothing
+        local _jnfbref = Ref(fb)
+        local _jn_result = emit_julia_numeric!(_jnfbref, ctx, _it_name, args, arg_type,
+                                               is_128bit, is_32bit, idx)
+        if _jn_result !== nothing
+            fb = _jnfbref[]
+            return append_builder!(b, fb)
+        end
+    end
+
+    # parity(quarantine: julia_numeric_tier.jl): THE conversions registry route —
+    # sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/fpext/fptrunc/bitcast.
+    # No dart anchor (dart coerces only through convertType, translator.dart:1597,
+    # and the dart:_wasm shims, intrinsics.dart:710-929). Target-type resolution for
+    # sext_int/zext_int/trunc_int stays HERE, not in the registry file, so L77's
+    # three literal diagnostic messages keep their home; sitofp/uitofp/fptosi/
+    # fptoui pass args[1] unresolved exactly as the arms did; bitcast passes the
+    # raw type reference and resolves inside `emit_conversion!`. Same nullable-
+    # return funnel shape as the routes above; for these ten ops the funnel is
+    # EXHAUSTIVE (their calls.jl arms are deleted).
+    if _it_name in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi,
+                    :fptoui, :fpext, :fptrunc, :bitcast)
+        local _cv_julia_dst = length(args) >= 1 ? args[1] : nothing
+        if _it_name === :sext_int || _it_name === :zext_int || _it_name === :trunc_int
+            local _cv_target_ref = _cv_julia_dst
+            _cv_julia_dst = _cv_target_ref isa GlobalRef && isdefined(_cv_target_ref.mod, _cv_target_ref.name) ?
+                getfield(_cv_target_ref.mod, _cv_target_ref.name) : _cv_target_ref
+            if !(_cv_julia_dst isa Type)
+                if _it_name === :sext_int
+                    record_unsupported!(ctx, :unsupported_type,
+                        "sext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                elseif _it_name === :zext_int
+                    record_unsupported!(ctx, :unsupported_type,
+                        "zext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                else
+                    record_unsupported!(ctx, :unsupported_type,
+                        "trunc_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
+                end
+            end
+        end
+        local _cv_julia_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        local _cv_src_wide = length(args) >= 2 && get_phi_edge_wasm_type(args[2], ctx) === I64
+        local _cv_result = emit_conversion!(fb, ctx, _it_name, _cv_julia_src, _cv_julia_dst, idx;
+                                            src_already_wide=_cv_src_wide)
+        _cv_result !== nothing && return append_builder!(b, fb)
+    end
+
     # Match intrinsics by name
-    if is_func(func, :add_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit addition: (a_lo, a_hi) + (b_lo, b_hi)
-        # Stack has: [a_struct, b_struct], need to produce result_struct
-        # This is complex - need to extract fields, compute with carry, create new struct
-        emit_int128_add!(fb, ctx, arg_type)
+    # (add_int/sub_int/mul_int: non-128-bit handled by THE intrinsics table route above;
+    # 128-bit handled by THE Int128 registry route above.)
 
-    elseif is_func(func, :sub_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit subtraction
-        emit_int128_sub!(fb, ctx, arg_type)
+    # checked_s{add,sub,mul}_int/checked_u{add,sub,mul}_int (narrow-width AND
+    # register-width paths, incl. the 128-bit reject stubs): THE julia_numeric_tier.jl
+    # CHECKED_OPS registry route above.
 
-    elseif is_func(func, :mul_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        # 128-bit multiplication (only need low 128 bits of result)
-        emit_int128_mul!(fb, ctx, arg_type)
+    # sdiv_int/udiv_int/srem_int/urem_int (+ checked_* aliases, I32/I64): THE
+    # intrinsics table route above (guard + opcode, same as this arm used to do).
 
-    # P2-batch13: NARROW-WIDTH checked add/sub/mul (Int8/UInt8/Int16/UInt16).
-    # The register-width handlers below detect overflow with sign-bit tricks at
-    # bit 31/63 — but a narrow op can never overflow the wide register, so the
-    # flag stayed false and e.g. checked_abs(Int8(-128)) leaked 128 instead of
-    # throwing OverflowError (lcm(Int8(-128), 1) divergent_throw family).
-    # Compute in i32 on normalised inputs; flag = result fails the
-    # sign/zero-extend round-trip at the JULIA width; value = wrapped result.
-    elseif is_32bit && _julia_int_width(arg_type, is_32bit) < 32 &&
-           (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int) ||
-            is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int) ||
-            is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int))
-        local _ncw = _julia_int_width(arg_type, is_32bit)
-        local _nc_signed = is_func(func, :checked_sadd_int) || is_func(func, :checked_ssub_int) ||
-                           is_func(func, :checked_smul_int)
-        local _nc_op = (is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)) ? Opcode.I32_ADD :
-                       (is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)) ? Opcode.I32_SUB :
-                       Opcode.I32_MUL
-        _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
-        local _nc_r = UInt32(allocate_local!(ctx, I32))
-        local _ncb = _ctx_builder(ctx, "compile_call")
-        num!(_ncb, _nc_op)
-        local_set!(_ncb, _nc_r)
-        # helper: push wrapped-to-width copy of result
-        local _nc_norm! = function ()
-            local_get!(_ncb, _nc_r)
-            if _nc_signed
-                num!(_ncb, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-            else
-                i32_const!(_ncb, Int64((1 << _ncw) - 1))
-                num!(_ncb, Opcode.I32_AND)
-            end
-        end
-        local _nc_tt = Tuple{Int32, Bool}
-        if !haskey(ctx.type_registry.structs, _nc_tt)
-            register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
-        end
-        local _nc_info = ctx.type_registry.structs[_nc_tt]
-        emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
-        _nc_norm!()                                           # field 1: wrapped value
-        _nc_norm!()                                           # flag: wrapped != raw
-        local_get!(_ncb, _nc_r)
-        num!(_ncb, Opcode.I32_NE)
-        struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields (march3)
-        append_builder!(fb, _ncb)
+    # bitcast: THE julia_numeric_tier.jl conversions registry route above.
 
-    # PURE-9003: checked_smul_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Overflow detection via division check: if a != 0 && a != -1: overflow = result/a != b
-    elseif is_func(func, :checked_smul_int) || is_func(func, :checked_umul_int)
-        _compile_call_checked_mul(func, args, fb, ctx, is_128bit, is_32bit)
-
-    # PURE-9003: checked_sadd_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Overflow detection: ((a ^ result) & (b ^ result)) has sign bit set
-    elseif is_func(func, :checked_sadd_int) || is_func(func, :checked_uadd_int)
-        if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit checked addition (Int128/UInt128)"; idx=idx)
-        else
-            is_signed = is_func(func, :checked_sadd_int)
-            local_type = is_32bit ? I32 : I64
-            local_a = allocate_local!(ctx, local_type)
-            local_b = allocate_local!(ctx, local_type)
-            local_result = allocate_local!(ctx, local_type)
-            local _caddb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [a, b]
-
-            # Save b, save a, compute a+b, save result
-            local_set!(_caddb, local_b)
-            local_tee!(_caddb, local_a)
-            local_get!(_caddb, local_b)
-            num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-            local_set!(_caddb, local_result)
-
-            local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
-                               ctx.type_registry.structs[_cadd_tt] :
-                               register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
-            emit_struct_prefix!(_caddb, ctx.type_registry, _cadd_tt, _cadd_info)
-            # Push result back for tuple field 1
-            local_get!(_caddb, local_result)
-
-            # Compute overflow flag
-            if is_signed
-                # Signed: overflow = ((a ^ result) & (b ^ result)) >> (bits-1)
-                local_get!(_caddb, local_a)
-                local_get!(_caddb, local_result)
-                num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                local_get!(_caddb, local_b)
-                local_get!(_caddb, local_result)
-                num!(_caddb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                num!(_caddb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-                if is_32bit
-                    i32_const!(_caddb, 31)
-                    num!(_caddb, Opcode.I32_SHR_U)
-                else
-                    i64_const!(_caddb, 63)
-                    num!(_caddb, Opcode.I64_SHR_U)
-                    num!(_caddb, Opcode.I32_WRAP_I64)
-                end
-            else
-                # Unsigned: overflow = result < a
-                local_get!(_caddb, local_result)
-                local_get!(_caddb, local_a)
-                num!(_caddb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
-            end
-
-            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            if !haskey(ctx.type_registry.structs, tuple_type)
-                register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            end
-            tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
-            append_builder!(fb, _caddb)
-        end
-
-    # PURE-9003: checked_ssub_int(a, b) -> Tuple{T, Bool} (result, overflow_flag)
-    # Signed overflow: ((a ^ b) & (a ^ result)) has sign bit set
-    elseif is_func(func, :checked_ssub_int) || is_func(func, :checked_usub_int)
-        if is_128bit
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
-        else
-            is_signed = is_func(func, :checked_ssub_int)
-            local_type = is_32bit ? I32 : I64
-            local_a = allocate_local!(ctx, local_type)
-            local_b = allocate_local!(ctx, local_type)
-            local_result = allocate_local!(ctx, local_type)
-            local _csubb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [a, b]
-
-            # Save b, save a, compute a-b, save result
-            local_set!(_csubb, local_b)
-            local_tee!(_csubb, local_a)
-            local_get!(_csubb, local_b)
-            num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-            local_set!(_csubb, local_result)
-
-            local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
-                               ctx.type_registry.structs[_csub_tt] :
-                               register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
-            emit_struct_prefix!(_csubb, ctx.type_registry, _csub_tt, _csub_info)
-            # Push result back for tuple field 1
-            local_get!(_csubb, local_result)
-
-            if is_signed
-                # Signed: overflow = ((a ^ b) & (a ^ result)) >> (bits-1)
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_b)
-                num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_result)
-                num!(_csubb, is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-                num!(_csubb, is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-                if is_32bit
-                    i32_const!(_csubb, 31)
-                    num!(_csubb, Opcode.I32_SHR_U)
-                else
-                    i64_const!(_csubb, 63)
-                    num!(_csubb, Opcode.I64_SHR_U)
-                    num!(_csubb, Opcode.I32_WRAP_I64)
-                end
-            else
-                # Unsigned: overflow = a < b
-                local_get!(_csubb, local_a)
-                local_get!(_csubb, local_b)
-                num!(_csubb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
-            end
-
-            tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-            if !haskey(ctx.type_registry.structs, tuple_type)
-                register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-            end
-            tuple_info = ctx.type_registry.structs[tuple_type]
-            struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
-            append_builder!(fb, _csubb)
-        end
-
-    elseif is_func(func, :sdiv_int) || is_func(func, :checked_sdiv_int)
-        local _dw = _julia_int_width(arg_type, is_32bit)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, true, _dw)
-        _emit_div_guard!(fb, ctx, is_32bit; check_overflow=true, julia_width=_dw)
-        _op1!(is_32bit ? Opcode.I32_DIV_S : Opcode.I64_DIV_S)
-
-    elseif is_func(func, :udiv_int) || is_func(func, :checked_udiv_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_DIV_U : Opcode.I64_DIV_U)
-
-    elseif is_func(func, :srem_int) || is_func(func, :checked_srem_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, true, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_REM_S : Opcode.I64_REM_S)
-
-    elseif is_func(func, :urem_int) || is_func(func, :checked_urem_int)
-        is_32bit && _emit_normalise_narrow_pair!(fb, ctx, false, _julia_int_width(arg_type, is_32bit))
-        _emit_div_guard!(fb, ctx, is_32bit)
-        _op1!(is_32bit ? Opcode.I32_REM_U : Opcode.I64_REM_U)
-
-    # Bitcast (reinterpret bits between types)
-    elseif is_func(func, :bitcast)
-        # Bitcast reinterprets bits between same-size types
-        # Need to emit reinterpret instructions for float<->int conversions
-        # args = [target_type, source_value]
-        # Get the target type - it's the first actual argument (args[1] after extracting args[2:end])
-        target_type_ref = length(args) >= 1 ? args[1] : nothing
-        source_val = length(args) >= 2 ? args[2] : nothing
-
-        # Determine target type from the GlobalRef or type literal
-        target_type = if target_type_ref isa GlobalRef
-            # Try to get the actual type from the GlobalRef
-            if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")
-                Int64
-            elseif target_type_ref.name === :UInt64
-                UInt64
-            elseif target_type_ref.name === :Int32 || target_type_ref.name === Symbol("Base.Int32")
-                Int32
-            elseif target_type_ref.name === :UInt32
-                UInt32
-            elseif target_type_ref.name === :Float64
-                Float64
-            elseif target_type_ref.name === :Float32
-                Float32
-            elseif target_type_ref.name === :Int128
-                Int128
-            elseif target_type_ref.name === :UInt128
-                UInt128
-            elseif isdefined(target_type_ref.mod, target_type_ref.name)
-                getfield(target_type_ref.mod, target_type_ref.name)
-            else
-                record_unsupported!(ctx, :unsupported_type,
-                    "reinterpret target GlobalRef is not defined"; idx=idx, detail=target_type_ref)
-            end
-        elseif target_type_ref isa DataType
-            target_type_ref
-        else
-            Any
-        end
-
-        # Determine source type
-        source_type = source_val !== nothing ? infer_value_type(source_val, ctx) : Any
-
-        # Emit appropriate reinterpret instruction if needed
-        if source_type === Float64 && (target_type === Int64 || target_type === UInt64)
-            _op1!(Opcode.I64_REINTERPRET_F64)
-        elseif (source_type === Int64 || source_type === UInt64) && target_type === Float64
-            _op1!(Opcode.F64_REINTERPRET_I64)
-        elseif source_type === Float32 && (target_type === Int32 || target_type === UInt32)
-            _op1!(Opcode.I32_REINTERPRET_F32)
-        elseif (source_type === Int32 || source_type === UInt32) && target_type === Float32
-            _op1!(Opcode.F32_REINTERPRET_I32)
-        end
-        # STACK-003: Char is stored as Julia's internal representation (UTF-8 packed UInt32),
-        # so bitcast(UInt32, Char) and bitcast(Char, UInt32) are no-ops (same as Int32<->UInt32).
-        # For other cases (Int64<->UInt64, Int32<->UInt32, Int128<->UInt128),
-        # bitcast is a no-op in Wasm (same representation)
-
-    elseif is_func(func, :neg_int)
-        if is_128bit
-            # 128-bit negation
-            emit_int128_neg!(fb, ctx, arg_type)
-        elseif is_32bit
-            # For simplicity, emit: i32.const -1, i32.xor, i32.const 1, i32.add
-            # Which is equivalent to: ~x + 1 = -x
-                i32_const!(fb, -1)  # -1 in signed LEB128
-                num!(fb, Opcode.I32_XOR)
-                i32_const!(fb, 1)
-                num!(fb, Opcode.I32_ADD)
-        else
-                i64_const!(fb, -1)  # -1 in signed LEB128
-                num!(fb, Opcode.I64_XOR)
-                i64_const!(fb, 1)
-                num!(fb, Opcode.I64_ADD)
-        end
-
-    elseif is_func(func, :flipsign_int)
-        _compile_call_flipsign(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    # neg_int: non-128-bit handled by THE intrinsics table route above; 128-bit handled
+    # by THE Int128 registry route above.
+    # flipsign_int: THE julia_numeric_tier.jl MISC_OPS registry route above.
 
     # Comparison operations
-    # P2-batch13: ordered comparisons OBSERVE the full register width, so narrow
+    # Ordered comparisons OBSERVE the full register width, so narrow
     # operands must be renormalised first (same policy as div/rem): an Int8 value
     # of -x can sit in the i32 register as 128, and slt_int(128, 0) = false flips
     # checked_abs's overflow test (lcm(Int8(-128), 1) returned 128 instead of
     # throwing). Signed → sign-extend in register; unsigned → mask.
-    elseif is_func(func, :slt_int)  # signed less than
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_slt!(fb, ctx, arg_type)
-
-    elseif is_func(func, :sle_int)  # signed less or equal
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_sle!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ult_int)  # unsigned less than
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ult!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ule_int)  # unsigned less or equal
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ule!(fb, ctx, arg_type)
-
-    elseif is_func(func, :eq_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_eq!(fb, ctx, arg_type)
-
-    elseif is_func(func, :ne_int)
-        # (non-128-bit handled by THE intrinsics table route above)
-        emit_int128_ne!(fb, ctx, arg_type)
-
-    # Float comparison operations
-    elseif is_func(func, :gt_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_GT : Opcode.F64_GT)
-
-    elseif is_func(func, :ge_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_GE : Opcode.F64_GE)
+    # slt_int/sle_int/ult_int/ule_int/eq_int/ne_int: non-128-bit handled by THE
+    # intrinsics table route above; 128-bit handled by THE Int128 registry route above.
 
     # Identity comparison (=== for integers is same as ==, for floats use float eq)
-    elseif is_func(func, :(===))
+    if is_func(func, :(===))
         _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
 
     elseif is_func(func, :(!==))
@@ -5025,549 +4294,25 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
 
-    # Bitwise operations
-    elseif is_func(func, :and_int)
-        if is_128bit
-            emit_int128_and!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_AND : Opcode.I64_AND)
-        end
+    # and_int/or_int/xor_int/not_int (non-128-bit): THE intrinsics table route above
+    # (not_int also has the boolean NOT special case just above it); 128-bit handled
+    # by THE Int128 registry route above.
 
-    elseif is_func(func, :or_int)
-        if is_128bit
-            emit_int128_or!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_OR : Opcode.I64_OR)
-        end
+    # Shift operations: shl_int/ashr_int/lshr_int (128-bit handled by THE Int128
+    # registry route above; the register-width path is THE julia_numeric_tier.jl
+    # SHIFT_OPS registry route above).
 
-    elseif is_func(func, :xor_int)
-        if is_128bit
-            emit_int128_xor!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_XOR : Opcode.I64_XOR)
-        end
+    # ctlz_int/cttz_int/ctpop_int: non-128-bit handled by THE intrinsics table route
+    # above; 128-bit handled by THE Int128 registry route above.
 
-    elseif is_func(func, :not_int)
-        # Check if this is boolean negation (result of comparison)
-        # If so, use eqz instead of bitwise NOT
-        if length(args) == 1 && is_boolean_value(args[1], ctx)
-            # Boolean NOT: eqz turns 0->1, 1->0
-            _op1!(Opcode.I32_EQZ)
-        elseif is_128bit
-            # F11: 128-bit bitwise NOT (xor each i64 limb with -1) — a single i64.xor on a
-            # 128-bit struct value was invalid wasm (surfaced via count_zeros = count_ones(~x)).
-            emit_int128_not!(fb, ctx, arg_type)
-        else
-            # Bitwise NOT: x xor -1
-                if is_32bit
-                    i32_const!(fb, -1)  # -1
-                    num!(fb, Opcode.I32_XOR)
-                else
-                    i64_const!(fb, -1)  # -1
-                    num!(fb, Opcode.I64_XOR)
-                end
-        end
+    # bswap_int (used in Char ↔ codepoint conversion): THE julia_numeric_tier.jl
+    # MISC_OPS registry route above.
 
-    # Shift operations
-    # Note: Wasm requires shift amount to have same type as value being shifted
-    # Julia often uses Int64/UInt64 shift amounts even for Int32 values
-    elseif is_func(func, :shl_int)
-        if is_128bit
-            # 128-bit left shift: stack has [x_struct, n_i64]
-            emit_int128_shl!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                    _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
-            end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
-                                 julia_width = _julia_int_width(arg_type, is_32bit),
-                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
-        end
+    # Float operations: muladd_float/fma_float/have_fma: THE julia_numeric_tier.jl
+    # FMA_OPS registry route above.
 
-    elseif is_func(func, :ashr_int)  # arithmetic shift right
-        if is_128bit
-            # 128-bit arithmetic right shift: stack has [x_struct, n_i64]. shl_int
-            # and lshr_int already special-cased 128-bit; ashr_int did not, so signed
-            # `Int128 >> n` fell through to the i64 guard and emitted `i64.shr_s` on
-            # the struct ref (validation: expected i64, found (ref null $int128) —
-            # WasmMakie TwicePrecision range/tick widemul path).
-            emit_int128_ashr!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Truncate i64 shift amount to i32
-                    _op1!(Opcode.I32_WRAP_I64)
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
-            end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
-        end
-
-    elseif is_func(func, :lshr_int)  # logical shift right
-        if is_128bit
-            # 128-bit logical right shift: stack has [x_struct, n_i64]
-            emit_int128_lshr!(fb, ctx, arg_type)
-        else
-            if length(args) >= 2
-                shift_type = infer_value_type(args[2], ctx)
-                if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                    # Saturating wrap of i64 amount → i32 (preserves over-shift magnitude)
-                    _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-                elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                    # Extend i32 shift amount to i64 (Wasm requires matching types)
-                    _op1!(Opcode.I64_EXTEND_I32_S)
-                end
-            end
-            _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
-                                 julia_width = _julia_int_width(arg_type, is_32bit),
-                                 signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
-        end
-
-    # Count leading/trailing zeros (used in Char conversion)
-    elseif is_func(func, :ctlz_int)
-        if is_128bit
-            emit_int128_ctlz!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_CLZ : Opcode.I64_CLZ)
-        end
-
-    elseif is_func(func, :cttz_int)
-        if is_128bit
-            emit_int128_cttz!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_CTZ : Opcode.I64_CTZ)
-        end
-
-    # PURE-9004: Population count (number of set bits)
-    elseif is_func(func, :ctpop_int)
-        if is_128bit
-            emit_int128_ctpop!(fb, ctx, arg_type)
-        else
-            _op1!(is_32bit ? Opcode.I32_POPCNT : Opcode.I64_POPCNT)
-        end
-
-    # Byte swap (used in Char ↔ codepoint conversion)
-    # WebAssembly has no native bswap — implement with bit manipulation
-    elseif is_func(func, :bswap_int)
-        if is_128bit
-            # 128-bit byte-swap is unsupported: the i64 reversal sequence below would run on a
-            # struct value → invalid wasm. Loud-reject (sound trap / strict reject) like the
-            # Int128 div/rem guard, rather than emitting an invalid module. (Full impl = reverse
-            # 16 bytes = bswap each i64 limb + swap lo/hi; deferred — niche op.)
-            emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "128-bit byte-swap (Int128/UInt128)"; idx=idx)
-            return append_builder!(b, fb)
-        end
-        # Allocate a scratch local to hold the input value (need it 4 times)
-        scratch_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, is_32bit ? I32 : I64)
-        local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the input
-        # Store input value
-        local_set!(_bswb, scratch_local)
-        if is_32bit
-            # i32 bswap: reverse 4 bytes
-            # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
-            # Part 1: (x >> 24) & 0xFF — top byte to bottom
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(24))
-            num!(_bswb, Opcode.I32_SHR_U)
-            i32_const!(_bswb, Int64(0xFF))
-            num!(_bswb, Opcode.I32_AND)
-            # Part 2: (x >> 8) & 0xFF00
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(8))
-            num!(_bswb, Opcode.I32_SHR_U)
-            i32_const!(_bswb, Int64(0xFF00))
-            num!(_bswb, Opcode.I32_AND)
-            num!(_bswb, Opcode.I32_OR)
-            # Part 3: (x << 8) & 0xFF0000
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(8))
-            num!(_bswb, Opcode.I32_SHL)
-            i32_const!(_bswb, Int64(0xFF0000))
-            num!(_bswb, Opcode.I32_AND)
-            num!(_bswb, Opcode.I32_OR)
-            # Part 4: x << 24 — bottom byte to top
-            local_get!(_bswb, scratch_local)
-            i32_const!(_bswb, Int64(24))
-            num!(_bswb, Opcode.I32_SHL)
-            num!(_bswb, Opcode.I32_OR)
-        else
-            # i64 bswap: reverse 8 bytes
-            # Same pattern but with 8 byte positions
-            local_get!(_bswb, scratch_local)
-            i64_const!(_bswb, Int64(56))
-            num!(_bswb, Opcode.I64_SHR_U)
-            i64_const!(_bswb, Int64(0xFF))
-            num!(_bswb, Opcode.I64_AND)
-            for (shift, mask) in [(40, 0xFF00), (24, 0xFF0000), (8, 0xFF000000),
-                                   (-8, 0xFF00000000), (-24, 0xFF0000000000),
-                                   (-40, 0xFF000000000000)]
-                local_get!(_bswb, scratch_local)
-                if shift > 0
-                    i64_const!(_bswb, Int64(shift))
-                    num!(_bswb, Opcode.I64_SHR_U)
-                else
-                    i64_const!(_bswb, Int64(-shift))
-                    num!(_bswb, Opcode.I64_SHL)
-                end
-                i64_const!(_bswb, Int64(mask))
-                num!(_bswb, Opcode.I64_AND)
-                num!(_bswb, Opcode.I64_OR)
-            end
-            # Last part: x << 56 (no mask needed)
-            local_get!(_bswb, scratch_local)
-            i64_const!(_bswb, Int64(56))
-            num!(_bswb, Opcode.I64_SHL)
-            num!(_bswb, Opcode.I64_OR)
-        end
-        append_builder!(fb, _bswb)
-
-    # Float operations
-    elseif is_func(func, :add_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    elseif is_func(func, :sub_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_SUB : Opcode.F64_SUB)
-
-    elseif is_func(func, :mul_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-
-    elseif is_func(func, :div_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_DIV : Opcode.F64_DIV)
-
-    elseif is_func(func, :neg_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_NEG : Opcode.F64_NEG)
-
-    # Fused multiply-add: muladd_float(a, b, c) = a*b + c
-    # WASM doesn't have native fma, so we implement as mul then add
-    elseif is_func(func, :muladd_float)
-        # Stack has [a, b, c], we need to compute a*b + c
-        # First multiply a*b, then add c
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    # fma_float: hardware FMA intrinsic. WASM has no scalar FMA instruction,
-    # so emit mul+add. This branch is dead code when have_fma returns false,
-    # but WASM requires structurally valid bytecode for both branches.
-    elseif is_func(func, :fma_float)
-        _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-
-    # have_fma: runtime FMA availability check. WASM has no scalar FMA,
-    # so always return false. The type argument (Float64) is not on the stack.
-    elseif is_func(func, :have_fma)
-            i32_const!(fb, 0)  # false — WASM has no hardware FMA
-
-    # Type conversions
-    elseif is_func(func, :sext_int)  # Sign extend
-        # sext_int(TargetType, value) - first arg is target type
-        target_type_ref = args[1]
-        # Extract actual type from GlobalRef if needed
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "sext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-        local _sxb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the operand
-        if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
-            src_wasm = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
-            if src_wasm !== I64
-                # P2-batch13: a narrow source must be renormalised at its JULIA
-                # width first — sext_int(Int64, x::Int8) with register value 128
-                # otherwise widens to 128 instead of -128.
-                local _sx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-                if _sx_src === Int8
-                    num!(_sxb, Opcode.I32_EXTEND8_S)
-                elseif _sx_src === Int16
-                    num!(_sxb, Opcode.I32_EXTEND16_S)
-                elseif _sx_src === UInt8
-                    i32_const!(_sxb, Int64(0xff)); num!(_sxb, Opcode.I32_AND)
-                elseif _sx_src === UInt16
-                    i32_const!(_sxb, Int64(0xffff)); num!(_sxb, Opcode.I32_AND)
-                end
-                num!(_sxb, Opcode.I64_EXTEND_I32_S)
-            end
-        elseif target_type === Int128 || target_type === UInt128
-            # Sign-extending to 128-bit - create struct with (typeId, lo=value, hi=sign_extension)
-            # The value is already on the stack (i64)
-            source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-
-            # If source is 32-bit, sign-extend to 64-bit first
-            # PURE-325: Bool also maps to i32
-            if source_type === Int32 || source_type === UInt32 || source_type === Int16 || source_type === Int8 || source_type === Bool
-                num!(_sxb, Opcode.I64_EXTEND_I32_S)
-            end
-
-            # Now we have i64 on stack (the lo part)
-            # Need to duplicate it to compute the hi part (sign extension)
-            # Use a scratch local: store, load twice
-            scratch_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, I64)
-
-            # Store to scratch
-            local_tee!(_sxb, scratch_idx)
-
-            # Compute hi = lo >> 63 (arithmetic shift, gives 0 or -1)
-            i64_const!(_sxb, 63)  # 63
-            num!(_sxb, Opcode.I64_SHR_S)
-
-            # Stack: [hi]. Need [typeId, lo, hi] for struct.new
-            # Save hi to scratch, then push typeId, lo, hi
-            scratch2_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, I64)
-            local_set!(_sxb, scratch2_idx)
-
-            # Stack: [] — push in struct field order: typeId, lo, hi
-            i32_const!(_sxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
-            local_get!(_sxb, scratch_idx)
-            local_get!(_sxb, scratch2_idx)
-
-            # Create the 128-bit struct (typeId, lo, hi)
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_sxb, type_idx)   # mod-resolved fields (march3)
-        end
-        # If extending to 32-bit (Int32), it's a no-op since small types already map to i32
-        append_builder!(fb, _sxb)
-
-    elseif is_func(func, :zext_int)  # Zero extend
-        # zext_int(TargetType, value) - first arg is target type
-        target_type_ref = args[1]
-        # Extract actual type from GlobalRef if needed
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "zext_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-        # P3 gap da22976c7cd6: sub-32-bit values live in i32 locals that can
-        # carry dirty high bits (e.g. `0x01 + 0xff` leaves 0x100 — add_int does
-        # not re-narrow). zext_int takes the BITS of the source width, so mask
-        # to that width before extending (`x << Int64(0x01 + x)` shifted by 256
-        # instead of 0 — over-shift gave 0 where native wraps the count).
-        _zx_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
-        _zx_mask = (_zx_src === UInt8 || _zx_src === Int8) ? Int64(0xFF) :
-                   (_zx_src === UInt16 || _zx_src === Int16) ? Int64(0xFFFF) : Int64(0)
-        local _zxb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the operand
-        if target_type === Int64 || target_type === UInt64
-            # Extending to 64-bit - emit extend instruction
-            # PURE-324: Skip extend if source is already i64 (e.g., from widened phi local)
-            src_wasm_z = length(args) >= 2 ? get_phi_edge_wasm_type(args[2], ctx) : nothing
-            if src_wasm_z !== I64
-                if _zx_mask != 0
-                    i32_const!(_zxb, _zx_mask)
-                    num!(_zxb, Opcode.I32_AND)
-                end
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            end
-        elseif target_type === Int32 || target_type === UInt32
-            # Same-register-class extension: mask the source width so dirty
-            # carry bits don't leak into the wider type
-            if _zx_mask != 0 && get_phi_edge_wasm_type(args[2], ctx) !== I64
-                i32_const!(_zxb, _zx_mask)
-                num!(_zxb, Opcode.I32_AND)
-            end
-        elseif target_type === Int128 || target_type === UInt128
-            # Extending to 128-bit - create struct with (typeId, lo=value, hi=0)
-            # The value is already on the stack (i64), need to create 128-bit struct
-            source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : UInt64
-
-            # If source is 32-bit or narrower, extend to 64-bit first
-            # PURE-325: Bool also maps to i32, so include it here
-            # P3 da22976c7cd6: 8/16-bit sources also live in i32 — mask their
-            # width (dirty carry bits) before the unsigned extend
-            if _zx_mask != 0
-                i32_const!(_zxb, _zx_mask)
-                num!(_zxb, Opcode.I32_AND)
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
-                num!(_zxb, Opcode.I64_EXTEND_I32_U)
-            end
-
-            # Now we have i64 on stack (the lo part)
-            # Save lo to scratch, push typeId, restore lo, then push hi=0
-            _zext_scratch = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I64)
-            local_set!(_zxb, _zext_scratch)
-            i32_const!(_zxb, Int64(ensure_type_id!(ctx.type_registry, target_type)))  # real classId (M3)
-            local_get!(_zxb, _zext_scratch)
-            # Push 0 for hi part
-            i64_const!(_zxb, 0)
-
-            # Create the 128-bit struct (typeId, lo, hi)
-            type_idx = get_int128_type!(ctx.mod, ctx.type_registry, target_type)
-            struct_new!(_zxb, type_idx)   # mod-resolved fields (march3)
-        end
-        # If extending to 32-bit (UInt32/Int32), it's a no-op since small types already map to i32
-        append_builder!(fb, _zxb)
-
-    elseif is_func(func, :trunc_int)  # Truncate to smaller type
-        # trunc_int(TargetType, value)
-        target_type_ref = args[1]
-        target_type = target_type_ref isa GlobalRef && isdefined(target_type_ref.mod, target_type_ref.name) ?
-            getfield(target_type_ref.mod, target_type_ref.name) : target_type_ref
-        target_type isa Type || record_unsupported!(ctx, :unsupported_type,
-            "trunc_int target is not a defined Julia type"; idx=idx, detail=target_type_ref)
-
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-
-        # Determine source and target WASM bit widths
-        # PURE-324: Also check actual Wasm type — widened phi locals may be I64
-        # even though Julia type says UInt32
-        source_is_64bit = source_type === Int64 || source_type === UInt64 || source_type === Int
-        if !source_is_64bit && length(args) >= 2
-            src_wasm_t = get_phi_edge_wasm_type(args[2], ctx)
-            if src_wasm_t === I64
-                source_is_64bit = true
-            end
-        end
-        target_is_32bit = target_type === Int32 || target_type === UInt32 ||
-                          target_type === Int16 || target_type === UInt16 ||
-                          target_type === Int8 || target_type === UInt8 ||
-                          target_type === Bool || target_type === Char
-
-        local _trb = _sub_builder(fb, ctx, "compile_call", 1)   # march17: consumes the source
-        if source_type === Int128 || source_type === UInt128
-            # Truncating from 128-bit - extract lo part
-            source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
-            struct_get!(_trb, source_type_idx, UInt32(1), I64)  # Field 1 = lo (0=typeId)
-
-            # Now we have i64, may need to wrap to i32
-            if target_is_32bit
-                num!(_trb, Opcode.I32_WRAP_I64)
-            end
-        elseif source_is_64bit && target_is_32bit
-            # i64 to i32 truncation (includes UInt8, Int8, UInt16, Int16 targets)
-            num!(_trb, Opcode.I32_WRAP_I64)
-        end
-        # i64 to i64 or i32 to i32 is a no-op
-        # P3 gap 40da73b299fc (2nd find): sub-32-bit targets must be width-
-        # normalised — bare i32.wrap_i64 is 32-bit truncation, so the
-        # InexactError round-trip `zext(trunc(x)) == x` compared x against
-        # itself and let out-of-range values through silently. Unsigned
-        # targets zero-mask; signed targets sign-extend (so sext consumers
-        # and the return marshalling read the right value directly).
-        if target_type === Bool
-            i32_const!(_trb, 1)
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === UInt8
-            i32_const!(_trb, Int64(0xFF))
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === UInt16
-            i32_const!(_trb, Int64(0xFFFF))
-            num!(_trb, Opcode.I32_AND)
-        elseif target_type === Int8
-            num!(_trb, Opcode.I32_EXTEND8_S)
-        elseif target_type === Int16
-            num!(_trb, Opcode.I32_EXTEND16_S)
-        end
-        append_builder!(fb, _trb)
-
-    elseif is_func(func, :sitofp)  # Signed int to float
-        # sitofp(TargetType, value) - first arg is target type, second is value
-        # Need to check: target float type (first arg) and source int type (second arg)
-        target_type = args[1]  # Float32 or Float64
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
-                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
-                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
-
-        # P3 gap 40ed488e7f10: narrow signed values can sit in the i32 register
-        # zero-extended (e.g. a width-masked shl leaves Int8(-8) as 0xF8), but
-        # the signed convert reads the full register. Sign-extend at the
-        # consumer, same convention as the comparison normalisation.
-        if source_type === Int8
-            _op1!(Opcode.I32_EXTEND8_S)
-        elseif source_type === Int16
-            _op1!(Opcode.I32_EXTEND16_S)
-        end
-
-        if target_type === Float32
-            _op1!(source_is_32bit ? Opcode.F32_CONVERT_I32_S : Opcode.F32_CONVERT_I64_S)
-        else  # Float64
-            _op1!(source_is_32bit ? Opcode.F64_CONVERT_I32_S : Opcode.F64_CONVERT_I64_S)
-        end
-
-    elseif is_func(func, :uitofp)  # Unsigned int to float
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        source_is_32bit = source_type === Int32 || source_type === UInt32 || source_type === Char ||
-                          source_type === Int16 || source_type === UInt16 || source_type === Int8 || source_type === UInt8 ||
-                          (isprimitivetype(source_type) && sizeof(source_type) <= 4)
-
-        if target_type === Float32
-            _op1!(source_is_32bit ? Opcode.F32_CONVERT_I32_U : Opcode.F32_CONVERT_I64_U)
-        else  # Float64
-            _op1!(source_is_32bit ? Opcode.F64_CONVERT_I32_U : Opcode.F64_CONVERT_I64_U)
-        end
-
-    elseif is_func(func, :fptosi)  # Float to signed int
-        # fptosi(TargetType, value) - first arg is target type
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
-        source_is_f32 = source_type === Float32
-
-        if target_type === Int32 || target_type === Int16 || target_type === Int8
-            _op1!(source_is_f32 ? Opcode.I32_TRUNC_F32_S : Opcode.I32_TRUNC_F64_S)
-        else  # Int64
-            _op1!(source_is_f32 ? Opcode.I64_TRUNC_F32_S : Opcode.I64_TRUNC_F64_S)
-        end
-
-    elseif is_func(func, :fptoui)  # Float to unsigned int
-        target_type = args[1]
-        source_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Float64
-        source_is_f32 = source_type === Float32
-
-        if target_type === UInt32 || target_type === UInt16 || target_type === UInt8
-            _op1!(source_is_f32 ? Opcode.I32_TRUNC_F32_U : Opcode.I32_TRUNC_F64_U)
-        else  # UInt64
-            _op1!(source_is_f32 ? Opcode.I64_TRUNC_F32_U : Opcode.I64_TRUNC_F64_U)
-        end
-
-    elseif is_func(func, :fpext)  # Float precision extension
-        _compile_call_fpext(args, fb, ctx)
-
-    elseif is_func(func, :fptrunc)  # Float precision truncation (Float64 → Float32)
-        # fptrunc(TargetType, value) - truncate Float64 to Float32
-        # The source is always Float64, target is Float32
-        _op1!(0xB6)  # f32.demote_f64
-
-    elseif is_func(func, :trunc_llvm)  # Truncate float towards zero (returns float)
-        _op1!(arg_type === Float32 ? Opcode.F32_TRUNC : Opcode.F64_TRUNC)
-
-    elseif is_func(func, :floor_llvm)  # Floor float
-        _op1!(arg_type === Float32 ? Opcode.F32_FLOOR : Opcode.F64_FLOOR)
-
-    elseif is_func(func, :ceil_llvm)  # Ceil float
-        _op1!(arg_type === Float32 ? Opcode.F32_CEIL : Opcode.F64_CEIL)
-
-    elseif is_func(func, :rint_llvm)  # Round to nearest even
-        _op1!(arg_type === Float32 ? Opcode.F32_NEAREST : Opcode.F64_NEAREST)
-
-    elseif is_func(func, :abs_float)  # Absolute value of float
-        _op1!(arg_type === Float32 ? Opcode.F32_ABS : Opcode.F64_ABS)
-
-    elseif is_func(func, :sqrt_llvm) || is_func(func, :sqrt_llvm_fast)  # Square root
-        _op1!(arg_type === Float32 ? Opcode.F32_SQRT : Opcode.F64_SQRT)
-
-    elseif is_func(func, :copysign_float)  # Copy sign
-        _op1!(arg_type === Float32 ? Opcode.F32_COPYSIGN : Opcode.F64_COPYSIGN)
-
-    elseif is_func(func, :min_float) || is_func(func, :min_float_fast)
-        _op1!(arg_type === Float32 ? Opcode.F32_MIN : Opcode.F64_MIN)
-
-    elseif is_func(func, :max_float) || is_func(func, :max_float_fast)
-        _op1!(arg_type === Float32 ? Opcode.F32_MAX : Opcode.F64_MAX)
+    # Type conversions: sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/
+    # fpext/fptrunc: THE julia_numeric_tier.jl conversions registry route above.
 
     # High-level operators (fallback)
     elseif is_func(func, :+)
@@ -5598,13 +4343,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # invoke) fell into the numeric branch and emitted i64.mul on two
         # string refs — the E-003 island's fn#107 validation failure. Route
         # to the same compile_string_concat the invoke path uses; args were
-        # pre-pushed, so rebuild the buffer (PURE-908 pattern).
+        # pre-pushed, so rebuild the buffer (pattern).
         _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
         _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
         if length(args) == 2 && (_conc1 === String || _conc1 === Symbol) &&
            (_conc2 === String || _conc2 === Symbol)
             fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-            append_builder!(fb, compile_string_concat_b(args[1], args[2], ctx))
+            append_builder!(fb, compile_string_concat_many_b([args[1], args[2]], ctx))
         elseif arg_type === Float32
             _op1!(Opcode.F32_MUL)
         elseif arg_type === Float64
@@ -5615,21 +4360,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _op1!(Opcode.I64_MUL)
         end
 
-    # Compiler hints - these can be ignored
-    elseif is_func(func, :compilerbarrier)
-        # compilerbarrier(kind, value) - just return the value
-        # The first arg is a symbol (like :type), second is the actual value
-        # We only pushed the value (args[2]) since args[1] is a QuoteNode
-        # The value is already on stack, nothing more to do
-
     # isa() - type checking for Union discrimination
     elseif is_func(func, :isa) && length(args) >= 2
         _compile_call_isa(args, fb, ctx)
 
     # throw() - compile to WASM throw instruction
     elseif func isa GlobalRef && func.name === :throw
-        # PURE-1102: Emit throw instruction with tag 0 (our Julia exception tag)
-        # PURE-9032: Stash exception value in $current_exn global before throwing.
+        # Emit throw instruction with tag 0 (our Julia exception tag)
+        # Stash exception value in $current_exn global before throwing.
         # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
         ensure_exception_tag!(ctx.mod)
         exn_global = ensure_exception_global!(ctx.mod)
@@ -5661,18 +4399,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         global_get!(_thrb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(_thrb, ExternRef); throw_!(_thrb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
-    # PURE-1102: throw_methoderror — emit throw (catchable) instead of unreachable
+    # throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func isa GlobalRef && func.name === :throw_methoderror
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         ensure_exception_tag!(ctx.mod)
             global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-        ctx.last_stmt_was_stub = true  # PURE-908
+        ctx.last_stmt_was_stub = true
 
-    # PURE-4149: Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
+    # Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
     # _svec_len returns Int64 = array.len (converted from i32 to i64).
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
-    # PURE-6021: args[1] (svec array) is already pre-pushed by the generic loop above.
+    # args[1] (svec array) is already pre-pushed by the generic loop above.
     elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || (isdefined(Core, :_svec_len) && func === Core._svec_len)) && length(args) == 1
         # P4-stdlib: fold against host-constant svecs (padding/typename.names)
         local _svl = _try_host_svec(args[1], ctx)
@@ -5685,17 +4423,17 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 num!(fb, Opcode.I64_EXTEND_I32_U)
         end
 
-    # PURE-4149: Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
+    # Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
     # Match both GlobalRef and direct builtin function object (same as _svec_len above).
-    # PURE-6021: args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
+    # args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
     # the generic loop above — do NOT call compile_value again here (causes double-push,
     # leaving 2 orphaned values on the stack → "values remaining" validation error).
     elseif ((func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) || (isdefined(Core, :_svec_ref) && func === Core._svec_ref)) && length(args) == 2
         # Get element from externref array
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
-        local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # march17: [svec, i64 idx] on fb
+        local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # [svec, i64 idx] on fb
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
         num!(_svrb, Opcode.I32_WRAP_I64)
         i32_const!(_svrb, 1)  # 1
@@ -5805,11 +4543,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         _emit_svec_values!(fb, args, ctx)
 
-    # PURE-604/605: Core builtins re-exported through Base (isdefined, getfield, setfield!).
+    # Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These builtins share the ordinary typed struct/tuple lowering below.
     elseif func isa GlobalRef &&
            any(name -> is_builtin_func(func, name), (:isdefined, :getfield, :setfield!))
-        # PURE-908: Clear pre-pushed args
+        # Clear pre-pushed args
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         # P4-stdlib (Statistics median): getfield on a compile-time CONSTANT
         # receiver (QuoteNode) — e.g. getfield(typename(UInt64), :flags) from
@@ -5925,7 +4663,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        # parity(M10b): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
+        # parity(closures.dart:1365 Context): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
         # (dart Context variable write); the value wraps to anyref through the funnel.
         if !_gfc_done && func.name === :setfield! && length(args) == 3 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -5943,7 +4681,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _bxs_ib)
             _gfc_done = true
         end
-        # parity(M10b): isdefined(%box::Core.Box, :contents) — the shared cell's
+        # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
         # defined-check = a null test on the anyref contents.
         if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -6005,7 +4743,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
             end
         end
-        # parity(M10b): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read). The cell is the F3 anyref box struct.
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
@@ -6020,7 +4758,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             append_builder!(fb, _bx_ib)
             _gfc_done = true
         end
-        # parity(M10b): getfield(closure_value, :boxfield) — the box was born in a
+        # parity(closures.dart:1365 Context): getfield(closure_value, :boxfield) — the box was born in a
         # callee; read the registered struct field here (the ONE shared cell).
         if !_gfc_done && func.name === :getfield && length(args) == 2 &&
            ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
@@ -6061,32 +4799,29 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             record_unsupported!(ctx, :unsupported_method,
                                 "$(func.name) call shape not lowerable";
                                 idx=idx, detail=expr)
-            ctx.last_stmt_was_stub = true  # PURE-908
+            ctx.last_stmt_was_stub = true
         end
 
-    # PURE-604: Symbol(x) — in WasmGC, Symbol IS String (both are byte arrays).
-    # The argument is already compiled as a string array — just pass through.
-    elseif is_func(func, :Symbol) && func isa GlobalRef && length(args) == 1
-        _compile_call_symbol(args, fb, ctx)
-
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
-    # PURE-325: Skip cross-call lookup for Core._expr — it's a builtin that has a
-    # special handler below (line ~19900). Without this guard, get_function returns
-    # nothing (builtins aren't in the function registry) and emits unreachable.
-    elseif func isa GlobalRef && ctx.func_registry !== nothing && !is_func(func, :_expr)
+    # Core._expr never reaches here — THE identity-keyed builtin funnel
+    # (builtins.jl) claims it long before this ladder starts.
+    elseif func isa GlobalRef && ctx.func_registry !== nothing
         # Try to find this function in our registry
         called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
 
         # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
         # try looking up by name string in func_registry. This handles import stubs
         # like compiled_get_prop_string_id referenced from re-exported modules.
+        # parity(quarantine: getfield already lost the func_ref here — dart never
+        # does this, it resolves every callee by Reference identity
+        # (functions.dart:26) — see get_function_by_export_name's own anchor).
         # WASMMAKIE E-003: the name match MUST also match arity — with broad
         # registries (65 canvas ops incl. names like width/height/fill/stroke/
         # rect/save/translate) the bare-name redirect hijacked unrelated
         # same-named calls and emitted arity-mismatched call instructions
         # (validation: 'not enough arguments on the stack').
         if called_func === nothing
-            target_by_name = get_function(ctx.func_registry, string(func.name))
+            target_by_name = get_function_by_export_name(ctx.func_registry, string(func.name))
             if target_by_name !== nothing && length(target_by_name.arg_types) == length(args)
                 called_func = target_by_name.func_ref
             end
@@ -6102,7 +4837,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             target_info = get_function(ctx.func_registry, called_func, call_arg_types;
                                        expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
 
-            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            # Closure/kwarg functions are registered with self-type prepended
             if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                 closure_arg_types = (typeof(called_func), call_arg_types...)
                 target_info = get_function(ctx.func_registry, called_func, closure_arg_types;
@@ -6147,7 +4882,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         actual_julia_type = call_arg_types[arg_idx]
                         actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
-                        # PURE-901/4155: Handle Nothing→ref conversion BEFORE type bridging.
+                        # Handle Nothing→ref conversion BEFORE type bridging.
                         # compile_value emits i32_const 0 for Nothing,
                         # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                         # otherwise bridging tries any_convert_extern on an i32 value.
@@ -6167,7 +4902,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             end
                         end
 
-                        # march5 F8 (twin of the invoke collapse): the bridging chain IS
+                        # F8 (twin of the invoke collapse): the bridging chain IS
                         # one convertType call (dart code_generator.dart:879). The tracked
                         # emission type refines `actual`; replaced arms incl. the phantom
                         # handled above.
@@ -6183,13 +4918,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # here used to hide the call's parameter pops from validation.
                 local _xcb = fb
                 call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
-                # PURE-3111: If the callee returns Union{} (Bottom), it always throws.
+                # If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
                 if target_info.return_type === Union{}
                     unreachable!(_xcb)  # structural trap (dart-legit dead path)
                     ctx.last_stmt_was_stub = true
-                # PURE-900: Bridge type gap between function's Wasm return type
+                # Bridge type gap between function's Wasm return type
                 # and the caller's SSA local type. Handles both directions:
                 # 1. externref → ConcreteRef: any_convert_extern + ref.cast
                 # 2. ConcreteRef → externref: extern_convert_any
@@ -6204,7 +4939,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             any_convert_extern!(_xcb)
                             ref_cast!(_xcb, Int64(target_local_type.type_idx), true)
                         elseif target_local_type === AnyRef && ret_wasm === ExternRef
-                            # PURE-908: Function returns externref, local expects anyref
+                            # Function returns externref, local expects anyref
                             any_convert_extern!(_xcb)
                         elseif target_local_type === ExternRef && ret_wasm !== ExternRef && ret_wasm !== nothing
                             # Function returns concrete/struct/array ref, local expects externref
@@ -6222,7 +4957,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             # 1f6e77980994: callee returns a numeric but the SSA local is a
                             # ref class (dynamic Any-typed call site, e.g. getindex on a bond
                             # Vector resolving to an i32-returning overload) — box the RESULT
-                            # (on the stack) exactly like the PURE-9022 arg path via the one emitter.
+                            # (on the stack) exactly like the arg path via the one emitter.
                             # The box struct is already a structref subtype — no cast needed for StructRef.
                             local _ret_jt = target_info.return_type
                             (_ret_jt isa Type && isconcretetype(_ret_jt)) ||
@@ -6283,7 +5018,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         _dyneq_ok = true
                     end
                 end
-                # parity(M10b): convert(T, x) where x's REFINED type is already T —
+                # parity(translator.dart:1598 Translator.convertType): convert(T, x) where x's REFINED type is already T —
                 # identity (dart: no conversion node when types agree). The join can
                 # refine an erased Any to T after inference classified the convert.
                 if !_dyneq_ok && called_func === Base.convert && length(args) == 2 &&
@@ -6314,16 +5049,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # recursion over heterogeneous AST nodes (md"…" rendering).
                 _disp = _try_inline_typeid_dispatch(ctx, called_func, args, call_arg_types, idx)
                 if _disp !== nothing
-                    fb = _disp   # discard-and-replace: the dispatch builder IS the product (march4)
+                    fb = _disp   # discard-and-replace: the dispatch builder IS the product
                 else
                 # No matching signature - likely dead code from Union type branches
                 # Emit unreachable instead of error (the branch won't be taken at runtime)
-                # PURE-605: Suppress warning for known-safe dynamic dispatch paths where
+                # Suppress warning for known-safe dynamic dispatch paths where
                 # Julia couldn't specialize (arg types contain Any/abstract types).
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # PURE-908: clear pre-pushed args
+                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                 if get(ctx.ssa_types, idx, Any) === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
                     ctx.last_stmt_was_stub = true
@@ -6411,7 +5146,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             end
 
                             # Create the NamedTuple struct
-                            struct_new!(_ntb, info.wasm_type_idx)   # mod-resolved fields (march3)
+                            struct_new!(_ntb, info.wasm_type_idx)   # mod-resolved fields
                             append_builder!(fb, _ntb)
                         else
                             error("NamedTuple/Tuple field count mismatch: $(length(names)) vs $(length(value_types))")
@@ -6429,89 +5164,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             error("NamedTuple constructor requires exactly one tuple argument, got $(length(args)) args")
         end
 
-    # Special case for Core._expr — creates an Expr(head::Symbol, args::Vector{Any})
-    # IR pattern: Core._expr(:head, arg1, arg2, ...) with 1+ args
-    # head is the first arg (Symbol), remaining args become the Expr.args Vector{Any}
-    elseif is_func(func, :_expr)
-        # Register Expr type if not already registered
-        if !haskey(ctx.type_registry.structs, Expr)
-            register_struct_type!(ctx.mod, ctx.type_registry, Expr)
-        end
-
-        if haskey(ctx.type_registry.structs, Expr)
-            expr_info = ctx.type_registry.structs[Expr]
-
-            # Ensure Vector{Any} is registered (for the args field)
-            if !haskey(ctx.type_registry.structs, Vector{Any})
-                register_vector_type!(ctx.mod, ctx.type_registry, Vector{Any})
-            end
-            vec_any_info = ctx.type_registry.structs[Vector{Any}]
-
-            # Ensure Tuple{Int64} is registered (for Vector size field)
-            if !haskey(ctx.type_registry.structs, Tuple{Int64})
-                register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Int64})
-            end
-            size_tuple_info = ctx.type_registry.structs[Tuple{Int64}]
-
-            # Get array type for Any (externref array)
-            any_array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Any)
-            str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-            # args[1] is the head (Symbol), args[2:end] are the Expr.args elements
-            head_arg = args[1]
-            expr_args = args[2:end]
-            n_expr_args = length(expr_args)
-
-            # Locals-first approach: compile each piece into a local, then assemble.
-
-            # Step 1: Compile head (Symbol = array<i32>) → local
-            # parity(M9): the head Symbol is a CLASSED string value
-            head_local = allocate_local!(ctx, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), true))
-                emit_value!(fb, head_arg, ctx, static_wasm_type(head_arg, ctx))
-                local_set!(fb, head_local)
-
-            # Step 2: Create data array (array<anyref>) → local
-            # Any maps to the registered array element type. Every element flows
-            # through the typed boxing/conversion chokepoint.
-            wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
-            if n_expr_args == 0
-                    i32_const!(fb, 0)
-                    array_new_default!(fb, any_array_type_idx)
-            else
-                # Push each arg, then array_new_fixed
-                for ea in expr_args
-                    emit_value!(fb, ea, ctx, wasm_elem_type)
-                end
-                    array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
-            end
-            data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
-                local_set!(fb, data_arr_local)
-
-                # Step 3: Create Tuple{Int64} for size → local (typeId, then value)
-                emit_struct_prefix!(fb, ctx.type_registry, Tuple{Int64}, size_tuple_info)
-                i64_const!(fb, Int64(n_expr_args))
-                struct_new!(fb, size_tuple_info.wasm_type_idx)   # mod-resolved fields (march3)
-            size_local = allocate_local!(ctx, ConcreteRef(size_tuple_info.wasm_type_idx, true))
-            let ib = _sub_builder(fb, ctx, "compile_call", 1)   # march17: the size tuple
-                local_set!(ib, size_local)
-
-                # Step 4: Assemble Expr struct
-                emit_struct_prefix!(ib, ctx.type_registry, Expr, expr_info)
-                # Push head (Expr field 1)
-                local_get!(ib, head_local)
-                # Create Vector{Any} inline (Expr field 2): push typeId, data_array, size_tuple, struct.new
-                emit_struct_prefix!(ib, ctx.type_registry, Vector{Any}, vec_any_info)
-                local_get!(ib, data_arr_local)
-                local_get!(ib, size_local)
-                struct_new!(ib, vec_any_info.wasm_type_idx)   # mod-resolved fields (march3)
-                # struct.new Expr with (typeId, head, vector)
-                struct_new!(ib, expr_info.wasm_type_idx)   # mod-resolved fields (march3)
-                append_builder!(fb, ib)
-            end
-
-            return append_builder!(b, fb)
-        end
-
     else
         # GlobalRef constructor call: SSA return type reveals the struct being constructed
         if func isa GlobalRef
@@ -6523,19 +5175,19 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # Unknown function call — emit unreachable (will trap at runtime)
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
-        # PURE-908: Clear pre-pushed args before UNREACHABLE
+        # Clear pre-pushed args before UNREACHABLE
         local _urb = _ctx_builder(ctx, "compile_call")
         record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)";
                             idx=idx, detail=expr)
         unreachable!(_urb)  # structural trap after recorded unsupported
-        fb = _urb   # discard-and-replace (march4)
-        ctx.last_stmt_was_stub = true  # PURE-908
+        fb = _urb   # discard-and-replace
+        ctx.last_stmt_was_stub = true
     end
 
-    # parity(M6/F3): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
+    # parity(translator.dart:1621 Translator.convertType): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
     # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
-    # march13: keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a
+    # Keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a
     # LOOP-scoped variable made this arm silently dead for every call since introduction.
     if (@isdefined _boxed_operand_unboxed) && _boxed_operand_unboxed && !ctx.last_stmt_was_stub
         local _dl = get(ctx.ssa_locals, idx, nothing)
@@ -6732,7 +5384,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     emit_value!(bld, target_value, ctx, AnyRef; from_julia=typeof(target_value))
     emit_struct_prefix!(bld, ctx.type_registry, Tuple{}, args_info)
     struct_new!(bld, args_info.wasm_type_idx)
-    i64_const!(bld, reinterpret(Int64, UInt64(Base.get_world_counter())))
+    i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
     global_set!(bld, exn_global)
     global_get!(bld, exn_global, AnyRef)

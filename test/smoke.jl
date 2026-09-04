@@ -52,11 +52,46 @@ _g("controlflow", Any[
 ])
 
 # ---- phi / union (the boxing channel) -------------------------------------
+# P4-types (get_concrete_wasm_type / julia_to_wasm_type_concrete fold): protect the
+# Union{Nothing,T}-for-locals EqRef seam (CG-003d) before the two duplicate chains merge.
+struct _PU
+    v::Int64
+end
+struct _PUWrap
+    inner::Union{Nothing,_PU}
+end
 _g("phi_union", Any[
     ("loop_phi", (n::Int64) -> (s = 0; for i in 1:n; s += i % 2 == 0 ? i : -i; end; s), Int64(6)),
     ("union_add", (b::Bool) -> (b ? 10 : 20) + 1, true),
     ("ternary_widen", (x::Int64) -> x > 5 ? 1.5 : 2.5, Int64(2)),
     ("acc_float", (n::Int64) -> (s = 0.0; for i in 1:n; s += i; end; s), Int64(5)),
+    # (1) two-edge if/else phi: one Nothing edge, one concrete-struct edge, stored in a
+    # local then used. Exercises the EqRef-for-locals path when the local is re-read.
+    ("phi_nothing_struct",
+     (x::Int64) -> (r = x > 0 ? _PU(x) : nothing; y = r; y === nothing ? Int64(-1) : y.v),
+     Int64(3)),
+    # (2) >=3-predecessor phi (if/elseif/elseif/else) merging Union{Nothing,_PU}.
+    ("phi_3way_nothing_struct",
+     (x::Int64) -> (r = if x == 1
+         _PU(10)
+     elseif x == 2
+         _PU(20)
+     elseif x == 3
+         nothing
+     else
+         _PU(30)
+     end; r === nothing ? Int64(-1) : r.v),
+     Int64(2)),
+    # (3) a Union{Nothing,_PU} value widened through an Any-typed intermediate, then
+    # merged again at a second phi (one edge sourced from the Any local, one Nothing).
+    ("phi_any_intermediate",
+     (x::Int64) -> (pre = x > 0 ? _PU(x) : nothing; dyn::Any = pre; post = x > 3 ? dyn : nothing;
+                    (post isa _PU) ? post.v : Int64(-1)),
+     Int64(6)),
+    # (4) a struct field of type Union{Nothing,T} read straight into a local, then used.
+    ("struct_field_nothing_to_local",
+     (x::Int64) -> (w = _PUWrap(x > 0 ? _PU(x) : nothing); f = w.inner; f === nothing ? Int64(-1) : f.v),
+     Int64(8)),
 ])
 
 # ---- arrays ---------------------------------------------------------------
@@ -83,15 +118,63 @@ _g("anyarray_boxing", Any[
 ])
 
 # ---- dicts ----------------------------------------------------------------
+# Native-built Dict{String,Int} CONSTANT: slots/keys/vals are embedded verbatim
+# (compile_memory_elements!, values.jl) at their NATIVE hash-placed positions,
+# so this only resolves in wasm when hash(::String) is bit-exact with native
+# (ground-truth string hashing; see string_hash_ground_truth.jl).
+const _SMOKE_HASH_DS = Dict("a" => 1, "bb" => 2, "ccc" => 3)
 _g("dicts", Any[
     ("dict_get", (x::Int64) -> (d = Dict(1 => 10, 2 => 20, 3 => 30); get(d, x, 0)), Int64(2)),
     ("dict_build", (n::Int64) -> (d = Dict{Int64,Int64}(); for i in 1:n; d[i] = i * i; end; sum(values(d))), Int64(4)),
     ("dict_haskey", (x::Int64) -> (d = Dict(1 => 1, 2 => 2); haskey(d, x) ? 1 : 0), Int64(2)),
+    # native-built constants: only occupied slots are serialized (unoccupied isbits
+    # slots held host heap garbage — process-varying bytes), and a constant Vector
+    # read only through .size registers its struct on demand
+    ("dict_const_get", (x::Int64) -> _SMOKE_DICT[x] + get(_SMOKE_DICT, x + 100, -1), Int64(2)),
+    ("dict_const_grow", (x::Int64) -> (d = copy(_SMOKE_DICT); d[x + 50] = 7; length(d) + d[x + 50]), Int64(3)),
+    ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
+    # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
+    ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
+    # copy of a String-keyed Dict: isbitstype(String) folds (no sizeof(String) branch)
+    # and the non-isbits Memory copy divides byte offsets by the reference stride
+    ("dict_str_copy_grow", (x::Int64) -> (d = copy(_SMOKE_DS); d["cc"] = x; length(d) * 10 + d["bb"]), Int64(3)),
+    # reference-element copies at offset 0 and above (stride 8 both sides)
+    ("vec_str_copy_push", (x::Int64) -> (w = copy(_SMOKE_VS); push!(w, "e"); length(w) * 10 + length(w[2]) + x), Int64(0)),
+    ("vec_str_slice", (x::Int64) -> (w = _SMOKE_VS[2:3]; length(w) * 10 + length(w[1]) + length(w[2]) + x), Int64(0)),
+    ("vec_str_copy_set", (x::Int64) -> (w = copy(_SMOKE_VS); w[2] = "zz"; length(_SMOKE_VS[2]) * 10 + length(w[2]) + x), Int64(0)),
 ])
+
+# ---- isa / typeassert against parametric abstracts on Any-typed values ---
+# AbstractVector = AbstractArray{T,1}: a DFS range keyed by the base could not answer
+# it (constant false), and its wasm type reached the matrix registrar (illegal cast).
+@noinline _smoke_anyvec(n::Int64) = n > 0 ? Any[1.0, 2.0] : Any[Float64[1.0, 2.0], "s", Int64[3]]
+_g("abstract_isa", Any[
+    ("isa_abstractvector", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(0)),
+    ("isa_abstractarray", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractArray && (c += 1); end; c), Int64(0)),
+    ("isa_abstractvector_none", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(1)),
+    ("typeassert_abstractvector", (n::Int64) -> (v = _smoke_anyvec(n)[1]::AbstractVector; v isa Vector{Float64} ? length(v)::Int : -1), Int64(0)),
+    ("dict_str_const_lookup", () -> _SMOKE_HASH_DS["bb"]),
+])
+const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
+const _SMOKE_VEC = Int64[1, 2, 3]
+const _SMOKE_VEC2 = Int64[4, 5, 6]
+const _SMOKE_SET = Set([1, 2, 3, 40])
+const _SMOKE_DS = Dict{String,Int64}("a" => 1, "bb" => 2)
+const _SMOKE_VS = ["a", "bb", "ccc", "dddd"]
 
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end
 mutable struct _Box; v::Int64; end
+mutable struct _RegTarget; v::Float64; end
+mutable struct _Holder; slot::Union{Nothing,_RegTarget}; end
+# @noinline so the struct genuinely escapes and setfield!/getfield compile for
+# real (inlined into a single closure body, Julia's SROA scalar-replaces the
+# field down to pure dataflow and never exercises the setfield! codegen path
+# this regresses).
+@noinline function _wt_clear_slot!(h::_Holder)
+    h.slot = nothing
+    return h.slot === nothing
+end
 _g("structs_tuples", Any[
     ("struct_field", (n::Int64) -> (p = _Pt(n, n + 1); p.x + p.y), Int64(3)),
     ("mutable_struct", (n::Int64) -> (b = _Box(n); b.v += 10; b.v), Int64(5)),
@@ -101,6 +184,11 @@ _g("structs_tuples", Any[
     # Loop B′: heterogeneous tuple at a RUNTIME index → Union element via the uniform box (both arms).
     ("het_tuple_rtidx", (x::Int64) -> (t = (10, 2.5); s = t[x]; s isa Int64 ? s : Int64(round(s))), Int64(1)),
     ("const_het_tuple_rtidx", (x::Int64) -> (t = (100, 3.5, 200); v = t[x]; v isa Int64 ? v : Int64(round(v))), Int64(1)),
+    # Phase 6.1 regression: `h.slot = nothing` lowers `nothing` as GlobalRef(Mod,:nothing),
+    # NOT a literal — setfield! into a Union{Nothing,ConcreteStruct} field must null the
+    # field with ITS OWN concrete type, not the generic bottom ref (MOI.Utilities.Model
+    # crash trigger). Round-trips nothing → back to a real struct value.
+    ("setfield_nothing_regression", (x::Float64) -> (h = _Holder(_RegTarget(x)); r1 = _wt_clear_slot!(h) ? 1 : 0; h.slot = _RegTarget(x * 2); r2 = h.slot === nothing ? 0.0 : h.slot.v; Float64(r1) + r2), 3.0),
 ])
 
 # ---- closures (capture; mutate-capture = F3) ------------------------------
@@ -141,9 +229,16 @@ _g("strings_classed", Any[
 # ---- dispatch (multiple methods / types) ----------------------------------
 _disp(x::Int64) = x * 2
 _disp(x::Float64) = x + 0.5
+# formal(dev/formal/ClassIdDispatch.tla) DispatchExact: four classed receivers through the ONE
+# selector table — rows packed with the whole span reserved, the classId span guard in front of
+# call_indirect (the MethodError-trap fix; test/dispatch_method_error.jl has the trap side).
+struct _SmA x::Int32 end; struct _SmB x::Int32 end; struct _SmC x::Int32 end; struct _SmD x::Int32 end
+_smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _smd(a::_SmD) = Int32(4)
+@noinline _smd_fwd(x::Any)::Int32 = _smd(x)
 _g("dispatch", Any[
     ("dispatch_int", (x::Int64) -> _disp(x), Int64(5)),
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
+    ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
 ])
 
 # ---- filtered folds (was the #1 SILENT MISCOMPILE: _InitialValue sentinel through

@@ -925,6 +925,118 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     end
 end
 
+# ============================================================================
+# Sidecar differential comparison (Phase 10.2 prototype — native linear-memory
+# module, dev/PARITY_MASTER.md roadmap item 3)
+# ============================================================================
+
+"""
+    _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types) -> String
+
+Driver body for the persistent runner pool, sidecar-aware: embeds
+`sidecar_bytes` as a hex literal directly in the generated JS (the pool's
+`bytes` channel — `run_driver_batch(main_bytes, src)` — only carries ONE
+binary, the main GC module; the sidecar rides inline in `src` instead).
+Instantiates the sidecar FIRST with no imports of its own, passes its
+exports as `importObject[sidecar_module_name]`, THEN instantiates `bytes`
+(the main module) against that import object — the two-module HOST-linking
+shape `add_import!`/`import_stubs` target, not `wasm-merge` (L98's road is
+for two WT-compiled GC binaries sharing one object model; the sidecar owns
+its own linear memory and shares no object model with the caller at all).
+
+Only scalar Float64 args and Vector{Float64} args are supported (daxpy's
+signature); Vector{Float64} args/results marshal through the `_bv_f64_*`
+bridge, which must already be compiled into the main module.
+"""
+function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_module_name::AbstractString,
+                                          func_name::AbstractString, args, arg_types)
+    lines = String[]
+    push!(lines, "  try {")
+    push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
+    push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
+    push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
+    push!(lines, "    const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };")
+    push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
+    push!(lines, "    const e = wasmModule.instance.exports;")
+
+    call_args = String[]
+    for (i, (arg, T)) in enumerate(zip(args, arg_types))
+        if T === Vector{Float64}
+            v = arg::Vector{Float64}
+            push!(lines, "    const v$(i) = e._bv_f64_new($(length(v))n);")
+            for (j, val) in enumerate(v)
+                js_val = isnan(val) ? "NaN" : isinf(val) ? (val > 0 ? "Infinity" : "-Infinity") : string(val)
+                push!(lines, "    e['_bv_f64_set!'](v$(i), $(j)n, $(js_val));")
+            end
+            push!(call_args, "v$(i)")
+        elseif T === Float64
+            js_val = isnan(arg) ? "NaN" : isinf(arg) ? (arg > 0 ? "Infinity" : "-Infinity") : string(arg)
+            push!(call_args, js_val)
+        else
+            error("_generate_sidecar_bridge_driver: unsupported arg type $T")
+        end
+    end
+
+    push!(lines, "    const result = e['$(func_name)']($(join(call_args, ", ")));")
+    push!(lines, "    const len = Number(e._bv_f64_len(result));")
+    push!(lines, "    const out = [];")
+    push!(lines, "    for (let i = 0; i < len; i++) {")
+    push!(lines, "      const v = e._bv_f64_get(result, BigInt(i+1));")
+    push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
+    push!(lines, "      else if (v === Infinity) out.push('Inf');")
+    push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+    push!(lines, "      else out.push(v);")
+    push!(lines, "    }")
+    push!(lines, "    return [{ ok: out }];")
+    push!(lines, "  } catch (err) {")
+    push!(lines, "    return [{ trap: String(err && err.message || err) }];")
+    push!(lines, "  }")
+    return join(lines, "\n")
+end
+
+"""
+    compare_sidecar_wasm_vec(main_bytes, sidecar_bytes, sidecar_module_name,
+                              func_name, expected, args...) -> NamedTuple
+
+Sidecar-aware variant of [`compare_julia_wasm_vec`](@ref) for the two-module
+host-linking pattern (`parity(functions.dart:90 wasm:import/export;
+translator.dart:213 ffiMemory)`). `expected` is a precomputed oracle — NEVER
+derived by calling `func_name`'s Julia function natively, since its import
+stub calls are `Base.inferencebarrier`/`Base.donotdelete` no-ops off the wasm
+boundary — compared element-wise (via `_approx_equal`) against the
+`Vector{Float64}` wasm result of calling `func_name(args...)` in the
+compiled `main_bytes` module, with the `sidecar_bytes` module instantiated
+first and wired in as `importObject[sidecar_module_name]`.
+
+Returns `(pass, expected, actual, skipped, wasm_size)`, matching every other
+`compare_julia_wasm_*` helper's shape.
+"""
+function compare_sidecar_wasm_vec(main_bytes::Vector{UInt8}, sidecar_bytes::Vector{UInt8},
+                                   sidecar_module_name::AbstractString, func_name::AbstractString,
+                                   expected::Vector{Float64}, args...)
+    if !WasmRunner.runner_available()
+        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(main_bytes))
+    end
+    arg_types = map(typeof, args)
+    driver = _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types)
+    status, results = WasmRunner.run_driver_batch(main_bytes, driver; ninputs=1)
+    if status === :nonode
+        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(main_bytes))
+    elseif status === :error
+        return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(main_bytes))
+    end
+    r = results[1]
+    if haskey(r, "trap")
+        return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(main_bytes))
+    end
+    actual_raw = unmarshal_result(r["ok"])
+    actual = actual_raw isa Vector ? [_parse_f64(x) for x in actual_raw] : actual_raw
+    pass = actual isa Vector && length(actual) == length(expected) &&
+           all(i -> _approx_equal(actual[i], expected[i]), 1:length(expected))
+    return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(main_bytes))
+end
+
 """
     compare_julia_wasm_bridge(f, args...; rettype=nothing, optimize=false) -> NamedTuple
 

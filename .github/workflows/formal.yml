@@ -1,0 +1,20 @@
+name: Formal models
+on:
+  push:
+    branches: [main]
+  pull_request:
+# Only the newest push per branch runs; a superseded run is cancelled.
+concurrency:
+  group: formal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tlc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Model-check every instance under dev/formal (and require the Broken ones to fail)
+        run: dev/formal/run_tlc.sh

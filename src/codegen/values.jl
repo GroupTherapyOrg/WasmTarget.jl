@@ -14,11 +14,11 @@ NEVER to describe a value that has already been emitted; the emission's own retu
 test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
 """
 function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
-    # PURE-036af: Handle nothing specially - compile_value(nothing) produces i32_const 0
+    # Handle nothing specially - compile_value(nothing) produces i32_const 0
     if val === nothing
         return I32
     end
-    # PURE-043: Handle GlobalRef by resolving it and recursively determining type
+    # Handle GlobalRef by resolving it and recursively determining type
     # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
     # GlobalRef to struct instance emits struct_new
     if val isa GlobalRef
@@ -50,9 +50,9 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         end
         # Fall back to Julia type inference
         ssa_type = get(ctx.ssa_types, val.id, Any)
-        return julia_to_wasm_type_concrete(ssa_type, ctx)
+        return get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
     elseif val isa Core.SlotNumber
-        # PURE-6024: SlotNumber in unoptimized IR — check slot_locals first, then params
+        # SlotNumber in unoptimized IR — check slot_locals first, then params
         if haskey(ctx.slot_locals, val.id)
             local_idx = ctx.slot_locals[val.id]
             local_array_idx = local_idx - ctx.n_params + 1
@@ -67,14 +67,14 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             arg_idx = val.id - 1
         end
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         else
             source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
+            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
         return AnyRef
     elseif val isa Core.Argument
-        # PURE-325: Match compile_value's offset — for regular functions, _1 is the
+        # Match compile_value's offset — for regular functions, _1 is the
         # function object, so actual args start at _2 → arg_types[1].
         if ctx.is_compiled_closure
             arg_idx = val.n
@@ -87,7 +87,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             tuple_info === nothing && error("packed vararg tuple layout is unavailable")
             return ConcreteRef(UInt32(tuple_info.wasm_type_idx), true)
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            return julia_to_wasm_type_concrete(ctx.arg_types[arg_idx], ctx)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         end
         return I32
     else
@@ -96,7 +96,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             return I64
         elseif val isa Int32 || val isa UInt32 || val isa Bool ||
                val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
-            # P2-batch11: narrow ints were MISSING here — a literal like 0x00
+            # Narrow ints were MISSING here — a literal like 0x00
             # fell through to AnyRef, so `return 0x00` failed
             # return_type_compatible(AnyRef, I32) and compiled to `unreachable`
             # (gap 46fd6782e95c). compile_value already emits i32.const for these.
@@ -106,7 +106,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         elseif val isa Float32
             return F32
         elseif val isa QuoteNode
-            # PURE-043: QuoteNode wraps a value - recursively determine its type.
+            # QuoteNode wraps a value - recursively determine its type.
             # D-001: IR reference types inside QuoteNodes are literal structs, not IR refs.
             inner = val.value
             if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
@@ -116,24 +116,24 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             end
             return static_wasm_type(inner, ctx)
         elseif val isa Symbol || val isa String
-            # parity(M9): String/Symbol constants are the CLASSED string struct
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif val isa Type
-            # PURE-4155: Type values (like Bool, Int64) compile to global.get (DataType struct ref).
+            # Type values (like Bool, Int64) compile to global.get (DataType struct ref).
             # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
-            # PURE-9063: Use $JlDataType when hierarchy is available
+            # Use $JlDataType when hierarchy is available
             dt_idx = get_datatype_type_idx(ctx.type_registry)
             return ConcreteRef(dt_idx, true)
         elseif val isa Core.TypeName
-            # PURE-9064: TypeName constants compile to global.get ($JlTypeName struct ref)
+            # TypeName constants compile to global.get ($JlTypeName struct ref)
             tn_idx = ctx.type_registry.jl_typename_idx
             if tn_idx !== nothing
                 return ConcreteRef(tn_idx, true)
             end
             return StructRef
         elseif isstructtype(typeof(val))
-            # PURE-043: Struct values compile to struct_new (ConcreteRef)
+            # Struct values compile to struct_new (ConcreteRef)
             return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
         else
             return AnyRef
@@ -383,7 +383,7 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
     if !val_is_ref && ret_is_ref
         return true
     end
-    haskey(ENV, "WT_TRACE_RETCOMPAT") && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
+    tracing(:retcompat) && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
     return false
 end
 
@@ -416,20 +416,20 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         return b
     elseif _wt_is_ref(from) && !_wt_is_ref(to)
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
-        # march5 F8: an externref source crosses the boundary first (the box lives
+        # F8: an externref source crosses the boundary first (the box lives
         # under anyref; ref.cast from externref is not wasm-valid).
         from === ExternRef && any_convert_extern!(b)
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
-        # march16 (dart convertType, closure meets a top type): a KNOWN closure's
+        # (dart convertType, closure meets a top type): a KNOWN closure's
         # captured struct erasing to any/eq/struct becomes the closure OBJECT
         # {classId, context, vtable} — the value stays dynamically callable.
         if (to === AnyRef || to === EqRef || to === StructRef) && from isa ConcreteRef &&
            maybe_wrap_closure!(b, ctx, from_julia)
             return b
         end
-        # parity(M9): the STRING arms — the classed string {classId,data} vs its byte
+        # parity(translator.dart:1597 convertType): the STRING arms — the classed string {classId,data} vs its byte
         # array. Ops consume/produce the array; values carry the class (dart: methods
         # read the class's array field; convertType adjusts at every boundary).
         local _ssi = ctx.type_registry.string_struct_idx
@@ -441,7 +441,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
             if _to_is_sarr && !_from_is_sarr
                 # any string-ish ref → its data array: narrow to $JlString, read data
-                # (march12: an externref source crosses the boundary first)
+                # (an externref source crosses the boundary first)
                 from === ExternRef && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
@@ -457,7 +457,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         end
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
         if to === ExternRef && from !== ExternRef
-            # march16: a KNOWN closure crossing to extern wraps first (the seam)
+            # A KNOWN closure crossing to extern wraps first (the seam)
             from isa ConcreteRef && maybe_wrap_closure!(b, ctx, from_julia)
             # any→extern at the JS boundary.
             extern_convert_any!(b)
@@ -482,7 +482,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         else
             # Downcast.
             if to isa ConcreteRef
-                # march16: a downcast to a CLOSURE's captured struct may receive the
+                # A downcast to a CLOSURE's captured struct may receive the
                 # closure OBJECT (the erasure seam wrapped it) — unwrap via .context
                 # when the runtime value is the object; direct cast otherwise.
                 local _cbase = ctx.type_registry.closure_base_idx
@@ -492,7 +492,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 local _cvg = ctx.type_registry.closure_vtable_globals
                 local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
                     local _tcj = nothing
-                    for (T, info) in ctx.type_registry.structs
+                    for (T, info) in registered_structs(ctx.type_registry)
                         if info.wasm_type_idx == to.type_idx && is_closure_type(T)
                             _tcj = T; break
                         end
@@ -535,7 +535,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             num!(b, Opcode.F32_CONVERT_I64_S)
         elseif from === I32 && to === F32
             num!(b, Opcode.F32_CONVERT_I32_S)
-        # march5 F8: the NARROWING arms (dart throws here; Julia call boundaries
+        # F8: the NARROWING arms (dart throws here; Julia call boundaries
         # genuinely narrow — e.g. an Int64 value meeting an Int32 param)
         elseif from === I64 && to === I32
             num!(b, Opcode.I32_WRAP_I64)
@@ -633,7 +633,7 @@ end
 """
     emit_string_wrap!(b, mod, registry)
 
-parity(M9) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
+parity(constants.dart:872 visitStringConstant) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
 byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The ONE
 place a string value is born; every string producer routes here.
 """
@@ -663,22 +663,6 @@ function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
 end
 
 """
-    emit_string_data!(b, mod, registry; from_anyref=false)
-
-parity(M9) — the classed string CONSUMER: with a string value on the stack
-(`\$JlString` or anyref), read its `data` byte array. String OPS call this once at
-entry and work on the array — dart's methods read the class's array field the same way.
-"""
-function emit_string_data!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
-                           from_anyref::Bool=false)
-    struct_idx = get_string_struct_type!(mod, registry)
-    arr_idx = get_string_array_type!(mod, registry)
-    from_anyref && ref_cast!(b, Int64(struct_idx), false)
-    struct_get!(b, UInt32(struct_idx), UInt32(2), ConcreteRef(arr_idx, true))
-    return b
-end
-
-"""
     emit_classid_range_check!(b, low, high)
 
 dart's `emitClassIdRangeCheck` (code_generator.dart:3847-3884), THE single abstract-type
@@ -700,7 +684,7 @@ function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
     return b
 end
 
-"""march9 — dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
+"""— dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
 plus the post-DFS drift ids. typeId is on the stack; result i32. Uses a scratch local
 when extras exist."""
 function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
@@ -715,6 +699,44 @@ function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
         i32_const!(b, Int64(x))
         num!(b, Opcode.I32_EQ)
         num!(b, Opcode.I32_OR)
+    end
+    return b
+end
+
+emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                     range::Tuple{<:Integer,<:Integer}, extras::Vector{Int32}) =
+    emit_classid_ranges!(b, ctx, range[1], range[2], extras)
+
+"""isa's classId test for a non-concrete type over the closed world: the exact id set
+(concrete_class_ids), emitted as dart's range window when it is contiguous and as an
+OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32."""
+function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
+    isempty(ids) && return emit_classid_ranges!(b, ctx, nothing, ids)
+    if ids[end] - ids[1] + 1 == length(ids)
+        return emit_classid_range_check!(b, ids[1], ids[end])
+    end
+    return emit_classid_ranges!(b, ctx, nothing, ids)
+end
+
+"""The extras-only check: an abstract type with NO DFS range (no descendant was in the
+closed world when assign_type_ids! ran) whose subtypes were numbered lazily. dart never
+has this case (one ClassIdNumbering pass, class_info.dart:831); WT's lazy path records the
+id on every ancestor (ensure_type_id!), and this is where a range-less ancestor reads it.
+typeId on the stack; result i32."""
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                              ::Nothing, extras::Vector{Int32})
+    if isempty(extras)
+        drop!(b)
+        i32_const!(b, 0)
+        return b
+    end
+    sc = allocate_local!(ctx, I32)
+    local_tee!(b, sc)
+    for (i, x) in enumerate(extras)
+        i > 1 && local_get!(b, UInt32(sc))
+        i32_const!(b, Int64(x))
+        num!(b, Opcode.I32_EQ)
+        i > 1 && num!(b, Opcode.I32_OR)
     end
     return b
 end
@@ -751,7 +773,7 @@ end
     emit_return_coerced!(b, val, ctx)
 
 Emit a ReturnNode value `val` coerced to the function's wasm return type. Extracted from ~9
-identical copies (cleanup Loop 4). PURE-315: a numeric value into a ref return → synthesize
+identical copies (cleanup Loop 4). a numeric value into a ref return → synthesize
 ref.null / extern-box. Else if the value type cannot satisfy the return type → `unreachable`
 (trap). Else compile the value + the numeric-widening / extern-convert coercion ladder, then
 `return`. Byte-identical to the inlined blocks it replaces.
@@ -771,7 +793,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         return_!(b)
         return b
     end
-    # parity(M2): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
+    # parity(code_generator.dart:1372 visitReturnStatement): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
     # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
     # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an
     # ill-typed non-box concrete target now traps loudly instead of silently nulling).
@@ -804,7 +826,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
 end
 
 """
-PURE-908: Compile a GotoIfNot condition to i32.
+Compile a GotoIfNot condition to i32.
 When the condition SSA value has an anyref/externref local (because Julia typed it as Any),
 the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
 ref.cast + struct.get when needed.
@@ -812,9 +834,9 @@ ref.cast + struct.get when needed.
 # MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
-"""THE condition visitor (march4): emit the i32 condition directly into the target builder."""
+"""THE condition visitor (): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
-    if haskey(ENV, "WT_TRACE_CONDSTUB") && ctx.last_stmt_was_stub
+    if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
             println(stderr, "   ", fr)
@@ -867,7 +889,7 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
-    # march3: THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
+    # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
     # proved _compile_value_b's tracked stack honest (zero liars across smoke +
     # the heaviest shards after the struct_new! mod-resolving fix).
     vb = _compile_value_b(val, ctx)
@@ -1001,18 +1023,18 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
         emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :
         emit_type_id!(b, ctx.type_registry, T)
-    # parity(M10): the narrow DECLARES its stack effect so the typed channel sees the
+    # parity(wasm_builder/lib/src/builder/instructions.dart:494 _verifyTypes, :212 _stackTypes): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
-    # march4: THE narrow channel emits direct — the cast/unbox is tracked (the
+    # THE narrow channel emits direct — the cast/unbox is tracked (the
     # declared pops/pushes contract died with the bytes buffer).
     _narrow!(li, sid) = _narrow_generic_local!(b, li, sid, ctx)
 
-    # PURE-6022: If we're in dead code (previous sub-call was a stub), don't compile
+    # If we're in dead code (previous sub-call was a stub), don't compile
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
-        haskey(ENV, "WT_TRACE_DEADVAL") && println(stderr, "DEADVAL val=", first(repr(val), 60))
+        tracing(:deadval) && println(stderr, "DEADVAL val=", first(repr(val), 60))
         unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
         return b
     end
@@ -1029,7 +1051,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         if haskey(ctx.ssa_locals, val.id)
             local_idx = ctx.ssa_locals[val.id]
             local_get!(b, local_idx)
-            # PURE-901: Narrow generic locals (anyref/structref) to concrete type.
+            # Narrow generic locals (anyref/structref) to concrete type.
             # When SSA type is concrete but local was allocated as generic (due to Union/Any),
             # ref.cast ensures downstream struct_get/array_get see the correct type.
             _narrow!(local_idx, val.id)
@@ -1039,7 +1061,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             local_get!(b, local_idx)
         else
             # No local - check if this is a PiNode
-            # PURE-6021: Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
+            # Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
             # that appear as constant literals in IR of compiler functions like construct_ssa!)
             if val.id < 1 || val.id > length(ctx.code_info.code)
                 return b  # Dead code - sentinel SSAValue with invalid id
@@ -1056,7 +1078,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         underlying_type = get(ctx.ssa_types, stmt.val.id, Any)
                         # For Union{Nothing, T}, emit ref.null $T
                         if underlying_type !== Nothing && underlying_type !== Any
-                            wasm_type = julia_to_wasm_type_concrete(underlying_type, ctx)
+                            wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
                             if wasm_type isa ConcreteRef
                                 ref_null!(b, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
                                 emitted_nothing = true
@@ -1071,7 +1093,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
                     emit_value!(b, stmt.val, ctx)  # R17-floor: Pi source representation selects unboxing
-                    # PURE-9030: Unbox from anyref to numeric type when PiNode narrows
+                    # Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
                     local _pi_target_wasm = julia_to_wasm_type(pi_type)
@@ -1107,20 +1129,20 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                             emit_classid_unbox!(b, ctx, _pi_target_wasm)
                         end
                     else
-                        # CG-003d: PiNode narrows to a struct/ref type (not numeric).
+                        # PiNode narrows to a struct/ref type (not numeric).
                         # Source value may be EqRef/StructRef/AnyRef (from Union{Nothing, T} local).
                         # Add ref.cast_null to narrow to the concrete type so struct.get works.
-                        local _pi_concrete = julia_to_wasm_type_concrete(pi_type, ctx)
+                        local _pi_concrete = get_concrete_wasm_type(pi_type, ctx.mod, ctx.type_registry; for_local=true)
                         if _pi_concrete isa ConcreteRef
                             # Check if the source is a generic ref type that needs casting
                             local _pi_src_wasm2 = nothing
                             if stmt.val isa Core.SSAValue
                                 local _pi_src_type2 = get(ctx.ssa_types, stmt.val.id, Any)
-                                _pi_src_wasm2 = julia_to_wasm_type_concrete(_pi_src_type2, ctx)
+                                _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
                             elseif stmt.val isa Core.Argument
                                 local _pi_arg_idx2 = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
                                 if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
-                                    _pi_src_wasm2 = julia_to_wasm_type_concrete(ctx.arg_types[_pi_arg_idx2], ctx)
+                                    _pi_src_wasm2 = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx2], ctx.mod, ctx.type_registry; for_local=true)
                                 end
                             end
                             if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef
@@ -1140,7 +1162,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             else
                 # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
                 if stmt isa Expr && stmt.head === :boundscheck
-                    # P2-batch6: real value (true unless @inbounds) — see statements.jl
+                    # real value (true unless @inbounds) — see statements.jl
                     i32_const!(b, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
                 elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
                     # Re-compile the expression to produce its value on the stack.
@@ -1213,7 +1235,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif val isa Core.SlotNumber
-        # PURE-6024: Check slot_locals first (for local variables in unoptimized IR),
+        # Check slot_locals first (for local variables in unoptimized IR),
         # then fall back to param mapping (slot 2 = param 0, slot 3 = param 1, etc.)
         if haskey(ctx.slot_locals, val.id)
             local_get!(b, ctx.slot_locals[val.id])
@@ -1253,11 +1275,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, reinterpret(Int64, val))
 
     elseif val isa Int128 || val isa UInt128
-        # march7: funnel-first (int128)
+        # funnel-first (int128) — parity(constants.dart:622-655 visitIntConstant)
         local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cgint128 !== nothing
-            local _ciint128 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
-            _ciint128 !== nothing && (global_get!(b, _cgint128, ConcreteRef(_ciint128.wasm_type_idx, false)); return b)
+            global_get!(b, _cgint128, ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(val)), false))
+            return b
         end
         # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
         result_type = typeof(val)
@@ -1267,7 +1289,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
         hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
 
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        # Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(result_type)
         i64_const!(b, reinterpret(Int64, lo))   # lo
         i64_const!(b, reinterpret(Int64, hi))   # hi
@@ -1280,7 +1302,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         f64_const!(b, val)
 
     elseif val isa String
-        # census F3 (march5): short literals read the ONE interned global (dart
+        # census F3 (): short literals read the ONE interned global (dart
         # constants.dart dedup — code size + `===` identity); the inline
         # data-segment path remains for long strings (dart lazies those).
         local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
@@ -1288,7 +1310,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             global_get!(b, _sg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
             return b
         end
-        # march7 LAZY: a pre-passed long literal reads its global, initializing on
+        # LAZY: a pre-passed long literal reads its global, initializing on
         # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
         local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
                     get(ctx.type_registry.lazy_string_globals, val, nothing)
@@ -1302,8 +1324,8 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             end_block!(b)
             return b
         end
-        # PURE-9013: String constant via passive data segment + array.new_data
-        # parity(M9): then WRAPPED as the classed string {classId, data} (the ONE producer).
+        # String constant via passive data segment + array.new_data
+        # parity(constants.dart:872 visitStringConstant): then WRAPPED as the classed string {classId, data} (the ONE producer).
         type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
         n_bytes = ncodeunits(val)
 
@@ -1313,23 +1335,21 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             utf8_bytes = Vector{UInt8}(codeunits(val))
             seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
             i32_const!(b, 0)              # offset 0 (start of segment)
-            # (signed-LEB length note preserved: see git history PURE-9013)
+            # (signed-LEB length note preserved: see git history)
             i32_const!(b, Int32(n_bytes))  # length
             array_new_data!(b, type_idx, seg_idx)
         end
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif val isa GlobalRef
-        isdefined(val.mod, val.name) || throw(WasmCompileError(WasmDiagnostic(
-            :unsupported_global, string(val), "GlobalRef is not defined in its source module",
-            nothing, nothing)))
+        isdefined(val.mod, val.name) || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(val) is not defined in its source module"; detail=val,
+            soundness_fatal=true)
         actual_val = getfield(val.mod, val.name)
         if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
            !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
             globals = ctx.type_registry.mutable_constant_globals
-            globals === nothing && throw(WasmCompileError(WasmDiagnostic(
-                :unsupported_global, string(val),
-                "mutable GlobalRef identity registry is unavailable", nothing, nothing)))
+            globals === nothing && record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef identity registry is unavailable"; detail=string(val), soundness_fatal=true)
             if haskey(globals, actual_val)
                 global_idx, type_idx = globals[actual_val]
                 global_get!(b, global_idx, ConcreteRef(type_idx, true))
@@ -1340,10 +1360,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                     "mutable GlobalRef initializer must produce exactly one value",
                     copy(init_b.v.stack), 0, "compile_value"))
                 init_type = only(init_b.v.stack)
-                init_type isa ConcreteRef || throw(WasmCompileError(WasmDiagnostic(
-                    :unsupported_global, string(val),
-                    "mutable GlobalRef initializer produced non-concrete type $init_type",
-                    nothing, nothing)))
+                init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
                 null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
                 ref_null!(null_b, Int64(init_type.type_idx),
                           ConcreteRef(init_type.type_idx, true))
@@ -1369,17 +1386,19 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # as SSA slot lookups / argument loads. Compile them as struct constants instead.
         inner = val.value
         if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
-            T = typeof(inner)
-            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-            type_idx = info.wasm_type_idx
-            _emit_tid!(T)
-            physical_fields = ctx.mod.types[type_idx + 1].fields
-            for (fi, field_name) in enumerate(fieldnames(T))
-                field_val = getfield(inner, field_name)
-                expected = physical_fields[Int(info.field_offset) + fi].valtype
-                emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
-            end
-            struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+            # THE ensureConstant funnel (constants.dart:49/427-443 — ONE constantInfo map
+            # deduplicating every constant kind). SSAValue/Argument/SlotNumber are immutable
+            # single-Int64-field structs: their layout is fixed by the type (not by the
+            # runtime value), so `_const_init_bytes!`'s constant-expressibility guard always
+            # holds and the funnel always succeeds — there is no inline struct_new! fallback
+            # for these types (unlike the mutable/non-constant-field kinds elsewhere in this
+            # function, which keep one because their funnel attempt is genuinely conditional).
+            _cgir = ensure_constant_global!(ctx.mod, ctx.type_registry, inner)
+            _cgir === nothing && error(
+                "unreachable: $(typeof(inner)) constant funnel declined — its immutable " *
+                "single-Int layout is always constant-expressible")
+            _ciir = register_struct_type!(ctx.mod, ctx.type_registry, typeof(inner))
+            global_get!(b, _cgir, ConcreteRef(_ciir.wasm_type_idx, false))
         else
             emit_value!(b, inner, ctx)  # R17-floor: QuoteNode delegates before a consumer exists
         end
@@ -1408,7 +1427,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif val isa Symbol
-        # march7 M7-c: Symbols share the classed string rep AND its intern registry —
+        # M7-c: Symbols share the classed string rep AND its intern registry —
         # equal symbol literals read the ONE deduplicated global (dart: one constantInfo
         # map for all kinds). Long names keep the inline data-segment path.
         name_str = String(val)
@@ -1428,7 +1447,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
 
     elseif typeof(val) <: Tuple
-        # march7: funnel-first (tuple) — tuples of constant-expressible fields intern
+        # funnel-first (tuple) — tuples of constant-expressible fields intern
         local _cgtp = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cgtp !== nothing
             local _citp = get(ctx.type_registry.structs, typeof(val), nothing)
@@ -1449,7 +1468,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # Push field values (tuples use 1-based indexing)
         for i in 1:length(val)
             field_val = val[i]
-            local _wasm_fi = i + Int(info.field_offset)  # PURE-9024: skip typeId
+            local _wasm_fi = i + Int(info.field_offset)  # skip typeId
             (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
                 error("tuple constant field lacks a physical Wasm type")
             local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
@@ -1457,17 +1476,17 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif val isa Type
-        # PURE-4151: Type constant — each unique Type gets a unique Wasm global
+        # Type constant — each unique Type gets a unique Wasm global
         # so that ref.eq can distinguish different Type objects at runtime.
         # Previous behavior (i32.const 0) made all Types indistinguishable.
         global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
         global_get!(b, global_idx, AnyRef)
 
     elseif val isa Core.TypeName
-        # PURE-9064: TypeName constant — look up or create the TypeName global.
+        # TypeName constant — look up or create the TypeName global.
         # TypeName objects have many undefined fields so the general struct constant
         # path would emit ref.null. Instead, use the dedicated TypeName global registry.
         tn_global_idx = get_typename_constant_global!(ctx.mod, ctx.type_registry, val)
@@ -1481,7 +1500,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         global_get!(b, global_idx, ConcreteRef(info.wasm_type_idx, false))
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
-        # march7: funnel-first (fn-singleton) — interned when eager-able
+        # funnel-first (fn-singleton) — interned when eager-able
         local _cg_0 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cg_0 !== nothing
             local _ci_0 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
@@ -1493,17 +1512,17 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
         type_idx = info.wasm_type_idx
         emit_struct_prefix!(b, ctx.type_registry, T, info)
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
-        # march7: funnel-first (closure-const) — interned when eager-able
+        # funnel-first (closure-const) — interned when eager-able
         local _cg_1 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
         if _cg_1 !== nothing
             local _ci_1 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
             global_get!(b, _cg_1, ConcreteRef(_ci_1.wasm_type_idx, false))
             return b
         end
-        # PURE-325: Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
+        # Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
         # These are structs that happen to be Functions — compile like regular structs
         T = typeof(val)
         info = register_struct_type!(ctx.mod, ctx.type_registry, T)
@@ -1511,10 +1530,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
 
         has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
         if has_undefined
-            throw(WasmCompileError(WasmDiagnostic(
-                :unsupported_type, string(nameof(T)),
-                "closure constant of type $T has undefined captures; WT never fabricates capture values",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "closure constant of type $T has undefined captures; WT never fabricates capture values"; detail=string(nameof(T)), soundness_fatal=true)
         end
 
         struct_type_def = ctx.mod.types[type_idx + 1]
@@ -1525,10 +1541,15 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             emit_value!(b, field_val, ctx, _fw; from_julia=typeof(field_val))
         end
 
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
 
     elseif typeof(val) <: Dict
-        # Dict constant with pre-populated data — materialize Memory fields as arrays
+        # Dict constant with pre-populated data — materialize Memory fields as arrays.
+        # parity(quarantine: mutable-identity floor — constants.dart:1152 visitMapConstant
+        # canonicalizes ONLY Dart's immutableMapClass, i.e. genuine `const` map literals;
+        # Julia's Dict has no immutable-literal form, so every Dict constant takes dart's
+        # ordinary non-const runtime map-instantiation shape (fresh struct.new), never
+        # ConstantCreator's Map<Constant,ConstantInfo> cache. R14 floor, never migratable.)
         T = typeof(val)
         K = keytype(val)
         V = valtype(val)
@@ -1548,37 +1569,44 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # Dict's backing Memory contains intentionally unassigned hash-table slots.
-        # Those are physical nullable-reference slots, not fabricated Julia values.
-        # Every assigned element goes through the same typed wrap funnel used by
-        # ordinary array stores, including boxing heterogeneous Union keys.
+        # Only OCCUPIED hash-table slots carry values (Base.isslotfilled: the slot
+        # byte's high bit). An unoccupied isbits slot is uninitialized host memory —
+        # emitting it would bake heap addresses into the binary (a process-varying
+        # leak, never read by Dict); it takes zero. An unoccupied reference slot is
+        # a physical null. Every occupied element goes through the typed wrap
+        # funnel used by ordinary array stores, including boxing Union keys.
         compile_memory_elements! = function(mem, arr_type_idx, elem_type)
             arr_type_def = ctx.mod.types[arr_type_idx + 1]
             arr_type_def isa ArrayType || error("Dict backing storage has no Wasm array layout")
             expected = arr_type_def.elem.valtype
             for i in 1:length(mem)
-                # PURE-6022: Stop emitting elements after stub/unreachable
+                # Stop emitting elements after stub/unreachable
                 if ctx.last_stmt_was_stub
                     break
                 end
-                if isassigned(mem, i)
+                if (dict_slots[i] & 0x80) != 0
                     v = mem[i]
                     emit_value!(b, v, ctx, expected; from_julia=typeof(v))
                 elseif expected isa RefType
                     ref_null!(b, expected)
                 elseif expected isa ConcreteRef && expected.nullable
                     ref_null!(b, Int64(expected.type_idx), expected)
+                elseif expected === I32
+                    i32_const!(b, 0)
+                elseif expected === I64
+                    i64_const!(b, 0)
+                elseif expected === F32
+                    f32_const!(b, 0.0f0)
+                elseif expected === F64
+                    f64_const!(b, 0.0)
                 else
-                    throw(WasmCompileError(WasmDiagnostic(
-                        :unsupported_type, string(typeof(mem)),
-                        "unassigned Dict backing slot $i has non-nullable physical type $expected",
-                        nothing, nothing)))
+                    record_unsupported!(ctx, :unsupported_type, "unoccupied Dict backing slot $i has non-nullable physical type $expected"; detail=string(typeof(mem)), soundness_fatal=true)
                 end
             end
             return expected
         end
 
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID
+        # Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(T)
 
         # field 1: slots — array of UInt8 (always defined, never throws)
@@ -1603,12 +1631,18 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         i64_const!(b, Int64(getfield(val, :maxprobe)))
 
         # struct.new
-        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields
 
     elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
-        # PURE-325: Constant Vector{T} — emit as struct{data_array, size_tuple}
+        # Constant Vector{T} — emit as struct{data_array, size_tuple}
         # This handles global constant vectors like ascii_is_identifier_char :: Vector{Bool}
         # The data array must contain the actual values, not ref.null.
+        # parity(quarantine: mutable-identity floor — constants.dart:1128 visitListConstant
+        # canonicalizes ONLY Dart's immutableListClass, i.e. genuine `const` list literals;
+        # Julia's Vector has no immutable-literal form, so every Vector constant takes dart's
+        # ordinary non-const runtime list-instantiation shape (fresh struct.new for both the
+        # data array and this nested size tuple below), never ConstantCreator's cache. R14
+        # floor, never migratable.)
         T = typeof(val)
         elem_type = eltype(T)
 
@@ -1621,45 +1655,42 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # Get the array type for elements
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for Vector struct
+        # Push typeId (field 0) with DFS-assigned ID for Vector struct
         _emit_tid!(T)
 
         # Field 1: data array — emit array.new_fixed with actual element values
         wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
         for i in 1:length(val)
-            # PURE-6022: Stop emitting array elements after unreachable (stub).
+            # Stop emitting array elements after unreachable (stub).
             # Dead code after unreachable contains raw data bytes that decode as
             # invalid WASM instructions (e.g., block with invalid type byte).
             if ctx.last_stmt_was_stub
                 break
             end
             emit_value!(b, val[i], ctx, wasm_elem_type; from_julia=typeof(val[i]))
-            # PURE-6022: Check after each element in case compile_value hit a stub
+            # Check after each element in case compile_value hit a stub
             if ctx.last_stmt_was_stub
                 break
             end
         end
-        # PURE-6022: Skip array_new_fixed if we're in dead code (stub was hit)
+        # Skip array_new_fixed if we're in dead code (stub was hit)
         if !ctx.last_stmt_was_stub
             array_new_fixed!(b, array_type_idx, length(val), wasm_elem_type)
         end
 
-        # Field 2: size tuple — Tuple{Int64} with the length
-        size_tuple_type = Tuple{Int64}
-        if !haskey(ctx.type_registry.structs, size_tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, size_tuple_type)
-        end
-        size_info = ctx.type_registry.structs[size_tuple_type]
-        # PURE-9024/9025: Push typeId (field 0) with DFS-assigned ID for size tuple
-        _emit_tid!(Tuple{Int64})
-        i64_const!(b, Int64(length(val)))
-        struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields (march3)
+        # Field 2: size tuple — an immutable Tuple{Int64}, interned like any tuple
+        # constant (Base replaces v.size wholesale, never writes into the tuple), so
+        # every constant Vector of one length shares it. parity(constants.dart:938-959
+        # ensureConstant: sub-constants intern regardless of the composite's eagerness)
+        local _cgsz = ensure_constant_global!(ctx.mod, ctx.type_registry, (Int64(length(val)),))
+        _cgsz === nothing && error("unreachable: Tuple{Int64} constant funnel declined")
+        global_get!(b, _cgsz, ConcreteRef(ctx.type_registry.structs[Tuple{Int64}].wasm_type_idx, false))
 
         # struct.new for Vector{T}
-        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields (march3)
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
-        # PURE-049: MemoryRef/Memory constants map to array types, not struct types.
+        # MemoryRef/Memory constants map to array types, not struct types.
         # Materialize the exact contents.  Size is never a license to replace a
         # real Memory constant with null, and undefined slots are not values.
         T = typeof(val)
@@ -1690,7 +1721,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
-        # march7: THE ensureConstant funnel first — an eager-internable immutable
+        # THE ensureConstant funnel first — an eager-internable immutable
         # constant reads its ONE deduplicated global (dart constants.dart:427-443);
         # mutable / non-constant-field values fall through to the inline path.
         local _cg = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
@@ -1707,15 +1738,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         # recursed compile_value to a StackOverflow. Guard by object identity
         # AND depth; refuse with a NAMED error so pipelines degrade honestly.
         if any(x -> x === val, _VALUE_COMPILE_STACK)
-            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-                "cyclic struct constant of type $(T) (object graph references itself)",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "cyclic struct constant of type $(T) (object graph references itself)"; detail=string(nameof(T)), soundness_fatal=true)
         end
         if length(_VALUE_COMPILE_STACK) > 200
             _tail = join((string(nameof(typeof(x))) for x in _VALUE_COMPILE_STACK[end-7:end]), " → ")
-            throw(WasmCompileError(WasmDiagnostic(:unsupported_type, string(nameof(T)),
-                "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))",
-                nothing, nothing)))
+            record_unsupported!(ctx, :unsupported_type, "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))"; detail=string(nameof(T)), soundness_fatal=true)
         end
         push!(_VALUE_COMPILE_STACK, val)
         try
@@ -1730,15 +1757,16 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             # Core.Box whose contents field is undefined. The nullable Any field's
             # null is the runtime undefined-reference sentinel consumed by the
             # existing isdefined/throw_undef_if_not lowering—not a fabricated value.
+            # parity(quarantine: mutable-identity floor — Core.Box is WT's captured-variable
+            # cell, dart's closures.dart:1102-1115 mutable box field; a closure cell is never
+            # a kernel `Constant` AST node, so it never enters constants.dart's canonicalization
+            # map on the dart side either. R14 floor, never migratable.)
             emit_struct_prefix!(b, ctx.type_registry, T, info)
             ref_null!(b, AnyRef)
             struct_new!(b, type_idx)
             return b
         end
-        isempty(undefined_fields) || throw(WasmCompileError(WasmDiagnostic(
-            :unsupported_type, string(nameof(T)),
-            "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values",
-            nothing, nothing)))
+        isempty(undefined_fields) || record_unsupported!(ctx, :unsupported_type, "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values"; detail=string(nameof(T)), soundness_fatal=true)
 
         struct_type_def = ctx.mod.types[type_idx + 1]
         struct_type_def isa StructType || error("constant $T has no struct Wasm layout")
@@ -1756,7 +1784,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         end
 
         # Create the struct
-        struct_new!(b, type_idx)   # mod-resolved fields (march3: the empty-list fudge is dead)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
         finally
             pop!(_VALUE_COMPILE_STACK)
         end

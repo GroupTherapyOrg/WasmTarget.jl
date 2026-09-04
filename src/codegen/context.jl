@@ -45,16 +45,20 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
     # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
     memoryref_offsets::Dict{Int, Any}
-    # PURE-908: Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
+    # Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
     # compile_statement reads and resets this to skip LOCAL_SET in dead code.
     last_stmt_was_stub::Bool
-    # PURE-6024: Slot variable locals for unoptimized IR (may_optimize=false).
+    # The SSA statement being compiled (set by compile_statement!), so every
+    # diagnostic — including ones raised deep inside helpers that carry no idx —
+    # is attributed to a statement and its inline chain (dart's located reporter).
+    current_stmt_idx::Int
+    # Slot variable locals for unoptimized IR (may_optimize=false).
     # Maps SlotNumber.id -> WASM local index. Slot 1 = self, Slot 2 = arg1, etc.
     # Slots > n_params+1 are local variables assigned with Expr(:(=), SlotNumber, rhs).
     slot_locals::Dict{Int, Int}
-    # PURE-9060: Tier 2 hash dispatch tables for megamorphic calls
+    # Tier 2 hash dispatch tables for megamorphic calls
     dispatch_registry::Union{Nothing, DispatchTableRegistry}
-    # PURE-9063: Scratch i32 local for typeof struct lookup (cached)
+    # Scratch i32 local for typeof struct lookup (cached)
     typeof_scratch_local::Union{Nothing, UInt32}
     # Skip statements: IR indices that should emit NOP instead of UNREACHABLE.
     # Used by Therapy.jl to skip js() calls that are handled externally in JS.
@@ -67,10 +71,16 @@ mutable struct CompilationContext <: AbstractCompilationContext
     entry_calls::Vector{UInt32} # typed zero-argument runtime adapters before root body
     # Diagnostics accumulated during compilation (see diagnostics.jl).
     diagnostics::Vector{WasmDiagnostic}
-    # march15: per-try-region exception payload locals (dart binds each catch's
+    # Per-try-region exception payload locals (dart binds each catch's
     # exception to its OWN local; keyed by the region's enter_idx). :the_exception
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
     exn_region_locals::Dict{Int, Int}
+    # NIR boundary (parity: code_generator.dart:77 typeContext) — frontend/nir.jl's
+    # build_nir output, positionally aligned with code_info.code. Populated after the
+    # analyze_*!/allocate_*! passes below so it can reuse ctx.ssa_types/ctx.locals
+    # instead of re-deriving types (R3/R5 unaffected). code_info stays alongside it —
+    # not every consumer is NIR-converted yet (R29 tracks the migration per file).
+    nir::Vector{NirStmt}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -111,24 +121,29 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{WasmValType, Int}(), # boxing_scratch_locals
         Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
-        false,                  # last_stmt_was_stub (PURE-908)
-        Dict{Int, Int}(),       # slot_locals (PURE-6024: unoptimized IR slot variables)
-        dispatch_registry,      # PURE-9060: Tier 2 hash dispatch
-        nothing,                # PURE-9063: typeof scratch local (allocated on demand)
+        false,                  # last_stmt_was_stub 
+        0,                      # current_stmt_idx
+        Dict{Int, Int}(),       # slot_locals (unoptimized IR slot variables)
+        dispatch_registry,      # Tier 2 hash dispatch
+        nothing,                # typeof scratch local (allocated on demand)
         skip_stmts,             # Skip statements (Therapy.jl js() interop)
         invoke_imports,         # Invoke imports (Therapy.jl js() as WASM imports)
         Dict{Int,Vector{Int}}(), # bound-invoke argument projections (assigned by plan)
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
-        Dict{Int, Int}()        # march15: exn_region_locals
+        Dict{Int, Int}(),       # exn_region_locals
+        NirStmt[]                # nir — filled in below, once locals/types exist
     )
     # Analyze SSA types and allocate locals for multi-use SSAs
     analyze_ssa_types!(ctx)
     analyze_control_flow!(ctx)  # Find loops and phi nodes
     analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
-    allocate_slot_locals!(ctx)  # PURE-6024: Slot locals BEFORE SSA locals (no overlap)
+    allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
     allocate_ssa_locals!(ctx)
     allocate_scratch_locals!(ctx)  # Extra locals for complex operations
+    # NIR boundary: built last so it can reuse ctx.ssa_types/ctx.locals/ctx.ssa_locals/
+    # ctx.phi_locals (all populated above) rather than re-deriving types.
+    ctx.nir = build_nir(code_info, ctx)
     return ctx
 end
 
@@ -347,7 +362,7 @@ Allocate a new local variable of the given Julia type and return its index.
 The index is relative to the function's locals, accounting for parameters.
 """
 function allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int
-    wasm_type = julia_to_wasm_type_concrete(T, ctx)
+    wasm_type = get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true)
     local_idx = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, wasm_type)
     return local_idx
@@ -355,8 +370,8 @@ end
 
 function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
-    # PURE-908: normalize AnyRef → ExternRef to avoid type hierarchy mismatches
-    # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+    # normalize AnyRef → ExternRef to avoid type hierarchy mismatches
+    # Exception — keep AnyRef when $JlType hierarchy is active
     local actual_type = wasm_type
     if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
         actual_type = ExternRef
@@ -369,225 +384,6 @@ function boxing_scratch_local!(ctx::AbstractCompilationContext,
                                wasm_type::WasmValType)::Int
     get!(ctx.boxing_scratch_locals, wasm_type) do
         allocate_local!(ctx, wasm_type)
-    end
-end
-
-"""
-Convert a Julia type to a WasmValType, using concrete references for struct/array types.
-This is like `julia_to_wasm_type` but returns `ConcreteRef` for registered types.
-"""
-function julia_to_wasm_type_concrete(T, ctx::AbstractCompilationContext)::WasmValType
-    # Vararg is a type modifier, not a proper type
-    # PURE-908: Use ExternRef instead of AnyRef for locals to avoid externref↔anyref
-    # mismatches. In WasmGC, anyref and externref are separate type hierarchies.
-    # Since Any→ExternRef and cross-calls return ExternRef, locals must be ExternRef.
-    if T isa Core.TypeofVararg
-        return ExternRef
-    end
-    # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
-    # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
-    # PURE-9063: Use $JlDataType when hierarchy is available
-    if T isa DataType && T <: Type && !(T isa UnionAll) && !isstructtype(T)
-        dt_idx = get_datatype_type_idx(ctx.type_registry)
-        return ConcreteRef(dt_idx, true)
-    end
-    # Union{} (TypeofBottom) is the bottom type — no values exist of this type.
-    # Used for unreachable code paths. Map to I32 as placeholder.
-    if T === Union{}
-        return I32
-    elseif T === String || T === Symbol
-        # parity(M9): the CLASSED string {classId, data} <: $JlBase
-        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(type_idx, true)
-    elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 1 && T.parameters[1] === UInt8
-        # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
-        # array (same contract as Memory) — trim-collected string internals
-        # (_searchindex et al.) construct and consume it directly.
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(type_idx, true)
-    elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
-        # MemoryRef{T} maps to array type for element T
-        elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
-        type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        return ConcreteRef(type_idx, true)
-    elseif T isa UnionAll && T <: Base.GenericMemoryRef
-        # PURE-902: Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll)
-        # This happens when cross-function calls use Vector (no eltype).
-        # Try to extract element type from the type variable bound, else use Any.
-        local memref_elem_type = Any
-        if T isa UnionAll && T.var isa TypeVar && T.var.ub !== Any
-            memref_elem_type = T.var.ub
-        end
-        type_idx = get_array_type!(ctx.mod, ctx.type_registry, memref_elem_type)
-        return ConcreteRef(type_idx, true)
-    elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
-        # Memory{T} maps to array type for element T
-        elem_type = T.parameters[2]
-        type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        return ConcreteRef(type_idx, true)
-    elseif T === Core.SimpleVector
-        # PURE-9064: Core.SimpleVector maps to $JlSVec array when hierarchy is active.
-        if ctx.type_registry.jl_svec_idx !== nothing
-            return ConcreteRef(ctx.type_registry.jl_svec_idx, true)
-        end
-        return ArrayRef
-    elseif T === Core.TypeName
-        # PURE-9064: Core.TypeName maps to $JlTypeName struct when hierarchy is active.
-        if ctx.type_registry.jl_typename_idx !== nothing
-            return ConcreteRef(ctx.type_registry.jl_typename_idx, true)
-        end
-        return StructRef
-    elseif is_struct_type(T)
-        # If struct is registered, return a ConcreteRef
-        if haskey(ctx.type_registry.structs, T)
-            info = ctx.type_registry.structs[T]
-            return ConcreteRef(info.wasm_type_idx, true)
-        else
-            # Register it now
-            register_struct_type!(ctx.mod, ctx.type_registry, T)
-            if haskey(ctx.type_registry.structs, T)
-                info = ctx.type_registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
-        end
-        # Fallback to abstract StructRef
-        return StructRef
-    elseif T <: Tuple
-        # PURE-6025: UnionAll tuples (e.g., Tuple{T, T} where T<:Type) lack .parameters.
-        # Skip registration and fall through to StructRef.
-        if T isa UnionAll
-            return StructRef
-        end
-        # Tuples are stored as WasmGC structs
-        if haskey(ctx.type_registry.structs, T)
-            info = ctx.type_registry.structs[T]
-            return ConcreteRef(info.wasm_type_idx, true)
-        else
-            # Register it now
-            register_tuple_type!(ctx.mod, ctx.type_registry, T)
-            if haskey(ctx.type_registry.structs, T)
-                info = ctx.type_registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
-        end
-        # Fallback to abstract StructRef
-        return StructRef
-    elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
-        # MemoryRef{T} / GenericMemoryRef maps to the array type for element T
-        # This is Julia's internal type for array element access
-        # IMPORTANT: Check this BEFORE AbstractArray since MemoryRef <: AbstractArray
-        # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
-        elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
-        if haskey(ctx.type_registry.arrays, elem_type)
-            type_idx = ctx.type_registry.arrays[elem_type]
-            return ConcreteRef(type_idx, true)
-        else
-            type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-            return ConcreteRef(type_idx, true)
-        end
-    elseif T isa UnionAll && T <: Base.GenericMemoryRef
-        # PURE-902: Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll)
-        local memref_elem_type2 = Any
-        if T isa UnionAll && T.var isa TypeVar && T.var.ub !== Any
-            memref_elem_type2 = T.var.ub
-        end
-        type_idx = get_array_type!(ctx.mod, ctx.type_registry, memref_elem_type2)
-        return ConcreteRef(type_idx, true)
-    elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
-        # GenericMemory/Memory is the backing storage for Vector (Julia 1.11+)
-        # IMPORTANT: Check this BEFORE AbstractArray since Memory <: AbstractArray
-        # Parameters are: (atomicity, element_type, addrspace)
-        # In WasmGC, it's the same as the array
-        elem_type = T.parameters[2]  # Element type is second parameter
-        if haskey(ctx.type_registry.arrays, elem_type)
-            type_idx = ctx.type_registry.arrays[elem_type]
-            return ConcreteRef(type_idx, true)
-        else
-            type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-            return ConcreteRef(type_idx, true)
-        end
-    # P2-batch20: exclude Unions — Union{Vector{Int32},Vector{Int64}} <: AbstractArray
-    # is true, and registering the UNION as a single-member vector wrapper here while
-    # value sites used the tagged-union struct made the two representations collide
-    # (gap 5ae13ccb033a: `sum([x,x,acc_b])` with Int32→Int64 widening). Unions fall
-    # through to the dedicated Union branch below.
-    elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
-        # In Julia 1.11+, Vector is a struct with :ref (MemoryRef) and :size fields
-        # Check if the type is registered as a struct first (for Vector/Matrix)
-        if haskey(ctx.type_registry.structs, T)
-            info = ctx.type_registry.structs[T]
-            return ConcreteRef(info.wasm_type_idx, true)
-        end
-
-        # 1D arrays (Vector) are stored as WasmGC structs (with ref and size fields)
-        # P3 gap 3aaa51b9a688: `T <: Array` also caught Matrix — vector layout
-        # (Tuple{Int64} size) while the ctor built NTuple{N,Int64} dims, so
-        # every Matrix struct.new failed validation. Only Vector goes here.
-        if T <: Vector
-            # Register Vector as a struct type with (ref, size) layout
-            info = register_vector_type!(ctx.mod, ctx.type_registry, T)
-            return ConcreteRef(info.wasm_type_idx, true)
-        elseif T <: AbstractVector && T isa DataType && !isconcretetype(T) && !isstructtype(T)
-            # 1.13-rc1: inference widens Memory-backed values to abstract vector supertypes
-            # (DenseVector{UInt8} etc.) — can hold a Vector struct OR a raw Memory array at
-            # runtime; the sound wasm join is AnyRef (register_struct_type! would THROW).
-            return AnyRef
-        elseif T <: AbstractVector && T isa DataType
-            # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-            return ConcreteRef(info.wasm_type_idx, true)
-        else
-            # Matrix and higher-dim arrays: also stored as structs
-            info = register_matrix_type!(ctx.mod, ctx.type_registry, T)
-            return ConcreteRef(info.wasm_type_idx, true)
-        end
-    elseif T === String
-        # parity(M9): the CLASSED string {classId, data} <: $JlBase
-        type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(type_idx, true)
-    elseif T === Int128 || T === UInt128
-        # 128-bit integers are represented as WasmGC structs with two i64 fields
-        if haskey(ctx.type_registry.structs, T)
-            info = ctx.type_registry.structs[T]
-            return ConcreteRef(info.wasm_type_idx, true)
-        else
-            info = register_int128_type!(ctx.mod, ctx.type_registry, T)
-            return ConcreteRef(info.wasm_type_idx, true)
-        end
-    elseif T isa Union
-        # Handle Union types
-        inner_type = get_nullable_inner_type(T)
-        if inner_type !== nothing
-            # Union{Nothing, T} → check if inner type is a ref type
-            inner_wasm = julia_to_wasm_type_concrete(inner_type, ctx)
-            if inner_wasm isa ConcreteRef
-                # CG-003d RC1: Union{Nothing, T} where T is a struct/array ref type.
-                # Use EqRef (not T's concrete ref) because the Nothing path may produce
-                # struct_new of the base tagged struct or ref.null, which is NOT a subtype
-                # of ConcreteRef(T). EqRef is the common supertype of all struct/array refs.
-                # _narrow_generic_local! handles downcasting to concrete type when reading.
-                return EqRef
-            end
-            return inner_wasm
-        else
-            # Multi-variant union → THE single resolver (dart2wasm translateType parity),
-            # shared with get_concrete_wasm_type so the local allocator + value-type resolver
-            # CANNOT drift. `for_local=true` keeps WT's anyref→externref-for-locals wart on the
-            # numeric path (the value-type resolver omits it); all other arms are identical.
-            non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
-            return _resolve_multivariant_union(T, non_nothing_u, ctx.mod, ctx.type_registry; for_local=true)
-        end
-    else
-        # Use the standard conversion for non-struct types
-        result = julia_to_wasm_type(T)
-        # PURE-908: Never return AnyRef for locals — use ExternRef instead.
-        # PURE-9064: Exception — when the $JlType hierarchy is active, keep AnyRef
-        # for Any-typed locals. $JlType struct fields return (ref null $JlType) which
-        # is a subtype of anyref but NOT externref. Aligns locals with function params.
-        if result === AnyRef && ctx.type_registry.jl_type_idx === nothing
-            return ExternRef
-        end
-        return result
     end
 end
 
@@ -611,7 +407,7 @@ Encode a block result type (for if/block/loop).
 Handles both simple types (i32/i64/f32/f64) and concrete reference types.
 Returns a vector of bytes to append to the instruction stream.
 """
-# march6 slice D: MULTI-VALUE blocktype — a function-type INDEX encoded as s33
+# MULTI-VALUE blocktype — a function-type INDEX encoded as s33
 # (wasm spec). Used by the typed-catch landing block (results = the tag payload).
 # Int specifically (not Integer): UInt8 0x40/void keeps its raw single-byte path.
 encode_block_type(type_idx::Int)::Vector{UInt8} = encode_leb128_signed(Int64(type_idx))
@@ -640,8 +436,8 @@ function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     return bytes
 end
 
-# parity(M10b): a CAST carries its target type — dart's `as T`
-# (code_generator.dart:3100 visitAsExpression: a statically-satisfied cast —
+# parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): a CAST carries its target type — dart's `as T`
+# (code_generator.dart:3170 visitAsExpression: a statically-satisfied cast —
 # `omitExplicitTypeChecks || node.isUnchecked` — is EXACTLY `wrap(operand,
 # expectedType)`: the operand through the one wrap channel, typed by the target).
 # `convert(T, x)` / `typeassert(x, T)` results that inference left erased refine
@@ -698,7 +494,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
-    # parity(M6/F3): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
     # a variable's local is typed by its REAL inferred type, not the erased Any). The
     # dormant Loop-C value-channel pass proves, conservatively, which Any-typed SSAs/phis
     # only ever carry one numeric type (the scalar-replaced Core.Box accumulator cycle);
@@ -738,7 +534,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     catch
         rethrow()
     end
-    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
@@ -753,7 +549,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, stmt) in enumerate(code)
@@ -771,9 +567,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                 end
             end
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
-            phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+            phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
 
-            # PURE-324: For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
+            # For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
             # use the widest numeric type instead of tagged union. Tagged union (ConcreteRef)
             # can't store/load raw numeric values — the phi edges emit numeric constants
             # but the ConcreteRef local expects a struct reference, causing ref.null defaults.
@@ -785,12 +581,12 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     wt === I32 || wt === I64 || wt === F32 || wt === F64
                 end
                 if all_numeric && !isempty(non_nothing)
-                    # Route through THE single resolver (julia_to_wasm_type_concrete →
+                    # Route through THE single resolver (get_concrete_wasm_type →
                     # _resolve_multivariant_union) instead of the old lossy resolve_union_type,
                     # which collapsed mixed int/float (Union{Int64,Float64}) to F64 — losing the
                     # tag (Int 1 / Float 1.0 indistinguishable). The principled path boxes it (AnyRef),
                     # matching the value-type resolver + dart's top type. Same-category → widest (same).
-                    phi_wasm_type = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+                    phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
                 end
             end
 
@@ -799,7 +595,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             # set_phi_locals_for_edge! and the inline phi handler,
             # which emit type-safe defaults for incompatible edges.
 
-            # PURE-036u: If this phi is used directly in a ReturnNode, and the function's
+            # If this phi is used directly in a ReturnNode, and the function's
             # Wasm return type is numeric but the phi was allocated as ref, override
             # the phi local's type to match the function's return type.
             # This handles cases like Union{Int64, SomeStruct} phi where Julia type
@@ -832,10 +628,10 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                 end
             end
 
-            # PURE-036bg: If phi type is a ref type but used in boolean context (i32_eqz,
+            # If phi type is a ref type but used in boolean context (i32_eqz,
             # not_int, eq_int, etc), override to I32. This handles dead code paths where
             # ref-typed phi values are tested with boolean operations.
-            # PURE-325: Skip this override for Int128/UInt128 phi types.
+            # Skip this override for Int128/UInt128 phi types.
             # These are primitive in Julia but map to struct{i64,i64} in Wasm.
             # They're used in comparison ops (sle_int, eq_int) but the phi local must
             # stay as ConcreteRef — the boolean ops receive extracted fields via struct_get.
@@ -859,7 +655,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                             is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
                             is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
                                                    :ult_int, :ule_int)
-                            # PURE-6021c: Arithmetic intrinsics that require numeric operands
+                            # Arithmetic intrinsics that require numeric operands
                             is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
                                                     :srem_int, :urem_int, :neg_int,
                                                     :add_float, :sub_float, :mul_float, :div_float,
@@ -877,7 +673,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                                     if arg === phi_ssa_val
                                         if is_arith_op || is_cmp_op
                                             # Arithmetic/comparison ops need I64 (Julia's default int width)
-                                            inferred = julia_to_wasm_type_concrete(phi_julia_type, ctx)
+                                            inferred = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
                                             if inferred === I64
                                                 phi_wasm_type = I64
                                             elseif inferred === I32
@@ -897,13 +693,13 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
-            # PURE-6021c DEBUG: Trace externref phi allocations
+            # Trace externref phi allocations
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
                 n_stmts = length(ctx.code_info.code)
                 @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            # PURE-908: normalize AnyRef → ExternRef for phi locals
-            # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+            # normalize AnyRef → ExternRef for phi locals
+            # Exception — keep AnyRef when $JlType hierarchy is active
             local phi_actual = phi_wasm_type
             if phi_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
                 phi_actual = ExternRef
@@ -913,7 +709,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
-    # PURE-9033: Allocate locals for PhiCNode values (exception handler value capture).
+    # Allocate locals for PhiCNode values (exception handler value capture).
     # PhiCNode is the dual of UpsilonNode: UpsilonNode stores, PhiCNode reads.
     # Each PhiCNode gets a local so UpsilonNode can local.set and PhiCNode can local.get.
     for (i, stmt) in enumerate(code)
@@ -927,9 +723,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     phic_julia_type = Any
                 end
             end
-            phic_wasm_type = julia_to_wasm_type_concrete(phic_julia_type, ctx)
+            phic_wasm_type = get_concrete_wasm_type(phic_julia_type, ctx.mod, ctx.type_registry; for_local=true)
             local_idx = ctx.n_params + length(ctx.locals)
-            # PURE-908/9064: normalize AnyRef → ExternRef unless JlType hierarchy active
+            # normalize AnyRef → ExternRef unless JlType hierarchy active
             local phic_actual = phic_wasm_type
             if phic_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
                 phic_actual = ExternRef
@@ -950,7 +746,7 @@ We need locals when:
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     code = ctx.code_info.code
-    # parity(M6/F3): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
     _numeric_joins = try
         # Parent side: record %new(Core.Box) contents types per capturing closure type
         # (feeds the closure-side seeding below when THAT closure's body compiles).
@@ -985,11 +781,11 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     catch
         rethrow()
     end
-    # parity(M10a): the join IS the variable's real type (dart translateTypeOfLocalVariable)
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
     # — visible to EVERY consumer, not just local allocation. Without this, compile_call
     # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
     # type-safe-default ZERO (the mutable-capture silent 0).
-    # parity(M10a): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
+    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
     # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
     # stay local-typing hints only (they poisoned print_to_string's string-carrying
     # accumulator when made visible).
@@ -1006,7 +802,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(M10b): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
@@ -1253,7 +1049,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
             ssa_type = get(ctx.ssa_types, ssa_id, Any)
 
-            # PURE-9043: Skip Task SSAs (from jl_get_current_task foreigncall)
+            # Skip Task SSAs (from jl_get_current_task foreigncall)
             # Task values are phantom — rngState fields map to Wasm globals
             stmt = ctx.code_info.code[ssa_id]
             if stmt isa Expr && stmt.head === :foreigncall
@@ -1278,7 +1074,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 end
             end
 
-            # PURE-9064: _svec_ref results — Julia infers return type as SimpleVector,
+            # _svec_ref results — Julia infers return type as SimpleVector,
             # but the actual WasmGC type is (ref null $JlType) (element of SVec array).
             # Override to AnyRef so the local matches what array.get actually produces.
             if stmt isa Expr && stmt.head === :call && ssa_type === Core.SimpleVector
@@ -1291,7 +1087,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 end
             end
 
-            # PURE-913: compilerbarrier(:type, value)::Any — use inner value's type
+            # compilerbarrier(:type, value)::Any — use inner value's type
             # Runtime intrinsics use @noinline + inferencebarrier, which inserts
             # compilerbarrier(:type, value)::Any. The SSA type is Any → ExternRef,
             # but the actual value is the inner arg's type (e.g., Int32 → I32).
@@ -1340,7 +1136,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 end
             end
 
-            # PURE-9032: :the_exception produces anyref from global.get $current_exn.
+            # :the_exception produces anyref from global.get $current_exn.
             # For Union exception types, override to Any so the local is anyref
             # (not the Union's tagged union type, which would cause illegal cast).
             # For concrete exception types (ErrorException etc.), keep the original
@@ -1368,10 +1164,10 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # will actually push on the stack. If the source value has a local,
             # that local's type is what will be on the stack (via local.get).
             effective_type = ssa_type
-            # parity(M6/F3): Any-but-really-numeric SSAs take their JOIN type (see above).
+            # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric SSAs take their JOIN type (see above).
             haskey(_numeric_joins, ssa_id) && (effective_type = _numeric_joins[ssa_id])
             if stmt isa Core.PiNode
-                narrowed_wasm = julia_to_wasm_type_concrete(ssa_type, ctx)
+                narrowed_wasm = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
                 # Check if the source value has a local with a different type
                 src_wasm_type = nothing
                 if stmt.val isa Core.SSAValue
@@ -1393,15 +1189,15 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                     # Source local has a different Wasm type than the narrowed type.
                     # Use the source's actual type for this local so local.get → local.set
                     # doesn't produce a type mismatch.
-                    # Skip julia_to_wasm_type_concrete for effective_type — we'll set wasm_type directly below.
+                    # Skip get_concrete_wasm_type for effective_type — we'll set wasm_type directly below.
                 elseif !(narrowed_wasm isa ConcreteRef) && narrowed_wasm !== StructRef && narrowed_wasm !== ArrayRef && narrowed_wasm !== AnyRef
                     # Numeric PiNode — use the value's type for the local since
                     # the Wasm representation is the same (i32/i64/f32/f64)
-                    # PURE-9030: But NOT when the source is anyref (Union boxing).
+                    # But NOT when the source is anyref (Union boxing).
                     # PiNode π(x::Union{Int32,Float64}, Int32) should allocate I32,
                     # not the Union's type. The unboxing in compile_statement extracts
                     # the concrete numeric value from the anyref box.
-                    # PURE-9030: For PiNode from anyref Union params, keep narrowed type
+                    # For PiNode from anyref Union params, keep narrowed type
                     # (don't widen to source's Union type). For non-Union sources, use source type.
                     local _pi_src_is_anyref = false
                     if stmt.val isa Core.Argument
@@ -1436,7 +1232,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 end
             end
 
-            wasm_type = julia_to_wasm_type_concrete(effective_type, ctx)
+            wasm_type = get_concrete_wasm_type(effective_type, ctx.mod, ctx.type_registry; for_local=true)
 
             # For PiNodes where source local has a different NUMERIC type,
             # use the source's actual Wasm type to avoid local.get → local.set mismatches.
@@ -1465,16 +1261,16 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                                      src_local_wasm === F32 || src_local_wasm === F64
                     is_numeric_tgt = wasm_type === I32 || wasm_type === I64 ||
                                      wasm_type === F32 || wasm_type === F64
-                    # PURE-324: Also allow widening when source is numeric but target is
+                    # Also allow widening when source is numeric but target is
                     # ConcreteRef from an all-numeric Union (e.g., Union{Int64, UInt32}).
                     # The phi was widened to I64, but the PiNode SSA got ConcreteRef from
-                    # julia_to_wasm_type_concrete. Use the source's numeric type.
+                    # get_concrete_wasm_type. Use the source's numeric type.
                     is_numeric_union_tgt = wasm_type isa ConcreteRef && effective_type isa Union &&
                         let ut = Base.uniontypes(effective_type),
                             nn = filter(t -> t !== Nothing, ut)
                             !isempty(nn) && all(t -> let wt = julia_to_wasm_type(t); wt === I32 || wt === I64 || wt === F32 || wt === F64 end, nn)
                         end
-                    # PURE-324: Don't widen I32 → I64 for PiNodes. The PiNode's
+                    # Don't widen I32 → I64 for PiNodes. The PiNode's
                     # compile_statement handler emits i32_wrap_i64 to convert the
                     # I64 phi value to I32, so the PiNode local should stay I32.
                     # Widening breaks downstream i32 operations (i32_sub, etc).
@@ -1491,7 +1287,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # Similarly for memoryrefget on arrays with Any elements.
             if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
                 sfunc = stmt.args[1]
-                # PURE-049: Match any module for getfield/getproperty
+                # Match any module for getfield/getproperty
                 is_gf = (sfunc isa GlobalRef &&
                          sfunc.name in (:getfield, :getproperty))
                 if is_gf
@@ -1503,7 +1299,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                         if field_sym isa Symbol && hasfield(obj_type, field_sym)
                             jft = fieldtype(obj_type, field_sym)
                             if jft === Any
-                                # PURE-908/9064: ExternRef unless JlType hierarchy active
+                                # ExternRef unless JlType hierarchy active
                                 wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
                             end
                         end
@@ -1521,14 +1317,14 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                             elt = ref_type.parameters[2]
                         end
                         if elt === Any
-                            # PURE-908/9064: ExternRef unless JlType hierarchy active
+                            # ExternRef unless JlType hierarchy active
                             wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
                         end
                     end
                 end
             end
 
-            # Fix PURE-036be/PURE-046: When wasm_type is ExternRef but SSA is used in numeric context,
+            # Fix When wasm_type is ExternRef but SSA is used in numeric context,
             # type the local based on the Julia type inference to match the expected operand type.
             # This handles dead code after UNREACHABLE and Any-typed struct fields used in comparisons.
             if wasm_type === ExternRef
@@ -1549,7 +1345,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                             # Comparison ops that can take i32 or i64 operands
                             is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
                                                   :ult_int, :ule_int)
-                            # PURE-6021c: Arithmetic and other numeric intrinsics that require
+                            # Arithmetic and other numeric intrinsics that require
                             # numeric operands — fixes externref/i64 mismatch in builtin_effects
                             is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
                                                     :srem_int, :urem_int, :neg_int,
@@ -1566,9 +1362,9 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                             if is_bool_op || is_cmp_op || is_arith_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === ssa_val
-                                        # PURE-046: Use Julia type to determine correct Wasm operand type
+                                        # Use Julia type to determine correct Wasm operand type
                                         # Compute what Wasm type the Julia type would normally map to
-                                        inferred_wasm = julia_to_wasm_type_concrete(effective_type, ctx)
+                                        inferred_wasm = get_concrete_wasm_type(effective_type, ctx.mod, ctx.type_registry; for_local=true)
                                         if inferred_wasm === I64
                                             wasm_type = I64
                                         elseif inferred_wasm === I32 || is_bool_op
@@ -1595,13 +1391,13 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             end
 
             local_idx = ctx.n_params + length(ctx.locals)
-            # PURE-6021c DEBUG: Trace externref allocations for diagnostics
+            # Trace externref allocations for diagnostics
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
                 n_stmts = length(ctx.code_info.code)
                 @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            # PURE-908: normalize AnyRef → ExternRef for SSA locals
-            # PURE-9064: Exception — keep AnyRef when $JlType hierarchy is active
+            # normalize AnyRef → ExternRef for SSA locals
+            # Exception — keep AnyRef when $JlType hierarchy is active
             local ssa_actual = wasm_type
             if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
                 ssa_actual = ExternRef
@@ -1614,7 +1410,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
 end
 
 """
-PURE-6024: Allocate WASM locals for slot variables in unoptimized IR (may_optimize=false).
+Allocate WASM locals for slot variables in unoptimized IR (may_optimize=false).
 
 In unoptimized IR, local variables are represented as SlotNumber assignments:
   code[i] = Expr(:(=), SlotNumber(n), rhs_expr)
@@ -1638,8 +1434,8 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)
                 if !haskey(ctx.slot_locals, slot_id)
                     # Determine type from ssavaluetypes for this statement
                     ssa_type = get(ctx.ssa_types, i, Any)
-                    wasm_type = julia_to_wasm_type_concrete(ssa_type, ctx)
-                    # PURE-908/9064: Normalize AnyRef → ExternRef unless JlType hierarchy active
+                    wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
+                    # Normalize AnyRef → ExternRef unless JlType hierarchy active
                     if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
                         wasm_type = ExternRef
                     end
@@ -1843,7 +1639,7 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
             end
         end
     elseif stmt isa Core.PiNode
-        # PURE-324: PiNode references a source value — count it so phi nodes
+        # PiNode references a source value — count it so phi nodes
         # that are only referenced by PiNodes get their ssa_locals mapping
         count_ssa_uses!(stmt.val, uses)
     end
@@ -1946,9 +1742,9 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
             # Store all concrete types including Nothing (needed for function dispatch)
             # Only skip Any as it provides no useful information
             if T !== Any
-                # PURE-6024: Widen inference lattice elements to concrete Julia types.
+                # Widen inference lattice elements to concrete Julia types.
                 # Unoptimized IR (may_optimize=false) retains Core.Const, Core.PartialStruct,
-                # etc. in ssavaluetypes. Downstream code (julia_to_wasm_type_concrete,
+                # etc. in ssavaluetypes. Downstream code (get_concrete_wasm_type,
                 # allocate_ssa_locals!) expects plain Julia types, not lattice elements.
                 actual_T = T isa Type ? T : Core.Compiler.widenconst(T)
                 ctx.ssa_types[i] = actual_T
@@ -1971,7 +1767,7 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
         if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
             func = stmt.args[1]
             # Check getfield/getproperty on Any-typed struct field
-            # PURE-049: Match any module — getproperty/getfield may appear as
+            # Match any module — getproperty/getfield may appear as
             # Compiler.getproperty, Base.getfield, etc. depending on the caller's module
             is_gf = (func isa GlobalRef &&
                      func.name in (:getfield, :getproperty))
@@ -1980,7 +1776,7 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
                 field_ref = stmt.args[3]
                 obj_type = infer_value_type(obj_arg, ctx)
                 # Check the Julia field type directly (no registry lookup needed)
-                # PURE-325: Also allow non-concrete Tuple types (e.g., Tuple{Any, Int64})
+                # Also allow non-concrete Tuple types (e.g., Tuple{Any, Int64})
                 # isconcretetype(Tuple{Any, Int64}) = false because Any is abstract, but
                 # fieldtype/fieldcount still work correctly on Tuple DataTypes.
                 is_concrete_enough = isconcretetype(obj_type) || (obj_type <: Tuple && obj_type isa DataType)
@@ -2023,7 +1819,7 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
     for (i, stmt) in enumerate(ctx.code_info.code)
         if !haskey(ctx.ssa_types, i)
             if stmt isa Expr && stmt.head === :call
-                # PURE-325: Skip memoryrefset! — its return type is the stored element (Any),
+                # Skip memoryrefset! — its return type is the stored element (Any),
                 # NOT the MemoryRef first argument. infer_call_type would incorrectly infer
                 # MemoryRef{T}, causing the SSA local to be allocated as ConcreteRef (array type)
                 # instead of ExternRef. This leads to illegal ref.cast at runtime.
@@ -2104,7 +1900,7 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
         end
     end
 
-    # PURE-325: getfield returns the field type, not the object type
+    # getfield returns the field type, not the object type
     if func isa GlobalRef && func.name in (:getfield, :getproperty) && length(args) >= 2
         obj_type = infer_value_type(args[1], ctx)
         field_ref = args[2]
@@ -2122,7 +1918,7 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
         end
     end
 
-    # PURE-325: Infer return type from first argument for most intrinsics.
+    # Infer return type from first argument for most intrinsics.
     # For calls where the first arg is Type{T} (constructor/conversion), return Any
     # since the return type is T, not Type{T}. Same for known non-identity functions.
     if length(args) > 0
@@ -2164,13 +1960,13 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
         elseif idx < 1 && ctx.func_ref !== nothing
-            # PURE-324: Core.Argument(1) in a non-closure is the function reference itself.
+            # Core.Argument(1) in a non-closure is the function reference itself.
             # This occurs in kwarg wrapper methods that pass `self` to the inner #method#N.
             # Return typeof(func_ref) so cross-function lookup can match the registered signature.
             return typeof(ctx.func_ref)
         end
     elseif val isa Core.SlotNumber
-        # PURE-6024: SlotNumber is the unoptimized IR equivalent of Core.Argument.
+        # SlotNumber is the unoptimized IR equivalent of Core.Argument.
         # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
         # For local variable slots (not params), use slottypes from CodeInfo.
         source_type = source_slot_type(ctx, val.id)
@@ -2216,7 +2012,7 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
             elseif actual_val isa Char
                 return Char
             elseif actual_val isa Type
-                # PURE-4155: Return Type{actual_val} (e.g., Type{Int64}) instead of bare Type.
+                # Return Type{actual_val} (e.g., Type{Int64}) instead of bare Type.
                 # This allows get_concrete_wasm_type to return ConcreteRef for the DataType struct,
                 # which triggers extern_convert_any bridging when passed to externref-typed params.
                 return Type{actual_val}
@@ -2233,7 +2029,7 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         # Type{T} references - return Type{T}
         return Type{val}
     elseif val isa Function
-        # PURE-324: Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
+        # Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
         # Return typeof(f) so cross-function lookup can match the registered signature
         return typeof(val)
     elseif isprimitivetype(typeof(val))
@@ -2266,7 +2062,7 @@ function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
             end
         end
     elseif val isa Core.Argument
-        # PURE-701b: the operand is a function PARAMETER. Its declared wasm slot
+        # the operand is a function PARAMETER. Its declared wasm slot
         # type can be abstract (structref/anyref) when the method was specialized
         # on an abstract value arg (e.g. `show(::IO, x)` where the body narrows x
         # to a concrete struct via inference) — the body then emits `struct.get
@@ -2295,7 +2091,7 @@ function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
         ref_cast!(b, Int64(target_type_idx), true)
     elseif local_wasm_type === ExternRef
-        # PURE-6025: Value on stack is externref (from Any-typed local or Dict/Vector retrieval).
+        # Value on stack is externref (from Any-typed local or Dict/Vector retrieval).
         # Must convert externref → anyref → (ref null $target_type_idx) for struct_get.
         any_convert_extern!(b)
         ref_cast!(b, Int64(target_type_idx), true)
@@ -2321,7 +2117,7 @@ end
 """
     _narrow_generic_local!(b, local_idx, ssa_id, ctx) -> Bool
 
-PURE-901 (march4, builder-native — THE implementation): when a local has generic type
+builder-native — THE implementation): when a local has generic type
 (anyref/structref/externref/eqref) but the SSA's Julia type maps to a concrete Wasm
 type, narrow the value on `b`'s stack (`ref.cast null` for refs — a no-op at runtime
 when correct, a trap on a real codegen bug — and THE funnel-unbox for join-refined
@@ -2341,7 +2137,7 @@ function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Int
     if ssa_julia_type === Any || ssa_julia_type === Union{}
         return false  # Can't narrow — don't know the concrete type
     end
-    # CG-003d: Don't narrow Union{Nothing, T} types — the value may be Nothing,
+    # Don't narrow Union{Nothing, T} types — the value may be Nothing,
     # and downstream code (e.g., === nothing comparison) needs the unnarrowed type.
     # Narrowing happens via PiNode after the null check succeeds.
     if ssa_julia_type isa Union
@@ -2350,14 +2146,14 @@ function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Int
     concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
     if concrete_wasm isa ConcreteRef
         if local_wasm_type === ExternRef
-            # PURE-6025: ExternRef needs any_convert_extern before ref.cast
+            # ExternRef needs any_convert_extern before ref.cast
             any_convert_extern!(b)
         end
         ref_cast!(b, Int64(concrete_wasm.type_idx), true)
         return true
     elseif concrete_wasm === I32 || concrete_wasm === I64 ||
            concrete_wasm === F32 || concrete_wasm === F64
-        # parity(M10): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
+        # parity(translator.dart:1597 Translator.convertType): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
         coerce_stack_top!(b, concrete_wasm, ctx; from_julia=ssa_julia_type)
@@ -2377,24 +2173,6 @@ function get_wasm_global_idx(val, ctx::AbstractCompilationContext)::Union{Int, N
         return global_index(val_type)
     end
     return nothing
-end
-
-# ============================================================================
-# SimpleCodeInfo — lightweight CodeInfo for WASM self-hosting
-# ============================================================================
-
-"""
-Lightweight replacement for Core.CodeInfo that can be constructed in WASM.
-Core.CodeInfo has complex fields (DebugInfo, MethodInstance) that can't be
-serialized as WasmGC constants. SimpleCodeInfo has only the fields needed
-for compilation: code, ssavaluetypes, ssaflags, slottypes, nargs.
-"""
-struct SimpleCodeInfo
-    code::Vector{Any}
-    ssavaluetypes::Vector{Any}
-    ssaflags::Vector{UInt32}
-    slottypes::Any  # Nothing for MVP
-    nargs::UInt64
 end
 
 # ============================================================================

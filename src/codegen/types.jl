@@ -31,6 +31,16 @@ wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx 
 # {typeId,tag,value} wrapper scheme are DELETED. A Union value is a boxed AnyRef
 # discriminated by classId — no per-union wrapper type, no tag, no descriptor.)
 
+# The compiled module is ONE immutable closed world, so it has one world age.
+# Baking the host's `get_world_counter()` made the binary depend on how many
+# methods the compiling process had defined (probe diffs of +55 between two
+# trees). dart has no world ages; Julia's are projected onto this single value:
+# a binding visible at compile time is visible in the module.
+const WASM_WORLD_AGE = UInt64(1)
+wasm_world_bound(host_bound::Integer, host_world::Integer, lower::Bool)::Int64 =
+    lower ? (host_bound <= host_world ? Int64(WASM_WORLD_AGE) : Int64(WASM_WORLD_AGE) + 1) :
+            (host_bound >= host_world ? typemax(Int64) : Int64(0))
+
 """
 Registry for struct and array type mappings within a module.
 """
@@ -38,17 +48,17 @@ mutable struct TypeRegistry
     structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
     arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
-    string_struct_idx::Union{Nothing, UInt32} # parity(M9): the CLASSED string {classId, data} <: $JlBase
+    string_struct_idx::Union{Nothing, UInt32} # parity(class_info.dart:18 FieldIndex): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
-    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # PURE-325: box types for numeric→externref returns
-    # PURE-4151: Type constant globals — each unique Type value gets a unique Wasm global
+    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
+    # Type constant globals — each unique Type value gets a unique Wasm global
     # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
     type_constant_globals::Union{Nothing, Dict{Type, UInt32}}  # Type value -> Wasm global index
-    # PURE-4149: TypeName constant globals — each unique TypeName gets a unique Wasm global
+    # TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
     typename_constant_globals::Union{Nothing, Dict{Core.TypeName, UInt32}}  # TypeName -> Wasm global index
-    # PURE-9025: DFS type ID assignment for runtime dispatch
+    # DFS type ID assignment for runtime dispatch
     type_ids::Union{Nothing, Dict{Type, Int32}}  # Concrete type -> unique DFS integer ID
     type_ranges::Union{Nothing, Dict{Type, Tuple{Int32, Int32}}}  # Abstract/concrete type -> [low, high] DFS range
     # dart class_info.dart: Top carries classId; Object extends it with the
@@ -57,14 +67,14 @@ mutable struct TypeRegistry
     base_struct_idx::Union{Nothing, UInt32}    # $JlTop = {classId:i32}
     object_struct_idx::Union{Nothing, UInt32}  # $JlObject <: Top = {classId, identityHash}
     identity_counter_global::Union{Nothing, UInt32}
-    # PURE-9028: BoxedNothing struct type and singleton global
+    # BoxedNothing struct type and singleton global
     nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
     nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
-    # PURE-9063: Type lookup table — typeId (i32) → DataType struct ref
+    # Type lookup table — typeId (i32) → DataType struct ref
     type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $JlDataType)))
     type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
-    type_lookup_table_size::Int32  # WBUILD-4000: Table size at creation time (guards late-arriving types)
-    # PURE-9063: $JlType hierarchy struct type indices
+    type_lookup_table_size::Int32  # Table size at creation time (guards late-arriving types)
+    # $JlType hierarchy struct type indices
     jl_type_idx::Union{Nothing, UInt32}       # $JlType = (struct (field $kind i32))
     jl_datatype_idx::Union{Nothing, UInt32}   # $JlDataType (sub $JlType) — most Julia types
     jl_union_idx::Union{Nothing, UInt32}      # $JlUnion (sub $JlType) — flat union of types
@@ -72,8 +82,6 @@ mutable struct TypeRegistry
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
-    # PURE-9065: String hash helper function index for Dict{String,...} support
-    string_hash_func_idx::Union{Nothing, UInt32}
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
@@ -84,7 +92,7 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
-    # march7: THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
+    # THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
     # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
     # identity that structural keying would wrongly merge.
@@ -94,20 +102,20 @@ mutable struct TypeRegistry
     # storage is published once by module start, then all reads share the object.
     mutable_constant_globals::Union{Nothing, IdDict{Any, Tuple{UInt32, UInt32}}}
     module_init_functions::Union{Nothing, Vector{UInt32}}
-    # census F3 (march5, dart constants.dart:427-443): interned string-constant globals —
+    # census F3 (dart constants.dart:427-443): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
     string_constant_globals::Union{Nothing, Dict{String, UInt32}}
-    # march7 LAZY constants (dart constants.dart:445-476/322-339): long strings get an
+    # LAZY constants (dart constants.dart:445-476/322-339): long strings get an
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
     lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
-    # march9: post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
+    # Post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
     # (ensure_type_id! max+1) lies outside every abstract's [low,high]; each abstract
     # ancestor records it here so isa checks the range PLUS these (dart's multi-range,
     # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
     type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
-    # march16 (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
+    # (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
     # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
@@ -127,17 +135,16 @@ TypeRegistry() = TypeRegistry(
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,  # string_hash_func_idx
     nothing,  # unicode_property_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
-    Dict{Any, UInt32}(),          # constant_globals (march7 ensureConstant)
+    Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
-    Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals (march7)
-    Dict{Type, Vector{Int32}}(),            # type_extra_ids (march9)
-    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # march16 closure layouter
+    Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
+    Dict{Type, Vector{Int32}}(),            # type_extra_ids
+    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}()                                # step5 class-DAG synthetics
 )
 
@@ -151,17 +158,16 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing, nothing,            # type_ids, type_ranges
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,  # string_hash_func_idx
     nothing,  # unicode_property_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
-    nothing,  # constant_globals (march7)
+    nothing,  # constant_globals
     nothing,  # mutable_constant_globals
     nothing,  # module_init_functions
     nothing,  # string_constant_globals (census F3)
-    nothing,  # lazy_string_globals (march7)
-    nothing,  # type_extra_ids (march9)
-    nothing, nothing, nothing,  # march16 closure layouter
+    nothing,  # lazy_string_globals
+    nothing,  # type_extra_ids
+    nothing, nothing, nothing,  # closure layouter
     nothing                     # step5 class-DAG synthetics
 )
 
@@ -172,7 +178,7 @@ symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
 """
     get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
 
-march7 LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
+LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
 (ref null \$JlString) global + an init function that builds the string once, stores
 it, and returns it. MUST be called BEFORE function-index assignment (the index-freeze
 constraint) — the literal pre-pass in compile.jl does.
@@ -206,7 +212,7 @@ end
 """
     ensure_constant_global!(mod, registry, val) -> Union{UInt32, Nothing}
 
-march7 — THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
+— THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
 map deduplicating EVERY constant kind). Returns the interned global for `val`, creating
 it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
@@ -228,6 +234,23 @@ end
 # i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
 function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
+    if T === Int128 || T === UInt128
+        # parity(constants.dart:622-655 visitIntConstant valueTypeConstants): a boxed
+        # numeric constant gets one cached module global. Int128 is a Julia primitive
+        # (not isstructtype), so it cannot take the struct path below.
+        type_idx = get_int128_type!(mod, registry, T)
+        lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
+        hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
+        push!(init, Opcode.I32_CONST)
+        append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
+        push!(init, Opcode.I64_CONST)
+        append!(init, encode_leb128_signed(reinterpret(Int64, lo)))
+        push!(init, Opcode.I64_CONST)
+        append!(init, encode_leb128_signed(reinterpret(Int64, hi)))
+        push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
+        append!(init, encode_leb128_unsigned(UInt64(type_idx)))
+        return type_idx
+    end
     (isconcretetype(T) && isstructtype(T) && !ismutabletype(T)) || return nothing
     T <: Type && return nothing                       # Type constants have their own registry
     (T === String || T === Symbol) && return nothing  # the string registry owns these
@@ -301,7 +324,7 @@ end
 """
     get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}
 
-census F3 (march5) — INTERNED string constants, dart's constant→deduplicated-global
+census F3 () — INTERNED string constants, dart's constant→deduplicated-global
 architecture (constants.dart:427-443 ensureConstant; small strings eager via
 array_new_fixed, :512-564). Every use of an equal short literal reads ONE global,
 matching dart's code-size and `===`-identity semantics. Strings longer than the
@@ -375,7 +398,7 @@ function get_datatype_type_idx(registry::TypeRegistry)::UInt32
 end
 
 # ============================================================================
-# PURE-9025: DFS Type ID Assignment
+# DFS Type ID Assignment
 # ============================================================================
 
 """
@@ -389,21 +412,22 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
 IDs start at 1 (0 is reserved for unknown/unassigned).
 """
 function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
+    # formal(dev/formal/ClassIdDispatch.tla): sorted-children DFS gives nested, sibling-disjoint ranges and a numbering that is a function of the closed world; only the lazy ensure_type_id! path makes ids history-dependent
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
-    for (T, info) in registry.structs
+    for (T, info) in registered_structs(registry)
         if T isa DataType && isconcretetype(T) && info.field_offset > 0
             push!(concrete_types, T)
         end
     end
-    # census F2 (march5): the closed world — IR-reachable types enter the numbering
+    # census F2 (): the closed world — IR-reachable types enter the numbering
     # even before (or without) struct registration; their ids/ranges are what isa
     # and the checked cast read, and lazy registration later reuses the same id.
     extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
 
     # Also include primitive numeric types that may need boxing/dispatch
-    # PURE-9028: Include Nothing for BoxedNothing typeId
-    # parity(M9): String + Symbol are CLASSED now — they join the hierarchy so
+    # Include Nothing for BoxedNothing typeId
+    # parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): String + Symbol are CLASSED now — they join the hierarchy so
     # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
               Float16, Float32, Float64, Nothing, String, Symbol)
@@ -510,6 +534,54 @@ function get_type_id(registry::TypeRegistry, T::Type)::Int32
 end
 
 """
+    memory_element_stride(T) -> Int
+
+Julia's byte stride of a `Memory{T}` element, the unit `MemoryRef.ptr_or_offset` is
+counted in: `sizeof(T)` for an isbits element, 8 for a boxed reference slot
+(`Base.aligned_sizeof(Any)`). Every lowering that converts between a byte offset and an
+element index uses this one rule.
+"""
+memory_element_stride(@nospecialize(T)) =
+    (T isa DataType && isbitstype(T)) ? max(sizeof(T), 1) : 8
+
+"""
+    registered_structs(registry::TypeRegistry) -> Vector{Pair{Type,StructInfo}}
+
+The ONE way to iterate the struct registry. `structs` is a `Dict` keyed by type
+object, whose iteration order varies per process; every consumer that picks
+"the first type at this wasm index" or assigns an id while walking it would
+otherwise emit process-varying bytes (the Dict-constant nondeterminism finding).
+The order is (wasm_type_idx, type name) — dart numbers classes once from the
+hierarchy (class_info.dart:831) and never depends on hash order.
+"""
+function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo}}
+    registry.structs === nothing && return Pair{Type,StructInfo}[]
+    return sort!(collect(Pair{Type,StructInfo}, registry.structs);
+                 by = p -> (p.second.wasm_type_idx, string(p.first)))
+end
+
+"""
+    ordered_pairs(dict, keyfn) -> Vector{Pair}
+
+The ONE way to walk any registry dictionary whose keys hash by identity (types,
+type names, function objects, constant values): sorted by a key that is a
+function of the program, never of the process. Type hashes are address-based,
+so a raw walk orders differently per process AND per architecture — the same
+function compiled on x64 and aarch64 interned its type-name strings in a
+different order. dart numbers and emits everything from the program structure
+(class_info.dart:831 ClassIdNumbering; constants.dart's map is walked in
+insertion order).
+"""
+ordered_pairs(dict::AbstractDict, keyfn) = sort!(collect(dict); by = p -> keyfn(p.first))
+
+"""A type's program-determined order key: its printed name, then its defining module
+(two modules may define a `Foo`), then the wrapper's name for UnionAll bodies."""
+type_order_key(@nospecialize(T)) =
+    (string(T), T isa DataType ? string(T.name.module) : (T isa UnionAll ? string(Base.unwrap_unionall(T).name.module) : ""))
+
+typename_order_key(tn::Core.TypeName) = (string(tn.module), string(tn.name))
+
+"""
     is_shared_wasm_type(registry, wasm_type_idx, T) -> Bool
 
 Check if another Julia type in the registry shares the same WasmGC type index.
@@ -517,8 +589,7 @@ When types share an index, ref.test can't distinguish them and typeId-based
 dispatch is needed.
 """
 function is_shared_wasm_type(registry::TypeRegistry, wasm_type_idx::UInt32, T::Type)::Bool
-    registry.structs === nothing && return false
-    for (other_type, other_info) in registry.structs
+    for (other_type, other_info) in registered_structs(registry)
         if other_info.wasm_type_idx == wasm_type_idx && other_type !== T
             return true
         end
@@ -543,7 +614,7 @@ function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
     end
     new_id = max_id + Int32(1)
     registry.type_ids[T] = new_id
-    # march9: record the drift id on every abstract ancestor — isa checks the DFS
+    # Record the drift id on every abstract ancestor — isa checks the DFS
     # range PLUS these extras (dart's multi-range), so numbering order can't break it.
     if registry.type_extra_ids !== nothing && T isa DataType && isconcretetype(T)
         anc = supertype(T)
@@ -554,6 +625,22 @@ function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
         end
     end
     return new_id
+end
+
+"""
+    concrete_class_ids(registry, T) -> Vector{Int32}
+
+The exact closed-world answer to `isa(x, T)` for a non-concrete `T`: the class ids of
+every numbered concrete type `C` with `C <: T` — Julia's own subtyping is the ground
+truth, so a parametric abstract (`AbstractVector` = `AbstractArray{T,1}`) is answered
+exactly, where the DFS range keyed by the base `AbstractArray` cannot distinguish it
+from a Matrix. `emit_classid_membership!` compresses a contiguous set back to dart's
+range window (class_info.dart:831 getConcreteClassIdRange).
+"""
+function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
+    registry.type_ids === nothing && return Int32[]
+    ids = Int32[id for (C, id) in ordered_pairs(registry.type_ids, type_order_key) if C isa Type && C <: T]
+    return sort!(ids)
 end
 
 """
@@ -573,13 +660,13 @@ Serialize the type ID table to a Dict suitable for JSON output.
 function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
     result = Dict{String, Any}()
     ids = Dict{String, Int32}()
-    for (T, id) in registry.type_ids
+    for (T, id) in ordered_pairs(registry.type_ids, type_order_key)
         ids[string(T)] = id
     end
     result["type_ids"] = ids
 
     ranges = Dict{String, Any}()
-    for (T, (low, high)) in registry.type_ranges
+    for (T, (low, high)) in ordered_pairs(registry.type_ranges, type_order_key)
         ranges[string(T)] = Dict("low" => low, "high" => high)
     end
     result["type_ranges"] = ranges
@@ -597,7 +684,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 
     # Struct types
     structs = Dict{String, Any}[]
-    for (T, info) in sort(collect(registry.structs), by=x->x[2].wasm_type_idx)
+    for (T, info) in registered_structs(registry)
         push!(structs, Dict{String, Any}(
             "julia_type" => string(T),
             "wasm_type_idx" => Int(info.wasm_type_idx),
@@ -610,7 +697,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 
     # Array types
     arrays = Dict{String, Int}()
-    for (T, idx) in registry.arrays
+    for (T, idx) in ordered_pairs(registry.arrays, type_order_key)
         arrays[string(T)] = Int(idx)
     end
     result["arrays"] = arrays
@@ -619,7 +706,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 end
 
 """builder-native (THE implementation): push the type's DFS id as i32.
-E2E-001: uses ensure_type_id! so types registered after assign_type_ids!()
+Uses ensure_type_id! so types registered after assign_type_ids!()
 (isa checks / struct constants) still get unique, matching typeIds."""
 function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
     i32_const!(b, Int64(ensure_type_id!(registry, T)))
@@ -708,11 +795,8 @@ function emit_typeof!(b::InstrBuilder, base_idx::UInt32)
     return b
 end
 
-# PURE-9063: Kind constants for $JlType.$kind field
+# Kind constants for $JlType.$kind field
 const JL_TYPE_KIND_DATATYPE  = Int32(0)
-const JL_TYPE_KIND_UNION     = Int32(1)
-const JL_TYPE_KIND_UNIONALL  = Int32(2)
-const JL_TYPE_KIND_TYPEVAR   = Int32(3)
 
 """
     create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
@@ -836,7 +920,7 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_typevar_idx = add_type!(mod, jl_typevar)
     registry.jl_typevar_idx = jl_typevar_idx
 
-    # PURE-9064: Register Julia type system types as StructInfo entries
+    # Register Julia type system types as StructInfo entries
     # so that isa(x, Union), getfield(::DataType, :parameters), PiNode narrowing, etc.
     # all work through the existing codegen paths.
     # field_offset=1 because field 0 is always $kind (like typeId for user structs)
@@ -938,6 +1022,13 @@ packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer) =
 
 """
 Registry for functions within a module, enabling cross-function calls.
+
+parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+staticParamInfo): `by_ref` is the dart-shaped core — callee identity (a Julia
+function object, standing in for dart's `Reference`) keyed to its compiled
+`FunctionInfo` (dart's `w.BaseFunction` + param ABI). `functions` (name-keyed)
+exists only to serve `serialize_function_table` and the Julia-only fallback
+`get_function_by_export_name` below — never the identity-keyed lookup path.
 """
 mutable struct FunctionRegistry
     functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
@@ -972,7 +1063,7 @@ Register a function in the registry.
 function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any; is_candidate::Bool=false)
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
     # arg types, index) — for hunting call-site/callee signature divergence
-    get(ENV, "WT_LOG_REGISTRY", "") == "1" &&
+    OPTIONS[].log_registry &&
         println(stderr, "WTREG\t", name, "\t", wasm_idx, "\t", arg_types)
     info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, is_candidate)
 
@@ -1006,9 +1097,18 @@ function register_function!(registry::FunctionRegistry, name::String, func_ref, 
 end
 
 """
-Look up a function by name.
+Look up a function by name — the sole caller has already lost the func_ref
+(a GlobalRef from an anonymous/re-exported module whose `getfield` failed) and
+a name string is all that remains to key on.
+
+parity(quarantine: name-fallback for cross-module identity loss — dart
+resolves every callee purely by `Reference` identity (functions.dart:26,
+`FunctionCollector._functions`); WT has no identity left to key on once
+`getfield(func.mod, func.name)` cannot recover the Function object, so this
+linear string scan is the only recourse. Never used when a func_ref is in
+hand — see `get_function(registry, func_ref, arg_types)` above.
 """
-function get_function(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
+function get_function_by_export_name(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
     for (n, info) in registry.functions
         (n == name && !info.is_candidate) && return info   # candidates are dispatch-only
     end
@@ -1045,6 +1145,12 @@ end
 
 """
 Look up a function by reference and argument types (for dispatch).
+
+parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+staticParamInfo): the func_ref-keyed core — resolves a callee's identity to
+its compiled ABI, same shape as dart's `Reference` → `w.BaseFunction` map.
+The subtype/reverse-subtype passes below are Julia's dynamic-dispatch
+overload resolution filling in for dart's static single-target reference.
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                       expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo, Nothing}
@@ -1095,7 +1201,7 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
         end
     end
 
-    # PURE-320: Try reverse subtype match (registered <: actual).
+    # Try reverse subtype match (registered <: actual).
     # This handles cases where infer_value_type returns abstract types (e.g., Type)
     # but the function was registered with concrete types (e.g., Type{SourceFile}).
     for info in infos
@@ -1172,7 +1278,7 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return registry.arrays[elem_type]
     end
 
-    # P2-batch26 (gap 56af911c52b2): Vector{Union{}} — `map` with an
+    # (gap 56af911c52b2): Vector{Union{}} — `map` with an
     # always-throwing closure infers eltype Union{}. Such an array can only
     # ever be EMPTY (Union{} has no values), so the element representation is
     # arbitrary; use Int64 so the JS boundary and accessors have a concrete
@@ -1233,7 +1339,7 @@ end
 """
     get_string_struct_type!(mod, registry) -> UInt32
 
-parity(M9): the CLASSED string — dart: String IS an Object class. A Julia String value is
+parity(class_info.dart:18 FieldIndex): the CLASSED string — dart: String IS an Object class. A Julia String value is
 `(struct (field i32 classId) (field (mut i32) identityHash)
          (field (ref null \$strbytes) data) (field i32 syntaxFlags))`, SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
@@ -1311,112 +1417,7 @@ function get_or_create_unicode_property_func!(mod::WasmModule,
 end
 
 """
-    get_or_create_string_hash_func!(mod, registry) → UInt32
-
-PURE-9065: Lazily create a Wasm helper function that computes FNV-1a hash
-over a byte array (string). Used by Dict{String,...} to replace the C memhash
-foreigncall. Returns the function index.
-
-Signature: (ref null \$str_arr, i64 len, i32 seed) → i64
-Algorithm: FNV-1a with offset_basis XOR seed, iterating min(len, array.len) bytes.
-"""
-function get_or_create_string_hash_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    if registry.string_hash_func_idx !== nothing
-        return registry.string_hash_func_idx
-    end
-
-    str_type_idx = get_string_array_type!(mod, registry)
-
-    # Function params: (ref null $str_arr, i64, i32) → (i64)
-    params = WasmValType[ConcreteRef(str_type_idx, true), I64, I32]
-    results = WasmValType[I64]
-    # Extra locals: 0=hash(i64), 1=i(i32), 2=array_len(i32)
-    locals = WasmValType[I64, I32, I32]
-
-    # Build the body via the typed InstrBuilder. Locals: params (ref,i64,i32) + extras (i64,i32,i32).
-    b = InstrBuilder(WasmValType[ConcreteRef(str_type_idx, true), I64, I32, I64, I32, I32],
-                     results; func_name="get_or_create_string_hash_func!")
-
-    # FNV-1a offset basis: 14695981039346656037 (0xcbf29ce484222325)
-    # FNV-1a prime: 1099511628211 (0x00000100000001b3)
-
-    # hash = FNV_OFFSET_BASIS XOR (i64.extend_i32_u seed)
-    i64_const!(b, Int64(-3750763034362895579))  # 14695981039346656037 as signed
-    local_get!(b, UInt32(2))  # param 2 = seed (i32)
-    num!(b, Opcode.I64_EXTEND_I32_U)
-    num!(b, Opcode.I64_XOR)
-    local_set!(b, UInt32(3))  # local 0 (offset 3) = hash
-
-    # array_len = array.len(arr)
-    local_get!(b, UInt32(0))  # param 0 = arr
-    array_len!(b)
-    local_set!(b, UInt32(5))  # local 2 (offset 5) = array_len
-
-    # Clamp array_len to min(len, array_len)
-    # if len < array_len (as unsigned): array_len = i32.wrap(len)
-    local_get!(b, UInt32(1))  # param 1 = len (i64)
-    local_get!(b, UInt32(5))  # array_len
-    num!(b, Opcode.I64_EXTEND_I32_U)
-    num!(b, Opcode.I64_LT_U)
-    if_!(b)  # void block
-    local_get!(b, UInt32(1))  # len
-    num!(b, Opcode.I32_WRAP_I64)
-    local_set!(b, UInt32(5))  # array_len = i32(len)
-    end_block!(b)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, UInt32(4))  # local 1 (offset 4) = i
-
-    # block $break
-    break_label = block!(b)  # void
-
-    # loop $continue
-    continue_label = loop!(b)  # void
-
-    # if i >= array_len: branch to the symbolic break label
-    local_get!(b, UInt32(4))  # i
-    local_get!(b, UInt32(5))  # array_len
-    num!(b, Opcode.I32_GE_U)
-    br_if!(b, break_label)
-
-    # byte = array.get_u(arr, i)
-    local_get!(b, UInt32(0))  # arr
-    local_get!(b, UInt32(4))  # i
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    # hash = (hash XOR byte) * FNV_PRIME
-    num!(b, Opcode.I64_EXTEND_I32_U)  # byte → i64
-    local_get!(b, UInt32(3))  # hash
-    num!(b, Opcode.I64_XOR)
-    i64_const!(b, Int64(1099511628211))  # FNV prime
-    num!(b, Opcode.I64_MUL)
-    local_set!(b, UInt32(3))  # hash = result
-
-    # i++
-    local_get!(b, UInt32(4))  # i
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, UInt32(4))  # i = i + 1
-
-    # branch to the symbolic continue label
-    br!(b, continue_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # return hash
-    local_get!(b, UInt32(3))  # hash
-    end_block!(b)  # end function
-
-    body = builder_code(b)
-    func_idx = add_function!(mod, params, results, locals, body)
-    registry.string_hash_func_idx = func_idx
-    return func_idx
-end
-
-"""
-PURE-325: Get or create a box struct type for a numeric Wasm type.
+Get or create a box struct type for a numeric Wasm type.
 Used when a function returning ExternRef needs to return a numeric value.
 The box struct has a single field of the numeric type, allowing the value
 to be wrapped as a GC reference and converted to externref.
@@ -1425,7 +1426,7 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     if haskey(registry.numeric_boxes, wasm_type)
         return registry.numeric_boxes[wasm_type]
     end
-    # PURE-9024: Prepend typeId:i32 as field 0 (universal object layout)
+    # Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
     # Declare `sub $JlBase` AT CREATION (dart class_info.dart:288 — every class
     # struct subtypes its super at definition). This lets the strict builder use
@@ -1463,7 +1464,7 @@ function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_ty
 end
 
 """
-PURE-9028: Get or create the BoxedNothing struct type.
+Get or create the BoxedNothing struct type.
 BoxedNothing has only typeId:i32 (no value field) — a singleton type.
 """
 function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
@@ -1479,7 +1480,7 @@ function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
-PURE-9028: Get or create a singleton global holding the BoxedNothing instance.
+Get or create a singleton global holding the BoxedNothing instance.
 Returns the global index. The global is initialized with struct.new \$BoxedNothing(typeId).
 """
 function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
@@ -1499,7 +1500,7 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
-PURE-4151 + PURE-9063: Get or create a Wasm global for a Type constant value.
+Get or create a Wasm global for a Type constant value.
 
 Each unique Julia Type (e.g., Int64, String, Number) gets a unique Wasm global
 holding a struct instance. This ensures that `ref.eq` correctly
@@ -1531,7 +1532,7 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # Cache
     registry.type_constant_globals[type_val] = global_idx
 
-    # PURE-4149: Recursively ensure globals exist for the entire type hierarchy.
+    # Recursively ensure globals exist for the entire type hierarchy.
     # This creates globals for supertypes, TypeNames, and parameter types
     # so that field access works at runtime.
     if type_val isa DataType
@@ -1615,7 +1616,7 @@ Create a start function that populates type constant global fields for all
 type constant globals. Called at the end of compile_module, after all
 Type globals have been created.
 
-PURE-9063: When \$JlType hierarchy is available, populates \$JlDataType fields:
+When \$JlType hierarchy is available, populates \$JlDataType fields:
   kind=0, name→\$JlTypeName, super→\$JlType, parameters→\$JlSVec, hash, abstract, dfs_low, dfs_high
 And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
@@ -1650,7 +1651,7 @@ function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)
 end
 
 """
-PURE-9063: Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
+Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
 """
 function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     dt_type_idx = registry.jl_datatype_idx
@@ -1659,16 +1660,16 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     jl_type_idx = registry.jl_type_idx
     str_arr_idx = get_string_array_type!(mod, registry)
 
-    # march17: global_get! declares the global's TRUE valtype (the AnyRef lie made
+    # global_get! declares the global's TRUE valtype (the AnyRef lie made
     # this the #1 harvest offender — 96k tracked-type mismatches feeding struct_set!).
     b = InstrBuilder(; func_name="_populate_jl_hierarchy!", mod=mod)
 
     # Close Module ancestry before iterating the constant registry, then wire
     # exact parent identities. Root modules point to themselves.
-    for tn in keys(registry.typename_constant_globals)
+    for (tn, _) in ordered_pairs(registry.typename_constant_globals, typename_order_key)
         tn.module !== nothing && get_module_constant_global!(mod, registry, tn.module)
     end
-    for (value, module_global) in collect(registry.constant_globals)
+    for (value, module_global) in ordered_pairs(registry.constant_globals, v -> v isa Module ? string(v) : "")
         value isa Module || continue
         parent_global = get_module_constant_global!(mod, registry, parentmodule(value))
         module_idx = registry.structs[Module].wasm_type_idx
@@ -1677,14 +1678,14 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         struct_set!(b, module_idx, UInt32(3), AnyRef)
     end
 
-    for (type_val, dt_global_idx) in registry.type_constant_globals
+    for (type_val, dt_global_idx) in ordered_pairs(registry.type_constant_globals, type_order_key)
         type_val isa DataType || continue
 
         # Field 0: kind = TYPE_DATATYPE (0)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(JL_TYPE_KIND_DATATYPE))
         struct_set!(b, dt_type_idx, UInt32(0), I32)  # field 0 = kind
@@ -1696,12 +1697,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             begin
             local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
             global_get!(b, tn_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             struct_set!(b, dt_type_idx, UInt32(1), ConcreteRef(tn_type_idx, true))  # field 1 = name
         end
@@ -1714,12 +1715,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                 begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                 begin
             local _gvt = mod.globals[Int(parent_global_idx) + 1].valtype
             global_get!(b, parent_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                 struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
             end
@@ -1728,12 +1729,12 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
             struct_set!(b, dt_type_idx, UInt32(2), ConcreteRef(jl_type_idx, true))  # field 2 = super
         end
@@ -1744,7 +1745,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         if nparams == 0
             i32_const!(b, 0)
@@ -1757,7 +1758,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
                     begin
             local _gvt = mod.globals[Int(p_global_idx) + 1].valtype
             global_get!(b, p_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
                     # $JlDataType is sub $JlType, so ref is already compatible
                 else
@@ -1769,20 +1770,23 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
         struct_set!(b, dt_type_idx, UInt32(3), ConcreteRef(svec_idx, true))  # field 3 = parameters
 
-        # Field 4: hash → i32 (use Julia's type hash)
+        # Field 4: hash → i32. Julia's DataType.hash is the host's objectid — a
+        # function of the host build (it differed between x64 and aarch64 for
+        # every type), not of the program; the module's value is the hash of the
+        # type's program identity (memhash is platform-independent).
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
-        i32_const!(b, Int64(Int32(hash(type_val) & 0x7FFFFFFF)))
+        i32_const!(b, Int64(Int32(hash(type_order_key(type_val)) & 0x7FFFFFFF)))
         struct_set!(b, dt_type_idx, UInt32(4), I32)  # field 4 = hash
 
         # Field 5: abstract → i32 (1 if abstract, 0 if concrete)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(isabstracttype(type_val) ? 1 : 0))
         struct_set!(b, dt_type_idx, UInt32(5), I32)  # field 5 = abstract
@@ -1803,7 +1807,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(dfs_low))
         struct_set!(b, dt_type_idx, UInt32(6), I32)  # field 6 = dfs_low
@@ -1812,7 +1816,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         begin
             local _gvt = mod.globals[Int(dt_global_idx) + 1].valtype
             global_get!(b, dt_global_idx, _gvt)
-            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # march17: anyref-stored type globals narrow at use
+            _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
         i32_const!(b, Int64(dfs_high))
         struct_set!(b, dt_type_idx, UInt32(7), I32)  # field 7 = dfs_high
@@ -1828,7 +1832,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     end
 
     # Populate $JlTypeName fields
-    for (tn, tn_global_idx) in registry.typename_constant_globals
+    for (tn, tn_global_idx) in ordered_pairs(registry.typename_constant_globals, typename_order_key)
         # Fields 2 and 5 are interned Symbol objects, carrying their exact
         # content-derived metadata across ordinary calls.
         string_idx = get_string_struct_type!(mod, registry)
@@ -1868,14 +1872,15 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         # derives it by walking mutable BindingPartition history; WT captures
         # the result once at its immutable closed-world collection boundary.
         world_bounds = Base.check_world_bounded(tn)
+        host_world = Base.get_world_counter()
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
         i32_const!(b, world_bounds === nothing ? 0 : 1)
         struct_set!(b, tn_type_idx, UInt32(8), I32)
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        i64_const!(b, world_bounds === nothing ? 0 : first(world_bounds))
+        i64_const!(b, world_bounds === nothing ? 0 : wasm_world_bound(first(world_bounds), host_world, true))
         struct_set!(b, tn_type_idx, UInt32(9), I64)
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        i64_const!(b, world_bounds === nothing ? 0 : last(world_bounds))
+        i64_const!(b, world_bounds === nothing ? 0 : wasm_world_bound(last(world_bounds), host_world, false))
         struct_set!(b, tn_type_idx, UInt32(10), I64)
 
         # Fields 11–12: exact deprecation state for either symbol that
@@ -1908,7 +1913,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             begin
                 local _gvt = mod.globals[Int(tn_global_idx) + 1].valtype
                 global_get!(b, tn_global_idx, _gvt)
-                _gvt === AnyRef && ref_cast!(b, Int64(tn_type_idx), true)   # march17: the RECEIVER is a TypeName
+                _gvt === AnyRef && ref_cast!(b, Int64(tn_type_idx), true)   # the RECEIVER is a TypeName
             end
             begin
                 local _gvt = mod.globals[Int(wrapper_global_idx) + 1].valtype
@@ -1919,7 +1924,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         end
     end
 
-    # PURE-9063: Populate the type lookup table (typeId → DataType struct ref)
+    # Populate the type lookup table (typeId → DataType struct ref)
     populate_type_lookup_table!(b, registry)
 
     isempty(builder_code(b)) && return
@@ -1931,7 +1936,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
 end
 
 # ============================================================================
-# PURE-9063: Full $JlType Hierarchy — Type Lookup Table
+# Full $JlType Hierarchy — Type Lookup Table
 # ============================================================================
 
 """
@@ -1953,8 +1958,9 @@ function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)
         push!(all_typed, T)
     end
 
-    # Create DataType globals for each (get_type_constant_global! is idempotent)
-    for T in all_typed
+    # Create DataType globals for each (get_type_constant_global! is idempotent),
+    # in program order — this is where the type-name strings get interned.
+    for T in sort!(collect(all_typed); by = type_order_key)
         T isa DataType || continue
         get_type_constant_global!(mod, registry, T)
     end
@@ -1999,7 +2005,7 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
 
     global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
     registry.type_lookup_global = global_idx
-    registry.type_lookup_table_size = table_size  # WBUILD-4000: record for OOB guard
+    registry.type_lookup_table_size = table_size  # record for OOB guard
 end
 
 """
@@ -2021,19 +2027,19 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
     table_global = registry.type_lookup_global
     arr_type_idx = registry.type_lookup_array_idx
 
-    # WBUILD-4000: Compute table size (must match create_type_lookup_table! sizing).
+    # Compute table size (must match create_type_lookup_table! sizing).
     # Types registered after create_type_lookup_table! (via ensure_type_id! during body
     # compilation) may have IDs exceeding the table size — skip those to avoid OOB.
     table_size = registry.type_lookup_table_size
 
     # For each concrete type with a DFS ID and a DataType global, populate the table
-    for (T, type_id) in registry.type_ids
+    for (T, type_id) in ordered_pairs(registry.type_ids, type_order_key)
         T isa DataType || continue
         haskey(registry.type_constant_globals, T) || continue
         type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds
         dt_global_idx = registry.type_constant_globals[T]
 
-        # march17: the table's declared type + narrow to the array receiver
+        # The table's declared type + narrow to the array receiver
         global_get!(b, table_global, AnyRef)
         ref_cast!(b, Int64(arr_type_idx), true)
         i32_const!(b, Int64(type_id))
@@ -2059,36 +2065,20 @@ function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
 end
 
 """
-Get or create an array type that holds string references.
-"""
-function get_string_ref_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    # First ensure string array type exists
-    str_type_idx = get_string_array_type!(mod, registry)
-
-    # Create array type for string refs if not exists
-    # Key: use Vector{String} as the Julia type marker
-    if !haskey(registry.arrays, Vector{String})
-        # Element type is (ref null str_type_idx) - ConcreteRef with nullable=true
-        str_ref_type = ConcreteRef(str_type_idx, true)
-        arr_idx = add_array_type!(mod, str_ref_type, true)
-        registry.arrays[Vector{String}] = arr_idx
-    end
-    return registry.arrays[Vector{String}]
-end
-
-"""
     _resolve_multivariant_union(T, non_nothing, mod, registry; for_local=false) -> WasmValType
 
 THE single resolver for a multi-variant (2+ non-Nothing) Union value's wasm type — dart2wasm
-parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT had
-TWO drifting copies — get_concrete_wasm_type + julia_to_wasm_type_concrete — that the "MUST agree"
-comments warned would silently null-deref on divergence). Mirrors dart's two outcomes: an UNBOXED
-primitive for a same-category numeric union (dart's unboxed int/double via `boxedClasses`), else the
-TOP type AnyRef (dart's `topInfo.nullableType`) — heterogeneous/incompatible-numeric values live
-boxed-with-classId behind AnyRef. `for_local=true` (the SSA-local allocator) applies WT's anyref→
-externref-for-locals wart on the numeric path (a WT-only anyref/externref split dart doesn't have;
-preserved exactly here, retired when that hierarchy unifies). The nullable (Union{Nothing,T}) case
-stays caller-side — the two callers diverge there intentionally (EqRef vs concrete inner ref).
+parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT once
+had two drifting copies of the whole type-translation chain — one taking `(mod, registry)`, one
+taking a compilation `ctx` — that the "MUST agree" comments warned would silently null-deref on
+divergence; both are now this one `for_local`-gated function, P4-types fold). Mirrors dart's two
+outcomes: an UNBOXED primitive for a same-category numeric union (dart's unboxed int/double via
+`boxedClasses`), else the TOP type AnyRef (dart's `topInfo.nullableType`) — heterogeneous/
+incompatible-numeric values live boxed-with-classId behind AnyRef. `for_local=true` (the SSA-local
+allocator) applies WT's anyref→externref-for-locals wart on the numeric path (a WT-only
+anyref/externref split dart doesn't have; preserved exactly here, retired when that hierarchy
+unifies). The nullable (Union{Nothing,T}) case stays caller-side — the two `for_local` branches of
+the caller diverge there intentionally (EqRef vs concrete inner ref).
 """
 function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     all_numeric = !isempty(non_nothing) && all(non_nothing) do t
@@ -2124,8 +2114,21 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
 end
 
 """
-Get a concrete Wasm type for a Julia type, using the module and registry.
-This is used before CompilationContext is created.
+Takes a Julia type `T`, the target `mod`, its `registry`, and a `for_local` keyword
+(default `false`); returns the `WasmValType` that represents `T`.
+
+THE single Julia-type → Wasm-type translator (dart2wasm parity: `translateType`
+translator.dart:1044 → `translateStorageType(type, {unbox})` :1067 — dart has ONE such
+translator, gated by one `unbox` flag; WT had TWO drifting ~200-line copies, this one and
+a former `ctx`-taking twin (`julia_to_wasm_type` plus `_concrete` — deleted; every call
+site now calls this function directly with `for_local` set true). `for_local`
+mirrors dart's `unbox`: `true` is the SSA-local/phi/PhiC/slot allocator (a value about to
+occupy a WT-allocated local that has no OTHER fixed representation yet); `false` is every
+signature/field/return position where the value already has a fixed representation
+established elsewhere (a function parameter's declared type, a struct field's wasm type).
+`T` is intentionally unannotated (not typed as a `Type`): `Vararg{T,N}` markers are
+`Core.TypeofVararg` instances, which are not subtypes of `Type`, so a `Type`-constrained
+signature would MethodError on them before the Vararg case below ever runs.
 """
 
 """
@@ -2141,27 +2144,81 @@ single source consumers migrate onto as those rework.
 derive_nullability(@nospecialize(T))::Bool =
     T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
 
-function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry)::WasmValType
-    # Union{} (bottom type) indicates unreachable code - return void/nothing
+"""
+    translate_external_type(T, mod, registry) -> WasmValType
+
+The host-boundary type translator: what a Julia type may become on the parameter or
+result of an import/export function signature. `parity(translator.dart:1239
+translateExternalType, :1266 translateExternalStorageType)`: dart restricts the
+interop boundary to wasm func/extern/array refs, its low-level `WasmArray<T>`
+intrinsic, and non-nullable primitive builtins — everything else (ordinary boxed
+objects included) widens to the `anyref` top type, so Binaryen's `--closed-world`
+mode never has to reason about an internal recursive-group struct ref crossing the
+boundary. WT has no Julia-level marker types for most of dart's `dart:_wasm`
+intrinsic classes (`WasmFuncRef`/`WasmArrayRef`/`WasmArray<T>` are never spelled as
+a Julia parameter type) — the one exception is `JSValue` (`julia_to_wasm_type`'s own
+"JS values are held as externref" case), WT's existing Julia-level marker for an
+opaque host reference, mirroring dart's `cls == wasmExternRefClass` arm; `AnyRef` is
+WT's `anyref`. This is total — it never throws. dart's only throw in this family
+(`translateExternalStorageType`'s "Wasm numeric types can't be nullable") fires for
+a nullable low-level wasm marker type, which likewise has no Julia-side analogue to
+reach it.
+"""
+function translate_external_type(T, mod::WasmModule, registry::TypeRegistry)::WasmValType
+    T === JSValue && return ExternRef
+    if !derive_nullability(T) &&
+       (T === Bool || T === Char ||
+        T === Int8 || T === UInt8 || T === Int16 || T === UInt16 ||
+        T === Int32 || T === UInt32 || T === Int64 || T === UInt64 || T === Int ||
+        T === Float32 || T === Float64)
+        return julia_to_wasm_type(T)
+    end
+    return AnyRef
+end
+
+function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
+    # Vararg is a type modifier (Core.TypeofVararg), not a proper Julia type — never `<: Type`.
+    # Use ExternRef for locals to avoid externref↔anyref mismatches (Any→ExternRef, and
+    # cross-calls return ExternRef, so locals holding a vararg tail must be ExternRef too).
+    if T isa Core.TypeofVararg
+        return ExternRef
+    end
+    # Union{} (bottom type / TypeofBottom): no runtime value exists of this type. In a
+    # signature/field position (for_local=false) that is a genuine bug — throw. The
+    # SSA-local allocator (for_local=true) can legitimately type an unreachable dead
+    # phi/local edge Union{}; I32 is a harmless placeholder no live value ever occupies.
     if T === Union{}
+        for_local && return I32
         throw(ArgumentError("Union{} has no runtime Wasm value type"))
     end
-    # PURE-4155: Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
+    # Type{X} singleton values (e.g., Type{Int64}) are represented as DataType
     # struct refs via global.get. Only match SINGLETON types (not struct types like Union/DataType).
-    # PURE-4151: Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
+    # Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
     # multi-variant unions that map to AnyRef (via julia_to_wasm_type), not single DataType refs.
     if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
-        # PURE-9063: Use $JlDataType when hierarchy is available
+        # Use $JlDataType when hierarchy is available
         dt_idx = get_datatype_type_idx(registry)
         return ConcreteRef(dt_idx, true)
     end
     if T === String || T === Symbol
-        # parity(M9): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
+        # parity(class_info.dart:18 FieldIndex): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
         # a class). Symbol shares the rep (its name string).
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
-    elseif is_closure_type(T)
-        # Closure types are structs with captured variables
+    elseif !for_local && is_closure_type(T)
+        # Closure types are structs with captured variables. NOT a deliberate asymmetry —
+        # a DISCOVERED pre-existing gap between the two former chains, preserved here rather
+        # than fixed (out of scope for a byte-identical fold; probe_bytes' string_uppercase
+        # caught the attempt to ungate this). The former ctx-taking twin (the for_local=true /
+        # SSA-local-phi-slot chain) never checked is_closure_type at all — an
+        # unregistered closure reaching the local allocator fell to the `is_struct_type` arm
+        # below and got `register_struct_type!`'s generic layout instead of
+        # `register_closure_type!`'s Object/vtable-prefixed one. In practice this is FIRST
+        # reached in the for_local=false chain (function parameter/return-type registration,
+        # compile.jl's arg_types loop) before any closure-typed local is ever allocated, so
+        # the gap is believed latent, not live — but that belief is unverified here. Flag for
+        # a follow-up: either prove it unreachable for_local=true, or route it through
+        # register_closure_type! there too (a real behavior change, not a fold).
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -2186,6 +2243,14 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         end
         return StructRef
     elseif T <: Tuple
+        # UnionAll tuples (e.g., Tuple{T, T} where T<:Type) lack .parameters — registration
+        # would throw. Skip registration and fall through to the abstract StructRef. Gated
+        # by for_local: this case came from the ctx (SSA-local) chain only — the
+        # mod/registry chain never had it, and ungating changed a pre-existing signature/
+        # field-position caller's result for `string_uppercase` (probe_bytes caught it).
+        if for_local && T isa UnionAll
+            return StructRef
+        end
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -2207,13 +2272,25 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
         type_idx = get_array_type!(mod, registry, elem_type)
         return ConcreteRef(type_idx, true)
+    elseif for_local && T isa UnionAll && T <: Base.GenericMemoryRef
+        # Bare MemoryRef or constrained MemoryRef{T} where T<:X (UnionAll) — happens when
+        # cross-function calls use Vector (no eltype). Extract the element type from the
+        # type variable bound when available, else fall back to Any. Gated by for_local:
+        # this case came from the ctx (SSA-local) chain only — see the Tuple/UnionAll note
+        # above for why ungating it changed a signature/field-position result.
+        local memref_elem_type = Any
+        if T.var isa TypeVar && T.var.ub !== Any
+            memref_elem_type = T.var.ub
+        end
+        type_idx = get_array_type!(mod, registry, memref_elem_type)
+        return ConcreteRef(type_idx, true)
     elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
         # Memory{T} / GenericMemory maps to array type for element T
         # IMPORTANT: Check BEFORE AbstractArray since Memory <: AbstractArray
         elem_type = T.parameters[2]  # Element type is second parameter for GenericMemory
         type_idx = get_array_type!(mod, registry, elem_type)
         return ConcreteRef(type_idx, true)
-    # P2-batch20: exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
+    # Exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
     # they must reach the Union branch below, not register as one member's wrapper
     # (gap 5ae13ccb033a).
     elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
@@ -2249,7 +2326,14 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
                 return ConcreteRef(info.wasm_type_idx, true)
             end
         else
-            # Matrix and higher-dim arrays: register as struct
+            # Matrix and higher-dim arrays: register as struct — CONCRETE ones. An
+            # abstract or UnionAll array type (AbstractVector, AbstractArray,
+            # AbstractMatrix{Float64}, …) has no struct of its own; it is the join,
+            # anyref (dart's top type for an unresolved class), narrowed at use by
+            # the cast machinery. (AbstractVector once reached the matrix registrar
+            # here — ndims of the UnionAll is 1 — and every Pi typed by it ref.cast to
+            # a bogus struct: `xs[1]::AbstractVector` trapped "illegal cast".)
+            (T isa DataType && isconcretetype(T)) || return AnyRef
             if haskey(registry.structs, T)
                 info = registry.structs[T]
                 return ConcreteRef(info.wasm_type_idx, true)
@@ -2273,40 +2357,61 @@ function get_concrete_wasm_type(T::Type, mod::WasmModule, registry::TypeRegistry
         if inner_type !== nothing
             # Union{Nothing, T} → T's concrete rep with DERIVED nullability (item 2:
             # dart's isPotentiallyNullable — true here by construction of the union)
-            local _inner_w = get_concrete_wasm_type(inner_type, mod, registry)
+            local _inner_w = get_concrete_wasm_type(inner_type, mod, registry; for_local=for_local)
             if _inner_w isa ConcreteRef
+                # Union{Nothing, T} where T is a struct/array ref type.
+                # for_local=true (the SSA-local/phi/PhiC/slot allocator): use EqRef (not T's
+                # concrete ref) because the Nothing path may produce struct_new of the base
+                # tagged struct or ref.null, which is NOT a subtype of ConcreteRef(T). EqRef
+                # is the common supertype of all struct/array refs; downstream narrowing casts
+                # to the concrete type on read. for_local=false (field/signature position):
+                # the value already has a fixed nullable-concrete representation there, so
+                # return the derived-nullability ConcreteRef directly.
+                for_local && return EqRef
                 return ConcreteRef(_inner_w.type_idx, derive_nullability(T))
             end
             return _inner_w
         else
             # Multi-variant union → THE single resolver (dart2wasm translateType parity).
-            # Formerly a copy that "MUST agree" with julia_to_wasm_type_concrete's twin; both
-            # now delegate here so they cannot drift (drift DROPped the value → ref.null →
-            # null-deref at runtime, on heterogeneous-tuple / interpolation inputs).
+            # Formerly a copy that "MUST agree" with the former ctx-taking twin's own version;
+            # both for_local branches now delegate here so they cannot drift (drift DROPped the
+            # value → ref.null → null-deref at runtime, on heterogeneous-tuple / interpolation
+            # inputs). `for_local` keeps WT's anyref→externref-for-locals wart on the numeric
+            # path when set.
             non_nothing_u = filter(t -> t !== Nothing, Base.uniontypes(T))
-            return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=false)
+            return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=for_local)
         end
     elseif T === Core.SimpleVector
-        # PURE-9064: Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
+        # Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
         # This ensures field access on DataType.parameters returns the correct type.
         if registry.jl_svec_idx !== nothing
             return ConcreteRef(registry.jl_svec_idx, true)
         end
         return ArrayRef
     elseif T === Core.TypeName
-        # PURE-9064: Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
+        # Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
         if registry.jl_typename_idx !== nothing
             return ConcreteRef(registry.jl_typename_idx, true)
         end
         return StructRef
     else
-        return julia_to_wasm_type(T)
+        # Standard (non-struct/array) conversion.
+        result = julia_to_wasm_type(T)
+        # Never return AnyRef for locals — use ExternRef instead. Exception — when the
+        # $JlType hierarchy is active, keep AnyRef for Any-typed locals: $JlType struct
+        # fields return (ref null $JlType), a subtype of anyref but NOT externref, so
+        # locals must align with function params. Signature/field positions (for_local=
+        # false) return the raw AnyRef unconditionally, as before this function existed.
+        if for_local && result === AnyRef && registry.jl_type_idx === nothing
+            return ExternRef
+        end
+        return result
     end
 end
 
 
 
-# ═══ march16: THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
+# ═══ THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
 
 """
     get_closure_base_struct!(mod, registry) -> UInt32

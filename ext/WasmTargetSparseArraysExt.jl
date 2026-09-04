@@ -28,7 +28,7 @@
 module WasmTargetSparseArraysExt
 
 using WasmTarget
-using SparseArrays
+using SparseArrays: SparseArrays, SparseMatrixCSC
 using Base.Experimental: @overlay
 
 # (1) Drop the Ti-parameterized `throwTi` closure; validate inline for Int64.

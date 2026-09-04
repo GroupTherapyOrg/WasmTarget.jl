@@ -3,6 +3,10 @@ module WasmTarget
 using Binaryen_jll: wasmopt
 using PrecompileTools: @setup_workload, @compile_workload
 
+# The debug surface (parity: translator.dart TranslatorOptions) — precedes every
+# file below because builder/instr_builder.jl already reads OPTIONS.
+include("codegen/options.jl")
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
@@ -16,14 +20,21 @@ include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic fie
 include("codegen/interpreter.jl")
 include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
+
+# Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
+# Loads here (before codegen/types.jl and codegen/context.jl exist) by design — see
+# frontend/nir.jl's header comment.
+include("frontend/nir.jl")
+
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
-include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (replaces FNV, M8.4)
-include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
+include("codegen/selector_table.jl")   # parity(dispatch_table.dart:396 DispatchTable): the dart dispatch table (replaces FNV, M8.4)
+include("codegen/intrinsics_table.jl")  # parity(intrinsics.dart:437 _binaryOperatorMap): the dart intrinsics table
+include("codegen/julia_numeric_tier.jl")  # parity(quarantine: Julia numeric semantics dart2wasm does not have)
 include("codegen/compile.jl")
 include("codegen/structs.jl")
-include("codegen/closures.jl")   # march16: the closure layouter consumers
+include("codegen/closures.jl")   # the closure layouter consumers
 include("codegen/unions.jl")
 include("codegen/int128.jl")
 include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/HISTORY.md#closures-and-dynamic-dispatch)
@@ -33,6 +44,7 @@ include("codegen/flow.jl")
 include("codegen/stackified.jl")
 include("codegen/statements.jl")
 include("codegen/values.jl")
+include("codegen/builtins.jl")  # parity(intrinsics.dart:401 KernelNodes._lookup): identity-keyed Core/Base builtin registry
 include("codegen/calls.jl")
 include("codegen/invoke.jl")
 include("codegen/helpers.jl")
@@ -50,26 +62,28 @@ include("bridge.jl")
 # Main API
 export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export wasm_bytes_length, wasm_bytes_get
-export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
+export preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
-export TypeRegistry, FunctionRegistry, register_function!
+export TypeRegistry, FunctionRegistry
 export add_string_global!, add_uninitialized_ref_global!, add_root_global_initializer!
-export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 # Soundness diagnostics + independent validation cross-check
-export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
+export WasmDiagnostic, WasmCompileError, WasmValidationError
+# The builder surface framework hosts (Therapy, Snapshot) drive qualified — API, not
+# namespace: the dart2wasm analogue is wasm_builder's public package interface.
+public add_type!, register_vector_type!, FuncRef, Bridge
 
 """
     _wt_default_validate() -> Bool
 
-parity(M4) — the wasm-tools DEMOTION (dart parity: dart2wasm ships no external validator;
-its builder IS the gate). Since 2026-07-01 every InstrBuilder hard-gates each emission
+parity(instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
+parity: dart2wasm ships no external validator; its builder IS the gate, verifying every emitted
+instruction's stack effect against its declared inputs/outputs). Since 2026-07-01 every InstrBuilder hard-gates each emission
 against the full subtype lattice (strict by default, mod threaded), so the module is valid
 BY CONSTRUCTION and the external `wasm-tools validate` pass is a redundant double-check —
 now OFF by default. Re-enable per-call (`validate=true`) or globally (`WT_VALIDATE=1`,
@@ -89,6 +103,7 @@ Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
                  validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Get function name for export
     func_name = string(nameof(f))
 
@@ -163,6 +178,7 @@ function compile_multi(functions::Vector; optimize=false,
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                        link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
+    OPTIONS[] = options_from_env()
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
@@ -212,6 +228,7 @@ This is the entry point for the eval_julia pipeline where type inference has alr
 function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
                                 func_name::String, arg_types::Tuple;
                                 optimize=false)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     mod = compile_module_from_ir([(code_info, return_type, arg_types, func_name)])
     bytes = to_bytes(mod)
     optimize === false && return bytes
@@ -220,7 +237,7 @@ function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
 end
 
 # ============================================================================
-# PURE-9047: Compile with base.wasm merge
+# Compile with base.wasm merge
 # ============================================================================
 
 const WASM_MERGE_GC_FLAGS = [
@@ -249,6 +266,7 @@ Merged `Vector{UInt8}` containing both base and user functions.
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
                            optimize=false)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Check tools
     wasm_merge = Sys.which("wasm-merge")
     if wasm_merge === nothing
@@ -440,15 +458,12 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
             false
         end
         if !ok
-            # debug escape hatch: keep the rejected module for offline objdump
-            dump_to = get(ENV, "WT_DUMP_INVALID", "")
-            isempty(dump_to) || (write(dump_to, bytes); @info "invalid module dumped" dump_to)
             details = String(take!(err))
             # self-diagnosing failures: disassemble around the failing offset so the
             # error names the construct (e.g. WHICH callee a mis-arity call targets)
             ctx_dis = _disassembly_context(wasm_tools, p, details)
             isempty(ctx_dis) || (details *= "\n\nemitted code at the failing offset:\n" * ctx_dis)
-            throw(WasmValidationError("wasm-tools rejected the emitted $label", details))
+            throw(WasmValidationError("wasm-tools rejected the emitted $label", details, bytes))
         end
     end
     return bytes

@@ -15,7 +15,7 @@
 module WasmTargetDatesExt
 
 using WasmTarget
-using Dates
+using Dates: Dates, Month, Year
 using Base.Experimental: @overlay
 
 function _wt_zpad(n::Int64, w::Int64)

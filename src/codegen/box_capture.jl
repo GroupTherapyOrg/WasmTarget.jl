@@ -358,7 +358,7 @@ end
 """
     f3_self_box_joins(code, ssa_types, selfT; argtypes=nothing, self_shift=1) -> Dict{Int,Type}
 
-parity(M6/F3) — the CLOSURE-LOCAL typed capture (dart `Capture.type`, closures.dart:1030):
+parity(closures.dart:1436 Capture.type) — the CLOSURE-LOCAL typed capture:
 when the parent scalar-replaced the `Core.Box` (no `%new` to record) the closure body must
 solve its captured contents type ALONE. Optimistic-verify: (1) find the `getfield(#self#,
 boxfield)` box reads; (2) CANDIDATE contents type = the join of resolved-numeric OTHER

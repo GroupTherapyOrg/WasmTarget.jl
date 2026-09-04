@@ -278,7 +278,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             end
         end
     end
-    # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
+    # OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
     # inference makes the body REAL instead of an any-erased stub).
     callable_invocations = Set{Tuple{DataType,Tuple}}()
@@ -315,7 +315,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
-        # march16 co-occurrence fold: a function's constructed closures enroll ONLY
+        # Co-occurrence fold: a function's constructed closures enroll ONLY
         # if that function ALSO makes dynamic (SSA-callee) calls — enrolling every
         # userland closure perturbed modules with purely-static closures (the
         # randsubseq suite regression).
@@ -356,7 +356,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # types, so collect from that semantic source as well as explicit :new.
         ssat isa Vector && foreach(t -> observe_callable!(CC.widenconst(t)), ssat)
         for stmt in src.code
-            # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
+            # (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
             # the vtable trampoline, which needs the body compiled. Specialized with
             # the method's own sig (abstract slots stay erased; the trampoline passes
@@ -482,7 +482,7 @@ end
 # their candidate compilation discovers transitively.
 const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 
-# march16: the conversion-arm allowlist — callable types whose bodies the candidate
+# The conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
 const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
@@ -529,6 +529,9 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
     return out
 end
 
+# formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
+# below always collects exactly the methods reachable from the roots, never stops
+# early, and never silently drops a reachable method whose specialization fails.
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
@@ -664,7 +667,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # discovery cannot change how base functions compile (the COLLECTION layer). Registry
     # isolation — so candidates don't perturb base get_function cross-call resolution — is
     # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
-    # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
+    # to for megamorphic (≥9-method) functions, the base pass is byte-identical
     # whether or not discovery runs.
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
@@ -755,7 +758,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             f = ftyp.parameters[1]       # constructors: Type{T} → T
             (f isa DataType || f isa UnionAll) || (f = nothing)
         elseif ftyp isa DataType && is_closure_type(ftyp)
-            # march16: a CAPTURING closure has no instance — key its body by the
+            # A CAPTURING closure has no instance — key its body by the
             # closure TYPE (the vtable machinery resolves by type; no static
             # caller resolves these by value). dart: creating a Lambda compiles
             # its target. USERLAND ONLY: converting Base-internal closure pairs

@@ -89,48 +89,163 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
     return n
 end
 
+"""
+Count every line in `.jl` files under `roots` matching `rx`, including comment lines.
+Used for metrics that must count sediment like marches and narration tags.
+"""
+function count_lines_all(rx::Regex; roots=[SRC])
+    n = 0
+    for root in roots
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            for line in eachline(joinpath(dir, f))
+                occursin(rx, line) && (n += 1)
+            end
+        end
+    end
+    return n
+end
+
+"""
+Return the line span of the top-level definition whose first line starts with `header`,
+using Julia's own parser (keyword-counting cannot see `@inbounds for`, trailing `do`, or
+one-line `if … end`). 0 if no such definition exists.
+"""
+function function_body_lines(path::String, header::AbstractString)::Int
+    lines = readlines(path)
+    start = findfirst(l -> startswith(l, header), lines)
+    start === nothing && return 0
+    ex = Meta.parseall(read(path, String); filename=path)
+    linenos(e, acc) = (e isa LineNumberNode ? push!(acc, e.line) :
+                       e isa Expr ? foreach(a -> linenos(a, acc), e.args) : nothing; acc)
+    for top in ex.args
+        top isa Expr || continue
+        ls = linenos(top, Int[])
+        isempty(ls) && continue
+        # a docstring makes the top-level expression begin before the header line
+        minimum(ls) <= start <= maximum(ls) && return maximum(ls) - start + 1
+    end
+    return 0
+end
+
+"""
+Tally every `is_func(func, :SYM)` site in calls.jl by the SYMBOL named, not by
+line (one line can name more than one symbol — the `is_func(func, :getfield) ||
+is_func(func, :getproperty)` interleave counts one occurrence of each). Powers
+L116's explicit-allowlist check; `#`-comment lines are excluded exactly like
+`count_sites`.
+"""
+function _is_func_site_tally()::Dict{String,Int}
+    tally = Dict{String,Int}()
+    rx = r"is_func\(func, (:\([^)]*\)|:[A-Za-z_][A-Za-z0-9_!]*|:[+\-*])\)"
+    for line in eachline(joinpath(CODEGEN, "calls.jl"))
+        _iscomment(line) && continue
+        for m in eachmatch(rx, line)
+            sym = m.captures[1]::AbstractString
+            tally[sym] = get(tally, sym, 0) + 1
+        end
+    end
+    return tally
+end
+
+# The R19 floor (march p57): every symbol legitimately left name-keyed in
+# calls.jl's `is_func(func, :sym)` ladder, with the one-line reason it cannot
+# route through a table/registry/BUILTIN_LOWERINGS entry instead, and the
+# maximum occurrence count it may appear at. checked_s{add,sub,mul}_int/
+# checked_u{add,sub,mul}_int (→ CHECKED_OPS' `op` data test), muladd_float/
+# fma_float (→ the hoisted `_it_name` data test), Core._expr, Symbol, and
+# Core.tuple's siblings were all migrated OUT of this ladder — see
+# julia_numeric_tier.jl's CHECKED_OPS/FMA_OPS and builtins.jl's
+# BUILTIN_LOWERINGS for where they live now.
+const L116_ALLOWLIST = Dict{String,Int}(
+    # getglobal-typename fast path runs BEFORE the SSAValue→GlobalRef callee
+    # resolution a few lines below it — an early-position dependency that
+    # THE identity-keyed builtin funnel (consulted only AFTER that
+    # resolution, or on the raw pre-resolution callee for a disjoint few
+    # arms) cannot reproduce without reordering compile_call!'s own callee
+    # resolution step.
+    ":getglobal" => 1,
+    # L38_no_known_value_substitutions pins this arm's text verbatim.
+    ":ifelse" => 1,
+    # getfield/getproperty interleave with raw (func.mod===Core/Base &&
+    # func.name===:getfield) identity checks (closure self-capture skip,
+    # :signal skip, the P3 layout-pointer fold) whose CURRENT relative order
+    # must hold — see the block comment above builtins.jl's BUILTIN_LOWERINGS
+    # constant for why folding them into one dict entry is unsafe. THREE
+    # `is_func(func, :getfield) || is_func(func, :getproperty)` sites: the P3
+    # layout-pointer fold, the signal-read detector, and the general
+    # concrete-struct getfield/getproperty arm.
+    ":getfield" => 3,
+    ":getproperty" => 3,
+    # setfield!/setproperty! interleave with the signal-write raw identity
+    # check and the Core.Box capture-write arm the same way.
+    ":setfield!" => 2,
+    ":setproperty!" => 2,
+    # L57_exact_typeassert_exception pins this arm's text verbatim.
+    ":typeassert" => 1,
+    # `_compile_call_egaleq` and the raw `!==` arm read `fb.v.stack` directly
+    # ("the two operands are already on fb") — not self-contained, so they
+    # cannot be dispatched from THE identity-keyed builtin funnel, which runs
+    # BEFORE the generic arg-push loop that puts those operands there.
+    ":(===)" => 2,   # one to gate the arg-prepush Type-value exception, one the arm itself
+    ":(!==)" => 2,   # ditto
+    # The high-level-operator fallback arms (`_op1!` emits a bare opcode onto
+    # already-pushed operands) are equally not self-contained.
+    ":+" => 1,
+    ":-" => 1,
+    ":*" => 1,
+    # `_compile_call_isa`: "the value argument is already on the stack from
+    # the loop that pushes all args" — not self-contained either.
+    ":isa" => 1,
+)
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0; ZERO since march4 — see L13)",
-        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
     "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
-        () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
-                          exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
+    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — the ONE type chain's re-derivation floor (M2 → pre-emit; julia_to_wasm_type_concrete was folded into it in Phase 4.1 and no longer exists)",
+        () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
-                          roots=[CODEGEN], exclude_files=["values.jl"])),
+                          roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
     # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
     # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
-    "R12_try_drivers" => ("shape-specialized try/catch drivers (march 6 → 1: dart's ONE visitTryCatch)",
-        () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
-                          exclude_line=nothing)),
-    "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
     "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
-    "R16_external_convert_ladders" => ("convert_type! callers outside values.jl (march 8 → 0: fold into the 4-arg wrap)",
-        () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
         () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
-    "R18_anyref_dispatch_sigs" => ("fill(AnyRef dispatch signatures (march 9 → 0: dart per-param LUB, dispatch_table.dart:86-205)",
-        () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
-    "R11_patch_markers" => ("patch-tag comment sediment PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- (monotone down via root-fixes)",
-        () -> begin  # markers live IN comments, so count comment lines too
-            n = 0
-            for (dir, _, files) in walkdir(SRC), f in files
-                endswith(f, ".jl") || continue
-                for line in eachline(joinpath(dir, f))
-                    occursin(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d", line) && (n += 1)
-                end
-            end
-            n
+    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (march p57: floor reached — the calls.jl arms remaining are L116's explicit allowlist, each one genuinely unable to route through a table/registry/BUILTIN_LOWERINGS entry; this ratchet stays file-agnostic so a site cannot dodge L116 by moving to another codegen file)",
+        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
+    "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+, or an `if`/`elseif`-headed `name === :\\w+`/`name in (:` arm, anywhere in statements.jl compile_foreigncall! dispatch (want 0: every foreigncall symbol dispatches through FOREIGN_LOWERINGS only)",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
+                  split(stmt_src, '\n'))
         end),
+    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
+                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
+    # ── Phase 10.1a: the normalized frontend boundary (frontend/nir.jl; PARITY_MASTER item
+    # 4 / DESIGN.md §10.1) — dart: AstCodeGenerator reads every node's type through ONE
+    # StaticTypeContext (code_generator.dart:77 typeContext, :135 getStaticType), never
+    # re-derived per visitor. R29 tracks per-file migration off raw CodeInfo reads onto the
+    # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
+    # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
+    # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ outside ir.jl — converted per file onto ctx.nir node dispatch (flow.jl/stackified.jl done: 2026-09-02)",
+        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
+    "R29b_code_info_identifier" => ("the `code_info` identifier reachable in codegen/ outside ir.jl — structural exit is 0 (CompilationContext no longer carries CodeInfo); flow.jl done: 2026-09-02",
+        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
@@ -337,20 +452,20 @@ const LOCKS = [
             count(p -> occursin(p, trim_src), forbidden) +
                 count(p -> !occursin(p, trim_src), required)
         end),
-    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and collection world instead of a generic trap",
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and the module's one world age (WASM_WORLD_AGE — never the host counter) instead of a generic trap",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
+            required = ["function _invoke_kwerr_b", "emit_value!(bkw, Core.kwcall",
                         "args_tuple_type = Tuple{arg_julia_types...}",
-                        "Base.get_world_counter()", "_wt_exact_kwerr_exception"]
+                        "Int64(WASM_WORLD_AGE)", "_wt_exact_kwerr_exception"]
             count(p -> !occursin(p, invoke_src * test_src), required)
         end),
     "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :throw_inexacterror", "payload = args[2:end]",
+            required = ["function _invoke_throw_inexacterror_b", "payload = args[2:end]",
                         "payload_type = Tuple{payload_types...}",
                         "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
                         "_wt_exact_inexact_exception"]
@@ -445,19 +560,16 @@ const LOCKS = [
             count(p -> occursin(p, values_src), forbidden) +
                 count(p -> !occursin(p, values_src), required)
         end),
-    "L89_erased_boundschecks_preserve_cfg_edges" => ("erasing explicit @inbounds checks forwards their control edges before dominator and loop ownership analysis",
+    "L89_erased_boundschecks_preserve_cfg_edges" => ("an always-taken @inbounds boundscheck branch is FOLDED (its fall-through edge dropped) and dead code is whatever the folded CFG cannot reach from the entry — never the statements between the jump and its target (that span carving dropped the live loop of reduce(max, 1:n) on 1.13); reachability runs before dominator and loop ownership analysis (re-pinned 2026-09-02)",
         () -> begin
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
-            resolver = findfirst("function resolve_through_dead_boundscheck", stack_src)
+            reach = findfirst("Dead code = unreachable from the entry over the folded CFG", stack_src)
             cfg = findfirst("# Build successor/predecessor maps", stack_src)
             dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
-            ordering_fail = resolver === nothing || cfg === nothing || dominators === nothing ||
-                            first(resolver) > first(cfg) || first(resolver) > first(dominators)
-            required = ["dropping the nodes without forwarding their edges disconnects the graph",
-                        "dest_block = resolve_through_dead_boundscheck(dest_block)",
-                        "fall_through_block = resolve_through_dead_boundscheck(fall_through_block)",
-                        "next_block = resolve_through_dead_boundscheck(next_block)"]
-            Int(ordering_fail) + count(p -> !occursin(p, stack_src), required)
+            ordering_fail = reach === nothing || cfg === nothing || dominators === nothing ||
+                            first(cfg) > first(reach) || first(reach) > first(dominators)
+            forbidden = ["for j in (i + 2):(target - 1)", "resolve_through_dead_boundscheck"]
+            Int(ordering_fail) + count(p -> occursin(p, stack_src), forbidden)
         end),
     "L90_crossing_regions_are_normalized_or_rejected" => ("shared terminal CFG tails are duplicated through the canonical visitor and every physical label closure is LIFO-checked",
         () -> begin
@@ -557,7 +669,7 @@ const LOCKS = [
             forbidden = ["jl_type_unionall` (no lowering)",
                          "get_concrete_wasm_type(Union{}"]
             required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
-                        "elseif _fc_sym === :jl_type_unionall",
+                        ":jl_type_unionall => _fc_jl_type_unionall!",
                         "ref_test!(b, Int64(unionall_idx), false)",
                         "A bottom producer has no runtime value to classify or coerce",
                         "bottom phi source has no terminating statement"]
@@ -777,7 +889,7 @@ const LOCKS = [
             all_src = compile_src * context_src * types_src * values_src
             required = ["mutable_constant_globals", "module_init_functions",
                         "finalize_module_initializers!", "function_wasm_signature",
-                        "GlobalRef is not defined in its source module"]
+                        "is not defined in its source module"]
             forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
                          "If we can't evaluate, might be a type reference"]
             count(p -> !occursin(p, all_src), required) +
@@ -787,9 +899,10 @@ const LOCKS = [
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
-                        "backing_type === String || backing_type === Symbol"]
+                        "backing_type === String || backing_type === Symbol",
+                        ":memmove => _fc_memmove!", ":memcpy => _fc_memmove!"]
             count(p -> !occursin(p, stmt_src), required) +
-                abs(length(collect(eachmatch(r"if \(name === :memmove \|\| name === :memcpy\)", stmt_src))) - 1)
+                abs(length(collect(eachmatch(r"function _fc_memmove!\(", stmt_src))) - 1)
         end),
     "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
         () -> begin
@@ -798,7 +911,8 @@ const LOCKS = [
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             all_src = types_src * values_src * stmt_src
             required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
-                        "name in (:jl_is_operator, :jl_is_syntactic_operator)",
+                        ":jl_is_operator => _fc_operator_flags!",
+                        ":jl_is_syntactic_operator => _fc_operator_flags!",
                         "dynamically-created Symbol lacks operator metadata"]
             forbidden = [":name_is_operator", ":singleton_is_operator",
                          "ASCII-only operator"]
@@ -835,7 +949,7 @@ const LOCKS = [
             all_src = types_src * values_src * calls_src * stmt_src
             required = ["get_module_constant_global!", "_closed_world_isvisible",
                         "emit_closed_world_isvisible!", "name_visible_main",
-                        "_fc_sym === :jl_module_parent", "_fc_sym === :jl_module_name"]
+                        ":jl_module_parent => _fc_jl_module_parent!", ":jl_module_name => _fc_jl_module_name!"]
             forbidden = ["Module constant — empty struct", "module_name (mut string ref)",
                          "module_name → string"]
             count(p -> !occursin(p, all_src), required) +
@@ -865,9 +979,9 @@ const LOCKS = [
             required = ["const _UTF8PROC_PROPERTY_DATA",
                         "get_or_create_unicode_property_func!",
                         "needs_unicode_properties && get_or_create_unicode_property_func!",
-                        "_fc_sym === :utf8proc_category",
-                        "_fc_sym === :utf8proc_charwidth",
-                        "name === :jl_id_start_char", "name === :jl_id_char"]
+                        ":utf8proc_category => _fc_utf8proc_category!",
+                        ":utf8proc_charwidth => _fc_utf8proc_charwidth!",
+                        ":jl_id_start_char => _fc_jl_id_start_char!", ":jl_id_char => _fc_jl_id_char!"]
             forbidden = ["assume valid, conservative", "true = always a grapheme break"]
             all_src = types_src * compile_src * stmt_src
             count(p -> !occursin(p, all_src), required) +
@@ -978,7 +1092,7 @@ const LOCKS = [
                         "for (container_arg, container_type) in zip(container_args, container_types)",
                         "_emit_apply_method_error!",
                         "MethodError(f, (), world)",
-                        "Base.get_world_counter()",
+                        "Int64(WASM_WORLD_AGE)",
                         "_get_binary_reduce_opcode(target_value, elem_type)",
                         "func === (+)",
                         "local_set!(bld, has_value)"]
@@ -1227,6 +1341,198 @@ const LOCKS = [
     "L3_legacy_flow_family" => ("ALL legacy lowering strategies — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow/loop_code/branched_loops/complex_flow router (M1 COMPLETE: ONE lowering = the stackifier; DELETED + locked 2026-07-01)",
         () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(|generate_loop_code\(|generate_branched_loops\(|generate_complex_flow\(";
                           exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow|generate_loop_code|generate_branched_loops|generate_complex_flow)\(")),
+    "L99_emit_raw_bridges_extinct" => ("emit_raw!( byte-bridges into the typed builder — EXTINCT since march4; the typed branch/try/catch generators emit structurally (locked 2026-09-01)",
+        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
+        () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
+                          exclude_line=nothing)),
+    "L101_catch_all_clauses_extinct" => ("catch_all_clause emissions — EXTINCT; the typed (exn,stackTrace) tag catches all exceptions (march 6 → locked 2026-09-01)",
+        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
+    "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
+        () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
+    "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
+        () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
+    "L108_no_campaign_narration" => ("no march<N>/P2-batch<N> campaign-narration tags anywhere in src, comment lines included; constraint-bearing content stays as untagged comments, parity( anchors cite dart source (locked 2026-09-02)",
+        () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
+    "L110_parity_anchors_cite_dart" => ("every parity( anchor in src cites a dart file:line at the pinned oracle commit or is an explicit quarantine — phase labels are narration, not anchors (locked 2026-09-02)",
+        () -> count_lines_all(r"parity\((?![A-Za-z_/]+\.dart:\d+|quarantine:)"; roots=[SRC])),
+    "L104_table_ops_have_no_ladder_arm" => ("per-symbol exclusivity: every op key in any INTRINSIC_* table has ZERO name-keyed is_func ladder arms anywhere in codegen — a table entry and an arm can never coexist, so a half-wired table cannot stall again (the M11 lesson; locked 2026-09-02)",
+        () -> begin
+            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
+            keys_set = Set{Symbol}()
+            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
+                    occursin("table residue", line) || (n += 1)
+                end
+            end
+            n
+        end),
+    "L109_no_patch_marker_tags" => ("no PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- patch-tag tokens anywhere in src, comment lines included — constraint-bearing sentences stay as untagged comments (locked 2026-09-02)",
+        () -> count_lines_all(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d"; roots=[SRC])),
+    "L106_dead_codegen_defs_extinct" => ("the fifteen dead codegen definitions the march census found stay deleted (locked 2026-09-02)",
+        () -> begin
+            dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
+                          "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
+                          "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
+                          "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
+                          "has_dispatch_table", "get_string_ref_array_type!"]
+            all_src = join((read(joinpath(dir, f), String)
+                            for (dir, _, files) in walkdir(SRC)
+                            for f in files if endswith(f, ".jl")), "\n")
+            count(dead_names) do name
+                q = replace(name, "!" => "\\!")
+                # multiline anchors: a definition at the start of any LINE
+                occursin(Regex("^function\\s+$(q)\\s*\\(", "m"), all_src) ||
+                occursin(Regex("^$(q)\\s*\\(.*\\)\\s*=(?!=)", "m"), all_src) ||
+                occursin(Regex("^const\\s+$(q)\\s*=", "m"), all_src) ||
+                occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
+            end
+        end),
+    "L111_formal_models_paired_and_anchored" => ("every TLA+ model dev/formal/<Name>.tla has its MC<Name>.tla + MC<Name>.cfg instance AND an MC<Name>Broken.cfg instance TLC must reject (a model with no counterexample-producing variant is vacuous), and is anchored by a formal(dev/formal/<Name>.tla) line in src or test; every formal( anchor names a model that exists (locked 2026-09-02)",
+        () -> begin
+            formal = joinpath(ROOT, "dev", "formal")
+            isdir(formal) || return 0
+            models = [f[1:end-4] for f in readdir(formal)
+                      if endswith(f, ".tla") && !startswith(f, "MC")]
+            anchors = Set{String}()
+            for root in (SRC, joinpath(ROOT, "test")), (dir, _, files) in walkdir(root), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"formal\(dev/formal/([A-Za-z0-9_]+)\.tla\)", read(joinpath(dir, f), String))
+                    push!(anchors, m.captures[1])
+                end
+            end
+            n = 0
+            for name in models
+                for inst in ("MC$(name).tla", "MC$(name).cfg")
+                    isfile(joinpath(formal, inst)) || (n += 1)
+                end
+                # at least one counterexample-producing variant (MC<Name>[Variant]Broken.cfg)
+                any(f -> startswith(f, "MC$(name)") && endswith(f, "Broken.cfg"), readdir(formal)) || (n += 1)
+                name in anchors || (n += 1)
+            end
+            n + count(a -> !(a in models), anchors)
+        end),
+    "L112_struct_registry_iterated_in_one_order" => ("the struct registry Dict is walked ONLY through registered_structs (sorted by wasm index then name) — a raw `for … in registry.structs` / keys/values/pairs walk picks a hash-order-dependent first match or id and emits process-varying bytes (the Dict-constant nondeterminism finding; dart numbers classes once, class_info.dart:831; locked 2026-09-02)",
+        () -> begin
+            walk = r"\b(?:in|keys|values|pairs)\(?\s*[\w.]*\.structs\b|collect\([^)]*\.structs\b"
+            # the helper's own collect is the one sanctioned walk; if it ever
+            # disappears the subtraction must not mask a rogue walk elsewhere
+            in_types = count_sites(walk; roots=[CODEGEN], exclude_files=String[]) -
+                       count_sites(walk; roots=[CODEGEN], exclude_files=["types.jl"])
+            in_types >= 1 || return 1000
+            count_sites(walk; roots=[SRC]) - 1
+        end),
+    "L113_builtin_registry_consulted_first" => ("in compile_call! the identity-keyed builtin registry is consulted BEFORE any name-keyed is_func arm — dev/formal/ConsultChain.tla showed the egal/getglobal arms' predicates overlap the registry's (a late `is_func(func, :(===))` also matches the string/typeof/nothing shapes the registry owns), so their correctness is a program-ORDER invariant, locked here (2026-09-02)",
+        () -> begin
+            lines = readlines(joinpath(CODEGEN, "calls.jl"))
+            start = findfirst(l -> startswith(l, "function compile_call!("), lines)
+            start === nothing && return 1000
+            first_builtin = findnext(l -> occursin("_try_builtin_lowering!(", l) && !_iscomment(l), lines, start)
+            first_arm = findnext(l -> occursin(r"is_func\(func, :", l) && !_iscomment(l), lines, start)
+            (first_builtin === nothing || first_arm === nothing) && return 1000
+            first_builtin < first_arm ? 0 : 1
+        end),
+    "L114_foreigncalls_dispatch_through_registry_only" => ("compile_foreigncall! has exactly one consult point — FOREIGN_LOWERINGS — and its body carries no name-keyed arm; parity(intrinsics.dart:607) the FFI call codegen's helper-table dispatch (also :685 the arg-count table, :1018 the direct-call funnel) never hand-writes a name ladder either, locked here (2026-09-02)",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
+                  split(stmt_src, '\n'))
+        end),
+    "L116_call_arms_are_the_allowlist" => ("every `is_func(func, :sym)` symbol remaining in calls.jl (march p57: floor reached, R19 31→15) is an entry in L116_ALLOWLIST above, each with a one-line reason it cannot route through a table/registry/BUILTIN_LOWERINGS entry; a symbol outside the allowlist, or a listed symbol whose occurrence count exceeds its allowed maximum, breaks this lock (locked 2026-09-02)",
+        () -> begin
+            violations = 0
+            for (sym, n) in _is_func_site_tally()
+                n > get(L116_ALLOWLIST, sym, 0) && (violations += 1)
+            end
+            violations
+        end),
+    "L117_identity_keyed_registries_walk_in_program_order" => ("every identity-keyed registry dictionary (type_ids, type_ranges, type_constant_globals, typename_constant_globals, constant_globals, arrays, numeric_boxes, dispatch tables/positions/cascades) is walked ONLY through ordered_pairs — a raw walk orders by address-based hashes, which differ per process AND per architecture (the whole probe corpus differed x64 vs aarch64 until this lock); reads by key are fine (locked 2026-09-02)",
+        () -> begin
+            regs = "type_ids|type_ranges|type_constant_globals|typename_constant_globals|constant_globals|arrays|numeric_boxes|tables|selector_positions|selector_cascades"
+            walk = Regex("\\bfor\\s+\\(?[^\\n]*?\\bin\\s+(?:keys|values|pairs)?\\(?\\s*[\\w.]*\\.(?:" * regs * ")\\b(?!\\[)")
+            # order-insensitive folds (a max over ids, a Set collect that is sorted before use)
+            benign = ["for (_, id) in registry.type_ids", "for id in values(registry.type_ids)",
+                      "for (_, (_, high)) in registry.type_ranges",
+                      "for T in keys(registry.type_ids)", "for T in keys(registry.type_ranges)"]
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    occursin(walk, line) || continue
+                    any(b -> occursin(b, line), benign) && continue
+                    n += 1
+                end
+            end
+            n
+        end),
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions (locked 2026-09-02)",
+        () -> count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
+                          exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])),
+    "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement and inline chain; _compile_statement_located! has no other caller (locked 2026-09-02)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, stmt, idx, ctx)",
+                        "(err isa WasmCompileError || err isa WasmInternalError) && rethrow()",
+                        "throw(located_internal_error(ctx, idx, err))"]
+            callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")
+            count(p -> !occursin(p, src), required) + abs(callers - 1)
+        end),
+    "L121_retired_names_absent_from_src" => ("a symbol this campaign deleted must not appear ANYWHERE in src — comments and docstrings included. A reference to a function that no longer exists sends the next reader (human or agent) looking for it; the cloud review of 2026-09-04 spent a finding on exactly that (a docstring naming julia_to_wasm_type_concrete, folded into get_concrete_wasm_type in Phase 4.1). Historical records in dev/ and test/ ledgers are exempt — they document what WAS (locked 2026-09-04)",
+        () -> begin
+            retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
+                       "string_hash_func_idx", "_wasm_string_fnv1a",
+                       "resolve_through_dead_boundscheck"]
+            n = 0
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                src = read(joinpath(dir, f), String)
+                n += count(name -> occursin(name, src), retired)
+            end
+            n
+        end),
+    "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
+        () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
+    "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            # the two sanctioned planner entries must exist verbatim, so a swap
+            # (delete a legitimate caller, add a rogue one) cannot keep the
+            # total at 3 and slip through
+            required = ["return _compile_closed_world_plan(functions)",
+                        "return _compile_closed_world_plan(plan; kwargs...)"]
+            extra = count_sites(r"_compile_closed_world_plan\(";
+                                exclude_line=r"function _compile_closed_world_plan\(") - 2
+            max(extra, 0) + count(p -> !occursin(p, compile_src), required)
+        end),
+    "L98_single_external_link_road" => ("external wasm-merge linking is a single road living only in compile_with_base; merged output bypasses the typed builder, so any new call site must be reviewed here (locked 2026-09-01)",
+        () -> begin
+            wt_src = read(joinpath(ROOT, "src", "WasmTarget.jl"), String)
+            # zero merge references outside src/WasmTarget.jl, the sanctioned
+            # count inside it (all within compile_with_base), and the road's
+            # host function must still exist
+            outside = count_sites(r"wasm-merge|wasm_merge"; exclude_files=["WasmTarget.jl"])
+            total = count_sites(r"wasm-merge|wasm_merge")
+            outside + max(total - 6, 0) +
+                (occursin("function compile_with_base", wt_src) ? 0 : 1)
+        end),
+    "L115_invokes_dispatch_through_registry_only" => ("parity(intrinsics.dart:26-64 MemberIntrinsic/StaticIntrinsic; `_lookup` :75-100/:401-428): every invoke target compile_invoke! recognizes is resolved through ONE Method-keyed lookup (INVOKE_INTRINSICS) — a bare-Symbol `name === :sym` ladder arm can never coexist with it in invoke.jl (R20's floor, locked here so it cannot regress back above 0)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
@@ -1237,6 +1543,11 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     ok = true
     current_m = Dict{String,Int}()
     current_l = Dict{String,Int}()
+
+    # function_body_lines must see the whole god function (4,583 lines at the march baseline);
+    # a helper that exits early would make every span lock vacuous
+    _fbl_check = function_body_lines(joinpath(CODEGEN, "calls.jl"), "function compile_call!(")
+    _fbl_check > 1000 || (println("⚠ function_body_lines sanity check: got $_fbl_check (expected > 1000)"); ok = false)
 
     println("── parity ratchet (dev/PARITY_MASTER.md) ──")
     for (id, (desc, thunk)) in METRICS

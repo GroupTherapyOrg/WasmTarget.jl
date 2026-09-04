@@ -38,7 +38,6 @@ Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
 """
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
-    ENV["WT_CUR_FN"] = try first(string(ctx.func_ref), 80) catch; "?" end   # debug context for builder errors
     code = ctx.code_info.code
 
     # Analyze control flow to find basic block structure
@@ -103,7 +102,7 @@ function find_try_regions(code)::Vector{TryRegion}
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
             elseif catch_dest > i
-                # P2-batch4: an always-throwing try body has NO :leave (Julia elides
+                # An always-throwing try body has NO :leave (Julia elides
                 # it when the body can't exit normally — e.g. `try div(0,0) catch`).
                 # Dropping the region here meant no try_table was emitted at all, so
                 # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
@@ -212,50 +211,6 @@ function analyze_blocks(code)
     return blocks
 end
 
-"""
-Check if this code contains a loop (has backward jumps).
-"""
-function has_loop(ctx::AbstractCompilationContext)
-    return any(ctx.loop_headers)
-end
-
-"""
-Check if there's a conditional BEFORE the first loop that jumps PAST the first loop.
-This pattern requires special handling (the stackifier instead of generate_loop_code).
-Example: if/else where each branch has its own loop (like float_to_string).
-"""
-function has_branch_past_first_loop(ctx::AbstractCompilationContext, code)
-    if !any(ctx.loop_headers)
-        return false
-    end
-
-    # Find first loop header and its back-edge
-    first_header = findfirst(ctx.loop_headers)
-    back_edge_idx = nothing
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode && stmt.label == first_header
-            back_edge_idx = i
-            break
-        end
-    end
-    if back_edge_idx === nothing
-        return false
-    end
-
-    # Check for conditionals BEFORE the first loop that jump PAST its back-edge
-    for i in 1:(first_header - 1)
-        stmt = code[i]
-        if stmt isa Core.GotoIfNot
-            target = stmt.dest
-            if target > back_edge_idx
-                # This conditional jumps past the first loop - complex pattern
-                return true
-            end
-        end
-    end
-
-    return false
-end
 
 """
 Find merge points - targets of multiple forward jumps.
@@ -298,14 +253,6 @@ function find_merge_points(code)
 end
 
 """
-Check if the control flow has || or && patterns (merge points from short-circuit evaluation).
-"""
-function has_short_circuit_patterns(code)
-    merge_points = find_merge_points(code)
-    return !isempty(merge_points)
-end
-
-"""
 Generate code for try/catch blocks using WASM exception handling (try_table).
 
 Following dart2wasm's approach:
@@ -325,10 +272,10 @@ WASM structure:
   )
   ;; code after try/catch
 """
-# PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
-# PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
+# Ensure module has exception tag 0 for Julia exceptions (idempotent)
+# Also ensures the $current_exn global exists for exception value stashing.
 function ensure_exception_tag!(mod::WasmModule)
-    # march6 slice D: THE TYPED TAG — dart's createExceptionTag carries
+    # THE TYPED TAG — dart's createExceptionTag carries
     # (exception, stackTrace) as the tag payload (translator.dart:485-491);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
     # Payload: (anyref exn, externref stackTrace — null until traces wire).
@@ -339,7 +286,7 @@ function ensure_exception_tag!(mod::WasmModule)
 end
 
 """
-PURE-9032: Ensure module has the \$current_exn global for exception value stashing.
+Ensure module has the \$current_exn global for exception value stashing.
 This is a (mut anyref) global initialized to ref.null any.
 Returns the global index. Idempotent — scans existing globals to avoid duplicates.
 """
@@ -356,14 +303,14 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
     return UInt32(length(mod.globals) - 1)
 end
 
-# census F7 (march5): the dormant stack-trace cluster (ensure_stack_trace_support!/
-# emit_capture_stack!) is DELETED — zero callers since introduction (PURE-9036).
+# census F7: the dormant stack-trace cluster (ensure_stack_trace_support!/
+# emit_capture_stack!) is DELETED — zero callers since introduction .
 # The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
 # (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
 # source is the reference, not dead scaffolding.
 
 """
-PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
+Generate try/catch code using generate_stackified_flow for the try body.
 Used when the try body has complex control flow (phi nodes, nested conditionals).
 The simple linear approach in generate_try_catch can't handle phi locals or nested
 GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
@@ -377,14 +324,14 @@ Structure:
   end
   ; catch handler code (pop_exception skipped, returns -1 or similar)
 """
-# P2-batch17: compile a catch-handler region [from..to] honouring GotoIfNot
+# Compile a catch-handler region [from..to] honouring GotoIfNot
 # (conditional catch arms / exception isa dispatch). The linear per-statement
 # loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
-# then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
+# then arm (gap f80bce91645e). Mirrors the handling from the simple
 # no-merge generator.
 """builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
 
-# P2-batch22 (gap bac7c93c2871): `if cond; try A catch X end else try B catch
+# `if cond; try A catch X end else try B catch
 # Y end end` — two INDEPENDENT try/catches, one per branch arm, every arm
 # returning. Neither the chain nor the sequential generator fits (chain glues
 # the else arm into the then arm's catch; sequential leaves the branch

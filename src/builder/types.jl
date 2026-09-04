@@ -119,7 +119,7 @@ A WasmGC struct type with named fields.
 """
 struct StructType
     fields::Vector{FieldType}
-    supertype_idx::Union{Nothing, UInt32}  # PURE-9026: supertype index for subtyping (nothing = no supertype)
+    supertype_idx::Union{Nothing, UInt32}  # supertype index for subtyping (nothing = no supertype)
 end
 
 # Backward-compatible constructor (no supertype)
@@ -321,7 +321,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # JS values are held as externref
         return ExternRef
     elseif T === String || T === Symbol || T <: AbstractString
-        # parity(M9): strings are CLASSED — {classId, data} <: $JlBase. The abstract
+        # parity(class_info.dart:18 FieldIndex): strings are CLASSED — {classId, data} <: $JlBase. The abstract
         # (module-less) rep is StructRef; concrete mappers give the $JlString ref.
         return StructRef
     elseif T <: Tuple
@@ -332,7 +332,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Union{Vector{Float64}, Vector{UInt64}} <: AbstractArray is true and
         # short-circuited here to ArrayRef, but Vectors are concretely struct
         # refs; route unions to find_common_wasm_type below (same class as
-        # the P2-batch20 exclusion in get_concrete_wasm_type).
+        # The exclusion in get_concrete_wasm_type).
         return ArrayRef
     elseif T <: WasmGlobal
         # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
@@ -345,7 +345,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         return StructRef
     elseif T isa UnionAll && isstructtype(T)
         # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
-        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
+        # Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
         return AnyRef
     elseif isprimitivetype(T)
         # Custom primitive types (e.g., JuliaSyntax.Kind, Core.IntrinsicFunction) - map by size.
@@ -364,7 +364,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # Abstract Function types (non-closure) map to externref
         return ExternRef
     elseif T <: Type && !(T isa UnionAll) && !isstructtype(T)
-        # PURE-4155: Type{X} singleton values are now represented as DataType struct refs (global.get)
+        # Type{X} singleton values are now represented as DataType struct refs (global.get)
         # instead of i32.const 0. Use StructRef as the generic fallback since we don't have
         # access to the module/registry here to get the concrete DataType type index.
         # NOTE: Struct types like Union, DataType are handled above (isconcretetype && isstructtype)
@@ -372,7 +372,7 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         return StructRef
     elseif isabstracttype(T)
         # Abstract types (e.g., Compiler.CallInfo, Type (UnionAll)) can hold any concrete subtype
-        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
+        # Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
         # NOTE: Type (without parameter) is UnionAll and isabstracttype, maps here
         return AnyRef
     else
@@ -467,14 +467,14 @@ function find_common_wasm_type(types::Vector)::WasmValType
     end
 
     # Heterogeneous union (mix of primitives, strings, structs, etc.)
-    # PURE-9020: Use anyref as the universal boxed value type (supports ref.cast/ref.test)
+    # Use anyref as the universal boxed value type (supports ref.cast/ref.test)
     return AnyRef
 end
 
 """
     needs_anyref_boxing(T::Union)::Bool
 
-PURE-9030: Check if a Union type needs anyref boxing for runtime dispatch.
+Check if a Union type needs anyref boxing for runtime dispatch.
 Returns true when the union has members with incompatible Wasm types (e.g., Int32+Float64),
 meaning widening loses type identity and isa() checks can't work.
 Used to override parameter types to anyref in function signatures.

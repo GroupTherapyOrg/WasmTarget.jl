@@ -55,8 +55,8 @@ mutable struct WasmStackValidator
     stack::Vector{WasmValType}          # Current value stack (types)
     errors::Vector{String}              # Pending diagnostics thrown by InstrBuilder._check!
     func_name::String                   # For error messages
-    labels::Vector{ValidatorLabel}      # Label stack for control flow (PURE-412)
-    reachable::Bool                     # Whether current code is reachable (PURE-412)
+    labels::Vector{ValidatorLabel}      # Label stack for control flow
+    reachable::Bool                     # Whether current code is reachable
     # The WasmModule being built — `wasm_subtype` needs it to resolve a ConcreteRef's
     # declared supertype chain (struct-vs-array kind + nominal `<:`). Held untyped to
     # avoid an include-order/layer dependency on WasmModule (the builder layer is below
@@ -64,7 +64,7 @@ mutable struct WasmStackValidator
     # when unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
     # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
     mod::Any
-    context_hint::String   # march17: the emitting Julia statement (set via set_context!)
+    context_hint::String   # the emitting Julia statement (set via set_context!)
 end
 
 WasmStackValidator(; func_name="", mod=nothing) =
@@ -98,7 +98,7 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
     # stores popped an empty tracked stack that the spec says is bottomless).
     v.reachable || return expected
     if length(v.stack) <= _base(v)
-        # march17: name the CURE — a fragment consuming the parent's stack must
+        # Name the CURE — a fragment consuming the parent's stack must
         # DECLARE the input via seeding (append_builder! settles the contract).
         push!(v.errors, "UNDERFLOW $(v.func_name): stack underflow (past block base) — expected $(expected) " *
               "[ctx: $(v.context_hint)]. FIX: seed the fragment's input so the merge settles it.")
@@ -162,7 +162,7 @@ end
 # declared supertype chain, and respects the abstract any/eq/struct/array/i31/func/
 # extern/exn hierarchy. The old permissive `wasm_types_assignable` (any-ref ↔ any-ref ⇒
 # true) + `_is_ref_type` shim were a deliberate "start permissive, tighten later"
-# placeholder (PURE-413) — DELETED here (Loop A): the validator calls `wasm_subtype`
+# placeholder — DELETED here (Loop A): the validator calls `wasm_subtype`
 # directly at every pop/branch/block-result check, with `v.mod` for the concrete chain.
 
 # ============================================================================
@@ -258,7 +258,7 @@ Validate a single instruction's stack effect. Pops expected operands and pushes
 results according to the Wasm spec. Mirrors dart2wasm's InstructionsBuilder
 assertion checks for numeric/parametric/conversion instructions.
 
-For GC-prefixed instructions (0xFB), use validate_gc_instruction! (PURE-413).
+For GC-prefixed instructions (0xFB), use validate_gc_instruction!.
 """
 function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)
 
@@ -403,7 +403,7 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
 end
 
 # ============================================================================
-# Control Flow Validation (PURE-412)
+# Control Flow Validation
 # Mirrors dart2wasm's _labelStack / Label hierarchy
 # ============================================================================
 
@@ -623,9 +623,9 @@ function validate_else!(v::WasmStackValidator)
 end
 
 # ============================================================================
-# WasmGC Instruction Validation (PURE-413)
+# WasmGC Instruction Validation
 # Mirrors dart2wasm's InstructionsBuilder GC instruction assertions.
-# These are the operations where PURE-317 through PURE-323 bugs lived.
+# These are the operations where specific bugs lived.
 # ============================================================================
 
 """

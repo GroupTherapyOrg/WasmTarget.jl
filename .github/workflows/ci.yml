@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Only the newest push per branch runs; a superseded run is cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
@@ -62,9 +67,24 @@ jobs:
             Pkg.instantiate()
           '
 
+      # The inner-loop lanes, on both Julia versions: the differential smoke
+      # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
+      # saw it), the structural ratchet, and — on 1.12, whose typed IR the
+      # baseline records — byte identity of the probe corpus.
+      - name: Inner-loop lanes
+        if: matrix.target.slice == 'all'
+        run: |
+          julia --project=. test/smoke.jl
+          julia --project=. test/parity_ratchet.jl
+          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; fi
+
       - name: Run tests
         env:
           WT_SHARD: ${{ matrix.target.shard }}
           WT_FUZZ: ${{ matrix.target.fuzz }}
+          # wasm-tools validation of every compiled module (module bytes are
+          # platform-independent, so Unix coverage validates the corpus;
+          # Windows stays off to protect its 45-minute shard budget).
+          WT_VALIDATE: ${{ matrix.target.os == 'windows-latest' && '' || '1' }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test()'

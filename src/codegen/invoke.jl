@@ -11,1391 +11,1081 @@ function _invoke_has_explicit_io(param_types)::Bool
     return first_type isa Type && first_type <: IO
 end
 
-# parity(M9): emit a string-op ARG through the funnel — classed strings adjust to
+# parity(translator.dart:1597 Translator.convertType): emit a string-op ARG through the funnel — classed strings adjust to
 # their DATA array (op contract: these positions are strings; no type re-query).
 function _emit_str_arg!(b::InstrBuilder, arg, ctx::AbstractCompilationContext, str_type_idx)
-    haskey(ENV, "WT_DBG_STRARG") && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
+    tracing(:strarg) && println(stderr, "STRARG ", repr(arg), " :: ", typeof(arg))
     emit_value!(b, arg, ctx, ConcreteRef(UInt32(str_type_idx), true))
     return b
 end
+# ============================================================================
+# INVOKE_INTRINSICS — Method-keyed intrinsic registry.
+#
+# parity(intrinsics.dart:26-64,:103+ MemberIntrinsic/StaticIntrinsic; `_lookup`
+# :75-100/:401-428): dart resolves each intrinsic callee ONCE to a stable
+# Kernel Reference identity and keys an enum on it — unknown ⇒ `throw
+# 'Unhandled …'`. WT's analogue is the `Method` already sitting in `mi.def`
+# (compile_invoke!'s `meth`, resolved at the top of the big `if mi isa
+# Core.MethodInstance` block): a `Method` object is Julia's own interned,
+# stable identity for "this exact overload" — the same role dart's
+# KernelNodes reference plays. It is stable for the life of this Julia
+# session (recompiling the SAME top-level method definition preserves object
+# identity via the method table), which is the only stability this registry
+# needs — one compiler invocation never crosses a world-age boundary mid-run.
+# `(module, name, signature)` was considered and rejected: it is strictly
+# weaker information than the Method object it would be reconstructed from,
+# with no compensating benefit here.
+#
+# Populated ONCE, lazily, on first use (`_build_invoke_intrinsics!`) from a
+# static list of `methods(f)` calls — never rescanned per invoke.
+#
+# `str_hash`/`str_len`/`repeat`/`lpad`/`rpad` are deliberately ABSENT: they are
+# ordinary Julia functions (or, for `repeat(::String,::Int)`, an
+# `@overlay WASM_METHOD_TABLE` body) that the generic cross-call/devirtualized
+# path already compiles correctly — adding a redundant registry entry would be
+# a second producer for the same op, exactly what L105-style locks forbid.
+# ============================================================================
+
 """
-Extract: str_hash(s) -> Int32. Compute string hash using Java-style: h = 31 * h + char[i].
+    InvokeIntrinsicEntry
+
+`mode` is `:append` — the builder is a CONTINUATION that assumes its inputs
+are already on `fb`'s stack from the ordinary argument pre-push loop (the
+only entry using this today, `isascii`, is verified to compile correctly this
+way) — or `:standalone` — the builder pushes every input itself via
+`emit_value!`/`_emit_str_arg!` and is a complete, self-contained replacement
+for `fb`.
+
+A builder may DECLINE a call it is registered for by returning `nothing` —
+used when one Method covers call shapes only SOME of which this entry
+handles (an arity/literal-value guard the Method's static signature alone
+cannot express, e.g. `Base.kwerr`'s `length(args) == 2`). On decline,
+`compile_invoke!`'s consult falls through to the terminal unsupported-method
+reject, exactly as a pre-migration bare-Symbol name-guard miss did.
 """
-_compile_invoke_str_hash(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_hash_b(args, ctx))
-
-"""builder-returning core (march4)."""
-function _compile_invoke_str_hash_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-    b = InstrBuilder(; func_name="_compile_invoke_str_hash")
-
-    # Allocate locals for this operation
-    str_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))  # string reference
-
-    len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)  # string length
-
-    hash_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)  # running hash
-
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)  # loop index
-
-    builder_set_local_type!(b, str_local, ConcreteRef(UInt32(str_type_idx), true))
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, hash_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-
-    # Store string reference
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, str_local)
-
-    # Get length
-    array_len!(b)
-    local_set!(b, len_local)
-
-    # Initialize hash = 0
-    i32_const!(b, 0)
-    local_set!(b, hash_local)
-
-    # Initialize i = 0
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop over characters
-    done_label = block!(b, 0x40)  # outer block for exit
-    loop_label = loop!(b, 0x40)  # loop
-
-    # Check i < len
-    local_get!(b, i_local)
-    local_get!(b, len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # hash = 31 * hash + char[i]
-    local_get!(b, hash_local)
-    i32_const!(b, 31)
-    num!(b, Opcode.I32_MUL)
-
-    # Get char at index i (0-based)
-    local_get!(b, str_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    num!(b, Opcode.I32_ADD)
-
-    # Mask to positive: & 0x7FFFFFFF
-    i32_const!(b, 0x7FFFFFFF)
-    num!(b, Opcode.I32_AND)
-
-    local_set!(b, hash_local)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    # Continue loop
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # Return hash
-    local_get!(b, hash_local)
-
-    return b
+struct InvokeIntrinsicEntry
+    fn::Function     # :append → (args, ctx) -> InstrBuilder (fragment); :standalone → (args, ctx, idx, expr) -> InstrBuilder (whole result)
+    mode::Symbol      # :append | :standalone
 end
 
-"""
-Extract: str_find(haystack, needle) -> Int32. Returns 1-based position or 0 if not found.
-"""
-_compile_invoke_str_find(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_find_b(args, ctx))
-
-"""builder-returning core (march3): callers merge via append_builder!."""
-function _compile_invoke_str_find_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_find")
-
-    # Allocate locals
-    haystack_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    needle_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    haystack_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    needle_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    j_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    found_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    last_start_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, haystack_local, strref)
-    builder_set_local_type!(b, needle_local, strref)
-    builder_set_local_type!(b, haystack_len_local, I32)
-    builder_set_local_type!(b, needle_len_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, j_local, I32)
-    builder_set_local_type!(b, found_local, I32)
-    builder_set_local_type!(b, result_local, I32)
-    builder_set_local_type!(b, last_start_local, I32)
-
-    # Store haystack
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, haystack_local)
-    array_len!(b)
-    local_set!(b, haystack_len_local)
-
-    # Store needle
-    _emit_str_arg!(b, args[2], ctx, str_type_idx)
-    local_tee!(b, needle_local)
-    array_len!(b)
-    local_set!(b, needle_len_local)
-
-    # Initialize result = 0
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-
-    # If needle_len == 0, return 1
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_EQZ)
-    if_!(b, 0x40)  # void
-    i32_const!(b, 1)
-    local_set!(b, result_local)
-    else_!(b)
-
-    # Check if needle_len > haystack_len - skip search if so
-    local_get!(b, needle_len_local)
-    local_get!(b, haystack_len_local)
-    num!(b, Opcode.I32_GT_S)
-    if_!(b, 0x40)  # void
-    # result stays 0
-    else_!(b)
-
-    # Calculate last_start = haystack_len - needle_len + 1 (1-based)
-    local_get!(b, haystack_len_local)
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_SUB)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, last_start_local)
-
-    # Initialize i = 1 (1-based)
-    i32_const!(b, 1)
-    local_set!(b, i_local)
-
-    # Outer loop over haystack positions
-    outer_done = block!(b, 0x40)  # outer block for exit
-    outer_loop = loop!(b, 0x40)  # outer loop
-
-    # Check i <= last_start
-    local_get!(b, i_local)
-    local_get!(b, last_start_local)
-    num!(b, Opcode.I32_GT_S)
-    br_if!(b, outer_done)
-
-    # found = 1
-    i32_const!(b, 1)
-    local_set!(b, found_local)
-
-    # j = 0 (0-based index into needle)
-    i32_const!(b, 0)
-    local_set!(b, j_local)
-
-    # Inner loop - compare needle chars
-    inner_done = block!(b, 0x40)  # inner block for break
-    inner_loop = loop!(b, 0x40)  # inner loop
-
-    # Check j < needle_len
-    local_get!(b, j_local)
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, inner_done)
-
-    # Compare haystack[i + j - 1] with needle[j] (0-based array access)
-    local_get!(b, haystack_local)
-    local_get!(b, i_local)
-    local_get!(b, j_local)
-    num!(b, Opcode.I32_ADD)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_SUB)  # i + j - 1 for 0-based
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    local_get!(b, needle_local)
-    local_get!(b, j_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    num!(b, Opcode.I32_NE)
-    if_!(b, 0x40)
-    # Characters don't match - set found = 0 and break
-    i32_const!(b, 0)
-    local_set!(b, found_local)
-    br!(b, inner_done)
-    end_block!(b)  # end if
-
-    # j++
-    local_get!(b, j_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, j_local)
-
-    # Continue inner loop
-    br!(b, inner_loop)
-
-    end_block!(b)  # end inner loop
-    end_block!(b)  # end inner block
-
-    # If found, set result = i and break outer
-    local_get!(b, found_local)
-    if_!(b, 0x40)
-    local_get!(b, i_local)
-    local_set!(b, result_local)
-    br!(b, outer_done)
-    end_block!(b)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    # Continue outer loop
-    br!(b, outer_loop)
-
-    end_block!(b)  # end outer loop
-    end_block!(b)  # end outer block
-
-    end_block!(b)  # end else (needle not too long)
-    end_block!(b)  # end else (needle not empty)
-
-    # Return result
-    local_get!(b, result_local)
-
-    return b
-end
-
-"""
-Extract: str_contains(haystack, needle) -> Bool. Returns true if needle is found in haystack.
-"""
-_compile_invoke_str_contains(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_contains_b(args, ctx))
-
-"""builder-returning core (march4)."""
-function _compile_invoke_str_contains_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_contains")
-
-    # Reuse str_find implementation by comparing result > 0
-    # Allocate locals
-    haystack_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    needle_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    haystack_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    needle_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    j_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    found_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    last_start_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, haystack_local, strref)
-    builder_set_local_type!(b, needle_local, strref)
-    builder_set_local_type!(b, haystack_len_local, I32)
-    builder_set_local_type!(b, needle_len_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, j_local, I32)
-    builder_set_local_type!(b, found_local, I32)
-    builder_set_local_type!(b, result_local, I32)
-    builder_set_local_type!(b, last_start_local, I32)
-
-    # Store haystack
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, haystack_local)
-    array_len!(b)
-    local_set!(b, haystack_len_local)
-
-    # Store needle
-    _emit_str_arg!(b, args[2], ctx, str_type_idx)
-    local_tee!(b, needle_local)
-    array_len!(b)
-    local_set!(b, needle_len_local)
-
-    # Initialize result = 0 (false)
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-
-    # If needle_len == 0, return true (1)
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_EQZ)
-    if_!(b, 0x40)
-    i32_const!(b, 1)
-    local_set!(b, result_local)
-    else_!(b)
-
-    # Check if needle_len > haystack_len - return false if so
-    local_get!(b, needle_len_local)
-    local_get!(b, haystack_len_local)
-    num!(b, Opcode.I32_GT_S)
-    num!(b, Opcode.I32_EQZ)  # NOT greater
-    if_!(b, 0x40)
-
-    # Calculate last_start = haystack_len - needle_len
-    local_get!(b, haystack_len_local)
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, last_start_local)
-
-    # Initialize i = 0 (0-based)
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Outer loop
-    outer_done = block!(b, 0x40)
-    outer_loop = loop!(b, 0x40)
-
-    # Check i <= last_start
-    local_get!(b, i_local)
-    local_get!(b, last_start_local)
-    num!(b, Opcode.I32_GT_S)
-    br_if!(b, outer_done)
-
-    # found = 1
-    i32_const!(b, 1)
-    local_set!(b, found_local)
-
-    # j = 0
-    i32_const!(b, 0)
-    local_set!(b, j_local)
-
-    # Inner loop
-    inner_done = block!(b, 0x40)
-    inner_loop = loop!(b, 0x40)
-
-    # Check j < needle_len
-    local_get!(b, j_local)
-    local_get!(b, needle_len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, inner_done)
-
-    # Compare haystack[i + j] with needle[j]
-    local_get!(b, haystack_local)
-    local_get!(b, i_local)
-    local_get!(b, j_local)
-    num!(b, Opcode.I32_ADD)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    local_get!(b, needle_local)
-    local_get!(b, j_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    num!(b, Opcode.I32_NE)
-    if_!(b, 0x40)
-    i32_const!(b, 0)
-    local_set!(b, found_local)
-    br!(b, inner_done)
-    end_block!(b)
-
-    # j++
-    local_get!(b, j_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, j_local)
-
-    br!(b, inner_loop)
-
-    end_block!(b)  # end inner loop
-    end_block!(b)  # end inner block
-
-    # If found, set result = 1 and break
-    local_get!(b, found_local)
-    if_!(b, 0x40)
-    i32_const!(b, 1)
-    local_set!(b, result_local)
-    br!(b, outer_done)
-    end_block!(b)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, outer_loop)
-
-    end_block!(b)  # end outer loop
-    end_block!(b)  # end outer block
-
-    end_block!(b)  # end if (needle not too long)
-    end_block!(b)  # end else (needle not empty)
-
-    # Return result (0 or 1 as i32, which is Bool in wasm)
-    local_get!(b, result_local)
-
-    return b
-end
-
-"""
-Extract: str_startswith(s, prefix) -> Bool.
-"""
-_compile_invoke_str_startswith(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_startswith_b(args, ctx))
-
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_startswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_startswith")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    prefix_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    s_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    prefix_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, prefix_local, strref)
-    builder_set_local_type!(b, s_len_local, I32)
-    builder_set_local_type!(b, prefix_len_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, result_local, I32)
-
-    # Store s
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, s_len_local)
-
-    # Store prefix
-    _emit_str_arg!(b, args[2], ctx, str_type_idx)
-    local_tee!(b, prefix_local)
-    array_len!(b)
-    local_set!(b, prefix_len_local)
-
-    # Default result = 1 (true)
-    i32_const!(b, 1)
-    local_set!(b, result_local)
-
-    # If prefix_len > s_len, return false
-    local_get!(b, prefix_len_local)
-    local_get!(b, s_len_local)
-    num!(b, Opcode.I32_GT_S)
-    if_!(b, 0x40)
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-    else_!(b)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop
-    done_label = block!(b, 0x40)
-    loop_label = loop!(b, 0x40)
-
-    # Check i < prefix_len
-    local_get!(b, i_local)
-    local_get!(b, prefix_len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # Compare s[i] with prefix[i]
-    local_get!(b, s_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    local_get!(b, prefix_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    num!(b, Opcode.I32_NE)
-    if_!(b, 0x40)
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-    br!(b, done_label)
-    end_block!(b)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-    end_block!(b)  # end else
-
-    # Return result
-    local_get!(b, result_local)
-
-    return b
-end
-
-"""
-Extract: str_endswith(s, suffix) -> Bool.
-"""
-_compile_invoke_str_endswith(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_endswith_b(args, ctx))
-
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_endswith_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_endswith")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    suffix_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    s_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    suffix_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    start_pos_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, suffix_local, strref)
-    builder_set_local_type!(b, s_len_local, I32)
-    builder_set_local_type!(b, suffix_len_local, I32)
-    builder_set_local_type!(b, start_pos_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, result_local, I32)
-
-    # Store s
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, s_len_local)
-
-    # Store suffix
-    _emit_str_arg!(b, args[2], ctx, str_type_idx)
-    local_tee!(b, suffix_local)
-    array_len!(b)
-    local_set!(b, suffix_len_local)
-
-    # Default result = 1 (true)
-    i32_const!(b, 1)
-    local_set!(b, result_local)
-
-    # If suffix_len > s_len, return false
-    local_get!(b, suffix_len_local)
-    local_get!(b, s_len_local)
-    num!(b, Opcode.I32_GT_S)
-    if_!(b, 0x40)
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-    else_!(b)
-
-    # Calculate start_pos = s_len - suffix_len (0-based start in s)
-    local_get!(b, s_len_local)
-    local_get!(b, suffix_len_local)
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, start_pos_local)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop
-    done_label = block!(b, 0x40)
-    loop_label = loop!(b, 0x40)
-
-    # Check i < suffix_len
-    local_get!(b, i_local)
-    local_get!(b, suffix_len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # Compare s[start_pos + i] with suffix[i]
-    local_get!(b, s_local)
-    local_get!(b, start_pos_local)
-    local_get!(b, i_local)
-    num!(b, Opcode.I32_ADD)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    local_get!(b, suffix_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-
-    num!(b, Opcode.I32_NE)
-    if_!(b, 0x40)
-    i32_const!(b, 0)
-    local_set!(b, result_local)
-    br!(b, done_label)
-    end_block!(b)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-    end_block!(b)  # end else
-
-    # Return result
-    local_get!(b, result_local)
-
-    return b
-end
-
-"""
-BF-2000: repeat(s, n) -> String. Repeat string s n times.
-Uses WasmGC array.new_default + loop with array.copy.
-"""
-_compile_invoke_str_repeat(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_repeat_b(args, ctx))
-
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_repeat_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_repeat")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    s_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    n_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, s_len_local, I32)
-    builder_set_local_type!(b, n_local, I32)
-    builder_set_local_type!(b, i_local, I32)
-
-    # Store s and get its length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, s_len_local)
-
-    # Store n as i32
-    n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
-    if n_type === Int64 || n_type === Int
-        num!(b, Opcode.I32_WRAP_I64)
+const INVOKE_INTRINSICS = Dict{Method,InvokeIntrinsicEntry}()
+
+"""Register every `methods(f)` (optionally narrowed to `argtypes`) under `entry` — the
+Method IS the identity dart's `_lookup` resolves to, so an overload set collapses to
+one registry lookup exactly like dart's enum keys on one Reference each."""
+function _register_invoke_intrinsic!(f, entry::InvokeIntrinsicEntry; argtypes=nothing)
+    ms = argtypes === nothing ? methods(f) : methods(f, argtypes)
+    for m in ms
+        INVOKE_INTRINSICS[m] = entry
     end
-    local_set!(b, n_local)
-
-    # Create result array of size s_len * n
-    local_get!(b, s_len_local)
-    local_get!(b, n_local)
-    num!(b, Opcode.I32_MUL)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop: while i < n, copy s into result at offset i * s_len
-    done_label = block!(b, 0x40)
-    loop_label = loop!(b, 0x40)
-
-    # if i >= n, break
-    local_get!(b, i_local)
-    local_get!(b, n_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # array.copy: dst=result, dst_off=i*s_len, src=s, src_off=0, len=s_len
-    local_get!(b, result_local)
-    # dst_off = i * s_len
-    local_get!(b, i_local)
-    local_get!(b, s_len_local)
-    num!(b, Opcode.I32_MUL)
-    # src
-    local_get!(b, s_local)
-    # src_off = 0
-    i32_const!(b, 0)
-    # len = s_len
-    local_get!(b, s_len_local)
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # Return result
-    local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
-
-    return b
+    return nothing
 end
 
-"""
-BF-2000: lpad(s, n, c) -> String. Left-pad string s to length n with char c.
-"""
-_compile_invoke_str_lpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_lpad_b(args, ctx))
+# ---- :standalone builders (self-contained; push every input themselves) ----
 
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_lpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+"""str_char(s,i) -> Int32. REWRITTEN standalone (the pre-migration inline arm
+assumed its string+index were already on `fb`'s stack via the continuation
+convention; that convention is unsound for a freshly-built, unseeded
+`InstrBuilder` — confirmed by the SAME crash `arr_get`/`arr_len` hit before
+this migration, `test/probe_bytes.jl`'s wt_arr_get discovery). Push both
+operands explicitly through the funnel, then the original post-push logic."""
+function _invoke_str_char_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_lpad")
+    bchr = _ctx_builder(ctx, "compile_invoke")
+    _emit_str_arg!(bchr, args[1], ctx, str_type_idx)
+    emit_value!(bchr, args[2], ctx, I32)   # funnel: I64 args narrow via convert_type!'s numeric ladder
+    i32_const!(bchr, 1)
+    num!(bchr, Opcode.I32_SUB)  # index - 1 for 0-based
+    array_get!(bchr, str_type_idx, I32; signed=false)
+    return bchr
+end
 
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    s_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    n_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    pad_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    c_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
+"""str_setchar!(s,i,c) -> Nothing. Moved verbatim (already self-contained)."""
+function _invoke_str_setchar_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bsc = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bsc, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
+    emit_value!(bsc, args[2], ctx, I32)
+    i32_const!(bsc, 1)
+    num!(bsc, Opcode.I32_SUB)
+    emit_value!(bsc, args[3], ctx, I32)
+    array_set!(bsc, str_type_idx, I32)
+    return bsc
+end
 
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, s_len_local, I32)
-    builder_set_local_type!(b, n_local, I32)
-    builder_set_local_type!(b, pad_len_local, I32)
-    builder_set_local_type!(b, c_local, I32)
-    builder_set_local_type!(b, i_local, I32)
+"""str_new(len) -> String. REWRITTEN standalone (same continuation-soundness
+issue as str_char — see its docstring)."""
+function _invoke_str_new_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bnew = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bnew, args[1], ctx, I32)
+    array_new_default!(bnew, str_type_idx)
+    return bnew
+end
 
-    # Store s and get its length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, s_len_local)
+"""str_copy(src,src_pos,dst,dst_pos,len) -> Nothing. Moved verbatim (already
+self-contained)."""
+function _invoke_str_copy_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    bcp = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bcp, args[3], ctx, ConcreteRef(UInt32(str_type_idx), true))
+    emit_value!(bcp, args[4], ctx, I32)
+    i32_const!(bcp, 1)
+    num!(bcp, Opcode.I32_SUB)
+    emit_value!(bcp, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
+    emit_value!(bcp, args[2], ctx, I32)
+    i32_const!(bcp, 1)
+    num!(bcp, Opcode.I32_SUB)
+    emit_value!(bcp, args[5], ctx, I32)
+    array_copy!(bcp, str_type_idx, str_type_idx)
+    return bcp
+end
 
-    # Store n as i32
-    n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
-    if n_type === Int64 || n_type === Int
-        num!(b, Opcode.I32_WRAP_I64)
-    end
-    local_set!(b, n_local)
+"""str_substr(s,start,len) -> String. Moved verbatim (already self-contained;
+uses caller scratch locals, unchanged from the pre-migration arm)."""
+function _invoke_str_substr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    ctx.scratch_locals === nothing &&
+        error("String operations require scratch locals but none were allocated")
+    result_local, src_local, _, _, _ = ctx.scratch_locals
+    bss = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bss, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
+    local_set!(bss, src_local)
+    emit_value!(bss, args[3], ctx, I32)
+    array_new_default!(bss, str_type_idx)
+    local_set!(bss, result_local)
+    local_get!(bss, result_local)
+    i32_const!(bss, 0)
+    local_get!(bss, src_local)
+    emit_value!(bss, args[2], ctx, I32)
+    i32_const!(bss, 1)
+    num!(bss, Opcode.I32_SUB)
+    emit_value!(bss, args[3], ctx, I32)
+    array_copy!(bss, str_type_idx, str_type_idx)
+    local_get!(bss, result_local)
+    emit_string_wrap!(bss, ctx)
+    return bss
+end
 
-    # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
-    # Julia Char is UTF-8 left-packed in UInt32: ' ' = 0x20000000. Need byte = 0x20.
-    char_arg = args[3]
-    if char_arg isa Char
-        # Compile-time conversion: extract codepoint directly
-        i32_const!(b, Int32(UInt32(char_arg)))
+"""arr_new(Type, len) -> Vector{Type}. Moved verbatim (already self-contained)."""
+function _invoke_arr_new_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    type_arg = args[1]
+    elem_type = if type_arg isa Core.SSAValue
+        ctx.ssa_types[type_arg.id]
+    elseif type_arg isa GlobalRef
+        getfield(type_arg.mod, type_arg.name)
+    elseif type_arg isa Type
+        type_arg
     else
-        # Runtime: compile_value gives Julia encoding, shift right 24 for ASCII
-        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
-        i32_const!(b, Int32(24))
-        num!(b, Opcode.I32_SHR_U)
+        Int32
     end
-    local_set!(b, c_local)
-
-    # If s_len >= n, result = s (no padding)
-    # Else, create padded result
-    local_get!(b, s_len_local)
-    local_get!(b, n_local)
-    num!(b, Opcode.I32_GE_S)
-    if_!(b, 0x40)  # void
-
-    # result = s
-    local_get!(b, s_local)
-    local_set!(b, result_local)
-
-    else_!(b)
-
-    # pad_len = n - s_len
-    local_get!(b, n_local)
-    local_get!(b, s_len_local)
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, pad_len_local)
-
-    # Create result array of size n
-    local_get!(b, n_local)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
-
-    # Fill first pad_len chars with c using array.fill
-    # array.fill: [ref, offset, value, count]
-    local_get!(b, result_local)
-    i32_const!(b, 0)  # offset = 0
-    local_get!(b, c_local)
-    local_get!(b, pad_len_local)
-    array_fill!(b, str_type_idx, I32)
-
-    # Copy s into result at offset pad_len
-    # array.copy: [dst, dst_off, src, src_off, len]
-    local_get!(b, result_local)
-    local_get!(b, pad_len_local)
-    local_get!(b, s_local)
-    i32_const!(b, 0)  # src_off = 0
-    local_get!(b, s_len_local)
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    end_block!(b)  # end if/else
-
-    # Return result
-    local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
-
-    return b
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+    ban = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(ban, args[2], ctx, I32)
+    array_new_default!(ban, arr_type_idx)
+    return ban
 end
 
-"""
-BF-2000: rpad(s, n, c) -> String. Right-pad string s to length n with char c.
-"""
-_compile_invoke_str_rpad(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_rpad_b(args, ctx))
+"""arr_get(arr,i) -> T. REWRITTEN standalone (same continuation-soundness
+issue as str_char — confirmed broken pre-migration: StackImbalanceError
+underflow, never previously exercised by any test)."""
+function _invoke_arr_get_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arr_type = infer_value_type(args[1], ctx)
+    elem_type = eltype(arr_type)
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+    bget = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bget, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
+    emit_value!(bget, args[2], ctx, I32)
+    i32_const!(bget, 1)
+    num!(bget, Opcode.I32_SUB)
+    array_get!(bget, arr_type_idx, I32; signed=packed_array_signedness(elem_type))
+    return bget
+end
 
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_rpad_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_rpad")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    s_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    n_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    c_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, s_len_local, I32)
-    builder_set_local_type!(b, n_local, I32)
-    builder_set_local_type!(b, c_local, I32)
-
-    # Store s and get its length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, s_len_local)
-
-    # Store n as i32
-    n_type = infer_value_type(args[2], ctx)
-    emit_value!(b, args[2], ctx, (n_type === Int64 || n_type === Int) ? I64 : I32)   # march14
-    if n_type === Int64 || n_type === Int
-        num!(b, Opcode.I32_WRAP_I64)
-    end
-    local_set!(b, n_local)
-
-    # Store pad char as i32 (convert from Julia Char encoding to UTF-8 byte)
-    char_arg = args[3]
-    if char_arg isa Char
-        i32_const!(b, Int32(UInt32(char_arg)))
+"""arr_set!(arr,i,val) -> Nothing. Moved verbatim (already self-contained)."""
+function _invoke_arr_set_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arr_type = infer_value_type(args[1], ctx)
+    elem_type = eltype(arr_type)
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+    bas = _ctx_builder(ctx, "compile_invoke")
+    local _arrset_elem_w = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+    local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
+    emit_value!(bas, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
+    emit_value!(bas, args[2], ctx, I32)
+    i32_const!(bas, 1)
+    num!(bas, Opcode.I32_SUB)
+    local _as_b = _compile_value_b(args[3], ctx)
+    local val_ty = isempty(_as_b.v.stack) ? nothing : _as_b.v.stack[end]
+    if elem_type === Any
+        if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
+            emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
+        else
+            append_builder!(bas, _as_b)
+            val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
+            val_ty === ExternRef || extern_convert_any!(bas)
+        end
     else
-        emit_value!(b, char_arg, ctx, I32)   # march14: Julia-encoded char bits
-        i32_const!(b, Int32(24))
-        num!(b, Opcode.I32_SHR_U)
+        append_builder!(bas, _as_b)
     end
-    local_set!(b, c_local)
-
-    # If s_len >= n, result = s (no padding)
-    local_get!(b, s_len_local)
-    local_get!(b, n_local)
-    num!(b, Opcode.I32_GE_S)
-    if_!(b, 0x40)
-
-    local_get!(b, s_local)
-    local_set!(b, result_local)
-
-    else_!(b)
-
-    # Create result array of size n
-    local_get!(b, n_local)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
-
-    # Copy s into result at offset 0
-    local_get!(b, result_local)
-    i32_const!(b, 0)  # dst_off = 0
-    local_get!(b, s_local)
-    i32_const!(b, 0)  # src_off = 0
-    local_get!(b, s_len_local)
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    # Fill remaining with c: array.fill(result, s_len, c, n - s_len)
-    local_get!(b, result_local)
-    local_get!(b, s_len_local)
-    local_get!(b, c_local)
-    local_get!(b, n_local)
-    local_get!(b, s_len_local)
-    num!(b, Opcode.I32_SUB)
-    array_fill!(b, str_type_idx, I32)
-
-    end_block!(b)  # end if/else
-
-    # Return result
-    local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
-
-    return b
+    array_set!(bas, arr_type_idx, _arrset_elem_w2)
+    return bas
 end
 
-"""
-Extract: str_uppercase(s) -> String. Convert lowercase ASCII letters to uppercase.
-"""
-_compile_invoke_str_uppercase(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_uppercase_b(args, ctx))
-
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_uppercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_uppercase")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    c_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, c_local, I32)
-
-    # Store s and get length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, len_local)
-
-    # Create result string: array.new_default with same length
-    local_get!(b, len_local)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
-
-    # i = 0 (0-based for WASM)
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop: while i < len
-    done_label = block!(b, 0x40)  # block for break
-    loop_label = loop!(b, 0x40)   # loop
-
-    # Check i < len
-    local_get!(b, i_local)
-    local_get!(b, len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # c = s[i]
-    local_get!(b, s_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-    local_set!(b, c_local)
-
-    # Check if c is lowercase (97 <= c <= 122)
-    # If so, convert to uppercase (c - 32)
-    local_get!(b, c_local)
-    i32_const!(b, 97)  # 'a'
-    num!(b, Opcode.I32_GE_S)
-    local_get!(b, c_local)
-    i32_const!(b, 122)  # 'z'
-    num!(b, Opcode.I32_LE_S)
-    num!(b, Opcode.I32_AND)
-    if_!(b, 0x40)  # void
-
-    # Convert to uppercase: c = c - 32
-    local_get!(b, c_local)
-    i32_const!(b, 0x20)  # 32
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, c_local)
-
-    end_block!(b)  # end if
-
-    # result[i] = c
-    local_get!(b, result_local)
-    local_get!(b, i_local)
-    local_get!(b, c_local)
-    array_set!(b, str_type_idx, I32)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # Return result
-    local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
-
-    return b
+"""arr_len(arr) -> Int32. REWRITTEN standalone — the pre-migration arm did not
+even compute the array's wasm type (it relied purely on continuation), which
+is the same unsound assumption `arr_get` made; confirmed broken pre-migration
+the same way."""
+function _invoke_arr_len_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arr_type = infer_value_type(args[1], ctx)
+    elem_type = eltype(arr_type)
+    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+    blen3 = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(blen3, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
+    array_len!(blen3)
+    return blen3
 end
 
-"""
-Extract: str_lowercase(s) -> String. Convert uppercase ASCII letters to lowercase.
-"""
-_compile_invoke_str_lowercase(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_lowercase_b(args, ctx))
-
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_lowercase_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+"""isascii(s::String) / isascii(cu::AbstractVector{<:Integer}) — the CodeUnits
+case from `isascii(codeunits(s))`. Moved verbatim; this is the one entry using
+`:append` mode — confirmed (probe `wt_isascii_codeunits`) to compile correctly
+as a continuation of `fb`'s pre-pushed argument."""
+function _invoke_isascii_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_lowercase")
-
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    i_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    c_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, i_local, I32)
-    builder_set_local_type!(b, c_local, I32)
-
-    # Store s and get length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_set!(b, len_local)
-
-    # Create result string: array.new_default with same length
-    local_get!(b, len_local)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
-
-    # i = 0 (0-based for WASM)
-    i32_const!(b, 0)
-    local_set!(b, i_local)
-
-    # Loop: while i < len
-    done_label = block!(b, 0x40)  # block for break
-    loop_label = loop!(b, 0x40)   # loop
-
-    # Check i < len
-    local_get!(b, i_local)
-    local_get!(b, len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, done_label)
-
-    # c = s[i]
-    local_get!(b, s_local)
-    local_get!(b, i_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-    local_set!(b, c_local)
-
-    # Check if c is uppercase (65 <= c <= 90)
-    # If so, convert to lowercase (c + 32)
-    local_get!(b, c_local)
-    i32_const!(b, 65)  # 'A'
-    num!(b, Opcode.I32_GE_S)
-    local_get!(b, c_local)
-    i32_const!(b, 90)  # 'Z'
-    num!(b, Opcode.I32_LE_S)
-    num!(b, Opcode.I32_AND)
-    if_!(b, 0x40)  # void
-
-    # Convert to lowercase: c = c + 32
-    local_get!(b, c_local)
-    i32_const!(b, 0x20)  # 32
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, c_local)
-
-    end_block!(b)  # end if
-
-    # result[i] = c
-    local_get!(b, result_local)
-    local_get!(b, i_local)
-    local_get!(b, c_local)
-    array_set!(b, str_type_idx, I32)
-
-    # i++
-    local_get!(b, i_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, i_local)
-
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # Return result
-    local_get!(b, result_local)
-    emit_string_wrap!(b, ctx)   # parity(M9): results are CLASSED strings
-
-    return b
+    arg_type = infer_value_type(args[1], ctx)
+    basc = _ctx_builder(ctx, "compile_invoke")
+    if arg_type !== String && arg_type !== Symbol
+        if haskey(ctx.type_registry.structs, arg_type)
+            cu_info = ctx.type_registry.structs[arg_type]
+            struct_get!(basc, cu_info.wasm_type_idx, wasm_field_idx(cu_info, 1), I32)
+        end
+    end
+    str_arr_type = ConcreteRef(str_type_idx, true)
+    str_local = allocate_local!(ctx, str_arr_type)
+    len_local = allocate_local!(ctx, I32)
+    accum_local = allocate_local!(ctx, I32)
+    i_local = allocate_local!(ctx, I32)
+    local_set!(basc, str_local)
+    local_get!(basc, str_local)
+    array_len!(basc)
+    local_set!(basc, len_local)
+    i32_const!(basc, 0)
+    local_set!(basc, accum_local)
+    i32_const!(basc, 0)
+    local_set!(basc, i_local)
+    done_label = block!(basc, 0x40)
+    loop_label = loop!(basc, 0x40)
+    local_get!(basc, i_local)
+    local_get!(basc, len_local)
+    num!(basc, Opcode.I32_GE_S)
+    br_if!(basc, done_label)
+    local_get!(basc, accum_local)
+    local_get!(basc, str_local)
+    local_get!(basc, i_local)
+    array_get!(basc, str_type_idx, I32; signed=false)
+    num!(basc, Opcode.I32_OR)
+    local_set!(basc, accum_local)
+    local_get!(basc, i_local)
+    i32_const!(basc, 1)
+    num!(basc, Opcode.I32_ADD)
+    local_set!(basc, i_local)
+    br!(basc, loop_label)
+    end_block!(basc)
+    end_block!(basc)
+    local_get!(basc, accum_local)
+    i32_const!(basc, 0x80)
+    num!(basc, Opcode.I32_LT_U)
+    return basc
 end
 
-"""
-Extract: str_trim(s) -> String. Remove leading and trailing ASCII whitespace.
-"""
-_compile_invoke_str_trim(args, ctx::AbstractCompilationContext)::Vector{UInt8} =
-    builder_code(_compile_invoke_str_trim_b(args, ctx))
+"""==(a::String,b::String). Moved verbatim (already self-contained; delegates
+to the shared compile_string_equal_b core, unchanged)."""
+_invoke_string_eq_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder =
+    compile_string_equal_b(args[1], args[2], ctx)
 
-"""builder-returning core (march4): callers merge via append_builder!."""
-function _compile_invoke_str_trim_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    b = InstrBuilder(; func_name="_compile_invoke_str_trim")
+"""SubString(s) / SubString(s,start,stop). Moved verbatim (already
+self-contained; all 7 real `SubString` constructor methods share this one
+body, matching the pre-migration arm's unconditional name-based dispatch)."""
+function _invoke_substring_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsub2 = _ctx_builder(ctx, "compile_invoke")
+    if length(args) >= 3
+        str_arg = args[1]
+        start_arg = args[2]
+        stop_arg = args[3]
+        local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+        local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
+        local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
+        emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
+        emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
+        emit_value!(bsub2, start_arg, ctx, I64)
+        i64_const!(bsub2, 1)
+        num!(bsub2, Opcode.I64_SUB)
+        emit_value!(bsub2, stop_arg, ctx, I64)
+        emit_value!(bsub2, start_arg, ctx, I64)
+        num!(bsub2, Opcode.I64_SUB)
+        i64_const!(bsub2, 1)
+        num!(bsub2, Opcode.I64_ADD)
+        substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
+        if substr_wasm isa ConcreteRef
+            struct_new!(bsub2, substr_wasm.type_idx)
+        end
+    elseif length(args) >= 1
+        str_arg = args[1]
+        local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
+        local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
+        local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
+        emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
+        emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
+        i64_const!(bsub2, 0)
+        emit_value!(bsub2, str_arg, ctx,
+                    ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+        array_len!(bsub2)
+        coerce_stack_top!(bsub2, I64, ctx)   # funnel: array.len's i32 → the field's i64
+        substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
+        if substr_wasm isa ConcreteRef
+            struct_new!(bsub2, substr_wasm.type_idx)
+        end
+    end
+    return bsub2
+end
 
-    # Allocate locals
-    s_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    start_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    end_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    new_len_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
-    result_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, ConcreteRef(str_type_idx))
-    c_local = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I32)
+"""Base.array_subpadding(T1,T2) — compile-time SimpleVector/Bool constant when
+both args are literal `Type`s in the IR (P4-stdlib radix sort guard). Moved
+verbatim; the constant-ness guard is per-callsite, not per-Method, so it is
+preserved as an internal check with the SAME terminal-unsupported fallback the
+old ladder's final `else` arm used when the guard failed."""
+function _invoke_array_subpadding_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsub = _ctx_builder(ctx, "compile_invoke")
+    if length(args) == 2 && args[1] isa Type && args[2] isa Type
+        i32_const!(bsub, Base.array_subpadding(args[1], args[2]) ? 1 : 0)
+    else
+        record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx, detail=expr)
+        unreachable!(bsub)
+        ctx.last_stmt_was_stub = true
+    end
+    return bsub
+end
 
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, s_local, strref)
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, start_local, I32)
-    builder_set_local_type!(b, end_local, I32)
-    builder_set_local_type!(b, new_len_local, I32)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, c_local, I32)
+"""Base.unalias(dest,src) — identity in WasmGC (every array.new is a distinct
+GC object; aliasing is impossible). Moved verbatim (all 3 real `unalias`
+methods share this one body, matching the pre-migration arm's unconditional
+name-based dispatch); `args[2]` replaces the original `expr.args[4]` — the
+SAME value (`args = expr.args[3:end]`, so `args[2] === expr.args[4]`)."""
+function _invoke_unalias_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bua = _ctx_builder(ctx, "compile_invoke")
+    src_arg = args[2]
+    emit_value!(bua, src_arg, ctx, static_wasm_type(src_arg, ctx))
+    return bua
+end
 
-    # Store s and get length
-    _emit_str_arg!(b, args[1], ctx, str_type_idx)
-    local_tee!(b, s_local)
-    array_len!(b)
-    local_tee!(b, len_local)
 
-    # Check for empty string
-    i32_const!(b, 0)
-    num!(b, Opcode.I32_EQ)
-    if_!(b, ConcreteRef(str_type_idx); results=WasmValType[strref])
+# ---- :standalone builders migrated off the name === :sym ladder (R20) ----
+# Each docstring says whether the body is a verbatim move, a verbatim move with a
+# widened/narrowed registration (Method identity now does work the old runtime name
+# check did), or a genuine rewrite (and why). "DECLINES" means the builder returns
+# `nothing` for a call shape this Method covers but this entry does not handle;
+# the ladder then falls through to the terminal unsupported-method reject.
 
-    # Return empty string (the original s)
-    local_get!(b, s_local)
+_invoke_is_32bit_arith(@nospecialize(arg_type))::Bool =
+    arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+    arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+    (arg_type isa Type && isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
 
-    else_!(b)
+"""The five arithmetic/length invoke intrinsics below (_invoke_add_b/_invoke_sub_b/
+_invoke_neg_b/_invoke_mul_b/_invoke_length_str_b) all key off `args[1]`'s inferred
+Julia type — ONE shared read, same as the pre-migration ladder's single top-of-
+function `arg_type = infer_value_type(args[1], ctx)` these Methods all used to reuse
+via closure capture (R3: infer_value_type callers are counted per call SITE, not per
+invocation — a shared helper keeps this at one site instead of five)."""
+_invoke_operand1_type(args, ctx::AbstractCompilationContext) = infer_value_type(args[1], ctx)
 
-    # start = 0 (0-based)
-    i32_const!(b, 0)
-    local_set!(b, start_local)
+"""parity(translator.dart:1621 Translator.convertType): numeric arith result → ref-typed
+SSA local ⇒ box through THE one producer (emit_classid_box!). Shared by the +/-/*
+invoke intrinsics below — each was compile_invoke!'s local `_f3_result_box!` closure
+before this migration; unchanged logic, just parameterized instead of captured."""
+function _invoke_box_arith_result!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int, expr::Expr,
+                                   @nospecialize(arg_type), is_32bit::Bool)
+    dl = get(ctx.ssa_locals, idx, nothing)
+    dl === nothing && return nothing
+    doff = dl - ctx.n_params
+    (doff >= 0 && doff < length(ctx.locals) && ctx.locals[doff + 1] === AnyRef) || return nothing
+    rbx = _ctx_builder(ctx, "compile_invoke")
+    boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
+    (boxed_result_jt isa Type && isconcretetype(boxed_result_jt)) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "boxed invoke result lacks a concrete Julia source type"; idx=idx, detail=expr)
+    emit_classid_box!(rbx, ctx, is_32bit ? I32 : I64, boxed_result_jt)
+    append_builder!(b, rbx)
+    return nothing
+end
 
-    # end = len - 1 (0-based, last valid index)
-    local_get!(b, len_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, end_local)
+"""+(x::T,y::T) where T<:BitInteger — Base arithmetic invoked directly (inference did
+not intrinsify it down to a raw add_int :call). REWRITTEN standalone: pushes both
+operands fresh (the old body assumed they were already on `fb` from the pre-push
+loop) and routes the opcode choice THROUGH intrinsics_table.jl's emit_intrinsic_binop!
+— the SAME table's (I32/I64,:add_int) entries — instead of re-deriving it, so there is
+one producer per op (dev/PARITY_MASTER L104's spirit). The bare `:add_int`/`:sub_int`/
+`:mul_int` disjuncts the pre-migration guard also checked are DROPPED: an intrinsic's
+own Method object always has `.name === :IntrinsicFunction` (confirmed on Julia 1.12
+and 1.13 — `which(Core.Intrinsics.add_int, (Int,Int))`), never `:add_int`, so those
+disjuncts could never fire via `mi.def isa Method`; direct intrinsic calls are `:call`
+expressions handled in calls.jl, not `:invoke` reaching this file at all."""
+function _invoke_add_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    badd = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(badd, args[1], ctx, wt)
+    emit_value!(badd, args[2], ctx, wt)
+    emit_intrinsic_binop!(badd, wt, wt, :add_int)
+    _invoke_box_arith_result!(badd, ctx, idx, expr, arg_type, is_32bit)
+    return badd
+end
 
-    # Find start: skip leading whitespace
-    # while start < len && is_whitespace(s[start])
-    start_done = block!(b, 0x40)
-    start_loop = loop!(b, 0x40)
+"""-(x::T,y::T) where T<:BitInteger — binary subtraction. REWRITTEN standalone, same
+shape and rationale as _invoke_add_b (routes through emit_intrinsic_binop!)."""
+function _invoke_sub_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bsub3 = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bsub3, args[1], ctx, wt)
+    emit_value!(bsub3, args[2], ctx, wt)
+    emit_intrinsic_binop!(bsub3, wt, wt, :sub_int)
+    _invoke_box_arith_result!(bsub3, ctx, idx, expr, arg_type, is_32bit)
+    return bsub3
+end
 
-    # Check start < len
-    local_get!(b, start_local)
-    local_get!(b, len_local)
-    num!(b, Opcode.I32_GE_S)
-    br_if!(b, start_done)
+"""-(x::T) where T<:BitInteger — unary negation, lowered as `0 - x` (unchanged from
+the pre-migration arm; the unary entry in intrinsics_table.jl's INTRINSIC_UNOPS uses
+`-1 * x` instead — a DIFFERENT Method's shape, not this one, so it is not reused here).
+REWRITTEN standalone: a distinct Method from the 2-arg `-` above (different arity ⇒
+different Method object), registered separately."""
+function _invoke_neg_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bneg = _ctx_builder(ctx, "compile_invoke")
+    is_32bit ? i32_const!(bneg, 0) : i64_const!(bneg, 0)
+    emit_value!(bneg, args[1], ctx, wt)
+    emit_intrinsic_binop!(bneg, wt, wt, :sub_int)
+    _invoke_box_arith_result!(bneg, ctx, idx, expr, arg_type, is_32bit)
+    return bneg
+end
 
-    # c = s[start]
-    local_get!(b, s_local)
-    local_get!(b, start_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-    local_set!(b, c_local)
+"""*(x::T,y::T) where T<:BitInteger — numeric multiply. REWRITTEN standalone, same
+shape as _invoke_add_b. The pre-migration arm never boxed this result (no
+`_f3_result_box!()` call in the numeric-mul arm) — preserved exactly: no boxing here
+either."""
+function _invoke_mul_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    is_32bit = _invoke_is_32bit_arith(arg_type)
+    wt = is_32bit ? I32 : I64
+    bmul = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bmul, args[1], ctx, wt)
+    emit_value!(bmul, args[2], ctx, wt)
+    emit_intrinsic_binop!(bmul, wt, wt, :mul_int)
+    return bmul
+end
 
-    # Check if whitespace: c == 32 || c == 9 || c == 10 || c == 13
-    local_get!(b, c_local)
-    i32_const!(b, 0x20)  # space
-    num!(b, Opcode.I32_EQ)
-    local_get!(b, c_local)
-    i32_const!(b, 0x09)  # tab
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
-    local_get!(b, c_local)
-    i32_const!(b, 0x0a)  # newline
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
-    local_get!(b, c_local)
-    i32_const!(b, 0x0d)  # carriage return
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
+"""*(s1::Union{AbstractChar,AbstractString}, ss::Union{AbstractChar,AbstractString}...)
+— string/char concatenation. A DIFFERENT Method than the BitInteger `*` above (Method
+identity now disambiguates concat from multiply — the pre-migration ladder needed a
+runtime `infer_value_type` guard here purely because it only had the bare Symbol
+`:*` to dispatch on; a guard MISS fell through to the numeric-mul arm and silently
+multiplied string-array refs as integers, e.g. for a Char argument the guard didn't
+cover). DECLINES (→ terminal unsupported-method reject) unless proven all-String/
+Symbol by `_all_string_args` — narrower than the Method's own Char/AbstractString
+domain, preserved exactly as the pre-migration guard's scope; loud rejection now
+replaces what used to be a silent wrong-value fallthrough for anything outside that
+scope, never the reverse."""
+function _invoke_star_concat_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) >= 2 && _all_string_args(args, ctx)) || return nothing
+    return compile_string_concat_many_b(args, ctx)
+end
 
-    # If not whitespace, break
-    num!(b, Opcode.I32_EQZ)
-    br_if!(b, start_done)
+"""length(s::String) → array.len. Moved verbatim (including the any→array cast for
+when WT's OWN type tracking (infer_value_type) still reports Any/Union{} even though
+this Method's declared parameter is String — the same imprecision the pre-migration
+arm's `arg_type === Any || arg_type === Union{}` branch compensated for)."""
+function _invoke_length_str_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    arg_type = _invoke_operand1_type(args, ctx)
+    blen = _ctx_builder(ctx, "compile_invoke")
+    str_wasm = ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true)
+    emit_value!(blen, args[1], ctx, str_wasm;
+                from_julia=(arg_type isa Type && isconcretetype(arg_type)) ? arg_type : nothing)
+    if arg_type === Any || arg_type === Union{}
+        any_convert_extern!(blen)        # externref → anyref
+        ref_cast!(blen, ArrayRef, true)  # anyref → (ref null array)
+    end
+    array_len!(blen)
+    coerce_stack_top!(blen, I64, ctx)   # funnel: array.len's i32 → Julia's Int
+    return blen
+end
 
-    # start++
-    local_get!(b, start_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, start_local)
+"""_thisind_continued closure (Base's local helper inside `_thisind_str`) — WasmGC
+strings are array<i32> (one codepoint per element), so every index is already a valid
+`thisind`: identity. Moved verbatim. Both name spellings in the pre-migration guard
+(`:_thisind_continued` and `Symbol("#_thisind_continued#_thisind_str##0")`) resolved
+to the SAME Method — a closure's `Method.name` is its declared short name, stripped
+of the enclosing-scope mangling that only appears in the closure's TYPE name — so one
+Method-keyed entry replaces both disjuncts."""
+function _invoke_thisind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    bti = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bti, length(args) >= 3 ? args[2] : args[1], ctx, I64)
+    return bti
+end
 
-    br!(b, start_loop)
+"""_nextind_continued closure — `nextind(s,i) = i + 1` in WasmGC. Moved verbatim; same
+single-Method rationale as _invoke_thisind_continued_b."""
+function _invoke_nextind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    bni = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bni, length(args) >= 3 ? args[2] : args[1], ctx, I64)
+    i64_const!(bni, 1)
+    num!(bni, Opcode.I64_ADD)
+    return bni
+end
 
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
+"""_string(a::Union{Char,SubString{String},String,Symbol}...) / string(a::Union{Char,
+String,Symbol}...) / string(a::Union{Char,SubString{String},String,Symbol}...) — N-way
+concatenation. Three distinct vararg Methods (one on `Base._string`, two on
+`Base.string` depending on whether a SubString could appear), all registered to this
+ONE builder. Moved verbatim: only String/Symbol arguments are PROVEN concatenable by
+`_all_string_args` — narrower than what each Method's own signature actually allows
+(Char and SubString are structurally valid too); not widened here, matching the
+pre-migration guard's exact scope. DECLINES when there are fewer than 2 arguments —
+the terminal `else` then rejects loudly, same as the pre-migration fallthrough."""
+function _invoke_string_concat_or_reject_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) > 1 || return nothing
+    _all_string_args(args, ctx) && return compile_string_concat_many_b(args, ctx)
+    arg_types = [infer_value_type(a, ctx) for a in args]
+    record_unsupported!(ctx, :unsupported_method,
+        "specialized multi-argument string lowering requires every argument to be String or Symbol";
+        idx=idx, detail=arg_types)
+    bms = _ctx_builder(ctx, "compile_invoke")
+    unreachable!(bms)  # polymorphic bottom; no fabricated String value
+    ctx.last_stmt_was_stub = true
+    return bms
+end
 
-    # Check if all whitespace (start >= len)
-    local_get!(b, start_local)
-    local_get!(b, len_local)
-    num!(b, Opcode.I32_GE_S)
-    if_!(b, ConcreteRef(str_type_idx); results=WasmValType[strref])
+"""string(n::Integer) — the dedicated positional Integer method (its kwarg body is
+`#string#403`, handled separately for the interpolation fast path near the top of
+compile_invoke!; THIS Method is what a plain `string(x)` call for any Int8..UInt64
+resolves to). Moved verbatim: redirects to int_to_string."""
+function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    value_arg = args[1]
+    bis1 = _ctx_builder(ctx, "compile_invoke")
+    int_to_string_info = nothing
+    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
+        int_to_string_func = getfield(WasmTarget, :int_to_string)
+        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
+    end
+    if int_to_string_info !== nothing
+        emit_value!(bis1, value_arg, ctx, I32)   # funnel: I64/UInt64 narrow via convert_type!
+        call!(bis1, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
+        return bis1
+    else
+        error("Base.string(::Integer) requires int_to_string in compile_multi. " *
+              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
+    end
+end
 
-    # Return empty string
-    i32_const!(b, 0)
-    array_new_default!(b, str_type_idx)
+"""string(a::String) / string(a::Symbol) — identity (WasmGC represents Symbol using
+String's array shape). Moved verbatim, two distinct Methods sharing one builder."""
+function _invoke_string_identity_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bid = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bid, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+    return bid
+end
 
-    else_!(b)
+"""string(xs...) — the fully generic Vararg{Any} fallback Method (Base strings/io.jl).
+Reached only when no more specific `string` method applies: Integer/String/Symbol all
+have their own dedicated Methods registered separately above, and Float16/32/64 are
+deliberately left UNREGISTERED (cross-call/auto-discovery owns Ryu.writeshortest, same
+as before this migration — registering the float Method here would be a second
+producer for the same op). Moved verbatim: length>1 defers to the same
+concat-or-reject builder the Char/String/Symbol vararg Methods use; length==1
+redirects Integer / passes String,Symbol through / hard-errors otherwise, matching the
+pre-migration arm's native `error()` exactly (this Method, for a length==1 call, is a
+Base-internal seam that was never proven reachable either before or after this
+migration — verbatim preservation, not a claim of coverage)."""
+function _invoke_string_generic_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) > 1 && return _invoke_string_concat_or_reject_b(args, ctx, idx, expr)
+    length(args) == 1 || return nothing
+    value_type = infer_value_type(args[1], ctx)
+    (value_type === Float32 || value_type === Float64) && return nothing
+    if value_type === Int32 || value_type === Int64 ||
+       value_type === UInt32 || value_type === UInt64 ||
+       value_type === Int16 || value_type === UInt16 ||
+       value_type === Int8 || value_type === UInt8
+        return _invoke_string_int_b(args, ctx, idx, expr)
+    elseif value_type === String || value_type === Symbol
+        return _invoke_string_identity_b(args, ctx, idx, expr)
+    else
+        error("Base.string(::$(value_type)) not yet supported. " *
+              "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
+    end
+end
 
-    # Find end: skip trailing whitespace
-    # while end >= start && is_whitespace(s[end])
-    end_done = block!(b, 0x40)
-    end_loop = loop!(b, 0x40)
+"""_throw_argerror(s) / throw_boundserror(A,I) / throw(...) (the Core builtin) /
+_throw_not_readable() — emit throw (catchable) using args[1] as the exception payload
+(absent for the 0-arg `_throw_not_readable`, which always hits the reject branch below
+— unchanged from the pre-migration arm). Moved verbatim.
 
-    # Check end >= start
-    local_get!(b, end_local)
-    local_get!(b, start_local)
-    num!(b, Opcode.I32_LT_S)
-    br_if!(b, end_done)
+`_throw_not_writable`, named in the pre-migration guard alongside these, does not
+exist as a Base binding on Julia 1.12 or 1.13 (`isdefined(Base, :_throw_not_writable)`
+is false on both — confirmed directly) — dead, dropped rather than registered."""
+function _invoke_throw_payload_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    ensure_exception_tag!(ctx.mod)
+    bthr2 = _ctx_builder(ctx, "compile_invoke")
+    exn_global = ensure_exception_global!(ctx.mod)
+    if isempty(args)
+        record_unsupported!(ctx, :unsupported_method,
+            "throw helper has no exception payload"; idx=idx, detail=expr)
+        unreachable!(bthr2)  # structural trap after recorded unsupported
+        ctx.last_stmt_was_stub = true
+        return bthr2
+    end
+    emit_value!(bthr2, args[1], ctx, AnyRef)
+    global_set!(bthr2, exn_global)
+    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return bthr2
+end
 
-    # c = s[end]
-    local_get!(b, s_local)
-    local_get!(b, end_local)
-    array_get!(b, str_type_idx, I32; signed=false)
-    local_set!(b, c_local)
+"""rethrow() / rethrow(e) — re-throw the currently-caught exception, already stashed
+in \$current_exn; any argument is disregarded (native `rethrow`'s optional `e` is
+likewise informational — WT's exception global always holds the live exception
+object). Moved verbatim; registered separately from _invoke_throw_payload_b (a
+DIFFERENT builder replaces the old bare-Symbol `rethrow` runtime branch)."""
+function _invoke_rethrow_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    ensure_exception_tag!(ctx.mod)
+    brt = _ctx_builder(ctx, "compile_invoke")
+    global_get!(brt, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(brt, ExternRef); throw_!(brt, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return brt
+end
 
-    # Check if whitespace
-    local_get!(b, c_local)
-    i32_const!(b, 0x20)
-    num!(b, Opcode.I32_EQ)
-    local_get!(b, c_local)
-    i32_const!(b, 0x09)
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
-    local_get!(b, c_local)
-    i32_const!(b, 0x0a)
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
-    local_get!(b, c_local)
-    i32_const!(b, 0x0d)
-    num!(b, Opcode.I32_EQ)
-    num!(b, Opcode.I32_OR)
+"""True when Method `m`'s first explicit parameter is not `<: IO` — the SAME test
+`_invoke_has_explicit_io` applies per-callsite (L96), applied ONCE per Method here at
+registry-construction time instead: println/print/show each have a handful of
+receiver-free overloads (`println(xs...)`, `println(x)`, `println(x,y)`, ...) plus
+hundreds of ordinary `f(io::IO, x::SomeType)` formatting methods; only the
+receiver-free ones belong to the host-console bridge (L96), so only those get
+registered — the IO-explicit ones are ordinary Julia methods compiled through
+cross-call, exactly as before this migration."""
+function _invoke_receiver_free_method(m::Method)::Bool
+    sig = m.sig
+    (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 2) || return true
+    param_types = sig.parameters[2:end]
+    return !_invoke_has_explicit_io(param_types)
+end
 
-    # If not whitespace, break
-    num!(b, Opcode.I32_EQZ)
-    br_if!(b, end_done)
+"""println(xs...) — receiver-free Methods only (see _invoke_receiver_free_method).
+Moved verbatim; the `if haskey(ctx.ssa_locals, idx)` nothing-placeholder push (used
+downstream by trim-collected show machinery) that used to run AFTER this arm's body
+mutated `fb` now runs inside the standalone builder itself."""
+function _invoke_println_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fbp = _compile_invoke_print_b(true, args, ctx)
+    if haskey(ctx.ssa_locals, idx)
+        bpn = _ctx_builder(ctx, "compile_invoke")
+        ref_null!(bpn, AnyRef)  # ref.null any (0xD0 0x6E)
+        append_builder!(fbp, bpn)
+    end
+    return fbp
+end
 
-    # end--
-    local_get!(b, end_local)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_SUB)
-    local_set!(b, end_local)
+"""print(xs...) — receiver-free Methods only. Moved verbatim, same shape as
+_invoke_println_b (is_println=false: no trailing newline write)."""
+function _invoke_print_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fbp = _compile_invoke_print_b(false, args, ctx)
+    if haskey(ctx.ssa_locals, idx)
+        bpn = _ctx_builder(ctx, "compile_invoke")
+        ref_null!(bpn, AnyRef)
+        append_builder!(fbp, bpn)
+    end
+    return fbp
+end
 
-    br!(b, end_loop)
+"""show(x) — the ONE receiver-free `show` Method (`Tuple{typeof(show),Any}`). Moved
+verbatim, including the pre-migration behavior of silently emitting nothing when no
+IO bridge is configured (unlike print/println, which reject via record_unsupported!
+— an existing asymmetry, not something this migration changes)."""
+function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    io = get_io_imports()
+    if io !== nothing
+        bsh2 = _ctx_builder(ctx, "compile_invoke")
+        for arg in args
+            arg_type = nothing
+            if arg isa Core.SSAValue
+                arg_type = ctx.code_info.ssavaluetypes[arg.id]
+            elseif arg isa Core.Argument
+                slot_id = arg.n
+                arg_type = ctx.code_info.slottypes[slot_id]
+            elseif arg isa String || arg isa Symbol
+                arg_type = String
+            elseif arg isa Int64 || arg isa Int32 || arg isa Int
+                arg_type = typeof(arg)
+            elseif arg isa Float64 || arg isa Float32
+                arg_type = typeof(arg)
+            elseif arg isa Bool
+                arg_type = Bool
+            elseif arg isa Nothing || arg === nothing
+                arg_type = Nothing
+            elseif arg isa GlobalRef && arg.name === :nothing
+                arg_type = Nothing
+            end
 
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
+            if arg_type === Nothing
+                call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
+            elseif arg_type === String || arg_type === Symbol
+                emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(translator.dart:1597 Translator.convertType): funnel → DATA array
+                emit_jl_string_to_js!(bsh2, io.decode_idx)
+                call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
+                emit_value!(bsh2, arg, ctx, I64)
+                call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Int32
+                emit_value!(bsh2, arg, ctx, I64)   # funnel: I32 source widens via convert_type!
+                call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Float64
+                emit_value!(bsh2, arg, ctx, F64)
+                call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Float32
+                emit_value!(bsh2, arg, ctx, F64)   # funnel: F32 source promotes via convert_type!
+                call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
+            elseif arg_type === Bool
+                emit_value!(bsh2, arg, ctx, I32)
+                call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
+            else
+                record_unsupported!(ctx, :unsupported_method,
+                    "show has no IO bridge representation for argument type $arg_type";
+                    idx=idx, detail=arg)
+                unreachable!(bsh2) # recorded unsupported; polymorphic bottom
+                ctx.last_stmt_was_stub = true
+                break
+            end
+        end
+        if haskey(ctx.ssa_locals, idx)
+            ref_null!(bsh2, AnyRef)
+        end
+        return bsh2
+    else
+        fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+        return fb2
+    end
+end
 
-    # new_len = end - start + 1
-    local_get!(b, end_local)
-    local_get!(b, start_local)
-    num!(b, Opcode.I32_SUB)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, new_len_local)
+"""truncate(io::GenericIOBuffer, n) — IOBuffer resize is a no-op in WasmGC; return the
+IOBuffer argument unchanged (Julia's `truncate` returns its io argument). REWRITTEN
+standalone: the pre-migration arm's body was empty, relying on the io argument (and,
+ambiguously, the length argument) being left over from the ordinary pre-push loop —
+that leftover-stack shape cannot be replicated by a self-contained builder. This
+pushes exactly the io argument and nothing else, matching the arm's documented intent
+("just leave it on stack... Returns the IOBuffer itself") unambiguously."""
+function _invoke_truncate_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    btr = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(btr, args[1], ctx, static_wasm_type(args[1], ctx))
+    return btr
+end
 
-    # Create result array
-    local_get!(b, new_len_local)
-    array_new_default!(b, str_type_idx)
-    local_set!(b, result_local)
+"""getindex_continued(s,i,u) — UTF-8 byte-level multibyte continuation; not
+implemented (WasmGC strings are array<i32>, one codepoint per element — genuinely
+unreachable for valid indices). Moved verbatim."""
+function _invoke_getindex_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bgic = _ctx_builder(ctx, "compile_invoke")
+    record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
+    unreachable!(bgic)
+    ctx.last_stmt_was_stub = true
+    return bgic
+end
 
-    # array.copy: result[0..new_len] = s[start..start+new_len]
-    local_get!(b, result_local)
-    i32_const!(b, 0)  # dst_offset = 0
-    local_get!(b, s_local)
-    local_get!(b, start_local)  # src_offset = start
-    local_get!(b, new_len_local)  # length
-    array_copy!(b, str_type_idx, str_type_idx)
+"""error() / error(s::AbstractString) / error(s::Vararg{Any,N}) — Base.error's 3
+Methods all funnel through ONE ErrorException construction (message-only payload);
+`error` called with more than one argument native-errors at WT-compile time exactly
+like the pre-migration arm (`length(args) <= 1 || error(...)`), since the payload
+this builds has no room for extra values. Moved verbatim."""
+function _invoke_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
+    _ee_info === nothing && error("ErrorException layout is unavailable")
+    length(args) <= 1 || error("unexpected error() lowering arity: $(length(args))")
+    emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
+    _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
+    _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
+    emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
+    struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields
+    global_set!(berr, exn_global)
+    global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return berr
+end
 
-    # Return result
-    local_get!(b, result_local)
+"""JuliaSyntax.parse_float_literal(::Type,str,firstind,endind) — not implemented
+(orig uses ccall(:jl_strtod_c)). Moved verbatim: Strict Approach A loud reject."""
+function _invoke_parse_float_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+    emit_unsupported_stub!(ctx, fb2, :unsupported_method,
+        "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
+    return fb2
+end
 
-    end_block!(b)  # end else (not all whitespace)
-    end_block!(b)  # end else (not empty)
-    emit_string_wrap!(b, ctx)   # parity(M9): the result is a CLASSED string
+"""JuliaSyntax.parse_int_literal(str) / parse_uint_literal(str,k) — not implemented.
+Moved verbatim: both Methods share the SAME stub message the pre-migration arm's
+combined `parse_int_literal`/`parse_uint_literal` name guard used."""
+function _invoke_parse_int_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+    emit_unsupported_stub!(ctx, fb2, :unsupported_method,
+        "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
+    return fb2
+end
 
-    return b
+"""Symbol(s::String) — identity (WasmGC represents Symbol using String's array
+shape). Moved verbatim."""
+function _invoke_symbol_from_string_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsym = _ctx_builder(ctx, "compile_invoke")
+    emit_value!(bsym, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+    return bsym
+end
+
+"""typeintersect(a,b) — a C runtime function used in tuple convert; with unoptimized
+IR the convert inlines typeintersect. Evaluated at compile time when both args are
+constant Type values. DECLINES otherwise — the terminal unsupported-method reject
+then applies, the same end state the pre-migration guard miss fell through to."""
+function _invoke_typeintersect_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) >= 2 && args[1] isa Type && args[2] isa Type) || return nothing
+    result_type = typeintersect(args[1], args[2])
+    bti2 = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
+    global_get!(bti2, global_idx, AnyRef)
+    extern_convert_any!(bti2)   # concrete ref → externref (Type values are externref in general context)
+    return bti2
+end
+
+"""_tuple_error(T,x) — error function in the tuple-convert dead-code path. Emit throw
+(catchable) instead of unreachable (trap). Moved verbatim."""
+function _invoke_tuple_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
+    ensure_exception_tag!(ctx.mod)
+    global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    ctx.last_stmt_was_stub = true
+    return bte
+end
+
+
+"""Base.padding(T,baseoffset) — a compile-time SimpleVector constant (P4-stdlib radix
+sort guard). DECLINES unless both args are literal `Type`/`Integer` values in the IR —
+matches the pre-migration guard exactly; falls through to the terminal reject
+otherwise, same as before."""
+function _invoke_padding_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    (length(args) == 2 && args[1] isa Type && args[2] isa Integer) || return nothing
+    bpad = _ctx_builder(ctx, "compile_invoke")
+    _padding = Base.padding(args[1], Int(args[2]))
+    _emit_svec_values!(bpad, collect(_padding), ctx)
+    return bpad
+end
+
+"""Base.sizehint!(collection,n) — a memory optimization hint; WasmGC arrays have no
+capacity concept, so it's a no-op returning the collection unchanged. Registered for
+EVERY sizehint! Method (Vector/Set/Dict/BitSet/IdSet/WeakKeyDict/...) — the
+pre-migration arm applied uniformly by name, not by collection type. Moved verbatim."""
+function _invoke_sizehint_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsh = _ctx_builder(ctx, "compile_invoke")
+    if !isempty(args)
+        emit_value!(bsh, args[1], ctx, static_wasm_type(args[1], ctx))
+    else
+        record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
+        unreachable!(bsh)
+    end
+    return bsh
+end
+
+"""#sizehint!#81(first,shrink,::typeof(sizehint!),a,sz) — the keyword-body entry
+`sizehint!(v,n)` desugars to. Moved verbatim: the vector argument is the 4th
+positional arg (matching the pre-migration arm's `args[4]`, which is the SAME
+position — `args` is the same expression-argument slice here as there)."""
+function _invoke_sizehint_kwbody_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+    bsh = _ctx_builder(ctx, "compile_invoke")
+    if length(args) >= 4
+        emit_value!(bsh, args[4], ctx, static_wasm_type(args[4], ctx))
+    else
+        record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
+        unreachable!(bsh)
+    end
+    return bsh
+end
+
+"""Base.kwerr(kw,args...) always throws the exact closed-world
+MethodError(Core.kwcall, (kw,args...), world). This is a real Julia exception
+payload, not a generic trap: catch-side isa/field inspection must observe the same
+object shape as native Julia. Moved verbatim (lock L81_kwerr_throws_exact_methoderror).
+DECLINES unless exactly 2 arguments (kw,f) — matches the pre-migration guard's
+`length(args) == 2`."""
+function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) == 2 || return nothing
+    bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
+    arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
+    all(T -> T isa Type, arg_julia_types) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
+    args_tuple_type = Tuple{arg_julia_types...}
+    args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
+    error_info === nothing && error("MethodError layout is unavailable")
+    args_info === nothing && error("kwerr argument tuple layout is unavailable")
+
+    emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
+    emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
+    emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
+    args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
+    args_layout isa StructType || error("kwerr argument tuple has no struct layout")
+    for (i, arg) in enumerate(args)
+        ft = args_layout.fields[Int(wasm_field_idx(args_info, i)) + 1].valtype
+        jt = arg_julia_types[i]
+        emit_value!(bkw, arg, ctx, ft;
+                    from_julia=isconcretetype(jt) ? jt : nothing)
+    end
+    struct_new!(bkw, args_info.wasm_type_idx)
+    i64_const!(bkw, Int64(WASM_WORLD_AGE))
+    struct_new!(bkw, error_info.wasm_type_idx)
+    global_set!(bkw, exn_global)
+    global_get!(bkw, exn_global, AnyRef)
+    ref_null!(bkw, ExternRef)
+    throw_!(bkw, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bkw
+end
+
+"""Core.throw_inexacterror(func,to,val) is precisely throw(InexactError(func,
+(to,val))). Preserve both fields so catch-side inspection agrees with Julia. Moved
+verbatim (lock L82_inexact_helper_throws_exact_payload)."""
+function _invoke_throw_inexacterror_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+    length(args) >= 3 || return nothing
+    bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, InexactError)
+    payload = args[2:end]
+    payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
+    all(T -> T isa Type, payload_types) ||
+        record_unsupported!(ctx, :unsupported_type,
+            "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
+    payload_type = Tuple{payload_types...}
+    payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
+    error_info === nothing && error("InexactError layout is unavailable")
+    payload_info === nothing && error("InexactError argument tuple layout is unavailable")
+
+    emit_struct_prefix!(bie, ctx.type_registry, InexactError, error_info)
+    emit_value!(bie, args[1], ctx,
+                ctx.mod.types[error_info.wasm_type_idx + 1].fields[
+                    Int(wasm_field_idx(error_info, 1)) + 1].valtype;
+                from_julia=Symbol)
+    emit_struct_prefix!(bie, ctx.type_registry, payload_type, payload_info)
+    payload_layout = ctx.mod.types[payload_info.wasm_type_idx + 1]
+    payload_layout isa StructType || error("InexactError payload has no struct layout")
+    for (i, value) in enumerate(payload)
+        ft = payload_layout.fields[Int(wasm_field_idx(payload_info, i)) + 1].valtype
+        jt = payload_types[i]
+        emit_value!(bie, value, ctx, ft;
+                    from_julia=isconcretetype(jt) ? jt : nothing)
+    end
+    struct_new!(bie, payload_info.wasm_type_idx)
+    struct_new!(bie, error_info.wasm_type_idx)
+    global_set!(bie, exn_global)
+    global_get!(bie, exn_global, AnyRef)
+    ref_null!(bie, ExternRef)
+    throw_!(bie, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return bie
+end
+
+"""Populate INVOKE_INTRINSICS once, lazily, on first `compile_invoke!` call."""
+function _build_invoke_intrinsics!()
+    isempty(INVOKE_INTRINSICS) || return nothing
+    _register_invoke_intrinsic!(str_char, InvokeIntrinsicEntry(_invoke_str_char_b, :standalone))
+    _register_invoke_intrinsic!(str_setchar!, InvokeIntrinsicEntry(_invoke_str_setchar_b, :standalone))
+    _register_invoke_intrinsic!(str_new, InvokeIntrinsicEntry(_invoke_str_new_b, :standalone))
+    _register_invoke_intrinsic!(str_copy, InvokeIntrinsicEntry(_invoke_str_copy_b, :standalone))
+    _register_invoke_intrinsic!(str_substr, InvokeIntrinsicEntry(_invoke_str_substr_b, :standalone))
+    _register_invoke_intrinsic!(arr_new, InvokeIntrinsicEntry(_invoke_arr_new_b, :standalone))
+    _register_invoke_intrinsic!(arr_get, InvokeIntrinsicEntry(_invoke_arr_get_b, :standalone))
+    _register_invoke_intrinsic!(arr_set!, InvokeIntrinsicEntry(_invoke_arr_set_b, :standalone))
+    _register_invoke_intrinsic!(arr_len, InvokeIntrinsicEntry(_invoke_arr_len_b, :standalone))
+    _register_invoke_intrinsic!(isascii, InvokeIntrinsicEntry(_invoke_isascii_b, :append))
+    _register_invoke_intrinsic!(Base.:(==), InvokeIntrinsicEntry(_invoke_string_eq_b, :standalone); argtypes=(String, String))
+    _register_invoke_intrinsic!(SubString, InvokeIntrinsicEntry(_invoke_substring_b, :standalone))
+    _register_invoke_intrinsic!(Base.array_subpadding, InvokeIntrinsicEntry(_invoke_array_subpadding_b, :standalone))
+    _register_invoke_intrinsic!(Base.unalias, InvokeIntrinsicEntry(_invoke_unalias_b, :standalone))
+
+    # ---- R20 migration (phase 5): the former name === :sym ladder arms -------
+    # Arithmetic: Base's BitInteger fallback Methods (the raw intrinsics never reach
+    # here as :invoke — see _invoke_add_b's docstring).
+    _register_invoke_intrinsic!(Base.:+, InvokeIntrinsicEntry(_invoke_add_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:-, InvokeIntrinsicEntry(_invoke_sub_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:-, InvokeIntrinsicEntry(_invoke_neg_b, :standalone); argtypes=(Int64,))
+    _register_invoke_intrinsic!(Base.:*, InvokeIntrinsicEntry(_invoke_mul_b, :standalone); argtypes=(Int64, Int64))
+    _register_invoke_intrinsic!(Base.:*, InvokeIntrinsicEntry(_invoke_star_concat_b, :standalone); argtypes=(String, String))
+    _register_invoke_intrinsic!(Base.length, InvokeIntrinsicEntry(_invoke_length_str_b, :standalone); argtypes=(String,))
+
+    # _thisind_continued / _nextind_continued: singleton closures — `getfield` returns
+    # the closure TYPE (mangled `#<name>#<enclosing>##<n>` naming); `.instance` is the
+    # one callable value `methods()` can resolve.
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#_thisind_continued#_thisind_str##0")).instance,
+                                InvokeIntrinsicEntry(_invoke_thisind_continued_b, :standalone))
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#_nextind_continued#_nextind_str##0")).instance,
+                                InvokeIntrinsicEntry(_invoke_nextind_continued_b, :standalone))
+
+    # string()/_string(): every vararg concat Method shares one builder; the dedicated
+    # Integer/String/Symbol Methods and the generic Vararg{Any} fallback each get their
+    # own (Float16/32/64 deliberately unregistered — see _invoke_string_generic_b).
+    _register_invoke_intrinsic!(Base._string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone); argtypes=(String, String))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_concat_or_reject_b, :standalone); argtypes=(SubString{String}, String))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_int_b, :standalone); argtypes=(Int64,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_identity_b, :standalone); argtypes=(String,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_identity_b, :standalone); argtypes=(Symbol,))
+    _register_invoke_intrinsic!(Base.string, InvokeIntrinsicEntry(_invoke_string_generic_b, :standalone); argtypes=(Int64, Int64))
+
+    # throw/rethrow family.
+    _register_invoke_intrinsic!(Base._throw_argerror, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base.throw_boundserror, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Core.throw, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base._throw_not_readable, InvokeIntrinsicEntry(_invoke_throw_payload_b, :standalone))
+    _register_invoke_intrinsic!(Base.rethrow, InvokeIntrinsicEntry(_invoke_rethrow_b, :standalone))
+
+    # println/print/show: the host-console bridge — receiver-free Methods only.
+    for m in methods(println)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_println_b, :standalone))
+    end
+    for m in methods(print)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_print_b, :standalone))
+    end
+    for m in methods(show)
+        _invoke_receiver_free_method(m) &&
+            (INVOKE_INTRINSICS[m] = InvokeIntrinsicEntry(_invoke_show_b, :standalone))
+    end
+
+    _register_invoke_intrinsic!(Base.truncate, InvokeIntrinsicEntry(_invoke_truncate_b, :standalone);
+                                argtypes=(Base.GenericIOBuffer, Integer))
+    _register_invoke_intrinsic!(Base.getindex_continued, InvokeIntrinsicEntry(_invoke_getindex_continued_b, :standalone))
+    _register_invoke_intrinsic!(Base.error, InvokeIntrinsicEntry(_invoke_error_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_float_literal, InvokeIntrinsicEntry(_invoke_parse_float_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_int_literal, InvokeIntrinsicEntry(_invoke_parse_int_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.JuliaSyntax.parse_uint_literal, InvokeIntrinsicEntry(_invoke_parse_int_literal_b, :standalone))
+    _register_invoke_intrinsic!(Base.Symbol, InvokeIntrinsicEntry(_invoke_symbol_from_string_b, :standalone); argtypes=(String,))
+    _register_invoke_intrinsic!(Base.typeintersect, InvokeIntrinsicEntry(_invoke_typeintersect_b, :standalone))
+    _register_invoke_intrinsic!(Base._tuple_error, InvokeIntrinsicEntry(_invoke_tuple_error_b, :standalone))
+    _register_invoke_intrinsic!(Base.padding, InvokeIntrinsicEntry(_invoke_padding_b, :standalone); argtypes=(DataType, Int64))
+    _register_invoke_intrinsic!(Base.sizehint!, InvokeIntrinsicEntry(_invoke_sizehint_b, :standalone))
+    _register_invoke_intrinsic!(getfield(Base, Symbol("#sizehint!#81")), InvokeIntrinsicEntry(_invoke_sizehint_kwbody_b, :standalone))
+    _register_invoke_intrinsic!(Base.kwerr, InvokeIntrinsicEntry(_invoke_kwerr_b, :standalone))
+    _register_invoke_intrinsic!(Core.throw_inexacterror, InvokeIntrinsicEntry(_invoke_throw_inexacterror_b, :standalone))
+    return nothing
 end
 
 """
@@ -1404,12 +1094,12 @@ Extract: println/print handler. Emits JS IO bridge imports.
 _compile_invoke_print(name::Symbol, args, ctx::AbstractCompilationContext)::Vector{UInt8} =
     builder_code(_compile_invoke_print_b(name, args, ctx))
 
-"""builder-returning core (march4)."""
-function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationContext)::InstrBuilder
+"""builder-returning core."""
+function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilationContext)::InstrBuilder
     io = get_io_imports()
     if io !== nothing
         b = _ctx_builder(ctx, "_compile_invoke_print")
-        # parity(M9): the io bridge consumes the DATA array — every string value
+        # parity(translator.dart:1597 Translator.convertType): the io bridge consumes the DATA array — every string value
         # funnels through the expected-type channel so classed strings unwrap here.
         _pr_str_arr = ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true)
         for arg in args
@@ -1445,27 +1135,25 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 # (ref extern) is subtype of externref — no conversion needed
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                emit_value!(b, arg, ctx, I64)   # march14
+                emit_value!(b, arg, ctx, I64)
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Int32
-                emit_value!(b, arg, ctx, I32)   # march14
-                num!(b, Opcode.I64_EXTEND_I32_S)
+                emit_value!(b, arg, ctx, I64)   # funnel: I32_from source widens via convert_type!
                 call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
             elseif arg_type === Float64
-                emit_value!(b, arg, ctx, F64)   # march14
+                emit_value!(b, arg, ctx, F64)
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Float32
-                emit_value!(b, arg, ctx, F32)   # march14
-                num!(b, Opcode.F64_PROMOTE_F32)
+                emit_value!(b, arg, ctx, F64)   # funnel: F32 source promotes via convert_type!
                 call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
             elseif arg_type === Bool
                 emit_value!(b, arg, ctx, I32)   # step4
                 call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
             elseif arg_type === Nothing
-                # PURE-9041: println(nothing) → write "nothing"
+                # println(nothing) → write "nothing"
                 call!(b, io.write_nothing_idx, WasmValType[], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Vector
-                # PURE-9067: Vector display — emit "[e1, e2, ...]"
+                # Vector display — emit "[e1, e2, ...]"
                 elem_type = eltype(arg_type)
 
                 # Register vector type to get struct info
@@ -1534,14 +1222,14 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
 
                 # Display element based on element type
                 if elem_type === Int32
-                    num!(b, Opcode.I64_EXTEND_I32_S)
+                    coerce_stack_top!(b, I64, ctx)   # funnel: array.get's i32 → the IO bridge's i64
                     call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                 elseif elem_type === Int64 || elem_type === Int || elem_type === UInt64
                     call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                 elseif elem_type === Float64
                     call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                 elseif elem_type === Float32
-                    num!(b, Opcode.F64_PROMOTE_F32)
+                    coerce_stack_top!(b, F64, ctx)   # funnel: array.get's f32 → the IO bridge's f64
                     call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                 elseif elem_type === Bool
                     call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
@@ -1567,7 +1255,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                 emit_jl_string_to_js!(b, io.decode_idx)
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
-                # PURE-9067: Tuple display — emit "(e1, e2, ...)"
+                # Tuple display — emit "(e1, e2, ...)"
                 tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, arg_type)
                 if tuple_info !== nothing
                     tuple_type_idx = tuple_info.wasm_type_idx
@@ -1600,14 +1288,14 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
 
                         # Write element based on type
                         if et === Int32
-                            num!(b, Opcode.I64_EXTEND_I32_S)
+                            coerce_stack_top!(b, I64, ctx)   # funnel: struct.get's i32 → the IO bridge's i64
                             call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                         elseif et === Int64 || et === Int || et === UInt64
                             call!(b, io.write_int_idx, WasmValType[I64], WasmValType[])
                         elseif et === Float64
                             call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                         elseif et === Float32
-                            num!(b, Opcode.F64_PROMOTE_F32)
+                            coerce_stack_top!(b, F64, ctx)   # funnel: struct.get's f32 → the IO bridge's f64
                             call!(b, io.write_float_idx, WasmValType[F64], WasmValType[])
                         elseif et === Bool
                             call!(b, io.write_bool_idx, WasmValType[I32], WasmValType[])
@@ -1637,7 +1325,7 @@ function _compile_invoke_print_b(name::Symbol, args, ctx::AbstractCompilationCon
                     "println/print has no IO bridge representation for argument type $arg_type")
             end
         end
-        if name === :println
+        if is_println
             call!(b, io.write_newline_idx, WasmValType[], WasmValType[])
         end
         return b
@@ -1690,12 +1378,13 @@ _invoke_singleton_instance(@nospecialize(T)) =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
 """
-Compile an invoke expression (method invocation) — dart visitor shape (march4):
+Compile an invoke expression (method invocation) — dart visitor shape:
 emits the invoke INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that replace it re-init; exits merge typed).
 """
 function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+    _build_invoke_intrinsics!()   # lazy, once per process — see INVOKE_INTRINSICS above
     fb = _ctx_builder(ctx, "compile_invoke.frag")
     _seed_builder_locals!(fb, ctx)
     args = expr.args[3:end]
@@ -1793,6 +1482,25 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         return append_builder!(b, wb)
     end
 
+    # Host-capability / dynamic-reflection reject — caught HERE, at MethodInstance
+    # identity, before any recursion into the callee's body (dart2wasm has no
+    # equivalent: `Core.eval` is outside a closed-world compilation target).
+    # `Core.eval`'s body is runtime reflection (world-age bump + toplevel eval) that
+    # WT tries to recurse into and partially compile, surfacing as an internal
+    # StackImbalanceError on the OUTER call's result type instead of a classified
+    # diagnostic (Phase 6.2). Reject at the call site instead, before the invariant
+    # gets a chance to trip.
+    if mi isa Core.MethodInstance && mi.def isa Method
+        local _iv_m = mi.def
+        if _iv_m.module === Core && _iv_m.name === :eval
+            record_unsupported!(ctx, :unsupported_method,
+                "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
+                idx=idx, detail=expr, soundness_fatal=true)
+            ctx.last_stmt_was_stub = true
+            return append_builder!(b, fb)
+        end
+    end
+
     if mi isa Core.MethodInstance && mi.def isa Method &&
        mi.def.name in (:_closed_world_isvisible, :isvisible) && length(args) == 3
         symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
@@ -1826,7 +1534,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             actual_func_ref_early = pi_ssa_stmt
         end
     elseif func_ref_early isa Core.Argument
-        # PURE-220: Higher-order function calls — extract function from mi.specTypes
+        # Higher-order function calls — extract function from mi.specTypes
         if mi isa Core.MethodInstance
             spec = mi.specTypes
             if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
@@ -1841,14 +1549,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
        isdefined(actual_func_ref_early.mod, actual_func_ref_early.name)
             called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
             if called_func === ctx.func_ref
-                # PURE-220: Also check arity — overloaded methods share the same function
+                # Also check arity — overloaded methods share the same function
                 # object but have different specTypes. A call to a different overload is NOT
                 # a self-call (e.g., parse_comma(ps) calling parse_comma(ps, true)).
                 if mi isa Core.MethodInstance
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple
                         call_nargs = length(spec.parameters) - 1  # subtract typeof(func)
-                        # PURE-047: Check both arity AND parameter types — same-arity overloads
+                        # Check both arity AND parameter types — same-arity overloads
                         # (e.g., validate_code!(errors, mi, c) vs validate_code!(errors, c, bool))
                         # share the function object and arity but have different specTypes.
                         if call_nargs == length(ctx.arg_types)
@@ -1881,7 +1589,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
 
-    # PURE-036z: Compute target_info EARLY so we can use its arg_types for proper type checking
+    # Compute target_info EARLY so we can use its arg_types for proper type checking
     # during argument compilation. This helps when param_types (from mi.specTypes) differ from
     # the actual compiled function's parameter types.
     target_info_early = nothing
@@ -1892,7 +1600,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             called_func_early = isdefined(actual_func_ref_early.mod, actual_func_ref_early.name) ?
                 getfield(actual_func_ref_early.mod, actual_func_ref_early.name) : nothing
         elseif actual_func_ref_early isa Function
-            # PURE-209a: func_ref can be a Function object directly (default-arg methods)
+            # func_ref can be a Function object directly (default-arg methods)
             called_func_early = actual_func_ref_early
         elseif mi isa Core.MethodInstance && mi.def isa Method
             # Fallback: get function from MethodInstance
@@ -1913,7 +1621,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             _exp_ret = get(ctx.ssa_types, idx, nothing)
             target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early;
                                              expected_return=_exp_ret isa Type ? _exp_ret : nothing)
-            # PURE-320: Closure/kwarg functions are registered with self-type prepended
+            # Closure/kwarg functions are registered with self-type prepended
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
                 closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
                 target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
@@ -1932,7 +1640,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     # runtime-constructed instance, so the invoke silently fell through to an
     # `unreachable` (Snapshot.jl newton C-W3). Resolve by TYPE against the
     # self-prepended signature and push the closure object as wasm param 1.
-    get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+    tracing(:closure) &&
         println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
                 " ti_early=", target_info_early !== nothing)
     if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
@@ -1941,7 +1649,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
             ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
-            get(ENV, "WT_DBG_CLOSURE", "") == "1" &&
+            tracing(:closure) &&
                 println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
             if ti !== nothing
                 target_info_early = ti
@@ -1967,27 +1675,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if meth_early isa Method
             _name_early = meth_early.name
             _spec_early = mi.specTypes
-
-            # map(typeof(lowercase), String) → str_lowercase
-            # map(typeof(uppercase), String) → str_uppercase
-            if _name_early === :map && length(args) == 2 &&
-               _spec_early isa DataType && _spec_early <: Tuple && length(_spec_early.parameters) >= 2
-                _func_param = _spec_early.parameters[2]
-                if _func_param === typeof(lowercase)
-                    @info "DISPATCH: map(lowercase, String) → str_lowercase" args_2=args[2] args_2_type=typeof(args[2])
-                    return append_builder!(b, _compile_invoke_str_lowercase_b([args[2]], ctx))
-                elseif _func_param === typeof(uppercase)
-                    return append_builder!(b, _compile_invoke_str_uppercase_b([args[2]], ctx))
-                end
-            end
-
-            # _searchindex(String, String, Int64) → str_find (returns I32, widen to I64)
-            if _name_early === :_searchindex && length(args) == 3
-                bsi = _ctx_builder(ctx, "compile_invoke")
-                append_builder!(bsi, _compile_invoke_str_find_b([args[1], args[2]], ctx))
-                num!(bsi, Opcode.I64_EXTEND_I32_S)
-                return append_builder!(b, bsi)
-            end
 
             # BF-4000: #string#403(base, pad, typeof(string), x) → inline dec call
             # String interpolation "$x" and string(x::Integer) go through this kwarg method.
@@ -2023,55 +1710,21 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
             end
 
-            # lstrip/rstrip(typeof(isspace), String) → str_trim
-            if (_name_early === :lstrip || _name_early === :rstrip) && length(args) == 2 &&
-               _spec_early isa DataType && _spec_early <: Tuple && length(_spec_early.parameters) >= 2
-                _func_param = _spec_early.parameters[2]
-                if _func_param === typeof(isspace)
-                    return append_builder!(b, _compile_invoke_str_trim_b([args[2]], ctx))
-                end
-            end
-
-            # startswith(String, String) → str_startswith
-            if _name_early === :startswith && length(args) == 2
-                return append_builder!(b, _compile_invoke_str_startswith_b([args[1], args[2]], ctx))
-            end
-
-            # endswith(String, String) → str_endswith
-            if _name_early === :endswith && length(args) == 2
-                return append_builder!(b, _compile_invoke_str_endswith_b([args[1], args[2]], ctx))
-            end
-
-            # BF-2000: repeat(String, Int64) → str_repeat
-            if _name_early === :repeat && length(args) == 2
-                # P6-trim: repeat(::Char, n) — the pad path inside the real Base
-                # lpad/rpad bodies (now trim-compiled). Char is UTF-8 left-packed
-                # in UInt32 (' ' = 0x20000000): byte = char >> 24, then a
-                # byte-filled array.new (same single-byte assumption as str_lpad).
-                local _rep_at = infer_value_type(args[1], ctx)
-                if _rep_at === Char
-                    br = _ctx_builder(ctx, "compile_invoke")
-                    str_t = get_string_array_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(br, args[1], ctx, I32)  # char i32 (left-packed)
-                    i32_const!(br, 24)
-                    num!(br, Opcode.I32_SHR_U)                    # utf8 byte
-                    emit_value!(br, args[2], ctx, I64)  # count i64
-                    num!(br, Opcode.I32_WRAP_I64)
-                    array_new!(br, str_t, I32)                    # fill (value, len)
-                    return append_builder!(b, br)
-                end
-                return append_builder!(b, _compile_invoke_str_repeat_b([args[1], args[2]], ctx))
-            end
-
-            # BF-2000: lpad(String, Int64, Char) → str_lpad
-            if _name_early === :lpad && length(args) == 3
-                return append_builder!(b, _compile_invoke_str_lpad_b([args[1], args[2], args[3]], ctx))
-            end
-
-            # BF-2000: rpad(String, Int64, Char) → str_rpad
-            if _name_early === :rpad && length(args) == 3
-                return append_builder!(b, _compile_invoke_str_rpad_b([args[1], args[2], args[3]], ctx))
-            end
+            # repeat/lpad/rpad: deleted (spike, dev/MARCH.md Phase 5.2 item A).
+            # These used to intercept by bare Symbol name BEFORE cross-call/overlay
+            # resolution ever got a chance — for repeat(::Char,::Int) that unconditional
+            # interception was shadowing a REAL bug fix: the
+            # `@overlay WASM_METHOD_TABLE Base.repeat(c::Char,n::Int)` in interpreter.jl
+            # (assembles the char's full UTF-8 bytes) was dead code, permanently shadowed
+            # by this arm's single-byte `char >> 24` fill — confirmed via the spike
+            # (repeat('💊',3) now correct; it silently truncated to one byte before).
+            # repeat(::String,::Int) has its own overlay; lpad/rpad have no overlay — Base's
+            # real bodies (strings/util.jl) compile correctly through the generic path
+            # (verified: the exact `lpad`/`rpad` source, copied under a fresh name so this
+            # interception could not shadow it, differential-passed including the
+            # `utf8proc_charwidth` foreigncall and the `p^q` dynamic-dispatch repeat call —
+            # WT already has table-driven foreigncall lowerings for `utf8proc_charwidth`/
+            # `utf8proc_category`, statements.jl/types.jl).
         end
     end
 
@@ -2087,7 +1740,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     for (arg_idx, arg) in enumerate(args)
 
         # Check if this is a nothing argument that needs ref.null
-        # PURE-044: Also check PiNode with typ === Nothing (Union dispatch pattern)
+        # Also check PiNode with typ === Nothing (Union dispatch pattern)
         is_nothing_arg = arg === nothing ||
                         (arg isa GlobalRef && arg.name === :nothing) ||
                         (arg isa Core.SSAValue && begin
@@ -2096,7 +1749,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             (ssa_stmt isa Core.PiNode && ssa_stmt.typ === Nothing)
                         end)
 
-        # PURE-044: Also check if param_types expects Nothing (Union dispatch to different signatures)
+        # Also check if param_types expects Nothing (Union dispatch to different signatures)
         # This handles the case where the arg is a phi value but param expects Nothing (i32)
         if !is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             param_type = param_types[arg_idx]
@@ -2108,7 +1761,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
             param_type = param_types[arg_idx]
-            wasm_type = julia_to_wasm_type_concrete(param_type, ctx)
+            wasm_type = get_concrete_wasm_type(param_type, ctx.mod, ctx.type_registry; for_local=true)
             # Emit the appropriate null/zero value based on the wasm type
             _nb = _ctx_builder(ctx, "compile_invoke")
             if wasm_type isa ConcreteRef
@@ -2134,7 +1787,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             append_builder!(fb, _nb)
         elseif is_nothing_arg
             # Nothing arg without param_types — emit ref.null anyref as safe default
-            # PURE-9022: Use anyref (not externref) for internal polymorphic positions
+            # Use anyref (not externref) for internal polymorphic positions
             _nb2 = _ctx_builder(ctx, "compile_invoke")
             ref_null!(_nb2, AnyRef)
             append_builder!(fb, _nb2)
@@ -2170,13 +1823,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 if expected_julia_type isa Type
                     expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                     actual_julia_type = infer_value_type(arg, ctx)
-                    # march5 F8 (census: dart wrap = 100% of expressions through convertType,
+                    # F8 (census: dart wrap = 100% of expressions through convertType,
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
                     # re-implementing convertType — is ONE funnel call. The emission's own
                     # tracked type (dart carries the type with the value) refines `actual`;
                     # the old ssa_locals re-lookup died with the ladder.
 
-                    # PURE-3111/4155: Handle Nothing→ref conversion.
+                    # Handle Nothing→ref conversion.
                     # compile_value emits i32_const 0 for Nothing,
                     # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
                     # otherwise bridging tries conversions on an i32 value.
@@ -2208,11 +1861,6 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
 
-    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
-               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
-               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
-
     # mi was already extracted above for parameter type checking
     if mi isa Core.MethodInstance
         meth = mi.def
@@ -2232,7 +1880,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     actual_func_ref = ssa_stmt
                 end
             elseif func_ref isa Core.Argument
-                # PURE-220: Higher-order function calls (e.g., parse_Nary's `down(ps)`)
+                # Higher-order function calls (e.g., parse_Nary's `down(ps)`)
                 # func_ref is a function parameter. Extract actual function from mi.specTypes.
                 if mi isa Core.MethodInstance
                     spec = mi.specTypes
@@ -2250,7 +1898,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # Check if this GlobalRef refers to the same function
                     called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
                     if called_func === ctx.func_ref
-                        # PURE-220/047: Check arity AND types for overloaded methods
+                        # Check arity AND types for overloaded methods
                         if mi isa Core.MethodInstance
                             spec = mi.specTypes
                             if spec isa DataType && spec <: Tuple
@@ -2267,9 +1915,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         end
                     end
             elseif ctx.func_ref !== nothing && actual_func_ref isa Function
-                # PURE-209a: Function object direct comparison
+                # Function object direct comparison
                 if actual_func_ref === ctx.func_ref
-                    # PURE-220/047: Check arity AND types for overloaded methods
+                    # Check arity AND types for overloaded methods
                     if mi isa Core.MethodInstance
                         spec = mi.specTypes
                         if spec isa DataType && spec <: Tuple
@@ -2289,13 +1937,27 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            # PURE-913: Skip cross-call for runtime intrinsics with proper inline handlers.
-            # str_substr's generate_intrinsic_body is a stub (returns source string unchanged).
-            # str_trim calls str_substr internally, so also broken when compiled standalone.
-            # The inline handlers below (str_substr at line ~22446, str_trim at ~23572)
-            # properly implement these using WasmGC array operations with caller scratch locals.
-            _skip_cross_call = name in (:str_substr, :str_trim, :sizehint!, Symbol("#sizehint!#81"),
-                                     :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!)
+            # Skip cross-call for runtime intrinsics with proper inline handlers.
+            # str_substr's generate_intrinsic_body is a stub (returns source string unchanged);
+            # the inline handler below implements it using WasmGC array operations with caller
+            # scratch locals. str_trim used to be skipped for the same reason (it calls
+            # str_substr internally) but Phase 5 deleted str_trim's bespoke builder — it now
+            # compiles standalone through ordinary cross-call resolution like any Julia
+            # function, and its internal str_substr call still hits this same skip+inline path.
+            # str_char/str_setchar!/str_new were ADDED here in Phase 5.2: their
+            # `generate_intrinsic_body` (compile.jl) hardcodes an i32 index/length local
+            # regardless of the ACTUAL argument types, so cross-call previously routed
+            # str_char(::String,::Int)/str_setchar!(::String,::Int,::Int32)/
+            # str_new(::Int) — the Int64, not Int32, overloads — into a StackImbalanceError
+            # ("expected I32, found I64") that predates this migration (confirmed against
+            # the unmodified tree). str_copy was ADDED because cross-call was routing it to
+            # its native-Julia no-op fallback (strings are immutable in native Julia; the
+            # real WasmGC array.copy only existed in the shadowed inline arm) — a silent
+            # correctness bug, not merely a crash. All four now route through
+            # INVOKE_INTRINSICS instead, which is correct for every overload.
+            _skip_cross_call = name in (:str_substr, :sizehint!, Symbol("#sizehint!#81"),
+                                     :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!,
+                                     :str_char, :str_setchar!, :str_new, :str_copy)
             if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
@@ -2306,11 +1968,11 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # For constructor calls, the func_ref might be the type directly
                     called_func = actual_func_ref
                 elseif actual_func_ref isa Function
-                    # PURE-209a: For default-arg methods, func_ref can be a Function object
+                    # For default-arg methods, func_ref can be a Function object
                     # (e.g., typeof(next_token) for next_token(lexer, true))
                     called_func = actual_func_ref
                 elseif actual_func_ref isa Core.Argument && mi isa Core.MethodInstance
-                    # PURE-220: Fallback for Core.Argument — extract from mi.specTypes
+                    # Fallback for Core.Argument — extract from mi.specTypes
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
                         func_type = spec.parameters[1]
@@ -2333,7 +1995,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         target_info = target_info_early
                     end
 
-                    # PURE-320: Closure/kwarg functions are registered with self-type prepended
+                    # Closure/kwarg functions are registered with self-type prepended
                     # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
                     if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                         closure_arg_types = (typeof(called_func), call_arg_types...)
@@ -2351,12 +2013,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # imported calls with an unseeded operand stack.
                         local _cc_params, _ = _true_call_sig(
                             fb, target_info.wasm_idx, WasmValType[], WasmValType[])
-                        haskey(ENV, "WT_DBG_CC") && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
+                        tracing(:cc) && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
                         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
                         call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
                         cross_call_handled = true
-                        # PURE-6024: If callee returns Union{} (Bottom), it always throws/traps.
+                        # If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.
                         # Emit unreachable to make stack polymorphic — prevents DROP from
                         # causing "nothing on stack" when the void call has no return value.
@@ -2366,7 +2028,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         if target_info.return_type === Union{}
                             unreachable!(bcc)  # structural trap (dart-legit dead path)
                         end
-                        # PURE-220: Unused cross-call return values are dropped by
+                        # Unused cross-call return values are dropped by
                         # the stackifier (builder stack delta + use_count==0).
                         # Do NOT emit DROP here — the stackifier's already_dropped heuristic
                         # has false positives when the LEB128 function index byte coincides
@@ -2375,7 +2037,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                         # insert any_convert_extern + ref.cast null to bridge the type gap.
                         # This happens when the function's wasm return type is externref (mapped
                         # from Any/Union via julia_to_wasm_type) but the caller's SSA local uses
-                        # a tagged union struct (mapped via julia_to_wasm_type_concrete).
+                        # a tagged union struct (mapped via get_concrete_wasm_type).
                         if haskey(ctx.ssa_locals, idx)
                             local_idx_val = ctx.ssa_locals[idx]
                             local_arr_idx = local_idx_val - ctx.n_params + 1
@@ -2391,13 +2053,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                 elseif target_local_type === AnyRef
                                     ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if ret_wasm === ExternRef
-                                        # PURE-908: Function returns externref, local expects anyref
+                                        # Function returns externref, local expects anyref
                                         any_convert_extern!(bcc)
                                     end
                                 elseif target_local_type === ExternRef && func_ref isa Core.Argument
-                                    # PURE-220: Higher-order call returns concrete ref but local expects externref
+                                    # Higher-order call returns concrete ref but local expects externref
                                     # (SSA type is Any because the function parameter is generic)
-                                    # PURE-6022: But if the callee already returns externref, skip —
+                                    # But if the callee already returns externref, skip —
                                     # extern_convert_any expects anyref input, not externref.
                                     callee_ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if callee_ret_wasm !== ExternRef
@@ -2411,22 +2073,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
             end
 
-            # parity(M6/F3): numeric arith result → ref-typed SSA local ⇒ box through THE
-            # one producer (the scalar-replaced Core.Box cycle: unbox → op → box → store).
-            _f3_result_box! = () -> begin
-                local _dl = get(ctx.ssa_locals, idx, nothing)
-                _dl === nothing && return
-                local _doff = _dl - ctx.n_params
-                (_doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef) || return
-                local _rbx = _ctx_builder(ctx, "compile_invoke")
-                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
-                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "boxed invoke result lacks a concrete Julia source type";
-                        idx=idx, detail=expr)
-                emit_classid_box!(_rbx, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
-                append_builder!(fb, _rbx)
-            end
+            # parity(translator.dart:1621 Translator.convertType): numeric arith result → ref-typed SSA local ⇒ box through THE
+            # one producer, dart's boxing branch (the scalar-replaced Core.Box cycle: unbox → op → box → store).
+            # (moved to _invoke_box_arith_result! — the +/-/* invoke intrinsics' shared
+            # helper, R20 migration; this used to be a local closure capturing `fb`/
+            # `arg_type`/`is_32bit`, both of which are now computed inside each of
+            # those Method-keyed builders instead of once here.)
             if is_self_call
                 # Self-recursive call - emit call instruction
                 # fullstrict: the args live on fb; the OWN placeholder sig is the contract
@@ -2443,7 +2095,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 end
                 bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
                 call!(bsc2, ctx.func_idx, WasmValType[], WasmValType[])
-                # PURE-908: Bridge return type for self-calls (externref→anyref)
+                # Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)
                     local_idx_val = ctx.ssa_locals[idx]
                     local_arr_idx = local_idx_val - ctx.n_params + 1
@@ -2467,864 +2119,23 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             elseif cross_call_handled
                 # Already handled above
 
-            elseif name === :+ || name === :add_int
-                badd = _ctx_builder(ctx, "compile_invoke")
-                num!(badd, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
-                append_builder!(fb, badd)
-                _f3_result_box!()
-            elseif name === :- || name === :sub_int
-                if length(args) == 1
-                    # WBUILD-3001: Unary negation -(x) → 0 - x. Prepend the 0 via
-                    # fragment composition (the pushfirst! byte surgery is gone).
-                    local _negb = _ctx_builder(ctx, "compile_invoke.frag")
-                    _seed_builder_locals!(_negb, ctx)
-                    is_32bit ? i32_const!(_negb, 0) : i64_const!(_negb, 0)
-                    append_builder!(_negb, fb)
-                    fb = _negb
-                end
-                bsub3 = _ctx_builder(ctx, "compile_invoke")
-                num!(bsub3, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
-                append_builder!(fb, bsub3)
-                _f3_result_box!()
-            elseif (name === :* || name === :mul_int) && length(args) == 2 &&
-                   (infer_value_type(args[1], ctx) === String || infer_value_type(args[1], ctx) === Symbol) &&
-                   (infer_value_type(args[2], ctx) === String || infer_value_type(args[2], ctx) === Symbol)
-                # String/Symbol `*` is CONCATENATION: this name-keyed arithmetic
-                # fallback fires when the concat MI failed to register as a
-                # cross-call (its body bottoms out in Vararg _string) and was
-                # emitting i64.mul on two string refs — the E-003 island's
-                # fn#107 validation failure. Args were pre-pushed: rebuild.
-                bcat = _ctx_builder(ctx, "compile_invoke")
-                append_builder!(bcat, compile_string_concat_b(args[1], args[2], ctx))
-                return append_builder!(b, bcat)
-            elseif name === :* || name === :mul_int
-                bmul = _ctx_builder(ctx, "compile_invoke")
-                num!(bmul, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
-                append_builder!(fb, bmul)
-            elseif name === :length && (arg_type === String || arg_type === Any || arg_type === Union{})
-                # String/Any length - argument already pushed, emit array.len
-                # Only for types that are actually WasmGC arrays (String, Any)
-                # Vector length is handled in calls.jl via struct_get on size field
-                # Other AbstractVector subtypes (StepRange, SubArray, ReinterpretArray)
-                # must go through cross-function call to their specific length() method
-                blen = _ctx_builder(ctx, "compile_invoke")
-                if arg_type === Any || arg_type === Union{}
-                    any_convert_extern!(blen)        # externref → anyref
-                    ref_cast!(blen, ArrayRef, true)  # anyref → (ref null array)
-                end
-                array_len!(blen)
-                # array.len returns i32, extend to i64 for Julia's Int
-                num!(blen, Opcode.I64_EXTEND_I32_S)
-                append_builder!(fb, blen)
-
-            # String concatenation: string * string -> string
-            # Julia compiles string concatenation to Base._string
-            # Also handle String, Symbol for error message construction
-            elseif (name === :* || name === :_string) && length(args) >= 2 &&
-                   _all_string_args(args, ctx)
-                fb = compile_string_concat_many_b(args, ctx)
-
-            # PURE-325: isascii(s) — check all bytes < 0x80
-            # Called from normalize_identifier via isascii(codeunits(s)).
-            # The argument is CodeUnits{UInt8,String} (a struct wrapping String).
-            # Extract the String (field 0) from the struct, then iterate bytes.
-            elseif name === :isascii && length(args) == 1
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                arg_type = infer_value_type(args[1], ctx)
-
-                basc = _ctx_builder(ctx, "compile_invoke")
-
-                # If the argument is a CodeUnits struct, extract the String field.
-                if arg_type !== String && arg_type !== Symbol
-                    if haskey(ctx.type_registry.structs, arg_type)
-                        cu_info = ctx.type_registry.structs[arg_type]
-                        struct_get!(basc, cu_info.wasm_type_idx, wasm_field_idx(cu_info, 1), I32)
-                    end
-                end
-
-                # Allocate locals: str, len, accum, i
-                str_arr_type = ConcreteRef(str_type_idx, true)
-                str_local = allocate_local!(ctx, str_arr_type)
-                len_local = allocate_local!(ctx, I32)
-                accum_local = allocate_local!(ctx, I32)
-                i_local = allocate_local!(ctx, I32)
-
-                # Store string
-                local_set!(basc, str_local)
-
-                # len = array.len(str)
-                local_get!(basc, str_local)
-                array_len!(basc)
-                local_set!(basc, len_local)
-
-                # accum = 0
-                i32_const!(basc, 0)
-                local_set!(basc, accum_local)
-
-                # i = 0
-                i32_const!(basc, 0)
-                local_set!(basc, i_local)
-
-                # block $exit
-                done_label = block!(basc, 0x40)  # void
-                #   loop $loop
-                loop_label = loop!(basc, 0x40)  # void
-
-                #     br_if $exit (i >= len)
-                local_get!(basc, i_local)
-                local_get!(basc, len_local)
-                num!(basc, Opcode.I32_GE_S)
-                br_if!(basc, done_label)
-
-                #     accum |= array.get(str, i)
-                local_get!(basc, accum_local)
-                local_get!(basc, str_local)
-                local_get!(basc, i_local)
-                array_get!(basc, str_type_idx, I32; signed=false)
-                num!(basc, Opcode.I32_OR)
-                local_set!(basc, accum_local)
-
-                #     i++
-                local_get!(basc, i_local)
-                i32_const!(basc, 1)
-                num!(basc, Opcode.I32_ADD)
-                local_set!(basc, i_local)
-
-                #     br $loop
-                br!(basc, loop_label)
-
-                #   end loop
-                end_block!(basc)
-                # end block
-                end_block!(basc)
-
-                # result = (accum < 0x80) ? 1 : 0
-                # accum < 128 means all bytes are ASCII
-                local_get!(basc, accum_local)
-                i32_const!(basc, 0x80)
-                num!(basc, Opcode.I32_LT_U)  # unsigned comparison: accum < 0x80
-                append_builder!(fb, basc)
-
-            # String equality comparison
-            elseif name === :(==) && length(args) == 2 &&
-                   infer_value_type(args[1], ctx) === String &&
-                   infer_value_type(args[2], ctx) === String
-                fb = compile_string_equal_b(args[1], args[2], ctx)
-
-            # WasmTarget string operations - str_char(s, i) -> Int32
-            elseif name === :str_char && length(args) == 2
-                # Get character at index: array.get on string array
-                # Args: string, index (1-based)
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-                # Compile string arg (already pushed by args loop)
-                # Compile index arg and convert to 0-based
-                bchr = _ctx_builder(ctx, "compile_invoke")
-                idx_type = infer_value_type(args[2], ctx)
-                # parity(M9): the pre-pushed string is the CLASSED struct sitting UNDER
-                # the index — save idx, read .data, reload idx.
-                _sc_idx = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, idx_type === Int64 || idx_type === Int ? I64 : I32)
-                builder_set_local_type!(bchr, _sc_idx, idx_type === Int64 || idx_type === Int ? I64 : I32)
-                local_set!(bchr, _sc_idx)
-                _ssi = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                ref_cast!(bchr, Int64(_ssi), false)
-                struct_get!(bchr, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(str_type_idx), true))
-                local_get!(bchr, _sc_idx)
-                if idx_type === Int64 || idx_type === Int
-                    # Convert Int64 to Int32 and subtract 1
-                    num!(bchr, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bchr, 1)  # 1
-                num!(bchr, Opcode.I32_SUB)  # index - 1 for 0-based
-
-                # array.get
-                array_get!(bchr, str_type_idx, I32; signed=false)
-                append_builder!(fb, bchr)
-
-            # WasmTarget string operations - str_setchar!(s, i, c) -> Nothing
-            elseif name === :str_setchar! && length(args) == 3
-                # Set character at index: array.set on string array
-                # Args: string, index (1-based), char (Int32)
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-                # Stack has: string, index, char
-                # Need to reorder to: string, index-1, char for array.set
-                # Actually array.set expects: array, index, value
-                # So we need: compile string, compile index-1, compile char
-
-                # Clear the bytes from the args loop - we'll recompile in correct order
-                bsc = _ctx_builder(ctx, "compile_invoke")
-
-                # Compile string
-                emit_value!(bsc, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-
-                # Compile index and convert to 0-based
-                idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bsc, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
-                if idx_type === Int64 || idx_type === Int
-                    num!(bsc, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bsc, 1)
-                num!(bsc, Opcode.I32_SUB)
-
-                # Compile char value
-                char_type = infer_value_type(args[3], ctx)
-                emit_value!(bsc, args[3], ctx, (char_type === Int64 || char_type === Int) ? I64 : I32)   # march14
-                if char_type === Int64 || char_type === Int
-                    num!(bsc, Opcode.I32_WRAP_I64)
-                end
-
-                # array.set
-                array_set!(bsc, str_type_idx, I32)
-                return append_builder!(b, bsc)
-
-            # WasmTarget string operations - str_len(s) -> Int32
-            elseif name === :str_len && length(args) == 1
-                # Get string length as Int32
-                # Arg already compiled, just emit array.len
-                blen2 = _ctx_builder(ctx, "compile_invoke")
-                array_len!(blen2)
-                append_builder!(fb, blen2)
-
-            # WasmTarget string operations - str_new(len) -> String
-            elseif name === :str_new && length(args) == 1
-                # Create new string of given length, filled with zeros
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-                # Length arg already compiled
-                bnew = _ctx_builder(ctx, "compile_invoke")
-                len_type = infer_value_type(args[1], ctx)
-                if len_type === Int64 || len_type === Int
-                    num!(bnew, Opcode.I32_WRAP_I64)
-                end
-
-                # array.new_default creates array filled with default value (0 for i32)
-                array_new_default!(bnew, str_type_idx)
-                append_builder!(fb, bnew)
-
-            # WasmTarget string operations - str_copy(src, src_pos, dst, dst_pos, len) -> Nothing
-            elseif name === :str_copy && length(args) == 5
-                # Copy characters from src to dst using array.copy
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-                # Clear bytes - recompile in correct order for array.copy
-                # array.copy expects: dst, dst_offset, src, src_offset, len
-                bcp = _ctx_builder(ctx, "compile_invoke")
-
-                # dst array
-                emit_value!(bcp, args[3], ctx, ConcreteRef(UInt32(str_type_idx), true))
-                # dst offset (0-based)
-                dst_idx_type = infer_value_type(args[4], ctx)
-                emit_value!(bcp, args[4], ctx, (dst_idx_type === Int64 || dst_idx_type === Int) ? I64 : I32)   # march14
-                if dst_idx_type === Int64 || dst_idx_type === Int
-                    num!(bcp, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bcp, 1)
-                num!(bcp, Opcode.I32_SUB)
-
-                # src array
-                emit_value!(bcp, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-                # src offset (0-based)
-                src_idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bcp, args[2], ctx, (src_idx_type === Int64 || src_idx_type === Int) ? I64 : I32)   # march14
-                if src_idx_type === Int64 || src_idx_type === Int
-                    num!(bcp, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bcp, 1)
-                num!(bcp, Opcode.I32_SUB)
-
-                # length
-                len_type = infer_value_type(args[5], ctx)
-                emit_value!(bcp, args[5], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
-                if len_type === Int64 || len_type === Int
-                    num!(bcp, Opcode.I32_WRAP_I64)
-                end
-
-                # array.copy
-                array_copy!(bcp, str_type_idx, str_type_idx)
-                return append_builder!(b, bcp)
-
-            # WasmTarget string operations - str_substr(s, start, len) -> String
-            elseif name === :str_substr && length(args) == 3
-                # Extract substring: create new string and copy characters
-                str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-
-                # Use scratch locals stored in context
-                if ctx.scratch_locals === nothing
-                    error("String operations require scratch locals but none were allocated")
-                end
-                result_local, src_local, _, _, _ = ctx.scratch_locals
-
-                # Clear bytes - recompile in correct order
-                bss = _ctx_builder(ctx, "compile_invoke")
-
-                # Store source string DATA (parity M9: the funnel unwraps the class)
-                emit_value!(bss, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-                local_set!(bss, src_local)
-
-                # Create new string of specified length
-                len_type = infer_value_type(args[3], ctx)
-                emit_value!(bss, args[3], ctx,
-                            (len_type === Int64 || len_type === Int) ? I64 : I32)  # len
-                if len_type === Int64 || len_type === Int
-                    num!(bss, Opcode.I32_WRAP_I64)
-                end
-                array_new_default!(bss, str_type_idx)
-                local_set!(bss, result_local)
-
-                # Copy characters: array.copy [dst, dst_off, src, src_off, len]
-                # dst = result, dst_off = 0, src = source, src_off = start-1, len = len
-                local_get!(bss, result_local)
-                i32_const!(bss, 0)  # dst_off = 0
-
-                local_get!(bss, src_local)
-
-                # src_off = start - 1 (convert to 0-based)
-                start_type = infer_value_type(args[2], ctx)
-                emit_value!(bss, args[2], ctx, (start_type === Int64 || start_type === Int) ? I64 : I32)   # march14
-                if start_type === Int64 || start_type === Int
-                    num!(bss, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bss, 1)
-                num!(bss, Opcode.I32_SUB)
-
-                # len
-                len_type2 = infer_value_type(args[3], ctx)
-                emit_value!(bss, args[3], ctx, (len_type2 === Int64 || len_type2 === Int) ? I64 : I32)   # march14
-                if len_type2 === Int64 || len_type2 === Int
-                    num!(bss, Opcode.I32_WRAP_I64)
-                end
-
-                array_copy!(bss, str_type_idx, str_type_idx)
-
-                # Return result — published as the CLASSED string (parity M9)
-                local_get!(bss, result_local)
-                emit_string_wrap!(bss, ctx)
-                return append_builder!(b, bss)
-
-            # WasmTarget string operations - str_hash(s) -> Int32
-            elseif name === :str_hash && length(args) == 1
-                fb = _compile_invoke_str_hash_b(args, ctx)
-
-            # ================================================================
-            # BROWSER-010: New String Operations
-            # str_find, str_contains, str_startswith, str_endswith
-            # str_uppercase, str_lowercase, str_trim
-            # ================================================================
-
-            # str_find(haystack, needle) -> Int32
-            # Returns 1-based position or 0 if not found
-            elseif name === :str_find && length(args) == 2
-                fb = _compile_invoke_str_find_b(args, ctx)
-
-            # str_contains(haystack, needle) -> Bool
-            # Returns true if needle is found in haystack
-            elseif name === :str_contains && length(args) == 2
-                fb = _compile_invoke_str_contains_b(args, ctx)
-
-
-            # str_startswith(s, prefix) -> Bool
-            elseif name === :str_startswith && length(args) == 2
-                fb = _compile_invoke_str_startswith_b(args, ctx)
-
-            # str_endswith(s, suffix) -> Bool
-            elseif name === :str_endswith && length(args) == 2
-                fb = _compile_invoke_str_endswith_b(args, ctx)
-
-            # str_uppercase(s) -> String
-            # Convert lowercase ASCII letters to uppercase
-            elseif name === :str_uppercase && length(args) == 1
-                fb = _compile_invoke_str_uppercase_b(args, ctx)
-
-            # str_lowercase(s) -> String
-            # Convert uppercase ASCII letters to lowercase
-            elseif name === :str_lowercase && length(args) == 1
-                fb = _compile_invoke_str_lowercase_b(args, ctx)
-
-
-            # str_trim(s) -> String
-            # Remove leading and trailing ASCII whitespace
-            elseif name === :str_trim && length(args) == 1
-                fb = _compile_invoke_str_trim_b(args, ctx)
-
-            # ================================================================
-            # WasmTarget array operations - arr_new, arr_get, arr_set!, arr_len
-            # ================================================================
-
-            # arr_new(Type, len) -> Vector{Type}
-            elseif name === :arr_new && length(args) == 2
-                # First arg is the type (compile-time constant)
-                # Second arg is the length
-                type_arg = args[1]
-                elem_type = if type_arg isa Core.SSAValue
-                    ctx.ssa_types[type_arg.id]
-                elseif type_arg isa GlobalRef
-                    getfield(type_arg.mod, type_arg.name)
-                elseif type_arg isa Type
-                    type_arg
+            # parity(intrinsics.dart:26-64 MemberIntrinsic/StaticIntrinsic; `_lookup`
+            # :75-100/:401-428): ONE Method-keyed lookup replaces the R20 arm-by-Symbol
+            # ladder for every op below that has a registry entry. `:append` continues
+            # the SAME fb the args loop already pushed to (isascii — verified to compile
+            # correctly this way); `:standalone` pushes its own inputs and IS the result.
+            elseif (local _invoke_reg_entry = get(INVOKE_INTRINSICS, meth, nothing)) !== nothing &&
+                   (local _invoke_reg_result = (_invoke_reg_entry.mode === :append ?
+                        _invoke_reg_entry.fn(args, ctx) : _invoke_reg_entry.fn(args, ctx, idx, expr))) !== nothing
+                if _invoke_reg_entry.mode === :append
+                    append_builder!(fb, _invoke_reg_result)
                 else
-                    Int32  # Default
+                    return append_builder!(b, _invoke_reg_result)
                 end
 
-                # Get or create array type
-                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-                # Clear previous arg compilation - we only need length
-                ban = _ctx_builder(ctx, "compile_invoke")
-
-                # Compile length arg
-                len_type = infer_value_type(args[2], ctx)
-                emit_value!(ban, args[2], ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # march14
-                if len_type === Int64 || len_type === Int
-                    num!(ban, Opcode.I32_WRAP_I64)
-                end
-
-                # array.new_default creates array filled with default value (0)
-                array_new_default!(ban, arr_type_idx)
-                return append_builder!(b, ban)
-
-            # arr_get(arr, i) -> T
-            elseif name === :arr_get && length(args) == 2
-                # Args already compiled: arr, index
-                # Need to adjust index to 0-based and emit array.get
-                arr_type = infer_value_type(args[1], ctx)
-                elem_type = eltype(arr_type)
-                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-                # Convert index to 0-based
-                bget = _ctx_builder(ctx, "compile_invoke")
-                idx_type = infer_value_type(args[2], ctx)
-                if idx_type === Int64 || idx_type === Int
-                    num!(bget, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bget, 1)
-                num!(bget, Opcode.I32_SUB)  # index - 1
-
-                # array.get (use ARRAY_GET_U for packed i8 arrays like UInt8)
-                array_get!(bget, arr_type_idx, I32; signed=packed_array_signedness(elem_type))
-                append_builder!(fb, bget)
-
-            # arr_set!(arr, i, val) -> Nothing
-            elseif name === :arr_set! && length(args) == 3
-                arr_type = infer_value_type(args[1], ctx)
-                elem_type = eltype(arr_type)
-                arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-
-                # Recompile in correct order for array.set: arr, index-1, val
-                bas = _ctx_builder(ctx, "compile_invoke")
-                local _arrset_elem_w = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-                local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
-
-                # Array ref
-                emit_value!(bas, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
-
-                # Index (convert to 0-based)
-                idx_type = infer_value_type(args[2], ctx)
-                emit_value!(bas, args[2], ctx, (idx_type === Int64 || idx_type === Int) ? I64 : I32)   # march14
-                if idx_type === Int64 || idx_type === Int
-                    num!(bas, Opcode.I32_WRAP_I64)
-                end
-                i32_const!(bas, 1)
-                num!(bas, Opcode.I32_SUB)
-
-                # Value — typed channel throughout
-                local _as_b = _compile_value_b(args[3], ctx)
-                local val_ty = isempty(_as_b.v.stack) ? nothing : _as_b.v.stack[end]
-                # PURE-045: If elem_type is Any (externref array), convert ref→externref
-                if elem_type === Any
-                    if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
-                        # march3: was emit_numeric_to_externref!(_, stmt.val, val_wasm, _) —
-                        # OUTER-SCOPE variables (same latent copy-paste bug as push!); the
-                        # stored VALUE boxes.
-                        emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
-                    else
-                        append_builder!(bas, _as_b)
-                        # march16: a KNOWN closure erasing into a Vector{Any} slot wraps
-                        # into the closure OBJECT first (dart convertType at the seam)
-                        val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
-                        # PURE-048: Skip extern_convert_any if value is already externref
-                        val_ty === ExternRef || extern_convert_any!(bas)
-                    end
-                else
-                    append_builder!(bas, _as_b)
-                end
-
-                # array.set
-                array_set!(bas, arr_type_idx, _arrset_elem_w2)
-                fb = bas   # discard-and-replace (march4)
-
-            # arr_len(arr) -> Int32
-            elseif name === :arr_len && length(args) == 1
-                # Arg already compiled, just emit array.len
-                blen3 = _ctx_builder(ctx, "compile_invoke")
-                array_len!(blen3)
-                append_builder!(fb, blen3)
-
-            # ================================================================
-            # PURE-322: SubString — create proper SubString struct
-            # SubString(str, start, stop) does UTF-8 thisind validation that
-            # uses jl_string_ptr/pointerref (unsupported in WasmGC). Since
-            # WasmGC strings are array<i32> (char arrays, not byte arrays),
-            # every index is valid. Create struct: {string, offset, ncodeunits}
-            # ================================================================
-            elseif name === :SubString
-                bsub2 = _ctx_builder(ctx, "compile_invoke")  # Clear accumulated arg bytes
-                if length(args) >= 3
-                    str_arg = args[1]
-                    start_arg = args[2]
-                    stop_arg = args[3]
-                    local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
-                    local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
-                    local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
-                    emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
-                    # Field 1: string (ref null array<i32>)
-                    emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
-                    # Field 2: offset = start - 1
-                    emit_value!(bsub2, start_arg, ctx, I64)
-                    i64_const!(bsub2, 1)
-                    num!(bsub2, Opcode.I64_SUB)
-                    # Field 3: ncodeunits = stop - start + 1
-                    emit_value!(bsub2, stop_arg, ctx, I64)
-                    emit_value!(bsub2, start_arg, ctx, I64)
-                    num!(bsub2, Opcode.I64_SUB)
-                    i64_const!(bsub2, 1)
-                    num!(bsub2, Opcode.I64_ADD)
-                    # Emit struct.new for SubString type
-                    substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
-                    if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
-                    end
-                elseif length(args) >= 1
-                    # SubString(str) — view of entire string
-                    str_arg = args[1]
-                    local _substr_info = register_struct_type!(ctx.mod, ctx.type_registry, SubString{String})
-                    local _substr_def = ctx.mod.types[_substr_info.wasm_type_idx + 1]
-                    local _substr_string_w = _substr_def.fields[wasm_field_idx(_substr_info, 1) + 1].valtype
-                    emit_struct_prefix!(bsub2, ctx.type_registry, SubString{String}, _substr_info)
-                    emit_value!(bsub2, str_arg, ctx, _substr_string_w; from_julia=String)
-                    i64_const!(bsub2, 0)  # offset = 0
-                    # ncodeunits = array.len(str)
-                    emit_value!(bsub2, str_arg, ctx,
-                                ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-                    array_len!(bsub2)
-                    num!(bsub2, Opcode.I64_EXTEND_I32_S)
-                    # Emit struct.new
-                    substr_wasm = get_concrete_wasm_type(SubString{String}, ctx.mod, ctx.type_registry)
-                    if substr_wasm isa ConcreteRef
-                        struct_new!(bsub2, substr_wasm.type_idx)   # mod-resolved fields (march3)
-                    end
-                end
-                return append_builder!(b, bsub2)
-
-            # ================================================================
-            # PURE-322: _thisind_continued / _nextind_continued — identity
-            # In WasmGC, strings are array<i32> (char codes), so every
-            # character index is valid (no multi-byte encoding).
-            # ================================================================
-            elseif (name === :_thisind_continued || name === Symbol("#_thisind_continued#_thisind_str##0")) && length(args) >= 2
-                bti = _ctx_builder(ctx, "compile_invoke")
-                # Closure form: (closure, string, index, len) → return index
-                if length(args) >= 3
-                    emit_value!(bti, args[2], ctx, I64)
-                else
-                    emit_value!(bti, args[1], ctx, I64)
-                end
-                return append_builder!(b, bti)
-
-            elseif (name === :_nextind_continued || name === Symbol("#_nextind_continued#_nextind_str##0")) && length(args) >= 2
-                bni = _ctx_builder(ctx, "compile_invoke")
-                # nextind(s, i) = i + 1 in WasmGC
-                if length(args) >= 3
-                    emit_value!(bni, args[2], ctx, I64)
-                else
-                    emit_value!(bni, args[1], ctx, I64)
-                end
-                i64_const!(bni, 1)
-                num!(bni, Opcode.I64_ADD)
-                return append_builder!(b, bni)
-
-            # ================================================================
-            # PURE-9016: Multi-arg string() → inline N-way concatenation
-            # string("hello", " ", "world") or string("x = ", int_to_string(x))
-            # Allocates one result array of total length, copies each arg in
-            # ================================================================
-            elseif (name === :string || name === :_string) && length(args) > 1
-                bms = _ctx_builder(ctx, "compile_invoke")  # Clear pre-compiled args
-
-                # Check arg types — for now handle all-String args
-                arg_types = [infer_value_type(a, ctx) for a in args]
-                all_strings = all(t -> t === String || t === Symbol, arg_types)
-
-                if all_strings
-                    bms = compile_string_concat_many_b(args, ctx)
-                else
-                    # A result-producing invoke may never substitute a valid but
-                    # unrelated String.  Normal Julia string conversion is handled
-                    # by the collected print_to_string body; if this specialized arm
-                    # is nevertheless selected without an all-string proof, reject
-                    # the unsupported lowering explicitly.
-                    record_unsupported!(ctx, :unsupported_method,
-                        "specialized multi-argument string lowering requires every argument to be String or Symbol";
-                        idx=idx, detail=arg_types)
-                    unreachable!(bms)  # polymorphic bottom; no fabricated String value
-                    ctx.last_stmt_was_stub = true
-                end
-                return append_builder!(b, bms)
-
-            # ================================================================
-            # WBUILD-5401: Base.string dispatch for single-arg types
-            # Float64 is handled via auto-discovery of Ryu.writeshortest.
-            # Int types fall back to int_to_string runtime if not auto-discovered.
-            # ================================================================
-            elseif name === :string && length(args) == 1 &&
-                   let _vt = infer_value_type(args[1], ctx)
-                       _vt !== Float32 && _vt !== Float64
-                   end
-                value_arg = args[1]
-                value_type = infer_value_type(value_arg, ctx)
-
-                if value_type === Int32 || value_type === Int64 ||
-                       value_type === UInt32 || value_type === UInt64 ||
-                       value_type === Int16 || value_type === UInt16 ||
-                       value_type === Int8 || value_type === UInt8
-                    # Integer types - redirect to int_to_string
-                    bis1 = _ctx_builder(ctx, "compile_invoke")
-
-                    int_to_string_info = nothing
-                    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
-                        int_to_string_func = getfield(WasmTarget, :int_to_string)
-                        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
-                    end
-
-                    if int_to_string_info !== nothing
-                        emit_value!(bis1, value_arg, ctx,
-                                    value_type in (Int64, UInt64) ? I64 : I32)
-
-                        # Convert to Int32 if needed
-                        if value_type === Int64
-                            num!(bis1, Opcode.I32_WRAP_I64)
-                        elseif value_type === UInt64
-                            num!(bis1, Opcode.I32_WRAP_I64)
-                        end
-
-                        call!(bis1, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
-                        return append_builder!(b, bis1)
-                    else
-                        error("Base.string(::$(value_type)) requires int_to_string in compile_multi. " *
-                              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
-                    end
-                elseif value_type === String || value_type === Symbol
-                    # string(s::String) is identity — the arg is already on the stack
-                    # (pre-compiled by the argument loop above)
-                else
-                    error("Base.string(::$(value_type)) not yet supported. " *
-                          "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
-                end
-
-            # PURE-1102: Error-throwing functions from Base (used by pop!, resize!, etc.)
-            # Emit throw (catchable) instead of unreachable (trap)
-            elseif name === :_throw_argerror || name === :throw_boundserror ||
-                   name === :throw || name === :rethrow ||
-                   name === :_throw_not_readable || name === :_throw_not_writable
-                ensure_exception_tag!(ctx.mod)
-                bthr2 = _ctx_builder(ctx, "compile_invoke")
-                if name === :rethrow
-                    # PURE-9034: rethrow() preserves the exception in the global —
-                    # just re-throw without overwriting. The caught exception is
-                    # already in $current_exn from the original throw.
-                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                else
-                    exn_global = ensure_exception_global!(ctx.mod)
-                    if isempty(args)
-                        record_unsupported!(ctx, :unsupported_method,
-                            "throw helper has no exception payload"; idx=idx, detail=expr)
-                        unreachable!(bthr2)  # structural trap after recorded unsupported
-                        ctx.last_stmt_was_stub = true
-                        return append_builder!(b, bthr2)
-                    end
-                    emit_value!(bthr2, args[1], ctx, AnyRef)
-                    global_set!(bthr2, exn_global)
-                    global_get!(bthr2, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bthr2, ExternRef); throw_!(bthr2, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                end
-                append_builder!(fb, bthr2)
-                ctx.last_stmt_was_stub = true  # PURE-908
-
-            # PURE-9040: println/print → JS IO bridge imports
-            elseif (name === :println || name === :print) &&
-                   !_invoke_has_explicit_io(param_types)
-                fb = _compile_invoke_print_b(name, args, ctx)
-                # print returns `nothing`; the io imports are void. If this SSA
-                # has a local (the nothing value is USED downstream — common in
-                # trim-collected show machinery), push its representation so the
-                # statement wrapper's local.set has a value to consume.
-                if haskey(ctx.ssa_locals, idx)
-                    bpn = _ctx_builder(ctx, "compile_invoke")
-                    ref_null!(bpn, AnyRef)  # ref.null any (0xD0 0x6E)
-                    append_builder!(fb, bpn)
-                end
-
-            # PURE-9041: show(x) → IO bridge imports (like print, no newline)
-            # show(42) displays "42", show(true) displays "true", show(nothing) displays "nothing"
-            elseif name === :show && !_invoke_has_explicit_io(param_types)
-                io = get_io_imports()
-                if io !== nothing
-                    bsh2 = _ctx_builder(ctx, "compile_invoke")
-                    for arg in args
-                        # Determine argument type
-                        arg_type = nothing
-                        if arg isa Core.SSAValue
-                            arg_type = ctx.code_info.ssavaluetypes[arg.id]
-                        elseif arg isa Core.Argument
-                            slot_id = arg.n
-                            arg_type = ctx.code_info.slottypes[slot_id]
-                        elseif arg isa String || arg isa Symbol
-                            arg_type = String
-                        elseif arg isa Int64 || arg isa Int32 || arg isa Int
-                            arg_type = typeof(arg)
-                        elseif arg isa Float64 || arg isa Float32
-                            arg_type = typeof(arg)
-                        elseif arg isa Bool
-                            arg_type = Bool
-                        elseif arg isa Nothing || arg === nothing
-                            arg_type = Nothing
-                        elseif arg isa GlobalRef && arg.name === :nothing
-                            arg_type = Nothing
-                        end
-
-                        if arg_type === Nothing
-                            # show(nothing) → write "nothing"
-                            call!(bsh2, io.write_nothing_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === String || arg_type === Symbol
-                            emit_value!(bsh2, arg, ctx, ConcreteRef(get_string_array_type!(ctx.mod, ctx.type_registry), true))   # parity(M9): funnel → DATA array
-                            emit_jl_string_to_js!(bsh2, io.decode_idx)
-                            call!(bsh2, io.write_string_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Int64 || arg_type === Int || arg_type === UInt64
-                            emit_value!(bsh2, arg, ctx, I64)
-                            call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Int32
-                            emit_value!(bsh2, arg, ctx, I32)
-                            num!(bsh2, Opcode.I64_EXTEND_I32_S)
-                            call!(bsh2, io.write_int_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Float64
-                            emit_value!(bsh2, arg, ctx, F64)
-                            call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Float32
-                            emit_value!(bsh2, arg, ctx, F32)
-                            num!(bsh2, Opcode.F64_PROMOTE_F32)
-                            call!(bsh2, io.write_float_idx, WasmValType[], WasmValType[])
-                        elseif arg_type === Bool
-                            emit_value!(bsh2, arg, ctx, I32)
-                            call!(bsh2, io.write_bool_idx, WasmValType[], WasmValType[])
-                        else
-                            record_unsupported!(ctx, :unsupported_method,
-                                "show has no IO bridge representation for argument type $arg_type";
-                                idx=idx, detail=arg)
-                            unreachable!(bsh2) # recorded unsupported; polymorphic bottom
-                            ctx.last_stmt_was_stub = true
-                            break
-                        end
-                    end
-                    # show returns `nothing`; io imports are void — same contract
-                    # as the print handler above.
-                    if haskey(ctx.ssa_locals, idx)
-                        ref_null!(bsh2, AnyRef)
-                    end
-                    return append_builder!(b, bsh2)
-                else
-                    fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
-                end
-
-            # Handle truncate (IOBuffer resize) — no-op in WasmGC
-            # Returns the IOBuffer itself
-            elseif name === :truncate
-                # First arg is the IOBuffer — just leave it on stack
-                # (already compiled by the args loop above)
-                # No-op: WasmGC arrays don't need explicit truncation
-
-            # Handle getindex_continued (multi-byte string char access)
-            # WBUILD-8001: UTF-8 byte continuation not implemented.
-            # In WasmGC, strings are array<i32> (one codepoint per element),
-            # so multi-byte continuation shouldn't be needed. If hit, it means
-            # a code path assumes byte-level string access.
-            elseif name === :getindex_continued
-                bgic = _ctx_builder(ctx, "compile_invoke")
-                record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
-                unreachable!(bgic)
-                append_builder!(fb, bgic)
-                ctx.last_stmt_was_stub = true
-
-            # PURE-1102: Error/throw functions — emit throw (catchable) instead of unreachable (trap)
-            # PURE-9032: Create exception struct objects and stash in $current_exn
-            # so that :the_exception + isa checks can identify the exception type.
-            elseif name === :error
-                berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                # error("msg") → create ErrorException struct, stash, throw
-                local _ee_info = register_struct_type!(ctx.mod, ctx.type_registry, ErrorException)
-                _ee_info === nothing && error("ErrorException layout is unavailable")
-                length(args) <= 1 || error("unexpected error() lowering arity: $(length(args))")
-                emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
-                local _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
-                local _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
-                emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
-                struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields (march3)
-                global_set!(berr, exn_global)
-                global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true
-                return append_builder!(b, berr)
-            # Handle JuliaSyntax internal functions that have complex implementations
-            # These are intercepted and compiled as simplified stubs
-            elseif name === :parse_float_literal
-                # WBUILD-8001: Float literal parsing not implemented (orig uses
-                # ccall(:jl_strtod_c)). Strict Approach A — loud reject (returns a
-                # value natively, so a silent trap would diverge).
-                emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                    "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
-
-            elseif name === :parse_int_literal ||
-                   name === :parse_uint_literal
-                # WBUILD-8001: Int/uint literal parsing not implemented.
-                emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                    "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
-
-            # Handle unalias — identity in WasmGC (arrays never alias)
-            # unalias(dest, src) checks if dest and src share backing memory
-            # and copies src if they do. In WasmGC, every array.new creates a
-            # distinct GC object, so aliasing is impossible. Just return src.
-            elseif name === :unalias
-                # Discard accumulated argument bytes and re-compile just src (arg 2)
-                bua = _ctx_builder(ctx, "compile_invoke")
-                src_arg = expr.args[4]  # args: [mi, func_ref, dest, src]
-                emit_value!(bua, src_arg, ctx, static_wasm_type(src_arg, ctx))
-                return append_builder!(b, bua)
-
-            # Handle push!/pop! growth closures from Base (_growend!)
-            # These are generated when Julia inlines push! and need to resize the array
-            # The closure name starts with # (e.g., #_growend!##0)
-            # For WasmGC, we implement array growth inline:
-            # 1. Allocate new array with 2x capacity
-            # 2. Copy elements from old array using array.copy
-            # 3. Update the vector's ref field
-            # WBUILD-3001: sizehint! is a memory optimization hint — no-op in WasmGC.
-            # WasmGC arrays have no capacity concept. Return the vector argument unchanged.
-            # sizehint!(v, n) → v; #sizehint!#81(shrink, first, sizehint!, v, n) → v
-            # Must be checked BEFORE the "#" closure handler below, since #sizehint!#81
-            # starts with "#" and would be incorrectly caught by the _growend! handler.
-            elseif name === :sizehint! || name === Symbol("#sizehint!#81")
-                bsh = _ctx_builder(ctx, "compile_invoke")
-                # The vector argument: for sizehint! it's args[1], for #sizehint!#81 it's args[4]
-                vec_arg = name === :sizehint! ? (length(args) >= 1 ? args[1] : nothing) :
-                          (length(args) >= 4 ? args[4] : nothing)
-                if vec_arg !== nothing
-                    emit_value!(bsh, vec_arg, ctx, static_wasm_type(vec_arg, ctx))
-                else
-                    record_unsupported!(ctx, :unsupported_method, "vector op: argument vector unavailable"; idx=idx)
-                    unreachable!(bsh)
-                end
-                return append_builder!(b, bsh)
-
+            # Base arithmetic (+/-/*), length(::String), _thisind_continued,
+            # _nextind_continued, string()/_string(), throw/rethrow,
+            # println/print/show: INVOKE_INTRINSICS registry (R20 migration).
             elseif meth.module === Base &&
                    occursin(r"^#_(?:growend|growbeg|growat)!", string(name))
                 # Clear any accumulated bytes from argument compilation
@@ -3379,14 +2190,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
                     # 1. Get the vector and store in local
                     emit_value!(bgr, vec_arg, ctx, ConcreteRef(UInt32(vec_type_idx), true))
-                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    # heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(vec_type_idx), true)
                     local_set!(bgr, vec_scratch_local)
 
                     # 2. Get old backing array and store
                     local_get!(bgr, vec_scratch_local)
                     struct_get!(bgr, vec_type_idx, wasm_field_idx(vec_info, 1), ConcreteRef(UInt32(arr_type_idx), true))
-                    # PURE-045: heap type for ref.cast must use signed LEB128
+                    # heap type for ref.cast must use signed LEB128
                     ref_cast!(bgr, Int64(arr_type_idx), true)
                     local_set!(bgr, old_arr_local)
 
@@ -3450,84 +2261,10 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                         idx=idx, detail=expr)
                     unreachable!(bgrf)  # structural trap after recorded unsupported
                     append_builder!(fb, bgrf)
-                    ctx.last_stmt_was_stub = true  # PURE-908
-                end
-
-            elseif name === :Symbol && length(args) == 1
-                # Symbol(s::String) — in WasmGC, Symbol IS String (both are byte arrays).
-                # The argument String is already on the stack from arg compilation above.
-                # Just pass it through — no conversion needed.
-                # (args were already compiled and pushed to `bytes` above)
-
-            # PURE-6024: typeintersect(T1, T2) — C runtime function used in tuple convert.
-            # With unoptimized IR (may_optimize=false), the convert inlines typeintersect.
-            # Evaluate at compile time when both args are constant Type values.
-            elseif name === :typeintersect && length(args) >= 2 && args[1] isa Type && args[2] isa Type
-                # Evaluate at compile time — pure function with constant args
-                result_type = typeintersect(args[1], args[2])
-                bti2 = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, result_type)
-                global_get!(bti2, global_idx, AnyRef)
-                # Convert concrete ref to externref (Type values are externref in general context)
-                extern_convert_any!(bti2)
-                return append_builder!(b, bti2)
-
-            # PURE-6024: _tuple_error — error function in tuple convert dead code path.
-            # Emit throw (catchable) instead of unreachable (trap).
-            elseif name === :_tuple_error
-                bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                ensure_exception_tag!(ctx.mod)
-                global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
-                ctx.last_stmt_was_stub = true  # PURE-908
-                return append_builder!(b, bte)
-
-            # Julia 1.13: hash_bytes(ptr, len, seed, secret) replaces memhash foreigncall
-            # Trace ptr back to jl_string_ptr to find original string, then use FNV-1a helper
-            elseif name === :hash_bytes
-                bhb = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
-                str_arg = nothing
-                # args: [CodeInstance/MI, func_ref, ptr, len, seed, secret]
-                if length(expr.args) >= 3
-                    ptr_arg = expr.args[3]
-                    if ptr_arg isa Core.SSAValue
-                        ptr_stmt = ctx.code_info.code[ptr_arg.id]
-                        if ptr_stmt isa Expr && ptr_stmt.head === :foreigncall
-                            ptr_name = length(ptr_stmt.args) >= 1 ? extract_foreigncall_name(ptr_stmt.args[1]) : nothing
-                            if ptr_name === :jl_string_ptr && length(ptr_stmt.args) >= 6
-                                str_arg = ptr_stmt.args[6]
-                            end
-                        end
-                    end
-                end
-                if str_arg !== nothing
-                    hash_func_idx = get_or_create_string_hash_func!(ctx.mod, ctx.type_registry)
-                    emit_value!(bhb, str_arg, ctx,
-                        ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))  # parity(M9): funnel → DATA
-                    # len arg
-                    if length(expr.args) >= 4
-                        emit_value!(bhb, expr.args[4], ctx, I64)  # length i64
-                    else
-                        i64_const!(bhb, 0)
-                    end
-                    # seed arg (UInt64 → i32)
-                    if length(expr.args) >= 5
-                        seed_type = infer_value_type(expr.args[5], ctx)
-                        emit_value!(bhb, expr.args[5], ctx,
-                                    (seed_type === UInt64 || seed_type === Int64 || seed_type === Int) ? I64 : I32)
-                        if seed_type === UInt64 || seed_type === Int64 || seed_type === Int
-                            num!(bhb, Opcode.I32_WRAP_I64)
-                        end
-                    else
-                        i32_const!(bhb, 0)
-                    end
-                    call!(bhb, hash_func_idx, WasmValType[], WasmValType[])
-                else
-                    record_unsupported!(ctx, :unsupported_method,
-                        "hash_bytes source is not traceable to a Wasm string"; idx=idx, detail=expr)
-                    unreachable!(bhb)  # structural trap after recorded unsupported
                     ctx.last_stmt_was_stub = true
                 end
-                return append_builder!(b, bhb)
+
+            # Symbol(::String), typeintersect, _tuple_error: INVOKE_INTRINSICS registry.
 
             # ================================================================
             # Struct constructor via :invoke — immutable structs with only
@@ -3624,109 +2361,14 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     ctx.last_stmt_was_stub = true
                 end
 
-            elseif name === :padding && length(args) == 2 &&
-                   args[1] isa Type && args[2] isa Integer
-                # `padding(T,n)` is a compile-time SimpleVector constant.
-                bpad = _ctx_builder(ctx, "compile_invoke")
-                local _padding = Base.padding(args[1], Int(args[2]))
-                _emit_svec_values!(bpad, collect(_padding), ctx)
-                return append_builder!(b, bpad)
-
-            elseif name === :array_subpadding && length(args) == 2 &&
-                   args[1] isa Type && args[2] isa Type
-                # P4-stdlib (Statistics median): Base.array_subpadding is a pure
-                # compile-time layout predicate guarding reinterpret-based radix
-                # sort paths, and its args arrive as literal types — host-evaluate
-                # and emit the Bool constant (the stub trapped the whole
-                # IEEEFloatOptimization sort path at runtime).
-                bsub = _ctx_builder(ctx, "compile_invoke")   # discard pre-pushed args
-                i32_const!(bsub, Base.array_subpadding(args[1], args[2]) ? 1 : 0)
-                return append_builder!(b, bsub)
-
-            elseif name === :kwerr && length(args) == 2
-                # Base.kwerr(kw, f) always throws the exact closed-world
-                # MethodError(Core.kwcall, (kw, f), world). This is a real Julia
-                # exception payload, not a generic trap: catch-side isa/field
-                # inspection must observe the same object shape as native Julia.
-                bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
-                arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
-                all(T -> T isa Type, arg_julia_types) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
-                args_tuple_type = Tuple{arg_julia_types...}
-                args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
-                error_info === nothing && error("MethodError layout is unavailable")
-                args_info === nothing && error("kwerr argument tuple layout is unavailable")
-
-                emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
-                emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
-                emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
-                args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
-                args_layout isa StructType || error("kwerr argument tuple has no struct layout")
-                for (i, arg) in enumerate(args)
-                    ft = args_layout.fields[Int(wasm_field_idx(args_info, i)) + 1].valtype
-                    jt = arg_julia_types[i]
-                    emit_value!(bkw, arg, ctx, ft;
-                                from_julia=isconcretetype(jt) ? jt : nothing)
-                end
-                struct_new!(bkw, args_info.wasm_type_idx)
-                i64_const!(bkw, reinterpret(Int64, UInt64(Base.get_world_counter())))
-                struct_new!(bkw, error_info.wasm_type_idx)
-                global_set!(bkw, exn_global)
-                global_get!(bkw, exn_global, AnyRef)
-                ref_null!(bkw, ExternRef)
-                throw_!(bkw, 0; inputs=WasmValType[AnyRef, ExternRef])
-                return append_builder!(b, bkw)
-
-            elseif name === :throw_inexacterror && length(args) >= 3
-                # Core.throw_inexacterror(func, to, values...) is precisely
-                # throw(InexactError(func, (to, values...))). Preserve both
-                # fields so catch-side inspection agrees with Julia.
-                bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
-                ensure_exception_tag!(ctx.mod)
-                exn_global = ensure_exception_global!(ctx.mod)
-                error_info = register_struct_type!(ctx.mod, ctx.type_registry, InexactError)
-                payload = args[2:end]
-                payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
-                all(T -> T isa Type, payload_types) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
-                payload_type = Tuple{payload_types...}
-                payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
-                error_info === nothing && error("InexactError layout is unavailable")
-                payload_info === nothing && error("InexactError argument tuple layout is unavailable")
-
-                emit_struct_prefix!(bie, ctx.type_registry, InexactError, error_info)
-                emit_value!(bie, args[1], ctx,
-                            ctx.mod.types[error_info.wasm_type_idx + 1].fields[
-                                Int(wasm_field_idx(error_info, 1)) + 1].valtype;
-                            from_julia=Symbol)
-                emit_struct_prefix!(bie, ctx.type_registry, payload_type, payload_info)
-                payload_layout = ctx.mod.types[payload_info.wasm_type_idx + 1]
-                payload_layout isa StructType || error("InexactError payload has no struct layout")
-                for (i, value) in enumerate(payload)
-                    ft = payload_layout.fields[Int(wasm_field_idx(payload_info, i)) + 1].valtype
-                    jt = payload_types[i]
-                    emit_value!(bie, value, ctx, ft;
-                                from_julia=isconcretetype(jt) ? jt : nothing)
-                end
-                struct_new!(bie, payload_info.wasm_type_idx)
-                struct_new!(bie, error_info.wasm_type_idx)
-                global_set!(bie, exn_global)
-                global_get!(bie, exn_global, AnyRef)
-                ref_null!(bie, ExternRef)
-                throw_!(bie, 0; inputs=WasmValType[AnyRef, ExternRef])
-                return append_builder!(b, bie)
-
+            # padding, kwerr, throw_inexacterror: INVOKE_INTRINSICS registry
+            # (R20 migration). array_subpadding/unalias already registered above.
             else
                 # Unknown method — codegen has no translation for this invoke target.
                 # This records a source-attributed diagnostic and emits dart's validating
                 # unsupported-path trap; no permissive mode exists.
                 # which lets compilation succeed for paths that never reach this method.
-                haskey(ENV, "WT_TRACE_STUBARGS") && println(stderr, "STUBARGS ", name, " args=", repr(args))
+                tracing(:stubargs) && println(stderr, "STUBARGS ", name, " args=", repr(args))
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=expr)
@@ -3734,7 +2376,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx)
                 unreachable!(bunk)
                 append_builder!(fb, bunk)
-                ctx.last_stmt_was_stub = true  # PURE-908
+                ctx.last_stmt_was_stub = true
             end
         end
     end

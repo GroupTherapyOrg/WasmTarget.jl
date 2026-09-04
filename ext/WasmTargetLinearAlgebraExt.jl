@@ -21,7 +21,7 @@
 module WasmTargetLinearAlgebraExt
 
 using WasmTarget
-using LinearAlgebra
+using LinearAlgebra: LinearAlgebra
 using Base.Experimental: @overlay
 
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.dot(x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}} =

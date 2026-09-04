@@ -146,9 +146,9 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
 
     # Get string array type for string operations
     str_type_idx = get_string_array_type!(mod, type_registry)
-    # parity(M9): params are the CLASSED string — every string push reads through
+    # parity(class_info.dart:18 FieldIndex): params are the CLASSED string — every string push reads through
     # to the DATA array (dart: methods read the class's array field).
-    # parity(M9): string-returning bodies publish the CLASSED string. The caller-visible
+    # parity(class_info.dart:18 FieldIndex): string-returning bodies publish the CLASSED string. The caller-visible
     # result type is $JlString; the array is saved through a dedicated extra local.
     function _wrap_result_str!(bb, scratch_idx)
         builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
@@ -393,71 +393,19 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_eq
-        # str_eq(a::String, b::String)::Bool
-        # Element-by-element comparison (not ref.eq identity check)
-        # local 0 = a (array ref), local 1 = b (array ref), local 2 = i (loop counter)
-        push!(extra_locals, I32)  # local 2: loop counter i
+        # str_eq(a::String, b::String)::Bool — the shared strings.jl core
+        # (reused, not re-derived) does the actual length/element comparison.
+        # local 0 = a (array ref), local 1 = b (array ref)
+        # extra locals: local 2 = len, local 3 = i (loop counter)
+        push!(extra_locals, I32)  # local 2: len
+        push!(extra_locals, I32)  # local 3: i
+        len_local = 2 + length(extra_locals) - 2
+        i_local = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, len_local, I32)
+        builder_set_local_type!(b, i_local, I32)
 
-        # Compare lengths first: if a.len != b.len, return false
-        local_get!(b, 0)  # a
-        array_len!(b)
-        local_get!(b, 1)  # b
-        array_len!(b)
-        num!(b, Opcode.I32_NE)
-        if_!(b, UInt8(I32))  # result type i32
-        # Lengths differ → return 0 (false)
-        i32_const!(b, 0)
-        else_!(b)
+        _emit_string_equal_core!(b, str_type_idx, 0, 1, len_local, i_local)
 
-        # Lengths equal — loop to compare elements
-        # i = 0
-        i32_const!(b, 0)
-        local_set!(b, 2)  # i = 0
-
-        # block $exit (result i32) — for early return of false
-        exit_label = block!(b, UInt8(I32))  # result type i32
-
-        # loop $loop (void)
-        loop_label = loop!(b)  # void block type
-
-        # if i >= a.len → break out with true (all matched)
-        local_get!(b, 2)  # i
-        local_get!(b, 0)  # a
-        array_len!(b)
-        num!(b, Opcode.I32_GE_U)
-        if_!(b)  # void
-        # Done — push 1 (true) and break out of block
-        i32_const!(b, 1)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # Compare a[i] vs b[i] (array.get_u for packed i8)
-        local_get!(b, 0)  # a
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        local_get!(b, 1)  # b
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        num!(b, Opcode.I32_NE)
-        if_!(b)  # void
-        # Mismatch — push 0 (false) and break out of block
-        i32_const!(b, 0)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # i++
-        local_get!(b, 2)  # i
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 2)  # i = i + 1
-
-        # br $loop (continue)
-        br!(b, loop_label)
-        end_block!(b)  # end loop
-        unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
-        end_block!(b)  # end block
-
-        end_block!(b)  # end if/else (lengths equal)
         end_block!(b)  # end function
         return (builder_code(b), extra_locals)
 
@@ -486,11 +434,11 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_concat
-        # str_concat(a::String, b::String)::String
-        # Concatenate two UTF-8 byte arrays into a new array
+        # str_concat(a::String, b::String)::String — the shared strings.jl core
+        # (reused, not re-derived) does the actual array.new_default + array.copy work;
+        # this arm only unwraps the CLASSED params into DATA-array locals for it.
         # local 0 = a (array ref), local 1 = b (array ref)
-        # extra locals: local 2 = len_a, local 3 = result (array ref)
-        # parity(M9): params are CLASSED strings — unwrap once into array locals
+        # parity(class_info.dart:18 FieldIndex): params are CLASSED strings — unwrap once into array locals
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
         _a_data = 2 + length(extra_locals) - 2
@@ -502,51 +450,28 @@ function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_regi
         struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
                     ConcreteRef(UInt32(str_type_idx), true))
         local_set!(b, _b_data)
-        push!(extra_locals, I32)  # len_a
+
+        push!(extra_locals, I32)  # offset
+        push!(extra_locals, I32)  # total_len
         str_ref_type = ConcreteRef(str_type_idx, true)
-        push!(extra_locals, str_ref_type)  # local 3: result array ref
-        builder_set_local_type!(b, 4, I32)
-        builder_set_local_type!(b, 5, str_ref_type)
+        push!(extra_locals, str_ref_type)  # result array ref
+        offset_local = 2 + length(extra_locals) - 3
+        total_len_local = 2 + length(extra_locals) - 2
+        result_local = 2 + length(extra_locals) - 1
+        builder_set_local_type!(b, offset_local, I32)
+        builder_set_local_type!(b, total_len_local, I32)
+        builder_set_local_type!(b, result_local, str_ref_type)
 
-        # len_a = array.len(a)
-        local_get!(b, _a_data)  # a data
-        array_len!(b)
-        local_set!(b, 4)  # len_a
+        _emit_string_concat_core!(b, str_type_idx, Int[_a_data, _b_data],
+                                  offset_local, total_len_local, result_local)   # leaves result on the stack
 
-        # result = array.new_default(len_a + array.len(b))
-        local_get!(b, 4)  # len_a
-        local_get!(b, _b_data)  # b data
-        array_len!(b)
-        num!(b, Opcode.I32_ADD)
-        array_new_default!(b, str_type_idx)
-        local_set!(b, 5)  # result
-
-        # array.copy(result, 0, a, 0, len_a)
-        local_get!(b, 5)  # dst: result
-        i32_const!(b, 0)  # dst_offset: 0
-        local_get!(b, _a_data)  # src: a data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 4)  # len: len_a
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # array.copy(result, len_a, b, 0, array.len(b))
-        local_get!(b, 5)  # dst: result
-        local_get!(b, 4)  # dst_offset: len_a
-        local_get!(b, _b_data)  # src: b data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, _b_data)  # b data
-        array_len!(b)  # len: array.len(b)
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # return result
-        local_get!(b, 5)  # result
         push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
         _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
         end_block!(b)
         return (builder_code(b), extra_locals)
 
     elseif fname === :str_substr
-        # WBUILD-8001: str_substr intrinsic body not implemented.
+        # str_substr intrinsic body not implemented.
         # The inline version at call sites properly implements this using
         # array.new + array.copy. This path is only hit when str_substr is
         # called as a standalone function (not inlined at call site).
@@ -598,6 +523,53 @@ function _ir_call_has_explicit_io(stmt::Expr, code_info::Core.CodeInfo)::Bool
         Any
     end
     return first_type isa Type && first_type <: IO
+end
+
+"""
+    _check_import_stub_external_types!(mod, registry, name, arg_types, wasm_idx, return_type)
+
+Validate an `import_stubs` entry against dart2wasm's host-boundary restriction
+(`translate_external_type`, `parity(translator.dart:1239 translateExternalType)`).
+The host declares the import's REAL wasm signature directly via `add_import!`; the
+Julia stub's `arg_types`/`return_type` are a SEPARATE declaration used only for
+call-site resolution (`register_function!` below) — nothing previously checked
+that the two agree. Because call-site coercion derives its target wasm type from
+these SAME Julia types (never from the import's actual declared signature), any
+divergence produces invalid wasm bytes at the call site with no diagnostic naming
+the parameter — this closes that gap at registration time, loudly, before any
+call is compiled. Every current caller (WasmMakie/Snapshot canvas providers:
+`Float64`/`Int64` only) already agrees with `translate_external_type` byte-for-byte.
+Skipped when `wasm_idx` is not an import index (defensive; `import_stubs` entries
+are host imports by contract).
+"""
+function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegistry,
+                                             name::AbstractString, arg_types::Tuple,
+                                             wasm_idx::Integer, return_type::Type)
+    Int(wasm_idx) < num_imported_funcs(mod) || return nothing
+    ft = _function_type(mod, Int(wasm_idx))
+    required_params = WasmValType[translate_external_type(T, mod, registry) for T in arg_types]
+    if length(required_params) != length(ft.params)
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" declares $(length(ft.params)) wasm parameter(s) but the " *
+            "Julia stub signature $(arg_types) has $(length(required_params)) — the host " *
+            "boundary signature and the call-site Julia arg types must agree in arity",
+            nothing, arg_types)))
+    end
+    for (i, (required, declared, T)) in enumerate(zip(required_params, ft.params, arg_types))
+        required == declared || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" parameter $(i) (::$(T)) crosses the host boundary as " *
+            "$(declared) but dart2wasm's external-type restriction (translateExternalType, " *
+            "translator.dart:1239) requires $(required) for this Julia type",
+            nothing, T)))
+    end
+    required_results = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+                        WasmValType[translate_external_type(return_type, mod, registry)]
+    required_results == ft.results || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+        "import \"$(name)\" returns $(ft.results) but dart2wasm's external-type " *
+        "restriction (translateExternalType, translator.dart:1239) requires $(required_results) " *
+        "for return type ::$(return_type)",
+        nothing, return_type)))
+    return nothing
 end
 
 """
@@ -659,24 +631,25 @@ function _compile_closed_world_plan(functions::Vector;
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
-    # PURE-9026: Create base struct type FIRST — all other structs will be subtypes
+    # Create base struct type FIRST — all other structs will be subtypes
     get_base_struct_type!(mod, type_registry)
 
     # Pre-register import stubs at their import indices in func_registry.
     # This enables compiled functions to call imports via cross-function call resolution.
     for entry in import_stubs
         func_ref, name, arg_types, wasm_idx, return_type = entry
+        _check_import_stub_external_types!(mod, type_registry, name, arg_types, wasm_idx, return_type)
         register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
     end
 
-    # PURE-325: Pre-register numeric box types for all common numeric Wasm types.
+    # Pre-register numeric box types for all common numeric Wasm types.
     # These are needed when functions with ExternRef return types (heterogeneous Unions)
     # need to return numeric values. Pre-registering avoids compilation order issues
     # where the caller's isa() check is compiled before the callee's box type exists.
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
-    # PURE-9028: Pre-register BoxedNothing type
+    # Pre-register BoxedNothing type
     get_nothing_box_type!(mod, type_registry)
 
     # Normalize input: ensure each entry is (func, arg_types, name)
@@ -732,7 +705,7 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
+    # Scan all functions for println/print/show usage and add IO imports if needed
     needs_io = false
     for (f, arg_types, fname) in normalized
         try
@@ -761,7 +734,7 @@ function _compile_closed_world_plan(functions::Vector;
         clear_io_imports!()
     end
 
-    # PURE-9043: Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
+    # Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
     needs_rng = false
     for (f, arg_types, fname) in normalized
         try
@@ -794,7 +767,7 @@ function _compile_closed_world_plan(functions::Vector;
 
     for (f, arg_types, name) in normalized
         # Check if this is a closure (function with captured variables)
-        # march16: a TYPE-KEYED entry (f IS the closure DataType — capturing
+        # A TYPE-KEYED entry (f IS the closure DataType — capturing
         # closures have no instance) resolves IR by ftype, and the closure type
         # is f itself, not typeof(f).
         local _type_keyed_closure = f isa DataType && is_closure_type(f)
@@ -839,52 +812,12 @@ function _compile_closed_world_plan(functions::Vector;
             end
         end
 
-        # Register types used in parameters (skip WasmGlobal)
+        # Register the signature's types (skip WasmGlobal)
         for (i, T) in enumerate(arg_types)
-            if i in global_args
-                continue
-            end
-            if is_closure_type(T)
-                register_closure_type!(mod, type_registry, T)
-            elseif T === Symbol
-                # Symbol is represented as a string (byte array), not a struct
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                # Vector (1-D only — matrices use register_matrix_type! below)
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: AbstractVector && T isa DataType
-                # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: AbstractArray
-                # Multi-dimensional arrays (Matrix, etc.) - register as struct
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
+            i in global_args && continue
+            register_reachable_type!(mod, type_registry, T)
         end
-
-        # Register return type
-        if is_closure_type(return_type)
-            register_closure_type!(mod, type_registry, return_type)
-        elseif return_type === Symbol
-            # Symbol is represented as a string (byte array), not a struct
-            get_string_struct_type!(mod, type_registry)
-        elseif is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            # Vector (1-D only — matrices use register_matrix_type! below)
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractVector && return_type isa DataType
-            # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractArray
-            # Multi-dimensional arrays (Matrix, etc.) - register as struct
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
+        register_reachable_type!(mod, type_registry, return_type)
 
         push!(function_data, (f, arg_types, name, code_info, return_type, global_args, is_closure))
     end
@@ -912,13 +845,13 @@ function _compile_closed_world_plan(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # PURE-9063: Create $JlType hierarchy types FIRST (march5 reorder: the closed-world
+    # Create $JlType hierarchy types FIRST (the closed-world
     # collector below registers structs whose DataType-typed fields must resolve to
     # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
     # which the Any-only patch pass below can't fix)
     create_jl_type_hierarchy!(mod, type_registry)
 
-    # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
+    # Census F2 CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
     # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
     # function's typed IR and COLLECT every reachable concrete struct / union member
     # so the DFS below numbers the closed world (real [low, high] ranges for isa/
@@ -928,51 +861,26 @@ function _compile_closed_world_plan(functions::Vector;
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
     _reachable = _collect_reachable_ir_types(function_data)
 
-    # PURE-9025: Assign DFS type IDs (the closed world = registered + reachable)
+    # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)
 
-    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
+    # Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
 
-    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
+    # Patch struct types registered before JlType hierarchy existed.
     # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
     # Now that the hierarchy exists, patch them to AnyRef.
     patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
 
-    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
+    # Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # PURE-9065: Pre-create string hash helper function if any function uses memhash.
-    # This must happen BEFORE function index assignment, because adding functions during
-    # body compilation would shift indices and break cross-function calls.
-    needs_string_hash = false
-    for (_, _, _, code_info, _, _, _) in function_data
-        if code_info !== nothing
-            for stmt in code_info.code
-                if stmt isa Expr && stmt.head === :foreigncall && length(stmt.args) >= 1
-                    fc_sym = extract_foreigncall_name(stmt.args[1])
-                    if fc_sym === :memhash
-                        needs_string_hash = true
-                        break
-                    end
-                end
-                # Julia 1.13: hash_bytes replaces memhash foreigncall
-                if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
-                    callee = stmt.args[2]
-                    callee_name = callee isa GlobalRef ? callee.name : nothing
-                    if callee_name === :hash_bytes
-                        needs_string_hash = true
-                        break
-                    end
-                end
-            end
-        end
-        needs_string_hash && break
-    end
-    if needs_string_hash
-        get_or_create_string_hash_func!(mod, type_registry)
-    end
+    # String hashing needs no pre-created helper function: hash(::String,::UInt)/
+    # hash(::SubString{String},::UInt) are overlaid with a pure-Julia,
+    # bit-exact-with-native port of the native algorithm (interpreter.jl,
+    # "String hash Overlay") that compiles through the ordinary :invoke path
+    # like any other Julia function — no special-cased wasm helper needed.
 
     # Pre-create the shared utf8proc property table/helper before function-index
     # assignment. Both category and character width read the same packed byte.
@@ -993,7 +901,7 @@ function _compile_closed_world_plan(functions::Vector;
     end
     needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
 
-    # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
+    # LAZY constants: collect long (>64B) String/Symbol literals and pre-create
     # their init functions NOW — the same index-freeze constraint (functions cannot be
     # added during body compilation without shifting indices). dart constants.dart:454.
     for (_, _, _, code_info, _, _, _) in function_data
@@ -1017,7 +925,7 @@ function _compile_closed_world_plan(functions::Vector;
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
-    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
+    n_existing = length(mod.functions)  # includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
@@ -1033,7 +941,7 @@ function _compile_closed_world_plan(functions::Vector;
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
 
-    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
+    # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).
@@ -1072,13 +980,13 @@ function _compile_closed_world_plan(functions::Vector;
 
 
 
-    # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
+    # Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
-        # parity(M8.2): pack single-axis selectors into the ONE dart table
+        # parity(dispatch_table.dart:501 DispatchTable.build): pack single-axis selectors into the ONE dart table
         pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
@@ -1094,7 +1002,7 @@ function _compile_closed_world_plan(functions::Vector;
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
 
-        # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
+        # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
         dispatch_dt = nothing
         if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
@@ -1106,10 +1014,10 @@ function _compile_closed_world_plan(functions::Vector;
             # Use the intrinsic body directly
             body, locals = intrinsic_body
         elseif dispatch_dt !== nothing
-            # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
+            # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
             if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
-                # parity(M8.2): the dart virtual call — classId + offset + call_indirect
+                # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
                 body, locals = generate_selector_caller_body(
                     dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
                     caller_return_type=return_type, mod=mod, type_registry=type_registry)
@@ -1168,20 +1076,20 @@ function _compile_closed_world_plan(functions::Vector;
         add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
-    # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
+    # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
     # This ensures entry.target_idx values (from func_registry) point to correct indices.
     if !isempty(dispatch_registry.tables)
         emit_dispatch_wrappers!(mod, type_registry, dispatch_registry)
     end
 
-    # PURE-9062 Phase 2: Add overlay wrapper functions
+    # Phase 2: Add overlay wrapper functions
 
-    # PURE-4149: Populate DataType/TypeName fields for type constant globals.
+    # Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
 
-    # PURE-9040/9042/9043: Clear module-level state after compilation
+    # Clear module-level state after compilation
     clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
@@ -1815,7 +1723,7 @@ end
 """
     _collect_reachable_ir_types(function_data) -> Set{DataType}
 
-census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
+census F2 — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
 number every class of the component once, before codegen). Walks every function's
 typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
 types reachable from the IR so `assign_type_ids!` numbers the whole world in one
