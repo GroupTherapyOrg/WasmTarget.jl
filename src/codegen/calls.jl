@@ -1117,7 +1117,7 @@ end
 Extracted handler for flipsign_int. Modifies `bytes` in-place; returns the
 pushed result's WasmValType (the structref for is_128bit — `struct_rt` was
 already computed here for the locals below, so the caller reuses it instead
-of a second `julia_to_wasm_type_concrete` call; a plain I32/I64 otherwise).
+of a second `get_concrete_wasm_type` call; a plain I32/I64 otherwise).
 """
 function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::WasmValType
     # flipsign_int(x, y) returns -x if y < 0, otherwise x

@@ -205,9 +205,8 @@ const L116_ALLOWLIST = Dict{String,Int}(
 const METRICS = [
     "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
-        () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
-                          exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
+    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — the ONE type chain's re-derivation floor (M2 → pre-emit; julia_to_wasm_type_concrete was folded into it in Phase 4.1 and no longer exists)",
+        () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
@@ -1492,6 +1491,19 @@ const LOCKS = [
                         "throw(located_internal_error(ctx, idx, err))"]
             callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")
             count(p -> !occursin(p, src), required) + abs(callers - 1)
+        end),
+    "L121_retired_names_absent_from_src" => ("a symbol this campaign deleted must not appear ANYWHERE in src — comments and docstrings included. A reference to a function that no longer exists sends the next reader (human or agent) looking for it; the cloud review of 2026-09-04 spent a finding on exactly that (a docstring naming julia_to_wasm_type_concrete, folded into get_concrete_wasm_type in Phase 4.1). Historical records in dev/ and test/ ledgers are exempt — they document what WAS (locked 2026-09-04)",
+        () -> begin
+            retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
+                       "string_hash_func_idx", "_wasm_string_fnv1a",
+                       "resolve_through_dead_boundscheck"]
+            n = 0
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                src = read(joinpath(dir, f), String)
+                n += count(name -> occursin(name, src), retired)
+            end
+            n
         end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
