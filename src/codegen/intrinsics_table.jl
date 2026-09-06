@@ -73,6 +73,18 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (F64, F64, :copysign_float) => BinOpEmit(Opcode.F64_COPYSIGN, F64),
     (F64, F64, :min_float) => BinOpEmit(Opcode.F64_MIN, F64),
     (F64, F64, :max_float) => BinOpEmit(Opcode.F64_MAX, F64),
+    # `@fastmath` variants (Base.FastMath.*_float_fast, aliases of the Core
+    # intrinsics): wasm has no fast-math flags, so they lower to the SAME ops.
+    (F64, F64, :add_float_fast) => BinOpEmit(Opcode.F64_ADD, F64),
+    (F64, F64, :sub_float_fast) => BinOpEmit(Opcode.F64_SUB, F64),
+    (F64, F64, :mul_float_fast) => BinOpEmit(Opcode.F64_MUL, F64),
+    (F64, F64, :div_float_fast) => BinOpEmit(Opcode.F64_DIV, F64),
+    (F64, F64, :eq_float_fast)  => BinOpEmit(Opcode.F64_EQ,  I32),
+    (F64, F64, :ne_float_fast)  => BinOpEmit(Opcode.F64_NE,  I32),
+    (F64, F64, :lt_float_fast)  => BinOpEmit(Opcode.F64_LT,  I32),
+    (F64, F64, :le_float_fast)  => BinOpEmit(Opcode.F64_LE,  I32),
+    (F64, F64, :min_float_fast) => BinOpEmit(Opcode.F64_MIN, F64),
+    (F64, F64, :max_float_fast) => BinOpEmit(Opcode.F64_MAX, F64),
     # ── f32 × f32 ────────────────────────────────────────────────────────
     (F32, F32, :add_float) => BinOpEmit(Opcode.F32_ADD, F32),
     (F32, F32, :sub_float) => BinOpEmit(Opcode.F32_SUB, F32),
@@ -82,6 +94,16 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (F32, F32, :ne_float)  => BinOpEmit(Opcode.F32_NE,  I32),
     (F32, F32, :lt_float)  => BinOpEmit(Opcode.F32_LT,  I32),
     (F32, F32, :le_float)  => BinOpEmit(Opcode.F32_LE,  I32),
+    (F32, F32, :add_float_fast) => BinOpEmit(Opcode.F32_ADD, F32),
+    (F32, F32, :sub_float_fast) => BinOpEmit(Opcode.F32_SUB, F32),
+    (F32, F32, :mul_float_fast) => BinOpEmit(Opcode.F32_MUL, F32),
+    (F32, F32, :div_float_fast) => BinOpEmit(Opcode.F32_DIV, F32),
+    (F32, F32, :eq_float_fast)  => BinOpEmit(Opcode.F32_EQ,  I32),
+    (F32, F32, :ne_float_fast)  => BinOpEmit(Opcode.F32_NE,  I32),
+    (F32, F32, :lt_float_fast)  => BinOpEmit(Opcode.F32_LT,  I32),
+    (F32, F32, :le_float_fast)  => BinOpEmit(Opcode.F32_LE,  I32),
+    (F32, F32, :min_float_fast) => BinOpEmit(Opcode.F32_MIN, F32),
+    (F32, F32, :max_float_fast) => BinOpEmit(Opcode.F32_MAX, F32),
 )
 
 """

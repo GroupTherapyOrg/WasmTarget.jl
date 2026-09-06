@@ -854,7 +854,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                     # Check if used as argument to boolean/comparison/arithmetic intrinsics
                     if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
                         func = use_stmt.args[1]
-                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
+                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics, Base.FastMath)
                             fname = func.name
                             is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
                             is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
@@ -871,7 +871,12 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                                                     :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
                                                     :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
                                                     :flipsign_int, :copysign_float,
-                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                                                    :eq_float, :ne_float, :lt_float, :le_float,
+                                                    # `@fastmath` forms (Base.FastMath aliases)
+                                                    :add_float_fast, :sub_float_fast, :mul_float_fast,
+                                                    :div_float_fast, :neg_float_fast, :sqrt_llvm_fast,
+                                                    :min_float_fast, :max_float_fast,
+                                                    :eq_float_fast, :ne_float_fast, :lt_float_fast, :le_float_fast)
                             if is_bool_op || is_cmp_op || is_arith_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === phi_ssa_val
@@ -1542,7 +1547,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                     # Check if used as argument to comparison/boolean intrinsics
                     if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
                         func = use_stmt.args[1]
-                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
+                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics, Base.FastMath)
                             fname = func.name
                             # Boolean ops that take boolean/i32 operands
                             is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
@@ -1562,7 +1567,12 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                                                     :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
                                                     :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
                                                     :flipsign_int, :copysign_float,
-                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                                                    :eq_float, :ne_float, :lt_float, :le_float,
+                                                    # `@fastmath` forms (Base.FastMath aliases)
+                                                    :add_float_fast, :sub_float_fast, :mul_float_fast,
+                                                    :div_float_fast, :neg_float_fast, :sqrt_llvm_fast,
+                                                    :min_float_fast, :max_float_fast,
+                                                    :eq_float_fast, :ne_float_fast, :lt_float_fast, :le_float_fast)
                             if is_bool_op || is_cmp_op || is_arith_op
                                 for arg in use_stmt.args[2:end]
                                     if arg === ssa_val
