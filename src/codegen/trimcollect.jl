@@ -529,6 +529,15 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
     return out
 end
 
+# Julia 1.13.0-rc4 added a REQUIRED `external_linkage::Bool` keyword to
+# Compiler.compile! (typeinfer.jl): `true` skips a CodeInstance already compiled
+# into the sysimage and links to it instead — juliac's case. WasmTarget has no
+# image to link against; every reachable method must enter the closed world, so
+# the value is `false` — the ClosedWorld.tla Completeness invariant, stated as a
+# keyword. Keyed on the method's actual signature, not on a version number.
+const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compile!))) ?
+    (; external_linkage = false) : (;)
+
 # formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
 # below always collects exactly the methods reachable from the roots, never stops
 # early, and never silently drops a reachable method whose specialization fails.
@@ -542,8 +551,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     codeinfos = Any[]
     workqueue = CC.CompilationQueue(; interp)
     append!(workqueue, entries)
-    CC.compile!(codeinfos, workqueue; invokelatest_queue)
-    CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
+    CC.compile!(codeinfos, workqueue; invokelatest_queue, _COMPILE_KW...)
+    CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue, _COMPILE_KW...)
     # Imports are typed call-graph leaves. Julia inference may inspect their
     # native fallback bodies, but those bodies and their dependencies do not
     # belong to the Wasm component. Cut them before invoke completion and
@@ -600,8 +609,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
             push!(fresh_wq, resolved_mi)
         end
-        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq)
-        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq)
+        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
+        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
         for k in 1:2:length(fresh_ci)
             (fresh_ci[k] isa Core.CodeInstance &&
              fresh_ci[k + 1] isa Core.CodeInfo) || continue
