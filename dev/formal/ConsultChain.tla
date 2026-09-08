@@ -35,18 +35,16 @@
 (*                       -- L104 (test/parity_ratchet.jl:1276) locks that no  *)
 (*                       `is_func(func, :key)` ladder arm exists anywhere in  *)
 (*                       codegen for any key these five own.                 *)
-(*   3. EGAL_ARM       -- `is_func(func, :(===))` / `:(!==)` fallback arm,   *)
-(*                       calls.jl:4180-4183, textually right after the       *)
-(*                       conversions registry, matching the real order.      *)
-(*   5. LATE_ARMS      -- the large remaining bucket: the rest of the        *)
-(*                       `is_func` chain plus the generic/dynamic call path  *)
+(*   3. LATE_ARMS      -- the large remaining bucket: the rest of the        *)
+(*                       identity-checked chain plus the generic/dynamic     *)
+(*                       call path                                          *)
 (*                       (getfield/getproperty variants, dynamic closure     *)
 (*                       dispatch, apply-iterate reduce, ...), folded into    *)
 (*                       one funnel -- none of THIS model's keys are its      *)
 (*                       intended prey; it exists so the terminal REJECT is   *)
 (*                       reached only after it declines, and so the Broken    *)
 (*                       instance has somewhere to plant a stale ladder arm.  *)
-(*   6. REJECT         -- the terminal: `record_unsupported!` + `unreachable!` *)
+(*   4. REJECT         -- the terminal: `record_unsupported!` + `unreachable!` *)
 (*                       (calls.jl:5253-5261, "unknown function call (no      *)
 (*                       handler arm)"). A loud, defined trap -- never a      *)
 (*                       silent fall-through.                                 *)
@@ -121,16 +119,16 @@ FallbackKeys  == {"getglobal_const", "getglobal_typename",
                    "egal_string", "egal_generic"}
 Keys == HardTableKeys \cup FallbackKeys \cup {"unknown_call"}
 
-Funnels == {"BUILTIN", "TABLE", "EGAL_ARM", "LATE_ARMS"}
+Funnels == {"BUILTIN", "TABLE", "LATE_ARMS"}
 
 (* Real program order (calls.jl: the single builtins-funnel consult runs     *)
-(* first, right after callee resolution, the five parity( tables next, the   *)
-(* egal fallback arm after them, everything else last before the terminal).  *)
-RealOrder == <<"BUILTIN", "TABLE", "EGAL_ARM", "LATE_ARMS">>
+(* first, right after callee resolution, the five parity( tables next,       *)
+(* everything else last before the terminal).                                *)
+RealOrder == <<"BUILTIN", "TABLE", "LATE_ARMS">>
 
 (* An alternate order used ONLY to probe claim (4), order-independence -- it  *)
-(* is never how the real compiler runs; it swaps EGAL_ARM ahead of BUILTIN.  *)
-AltOrder == <<"EGAL_ARM", "BUILTIN", "TABLE", "LATE_ARMS">>
+(* is never how the real compiler runs; it fully reverses the chain.         *)
+AltOrder == <<"LATE_ARMS", "TABLE", "BUILTIN">>
 
 ----------------------------------------------------------------------------
 (* Each funnel's claimed keys, read from source:                             *)
@@ -138,23 +136,20 @@ AltOrder == <<"EGAL_ARM", "BUILTIN", "TABLE", "LATE_ARMS">>
 (*    the isconst case) and "getglobal_typename" (the SAME entry's second     *)
 (*    guard, module_owner === name_owner -- a SPECIFIC, independently         *)
 (*    discriminating test, genuinely disjoint from the isconst case, tried    *)
-(*    after it in the entry's own guard order), and "egal_string"             *)
-(*    (`_lower_egal_early!` hits the String/Symbol case).                     *)
+(*    after it in the entry's own guard order), and BOTH egal shapes:         *)
+(*    "egal_string" (`_lower_egal_early!`, the String/Symbol guard) and       *)
+(*    "egal_generic" (`_lower_egal!`'s second guard, the width-keyed          *)
+(*    comparison that emits its own operands -- Phase 12F: it was the         *)
+(*    `is_func(func, :(===))` ladder arm, and folding it into the SAME entry  *)
+(*    is what closes the order-sensitivity finding recorded below).           *)
 (*  - TABLE claims every HardTableKeys entry (its five registries between      *)
 (*    them cover add/copysign/not_int-on-bool/ctlz/int128/checked/sext).      *)
-(*  - EGAL_ARM's guard (calls.jl:4180/4183) is JUST `is_func(func,:(===))` /   *)
-(*    `:(!==))` -- unconditional, with NO re-discrimination of the string/     *)
-(*    typeof/nothing cases BUILTIN already special-cases. Read in isolation,  *)
-(*    its predicate covers "egal_string" TOO, not only "egal_generic" -- it   *)
-(*    is only ever reached for "egal_generic" in practice because BUILTIN     *)
-(*    runs first and returns early on "egal_string". This is exactly the      *)
-(*    asymmetry claim (4) asks to surface.                                    *)
 (*  - LATE_ARMS claims nothing among these keys, unless StaleArmBug adds the   *)
 (*    forbidden extra claim on "copysign_f32".                                *)
 BaseClaims(f) ==
-    CASE f = "BUILTIN"       -> {"getglobal_const", "getglobal_typename", "egal_string"}
+    CASE f = "BUILTIN"       -> {"getglobal_const", "getglobal_typename",
+                                  "egal_string", "egal_generic"}
       [] f = "TABLE"         -> HardTableKeys
-      [] f = "EGAL_ARM"      -> {"egal_string", "egal_generic"}
       [] f = "LATE_ARMS"     -> {}
 
 Claims(f) ==
@@ -235,34 +230,35 @@ TableExclusivity ==
     AllDone =>
         \A k \in HardTableKeys : Cardinality({f \in Funnels : k \in Claims(f)}) <= 1
 
-(* Sanity check that the REAL order resolves the FallbackKeys asymmetry       *)
-(* correctly despite BUILTIN and EGAL_ARM's raw predicates overlapping on     *)
-(* "egal_string" (see BaseClaims's header comment above). *)
+(* Every FallbackKey is owned by exactly one funnel, BUILTIN, and reached     *)
+(* through one of its own guards (see BaseClaims's header comment above).     *)
 CorrectFallbackResolution ==
     AllDone =>
         /\ terminal["getglobal_const"]    = "BUILTIN"
         /\ terminal["egal_string"]        = "BUILTIN"
         /\ terminal["getglobal_typename"] = "BUILTIN"
-        /\ terminal["egal_generic"]       = "EGAL_ARM"
+        /\ terminal["egal_generic"]       = "BUILTIN"
 
-(* (4) ORDER-(IN)DEPENDENCE. Given EXCLUSIVITY, the terminal cannot depend on  *)
-(* consult order -- trivially, since at most one funnel's predicate can ever   *)
-(* match. TableOrderInvariance checks exactly that for the hard-exclusive      *)
-(* class. But BUILTIN and EGAL_ARM are NOT mutually exclusive at the raw-      *)
-(* predicate level on "egal_string" (EGAL_ARM's guard alone would also claim   *)
-(* it) -- correctness for that key rests on program ORDER (BUILTIN first,      *)
-(* returning early), not on disjoint predicates. OrderSensitivityWitness       *)
-(* proves that dependency exists: under AltOrder (EGAL_ARM before BUILTIN),    *)
-(* "egal_string" resolves to a DIFFERENT funnel than under RealOrder. This is  *)
-(* the FINDING claim (4) asked this model to surface, made precise: L104's     *)
-(* hard exclusivity governs the TABLE keys only; the BUILTIN/is_func-fallback  *)
-(* pairing (getglobal, egal) is safe ONLY because of a program-order            *)
-(* invariant that no lock currently checks.                                    *)
+(* (4) ORDER-INDEPENDENCE, now TOTAL. Given EXCLUSIVITY the terminal cannot   *)
+(* depend on consult order -- trivially, since at most one funnel's predicate  *)
+(* can match. TableOrderInvariance checks that for the hard-exclusive class.   *)
+(* This model previously carried the OPPOSITE claim for the fallback keys:     *)
+(* OrderSensitivityWitness, which PROVED that "egal_string" resolved to a      *)
+(* different funnel under AltOrder, because BUILTIN and a late                 *)
+(* `is_func(func, :(===))` ladder arm both claimed it at the raw-predicate     *)
+(* level and only program ORDER (BUILTIN first, returning early) made the      *)
+(* result correct. Phase 12F closed that finding by making the ladder arm a    *)
+(* second GUARD of the same BUILTIN entry -- one funnel, no overlap -- so the   *)
+(* witness is replaced by its strengthened negation, AllOrderInvariance:       *)
+(* EVERY key, table and fallback alike, resolves to the same terminal under    *)
+(* any consult order. StaleArmBug is the only thing that can break it, which   *)
+(* is what the Broken instance checks.                                         *)
 TableOrderInvariance ==
     AllDone =>
         \A k \in HardTableKeys : TerminalOf(RealOrder, k) = TerminalOf(AltOrder, k)
 
-OrderSensitivityWitness ==
-    AllDone => TerminalOf(RealOrder, "egal_string") # TerminalOf(AltOrder, "egal_string")
+AllOrderInvariance ==
+    AllDone =>
+        \A k \in Keys : TerminalOf(RealOrder, k) = TerminalOf(AltOrder, k)
 
 =============================================================================

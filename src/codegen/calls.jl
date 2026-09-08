@@ -2324,11 +2324,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     end
 
     # Determine argument type for opcode selection (do this BEFORE compiling args)
-    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
-               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
-               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
-    is_128bit = arg_type === Int128 || arg_type === UInt128
+    # — THE shared classification (builtins.jl), so this ladder and the
+    # self-contained operator entries read one definition of a call's width.
+    arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
 
     # If arg_type is Any/abstract but the intrinsic expects numeric operands,
     # the code is type-confused (externref being used as numeric). Emit unreachable
@@ -2810,17 +2808,16 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # Push arguments onto the stack (normal case)
     # Skip Type arguments (e.g., first arg of sext_int, zext_int, trunc_int, bitcast)
-    # These are compile-time type parameters, not runtime values
-    # EXCEPTION: For === and !== comparisons, Type values ARE runtime values
-    # (they get compiled to i32 type tags and compared)
+    # These are compile-time type parameters, not runtime values.
     # Skip arg-pushing for cross-call candidates — the cross-call handler
     # at line ~20714 pushes args with type bridging. Pre-pushing here causes duplicate
     # args on the stack (e.g., setindex! gets 6 args instead of 3).
     # Cross-call candidates are GlobalRef functions found in the func_registry that
-    # aren't handled by a specific earlier handler (intrinsics, ===, etc.) — Core._expr
-    # never reaches this point at all: THE identity-keyed builtin funnel (builtins.jl)
-    # claims it, self-contained args and all, before the ladder above even starts.
-    is_equality_comparison = is_func(func, :(===)) || is_func(func, :(!==))
+    # aren't handled by a specific earlier handler. `===`/`!==`/`isa`/`+`/`-`/`*`
+    # and Core._expr never reach this point at all: THE identity-keyed builtin
+    # funnel (builtins.jl) claims them, self-contained operands and all, before
+    # the ladder above even starts — which is why no `is_equality_comparison`
+    # carve-out survives here.
     # Arithmetic over an escaping mutable capture reaches us as a local-backed
     # `getfield(box, :contents)` SSA plus another operand. The numeric fallback
     # below owns that operation and must load the locals; a collected Base method
@@ -2843,8 +2840,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     owns_captured_arithmetic = is_materialized_generic_arithmetic && has_box_contents_operand
     _skip_arg_prepush = false
     if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
-            !is_numeric_intrinsic && !is_equality_comparison &&
-            !owns_captured_arithmetic
+            !is_numeric_intrinsic && !owns_captured_arithmetic
         _called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
         if _called_func !== nothing
             _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
@@ -2881,20 +2877,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if _skip_arg_prepush
             continue
         end
-        # Check if this argument is a type reference
-        is_type_arg = false
-        if arg isa Type
-            # Directly a Type value (Julia already resolved it)
-            is_type_arg = true
-        elseif arg isa GlobalRef && isdefined(arg.mod, arg.name)
-            is_type_arg = getfield(arg.mod, arg.name) isa Type
-        end
-        # Skip Type args for intrinsics (e.g., sext_int(Int64, x))
-        # but NOT for equality comparisons (e.g., x === SomeType)
-        if is_type_arg && !is_equality_comparison
-            continue
-        end
-        local _ia_ty = emit_value!(fb, arg, ctx)  # R17-floor: generic intrinsic normalization consumes actual width
+        # Skip Type args for intrinsics (e.g., sext_int(Int64, x)) — THE shared
+        # rule (values.jl), so the self-contained BUILTIN_LOWERINGS entries that
+        # emit their own operands classify a Type argument identically.
+        _is_type_operand(arg) && continue
+        local _ia_ty = emit_call_operand!(fb, ctx, arg)
         # Fix i32/i64 mismatch for numeric intrinsics — driven by the
         # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
@@ -2910,28 +2897,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
         # them raw in i64 arithmetic failed validation. Mirror of the
         # externref unbox below, minus any_convert_extern. Gated on the
-        # ACTUAL local type (type-derived guesses say I64 for these unions).
-        local _arg_anyref = false
-        if !_is_externref_value(arg, ctx) && arg isa Core.SSAValue
-            local _aa_li = get(ctx.ssa_locals, arg.id, nothing)
-            _aa_li === nothing && (_aa_li = get(ctx.phi_locals, arg.id, nothing))
-            if _aa_li !== nothing
-                local _aa_off = _aa_li - ctx.n_params
-                if _aa_off >= 0 && _aa_off < length(ctx.locals)
-                    _arg_anyref = ctx.locals[_aa_off + 1] === AnyRef
-                end
-            end
-        end
-        # Also fire for the GENERIC arithmetic operators (+,-,*,div,rem,mod):
-        # dynamic call sites with everything typed Any (e.g. `4 - %foldl` in
-        # Random.hash_seed) default to the i64 opcodes but consume raw anyref.
-        local _generic_arith = is_generic_arithmetic
-        # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): when the SSA's REFINED type is already numeric (the join),
-        # the LOAD (_narrow_generic_local!) is THE single unbox source — appending a
-        # second unbox here double-converted. Only unbox when the type is truly erased.
-        local _aa_refined_numeric = arg isa Core.SSAValue &&
-            get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
-        if (is_numeric_intrinsic || _generic_arith) && _arg_anyref && !_aa_refined_numeric
+        # ACTUAL local type (type-derived guesses say I64 for these unions) —
+        # THE shared predicate (values.jl), which `_lower_arith!` reuses.
+        # Fires for the GENERIC arithmetic operators (div/rem/mod here; +,-,*
+        # own their operands in builtins.jl) too: dynamic call sites with
+        # everything typed Any (e.g. `4 - %foldl` in Random.hash_seed) default
+        # to the i64 opcodes but consume raw anyref.
+        if (is_numeric_intrinsic || is_generic_arithmetic) && _is_boxed_numeric_operand(arg, ctx)
             local _aa_target = is_32bit ? I32 : I64
             emit_classid_unbox!(fb, ctx, _aa_target; nullable=true)
             _boxed_operand_unboxed = true   # function-scoped (the tail rebox keys on this)
@@ -2964,13 +2936,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         end
     end
-
-    # Migration helper: emit ONE no-immediate numeric/cmp/conv op into `bytes`
-    # via a scratch InstrBuilder (byte-identical to push!(bytes, op)).
-    # DIRECT emission — the one-instruction fragment wrapper was a
-    # migration artifact; the fresh builder's empty stack underflowed by design
-    # and the merge papered over it (7k+ harvest errors from this one idiom).
-    _op1! = (op::UInt8) -> num!(fb, op)
 
     # parity(intrinsics.dart:995 _binaryOperatorMap lookup): THE INTRINSICS TABLE ROUTE — one
     # declarative lookup ahead of the arm chain. Covered (lhsT, rhsT, op) entries
@@ -3026,7 +2991,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # comparison result is logical NOT (`i32.eqz`), structurally different from bitwise
     # NOT (`const -1; xor`) and must never reach the int-typed table entry.
     if _it_name === :not_int && length(args) == 1 && is_boolean_value(args[1], ctx)
-        _op1!(Opcode.I32_EQZ)
+        num!(fb, Opcode.I32_EQZ)
         return append_builder!(b, fb)
     elseif _it_name !== nothing && !is_128bit
         local _ut_w = arg_type === Float64 ? F64 :
@@ -3141,112 +3106,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # slt_int/sle_int/ult_int/ule_int/eq_int/ne_int: non-128-bit handled by THE
     # intrinsics table route above; 128-bit handled by THE Int128 registry route above.
 
-    # Identity comparison (=== for integers is same as ==, for floats use float eq)
-    if is_func(func, :(===))
-        _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
-
-    elseif is_func(func, :(!==))
-        if is_128bit
-            emit_int128_ne!(fb, ctx, arg_type)
-        elseif arg_type === Float64
-            num!(fb, Opcode.F64_NE)
-        elseif arg_type === Float32
-            num!(fb, Opcode.F32_NE)
-        else
-            local arg2_type_ne = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-            local arg1_is_ref_ne = is_ref_type_or_union(arg_type) && arg_type !== Nothing
-            local arg2_is_ref_ne = is_ref_type_or_union(arg2_type_ne) && arg2_type_ne !== Nothing
-
-            # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
-            # they can't be equal, so !== is always true. Drop both and return true.
-            if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-                return append_builder!(b, fb)
-            end
-
-            # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
-            if arg_type === Nothing && arg2_type_ne === Nothing
-                # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
-                local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
-                local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
-                local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
-                local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
-                # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
-                if a1_ref_ne != a2_ref_ne
-                    drop!(fb); drop!(fb); i32_const!(fb, 1)
-                    return append_builder!(b, fb)
-                elseif a1_ref_ne && a2_ref_ne
-                    # Both refs - use ref.eq then negate
-                    num!(fb, Opcode.REF_EQ)
-                    num!(fb, Opcode.I32_EQZ)
-                    return append_builder!(b, fb)
-                end
-                # Both numeric - fall through to normal handling
-            end
-
-            # Check actual Wasm representation for Nothing-typed args
-            local arg1_wasm_is_ref_ne = arg1_is_ref_ne
-            local arg2_wasm_is_ref_ne = arg2_is_ref_ne
-            local arg1_is_externref_ne = (arg_type === Any)
-            local arg2_is_externref_ne = (arg2_type_ne === Any)
-            # Check Wasm representation for any potentially mixed comparison
-            if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
-                # For Nothing-typed args, determine ref-ness from the inferred value type
-                # (dart2wasm carries the type with the value rather than scanning bytes).
-                # `nothing` is treated as a ref here (it may be ref.null when compared
-                # against a ref-typed Nothing local).
-                if length(args) >= 1 && arg_type === Nothing
-                    arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
-                                          _wt_is_ref(static_wasm_type(args[1], ctx))
-                end
-                if length(args) >= 2 && arg2_type_ne === Nothing
-                    arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
-                                          _wt_is_ref(static_wasm_type(args[2], ctx))
-                end
-            end
-            # BOTH args must be ref types to use ref.eq
-            if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-                # Convert externref → eqref before ref.eq (same pattern as === handler)
-                local _neb = _ctx_builder(ctx, "compile_call")
-                if arg1_is_externref_ne && arg2_is_externref_ne
-                    local tmp_ne = allocate_local!(ctx, EqRef)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_set!(_neb, tmp_ne)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_get!(_neb, tmp_ne)
-                elseif arg1_is_externref_ne
-                    local tmp_ne2 = allocate_local!(ctx, EqRef)
-                    local_set!(_neb, tmp_ne2)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_get!(_neb, tmp_ne2)
-                elseif arg2_is_externref_ne
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                end
-                num!(_neb, Opcode.REF_EQ)
-                num!(_neb, Opcode.I32_EQZ)  # Negate for !==
-                append_builder!(fb, _neb)
-            elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
-                # Comparing ref with non-ref: type mismatch, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-                # Comparing non-ref with ref: type mismatch, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            elseif !is_32bit && arg2_type_ne === Nothing
-                # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
-                num!(fb, Opcode.I64_EXTEND_I32_S)
-                num!(fb, Opcode.I64_NE)
-            elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
-                # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            else
-                num!(fb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-            end
-        end
-
+    # ===/!==: THE builtins.jl `_lower_egal!` entry (self-contained operands).
     # and_int/or_int/xor_int/not_int (non-128-bit): THE intrinsics table route above
     # (not_int also has the boolean NOT special case just above it); 128-bit handled
     # by THE Int128 registry route above.
@@ -3267,58 +3127,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # Type conversions: sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/
     # fpext/fptrunc: THE julia_numeric_tier.jl conversions registry route above.
 
-    # High-level operators (fallback)
-    elseif is_func(func, :+)
-        if arg_type === Float32
-            _op1!(Opcode.F32_ADD)
-        elseif arg_type === Float64
-            _op1!(Opcode.F64_ADD)
-        elseif is_32bit
-            _op1!(Opcode.I32_ADD)
-        else
-            _op1!(Opcode.I64_ADD)
-        end
-
-    elseif is_func(func, :-)
-        if arg_type === Float32
-            _op1!(Opcode.F32_SUB)
-        elseif arg_type === Float64
-            _op1!(Opcode.F64_SUB)
-        elseif is_32bit
-            _op1!(Opcode.I32_SUB)
-        else
-            _op1!(Opcode.I64_SUB)
-        end
-
-    elseif is_func(func, :*)
-        # String/Symbol `*` is CONCATENATION, not arithmetic: the plain-call
-        # path (closure-compiled bodies present concat as `call *`, not
-        # invoke) fell into the numeric branch and emitted i64.mul on two
-        # string refs — the E-003 island's fn#107 validation failure. Route
-        # to the same compile_string_concat the invoke path uses; args were
-        # pre-pushed, so rebuild the buffer (pattern).
-        _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
-        _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
-        if length(args) == 2 && (_conc1 === String || _conc1 === Symbol) &&
-           (_conc2 === String || _conc2 === Symbol)
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-            append_builder!(fb, compile_string_concat_many_b([args[1], args[2]], ctx))
-        elseif arg_type === Float32
-            _op1!(Opcode.F32_MUL)
-        elseif arg_type === Float64
-            _op1!(Opcode.F64_MUL)
-        elseif is_32bit
-            _op1!(Opcode.I32_MUL)
-        else
-            _op1!(Opcode.I64_MUL)
-        end
-
-    # isa() - type checking for Union discrimination
-    elseif is_func(func, :isa) && length(args) >= 2
-        _compile_call_isa(args, fb, ctx)
+    # The high-level operator fallback (+ - *) and isa: THE builtins.jl
+    # `_lower_operator!` / `_lower_isa!` entries (self-contained operands).
 
     # throw() - compile to WASM throw instruction
-    elseif func isa GlobalRef && func.name === :throw
+    if func isa GlobalRef && func.name === :throw
         # Emit throw instruction with tag 0 (our Julia exception tag)
         # Stash exception value in $current_exn global before throwing.
         # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.

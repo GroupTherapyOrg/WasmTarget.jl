@@ -128,26 +128,6 @@ function function_body_lines(path::String, header::AbstractString)::Int
     return 0
 end
 
-"""
-Tally every `is_func(func, :SYM)` site in calls.jl by the SYMBOL named, not by
-line (one line can name more than one symbol — the `is_func(func, :getfield) ||
-is_func(func, :getproperty)` interleave counts one occurrence of each). Powers
-L116's explicit-allowlist check; `#`-comment lines are excluded exactly like
-`count_sites`.
-"""
-function _is_func_site_tally()::Dict{String,Int}
-    tally = Dict{String,Int}()
-    rx = r"is_func\(func, (:\([^)]*\)|:[A-Za-z_][A-Za-z0-9_!]*|:[+\-*])\)"
-    for line in eachline(joinpath(CODEGEN, "calls.jl"))
-        _iscomment(line) && continue
-        for m in eachmatch(rx, line)
-            sym = m.captures[1]::AbstractString
-            tally[sym] = get(tally, sym, 0) + 1
-        end
-    end
-    return tally
-end
-
 # ---- R30/R31 (Phase 12.I): parser-based, not regex-based ---------------------
 # Both walk Meta.parseall's AST rather than grep patterns: a return-type
 # annotation or a field's declared type can span lines, hide behind a `where`
@@ -332,32 +312,6 @@ function _count_any_fields_in(ex)::Int
     return n
 end
 
-# The R19 floor (march p57): every symbol legitimately left name-keyed in
-# calls.jl's `is_func(func, :sym)` ladder, with the one-line reason it cannot
-# route through a table/registry/BUILTIN_LOWERINGS entry instead, and the
-# maximum occurrence count it may appear at. checked_s{add,sub,mul}_int/
-# checked_u{add,sub,mul}_int (→ CHECKED_OPS' `op` data test), muladd_float/
-# fma_float (→ the hoisted `_it_name` data test), Core._expr, Symbol, and
-# Core.tuple's siblings were all migrated OUT of this ladder — see
-# julia_numeric_tier.jl's CHECKED_OPS/FMA_OPS and builtins.jl's
-# BUILTIN_LOWERINGS for where they live now.
-const L116_ALLOWLIST = Dict{String,Int}(
-    # `_compile_call_egaleq` and the raw `!==` arm read `fb.v.stack` directly
-    # ("the two operands are already on fb") — not self-contained, so they
-    # cannot be dispatched from THE identity-keyed builtin funnel, which runs
-    # BEFORE the generic arg-push loop that puts those operands there.
-    ":(===)" => 2,   # one to gate the arg-prepush Type-value exception, one the arm itself
-    ":(!==)" => 2,   # ditto
-    # The high-level-operator fallback arms (`_op1!` emits a bare opcode onto
-    # already-pushed operands) are equally not self-contained.
-    ":+" => 1,
-    ":-" => 1,
-    ":*" => 1,
-    # `_compile_call_isa`: "the value argument is already on the stack from
-    # the loop that pushes all args" — not self-contained either.
-    ":isa" => 1,
-)
-
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -377,8 +331,6 @@ const METRICS = [
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
     "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
         () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
-    "R19_call_is_func_arms" => ("name-keyed is_func(func, :sym) ladder arms anywhere in codegen (march p57: floor reached — the calls.jl arms remaining are L116's explicit allowlist, each one genuinely unable to route through a table/registry/BUILTIN_LOWERINGS entry; this ratchet stays file-agnostic so a site cannot dodge L116 by moving to another codegen file)",
-        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
     "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
                           exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
@@ -1610,15 +1562,20 @@ const LOCKS = [
             in_types >= 1 || return 1000
             count_sites(walk; roots=[SRC]) - 1
         end),
-    "L113_builtin_registry_consulted_first" => ("in compile_call! the identity-keyed builtin registry is consulted BEFORE any name-keyed is_func arm — dev/formal/ConsultChain.tla showed the egal/getglobal arms' predicates overlap the registry's (a late `is_func(func, :(===))` also matches the string/typeof/nothing shapes the registry owns), so their correctness is a program-ORDER invariant, locked here (2026-09-02)",
+    "L113_builtin_registry_consulted_once_and_first" => ("compile_call! consults the identity-keyed builtin registry EXACTLY ONCE, right after its ONE SSAValue→GlobalRef callee resolution, and no lowering arm precedes that consult — dev/formal/ConsultChain.tla showed the retired egal/getglobal arms' predicates overlapped the registry's (a late `is_func(func, :(===))` also matched the string/typeof/nothing shapes the registry owns), so their correctness was a program-ORDER invariant; with Phase 12F those arms ARE registry entries and the invariant is now that the consult is single and first (relocked 2026-09-08)",
         () -> begin
             lines = readlines(joinpath(CODEGEN, "calls.jl"))
             start = findfirst(l -> startswith(l, "function compile_call!("), lines)
             start === nothing && return 1000
-            first_builtin = findnext(l -> occursin("_try_builtin_lowering!(", l) && !_iscomment(l), lines, start)
-            first_arm = findnext(l -> occursin(r"is_func\(func, :", l) && !_iscomment(l), lines, start)
-            (first_builtin === nothing || first_arm === nothing) && return 1000
-            first_builtin < first_arm ? 0 : 1
+            stop = findnext(l -> startswith(l, "end"), lines, start + 1)
+            stop = stop === nothing ? length(lines) : stop
+            body = view(lines, start:stop)
+            live = l -> !_iscomment(l)
+            consults = count(l -> occursin("_try_builtin_lowering!(", l) && live(l), body)
+            first_builtin = findfirst(l -> occursin("_try_builtin_lowering!(", l) && live(l), body)
+            first_arm = findfirst(l -> occursin(r"is_func\(func, :", l) && live(l), body)
+            (consults == 1 ? 0 : 1) +
+                (first_arm !== nothing && first_builtin !== nothing && first_arm < first_builtin ? 1 : 0)
         end),
     "L114_foreigncalls_dispatch_through_registry_only" => ("compile_foreigncall! has exactly one consult point — FOREIGN_LOWERINGS — and its body carries no name-keyed arm; parity(intrinsics.dart:607) the FFI call codegen's helper-table dispatch (also :685 the arg-count table, :1018 the direct-call funnel) never hand-writes a name ladder either, locked here (2026-09-02)",
         () -> begin
@@ -1629,14 +1586,8 @@ const LOCKS = [
                             occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
                   split(stmt_src, '\n'))
         end),
-    "L116_call_arms_are_the_allowlist" => ("every `is_func(func, :sym)` symbol remaining in calls.jl (march p57: floor reached, R19 31→15) is an entry in L116_ALLOWLIST above, each with a one-line reason it cannot route through a table/registry/BUILTIN_LOWERINGS entry; a symbol outside the allowlist, or a listed symbol whose occurrence count exceeds its allowed maximum, breaks this lock (locked 2026-09-02)",
-        () -> begin
-            violations = 0
-            for (sym, n) in _is_func_site_tally()
-                n > get(L116_ALLOWLIST, sym, 0) && (violations += 1)
-            end
-            violations
-        end),
+    "L124_no_name_keyed_call_arms" => ("Phase 12F (dev/MARCH.md item F, formal(dev/formal/ConsultChain.tla)): ZERO `is_func(func, :sym)` arms anywhere in codegen — every Core/Base builtin call lowers through THE identity-keyed BUILTIN_LOWERINGS entry for its resolved callee OBJECT (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup, never on a bare name that any module's same-named function also answers to). Retires ratchet R19_call_is_func_arms and lock L116_call_arms_are_the_allowlist, whose fifteen-site allowlist this reduces to zero (locked 2026-09-08)",
+        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
     "L117_identity_keyed_registries_walk_in_program_order" => ("every identity-keyed registry dictionary (type_ids, type_ranges, type_constant_globals, typename_constant_globals, constant_globals, arrays, numeric_boxes, dispatch tables/positions/cascades) is walked ONLY through ordered_pairs — a raw walk orders by address-based hashes, which differ per process AND per architecture (the whole probe corpus differed x64 vs aarch64 until this lock); reads by key are fine (locked 2026-09-02)",
         () -> begin
             regs = "type_ids|type_ranges|type_constant_globals|typename_constant_globals|constant_globals|arrays|numeric_boxes|tables|selector_positions|selector_cascades"
