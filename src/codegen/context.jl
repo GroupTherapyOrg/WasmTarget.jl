@@ -76,10 +76,10 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
     exn_region_locals::Dict{Int, Int}
     # NIR boundary (parity: code_generator.dart:77 typeContext) — frontend/nir.jl's
-    # build_nir output, positionally aligned with code_info.code. Populated after the
-    # analyze_*!/allocate_*! passes below so it can reuse ctx.ssa_types/ctx.locals
-    # instead of re-deriving types (R3/R5 unaffected). code_info stays alongside it —
-    # not every consumer is NIR-converted yet (R29 tracks the migration per file).
+    # build_nir output, positionally aligned with code_info.code. Built FIRST, from the
+    # CodeInfo alone, so the analysis passes below are themselves NIR consumers rather
+    # than its prerequisites. code_info stays alongside it — not every consumer is
+    # NIR-converted yet (R29 tracks the migration per file).
     nir::Vector{NirStmt}
 end
 
@@ -132,7 +132,7 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}(),       # exn_region_locals
-        NirStmt[]                # nir — filled in below, once locals/types exist
+        build_nir(code_info)    # NIR boundary — a pure function of the CodeInfo, built first
     )
     # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
@@ -144,9 +144,6 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
         allocate_ssa_locals!(ctx)
         allocate_scratch_locals!(ctx)  # Extra locals for complex operations
-        # NIR boundary: built last so it can reuse ctx.ssa_types/ctx.locals/ctx.ssa_locals/
-        # ctx.phi_locals (all populated above) rather than re-deriving types.
-        ctx.nir = build_nir(code_info, ctx)
     catch e
         (e isa WasmCompileError || e isa WasmInternalError) && rethrow()
         throw(WasmInternalError(_ctx_func_name(ctx), 0, "", String[], e))

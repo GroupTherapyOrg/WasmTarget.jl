@@ -253,7 +253,6 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:NirLiteral, :value),              # a Julia literal's runtime value — literals are open
     (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
     (:NirStmt, :raw),                   # transitional: the raw CodeInfo statement, pending the NIR migration (Phase 12.D)
-    (:NirStmt, :static_type),           # transitional: its pre-NIR inferred type, ditto
     (:FunctionInfo, :func_ref),         # the registries' Function values — holds a Function, Type, or Builtin (anything callable)
     (:FunctionRegistry, :by_ref),       # keyed by the same open func_ref
     (:DispatchTable, :func_ref),        # DispatchTableRegistry's func_ref keys — same "anything callable" seam
@@ -361,7 +360,7 @@ const METRICS = [
     # regard" made machine-checked for API types, not just codegen structure.
     "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
         () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
-    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee, NirStmt.raw/static_type, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
+    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee, NirStmt.raw, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
         () -> count_any_typed_fields()),
 ]
 
