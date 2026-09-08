@@ -85,6 +85,25 @@ end
     end
 end
 
+@testset "diagnostics: the coercion funnel rejects a numeric pair it has no arm for" begin
+    # Julia never converts float→int implicitly; a codegen type-chain defect that asks the
+    # funnel for one must reject at the statement, never leave the value unconverted.
+    ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
+    ctx = WasmTarget.CompilationContext(ci, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+    ctx.current_stmt_idx = 1
+    b = WasmTarget._ctx_builder(ctx, "funnel_negative")
+    WasmTarget.f64_const!(b, 1.5)
+    err = try
+        WasmTarget.convert_type!(b, WasmTarget.F64, WasmTarget.I64, ctx)
+        nothing
+    catch e
+        e
+    end
+    @test err isa WasmTarget.WasmCompileError
+    @test occursin("no numeric conversion from F64 to I64", sprint(showerror, err))
+    @test length(ctx.diagnostics) == 1 && ctx.diagnostics[1].stmt_idx == 1
+end
+
 @testset "diagnostics: the 5-field constructor still builds a located-less report" begin
     d = WasmTarget.WasmDiagnostic(:unsupported_type, "f", "x", nothing, nothing)
     @test d.stmt_idx == 0 && isempty(d.frames) && d.stmt == ""

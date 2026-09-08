@@ -541,6 +541,12 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             num!(b, Opcode.I32_WRAP_I64)
         elseif from === F64 && to === F32
             num!(b, Opcode.F32_DEMOTE_F64)
+        else
+            # Julia never converts implicitly across these (float→int is a `trunc`/`round`
+            # call in typed IR); reaching here is a codegen type-chain defect, and an
+            # un-converted value would validate as the wrong type or silently miscompute.
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "no numeric conversion from $(from) to $(to)"; detail=from_julia)
         end
     end
     return b
