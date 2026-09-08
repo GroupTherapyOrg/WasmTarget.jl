@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_raw_code, nir_value_raw, nir_node, nir_new,
+       build_nir, nir_raw_code, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -134,10 +134,17 @@ end
 """`mi`/`method` are `Union{_,Nothing}` — resolve_invoke_mi/resolve_invoke_method are
 deliberately total (never throw) because build_nir must not crash mid-compile on an
 exotic `:invoke` shape; invoke.jl's own existing ~4 duplicated resolution sites are
-equally defensive (see resolve_invoke_method's docstring)."""
+equally defensive (see resolve_invoke_method's docstring). `callee` is the statement's
+OWN callee operand (`args[2]`), resolved exactly like NirCall's — a function object when
+statically known, a NirNode when the invoked value is an SSA/argument (a closure VALUE
+invoked through its known MethodInstance), `nothing` when the statement carried none. It
+is NOT recoverable from `mi.specTypes.parameters[1]`: that names the closure's TYPE for a
+value callee, so a consumer gating on "is the callee a function object" would answer
+differently (trimcollect.jl's closed-world re-specialization gate does exactly that)."""
 struct NirInvoke <: NirNode
     mi::Union{Core.MethodInstance,Nothing}
     method::Union{Core.Method,Nothing}
+    callee::Any
     args::Vector{NirNode}
 end
 
@@ -478,8 +485,9 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
             return NirCall(callee, cargs)
         elseif head === :invoke && !isempty(args)
             mi_or_ci = args[1]
+            callee = length(args) >= 2 ? resolve_call_callee(args[2], types) : nothing
             cargs = length(args) >= 3 ? NirNode[resolve_operand(a, types) for a in @view args[3:end]] : NirNode[]
-            return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci), cargs)
+            return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci), callee, cargs)
         elseif head === :new && !isempty(args)
             T, kind, detail = _resolve_new_type(args[1], i, code_info)
             cargs = length(args) >= 2 ? NirNode[resolve_operand(a, types) for a in @view args[2:end]] : NirNode[]
@@ -569,6 +577,22 @@ nir_value_raw(s::NirStmt)::Any = s.slot > 0 ? s.raw.args[2] : s.raw
 """Resolve a RAW IR operand a not-yet-converted consumer still holds into its NirNode, with
 the SSA types the boundary already computed. The bridge INTO the node world."""
 nir_node(ctx, x)::NirNode = x isa NirNode ? x : resolve_operand(x, ctx.nir)
+
+"""Re-target statement `i`'s `:invoke` at `mi` — the ONE write into an invoke's target
+operand. The closed-world collector (trimcollect.jl) rebuilds an explicit invoke's
+MethodInstance from the concrete call-site types when Julia left it abstract, and the
+collected IR must keep agreeing with the edge it hands to inference, so BOTH the raw
+statement and the record's NirInvoke are rewritten here rather than a consumer splicing
+`Expr.args` behind the boundary's back. Loud on a statement that is not an `:invoke`."""
+function nir_retarget_invoke!(nir::Vector{NirStmt}, i::Int, mi::Core.MethodInstance)::Nothing
+    s = nir[i]
+    node = s.node
+    node isa NirInvoke || error("nir_retarget_invoke!: statement $i is a $(nameof(typeof(node))), not an :invoke")
+    nir_value_raw(s).args[1] = mi
+    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), node.callee, node.args),
+                     s.julia_type, s.line, s.slot, s.raw)
+    return nothing
+end
 
 """The inverse: a node back to the raw operand `Expr.args` carried. Transitional — it exists
 only until the value channel itself takes a NirNode, and is deleted then. A Symbol literal is

@@ -252,6 +252,7 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:WasmDiagnostic, :detail),         # the raw Expr/MethodInstance/Type a diagnostic points at — open by construction
     (:NirLiteral, :value),              # a Julia literal's runtime value — literals are open
     (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
+    (:NirInvoke, :callee),              # the same seam on the invoke node — an invoked closure VALUE is a NirNode there
     (:NirStmt, :raw),                   # transitional: the raw CodeInfo statement, pending the NIR migration (Phase 12.D)
     (:FunctionInfo, :func_ref),         # the registries' Function values — holds a Function, Type, or Builtin (anything callable)
     (:FunctionRegistry, :by_ref),       # keyed by the same open func_ref
