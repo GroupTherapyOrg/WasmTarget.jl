@@ -889,18 +889,15 @@ unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
 function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext, args, arg_type,
                               is_32bit::Bool, kind::Symbol)::WasmValType
     if length(args) >= 2
-        shift_type = infer_value_type(args[2], ctx)
-        if kind === :ashr
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
-                num!(fb, Opcode.I32_WRAP_I64)
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                num!(fb, Opcode.I64_EXTEND_I32_S)
-            end
-        else   # :shl / :lshr
-            if is_32bit && (shift_type === Int64 || shift_type === UInt64)
+        # the amount's emitted width is the builder's tracked stack top (a 128-bit
+        # amount is a struct and is left to the Int128 route)
+        local _cnt = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
+        local _want = is_32bit ? I32 : I64
+        if _cnt === I32 || _cnt === I64
+            if kind !== :ashr && is_32bit && _cnt === I64
                 _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
-            elseif !is_32bit && shift_type !== Int64 && shift_type !== UInt64 && shift_type !== Int128 && shift_type !== UInt128
-                num!(fb, Opcode.I64_EXTEND_I32_S)
+            else
+                coerce_stack_top!(fb, _want, ctx)
             end
         end
     end
