@@ -10,20 +10,22 @@
 (* idealized textbook chain):                                                *)
 (*                                                                           *)
 (*   1. BUILTIN       -- the identity-keyed Core/Base registry               *)
-(*                       (`_try_builtin_lowering!`, builtins.jl:44, called   *)
-(*                       from calls.jl:2254 and again at :2308). Keyed on    *)
-(*                       the CALLEE OBJECT's identity (an IdDict), not a     *)
+(*                       (`_try_builtin_lowering!`, builtins.jl:44), called  *)
+(*                       ONCE from compile_call!, immediately after the ONE  *)
+(*                       SSAValue->GlobalRef callee-resolution step. Keyed   *)
+(*                       on the CALLEE OBJECT's identity (an IdDict), not a  *)
 (*                       Symbol -- e.g. `Core.getglobal`, `Core.:(===)`.     *)
 (*                       Several of its entries (`_lower_getglobal_          *)
-(*                       constfold!` builtins.jl:127, `_lower_egal_early!`   *)
-(*                       builtins.jl:838) themselves decline for a SUBSET of *)
-(*                       their callee's call shapes, by the SAME nullable-   *)
-(*                       return convention, one level down.                  *)
-(*   2. GETGLOBAL_ARM  -- `is_func(func, :getglobal)` typename special case, *)
-(*                       calls.jl:2258-2270. Reachable ONLY because funnel 1 *)
-(*                       already declined for this callee (an early `return` *)
-(*                       fires on a BUILTIN hit, calls.jl:2254-2256).        *)
-(*   3. TABLE          -- the five parity(intrinsics.dart:...) tables/       *)
+(*                       constfold!`, `_lower_egal_early!`) themselves       *)
+(*                       decline for a SUBSET of their callee's call shapes, *)
+(*                       by the SAME nullable-return convention, one level   *)
+(*                       down -- and an entry may hold SEVERAL such guards in *)
+(*                       sequence (getglobal's const-fold guard, then its    *)
+(*                       closed-world TypeName guard: Phase 12F folded the   *)
+(*                       former `is_func(func, :getglobal)` arm in as the    *)
+(*                       entry's second guard, which is why no separate      *)
+(*                       GETGLOBAL_ARM funnel appears below any more).       *)
+(*   2. TABLE          -- the five parity(intrinsics.dart:...) tables/       *)
 (*                       registries, consulted back-to-back and folded into  *)
 (*                       ONE funnel here since they share the identical      *)
 (*                       nullable-return shape and sit in one unbroken run   *)
@@ -33,7 +35,7 @@
 (*                       -- L104 (test/parity_ratchet.jl:1276) locks that no  *)
 (*                       `is_func(func, :key)` ladder arm exists anywhere in  *)
 (*                       codegen for any key these five own.                 *)
-(*   4. EGAL_ARM       -- `is_func(func, :(===))` / `:(!==)` fallback arm,   *)
+(*   3. EGAL_ARM       -- `is_func(func, :(===))` / `:(!==)` fallback arm,   *)
 (*                       calls.jl:4180-4183, textually right after the       *)
 (*                       conversions registry, matching the real order.      *)
 (*   5. LATE_ARMS      -- the large remaining bucket: the rest of the        *)
@@ -119,25 +121,25 @@ FallbackKeys  == {"getglobal_const", "getglobal_typename",
                    "egal_string", "egal_generic"}
 Keys == HardTableKeys \cup FallbackKeys \cup {"unknown_call"}
 
-Funnels == {"BUILTIN", "GETGLOBAL_ARM", "TABLE", "EGAL_ARM", "LATE_ARMS"}
+Funnels == {"BUILTIN", "TABLE", "EGAL_ARM", "LATE_ARMS"}
 
-(* Real program order (calls.jl: builtins funnel + its getglobal fallback    *)
-(* run first at :2254-:2270, the five parity( tables at :4021-:4151, the     *)
-(* egal fallback arm at :4180, everything else last before the terminal).    *)
-RealOrder == <<"BUILTIN", "GETGLOBAL_ARM", "TABLE", "EGAL_ARM", "LATE_ARMS">>
+(* Real program order (calls.jl: the single builtins-funnel consult runs     *)
+(* first, right after callee resolution, the five parity( tables next, the   *)
+(* egal fallback arm after them, everything else last before the terminal).  *)
+RealOrder == <<"BUILTIN", "TABLE", "EGAL_ARM", "LATE_ARMS">>
 
 (* An alternate order used ONLY to probe claim (4), order-independence -- it  *)
 (* is never how the real compiler runs; it swaps EGAL_ARM ahead of BUILTIN.  *)
-AltOrder == <<"EGAL_ARM", "BUILTIN", "GETGLOBAL_ARM", "TABLE", "LATE_ARMS">>
+AltOrder == <<"EGAL_ARM", "BUILTIN", "TABLE", "LATE_ARMS">>
 
 ----------------------------------------------------------------------------
 (* Each funnel's claimed keys, read from source:                             *)
 (*  - BUILTIN claims "getglobal_const" (`_lower_getglobal_constfold!` hits    *)
-(*    the isconst case, builtins.jl:134-139) and "egal_string"                *)
-(*    (`_lower_egal_early!` hits the String/Symbol case, builtins.jl:843-852).*)
-(*  - GETGLOBAL_ARM claims "getglobal_typename" -- a SPECIFIC, independently  *)
-(*    discriminating guard (module_owner === name_owner, calls.jl:2261),      *)
-(*    genuinely disjoint from BUILTIN's isconst case.                         *)
+(*    the isconst case) and "getglobal_typename" (the SAME entry's second     *)
+(*    guard, module_owner === name_owner -- a SPECIFIC, independently         *)
+(*    discriminating test, genuinely disjoint from the isconst case, tried    *)
+(*    after it in the entry's own guard order), and "egal_string"             *)
+(*    (`_lower_egal_early!` hits the String/Symbol case).                     *)
 (*  - TABLE claims every HardTableKeys entry (its five registries between      *)
 (*    them cover add/copysign/not_int-on-bool/ctlz/int128/checked/sext).      *)
 (*  - EGAL_ARM's guard (calls.jl:4180/4183) is JUST `is_func(func,:(===))` /   *)
@@ -145,13 +147,12 @@ AltOrder == <<"EGAL_ARM", "BUILTIN", "GETGLOBAL_ARM", "TABLE", "LATE_ARMS">>
 (*    typeof/nothing cases BUILTIN already special-cases. Read in isolation,  *)
 (*    its predicate covers "egal_string" TOO, not only "egal_generic" -- it   *)
 (*    is only ever reached for "egal_generic" in practice because BUILTIN     *)
-(*    runs first and returns early on "egal_string" (calls.jl:2254-2256,      *)
-(*    2308-2310). This is exactly the asymmetry claim (4) asks to surface.    *)
+(*    runs first and returns early on "egal_string". This is exactly the      *)
+(*    asymmetry claim (4) asks to surface.                                    *)
 (*  - LATE_ARMS claims nothing among these keys, unless StaleArmBug adds the   *)
 (*    forbidden extra claim on "copysign_f32".                                *)
 BaseClaims(f) ==
-    CASE f = "BUILTIN"       -> {"getglobal_const", "egal_string"}
-      [] f = "GETGLOBAL_ARM" -> {"getglobal_typename"}
+    CASE f = "BUILTIN"       -> {"getglobal_const", "getglobal_typename", "egal_string"}
       [] f = "TABLE"         -> HardTableKeys
       [] f = "EGAL_ARM"      -> {"egal_string", "egal_generic"}
       [] f = "LATE_ARMS"     -> {}
@@ -241,7 +242,7 @@ CorrectFallbackResolution ==
     AllDone =>
         /\ terminal["getglobal_const"]    = "BUILTIN"
         /\ terminal["egal_string"]        = "BUILTIN"
-        /\ terminal["getglobal_typename"] = "GETGLOBAL_ARM"
+        /\ terminal["getglobal_typename"] = "BUILTIN"
         /\ terminal["egal_generic"]       = "EGAL_ARM"
 
 (* (4) ORDER-(IN)DEPENDENCE. Given EXCLUSIVITY, the terminal cannot depend on  *)

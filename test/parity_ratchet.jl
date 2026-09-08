@@ -342,13 +342,6 @@ end
 # julia_numeric_tier.jl's CHECKED_OPS/FMA_OPS and builtins.jl's
 # BUILTIN_LOWERINGS for where they live now.
 const L116_ALLOWLIST = Dict{String,Int}(
-    # getglobal-typename fast path runs BEFORE the SSAValue→GlobalRef callee
-    # resolution a few lines below it — an early-position dependency that
-    # THE identity-keyed builtin funnel (consulted only AFTER that
-    # resolution, or on the raw pre-resolution callee for a disjoint few
-    # arms) cannot reproduce without reordering compile_call!'s own callee
-    # resolution step.
-    ":getglobal" => 1,
     # getfield/getproperty interleave with raw (func.mod===Core/Base &&
     # func.name===:getfield) identity checks (closure self-capture skip,
     # :signal skip, the P3 layout-pointer fold) whose CURRENT relative order
