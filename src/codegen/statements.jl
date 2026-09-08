@@ -759,17 +759,18 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
     # own #self# argument). A failed resolution is type instability — a loud reject, never
     # a guessed layout.
     field_values = node.operands
-    if node.type_kind === :ssa
-        emit_unsupported_stub!(ctx, b, :unsupported_type,
-            "struct construction (:new) with a non-constant type — type instability"; idx=idx,
-            detail=node.type_detail)
-        return b
-    elseif node.type_kind === :argument
-        emit_unsupported_stub!(ctx, b, :unsupported_type,
-            "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
-            detail=node.type_detail)
-        return b
-    elseif node.type_kind === :unknown
+    if !node.type_resolved
+        if node.type_kind === :ssa
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "struct construction (:new) with a non-constant type — type instability"; idx=idx,
+                detail=node.type_detail)
+            return b
+        elseif node.type_kind === :argument
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
+                detail=node.type_detail)
+            return b
+        end
         error("Unknown struct type reference in %new")
     end
     struct_type = node.T
