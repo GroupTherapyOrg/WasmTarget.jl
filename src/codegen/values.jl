@@ -734,55 +734,30 @@ function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
     return b
 end
 
-"""— dart's MULTI-range check (code_generator.dart:3862-3883): the DFS range
-plus the post-DFS drift ids. typeId is on the stack; result i32. Uses a scratch local
-when extras exist."""
-function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                              low::Integer, high::Integer, extras::Vector{Int32})
-    isempty(extras) && return emit_classid_range_check!(b, low, high)
-    sc = allocate_local!(ctx, I32)
-    local_tee!(b, sc)
-    emit_classid_range_check!(b, low, high)
-    for x in extras
-        (low <= x <= high) && continue
-        local_get!(b, UInt32(sc))
-        i32_const!(b, Int64(x))
-        num!(b, Opcode.I32_EQ)
-        num!(b, Opcode.I32_OR)
-    end
-    return b
-end
-
-emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                     range::Tuple{<:Integer,<:Integer}, extras::Vector{Int32}) =
-    emit_classid_ranges!(b, ctx, range[1], range[2], extras)
-
 """isa's classId test for a non-concrete type over the closed world: the exact id set
 (concrete_class_ids), emitted as dart's range window when it is contiguous and as an
 OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32."""
 function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
-    isempty(ids) && return emit_classid_ranges!(b, ctx, nothing, ids)
+    isempty(ids) && return emit_classid_ranges!(b, ctx, ids)
     if ids[end] - ids[1] + 1 == length(ids)
         return emit_classid_range_check!(b, ids[1], ids[end])
     end
-    return emit_classid_ranges!(b, ctx, nothing, ids)
+    return emit_classid_ranges!(b, ctx, ids)
 end
 
-"""The extras-only check: an abstract type with NO DFS range (no descendant was in the
-closed world when assign_type_ids! ran) whose subtypes were numbered lazily. dart never
-has this case (one ClassIdNumbering pass, class_info.dart:831); WT's lazy path records the
-id on every ancestor (ensure_type_id!), and this is where a range-less ancestor reads it.
-typeId on the stack; result i32."""
-function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                              ::Nothing, extras::Vector{Int32})
-    if isempty(extras)
+"""The OR-chain form of `emit_classid_membership!`: a non-contiguous id set with no
+single dart-style range window, so each id gets its own equality test. typeId is on the
+stack; result i32. An empty set is constant false (no concrete class of the closed
+world is a subtype)."""
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
+    if isempty(ids)
         drop!(b)
         i32_const!(b, 0)
         return b
     end
     sc = allocate_local!(ctx, I32)
     local_tee!(b, sc)
-    for (i, x) in enumerate(extras)
+    for (i, x) in enumerate(ids)
         i > 1 && local_get!(b, UInt32(sc))
         i32_const!(b, Int64(x))
         num!(b, Opcode.I32_EQ)

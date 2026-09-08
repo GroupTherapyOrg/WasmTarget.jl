@@ -3,10 +3,10 @@
 (* A TLA+ model of WasmTarget's two coupled closed-world structures:         *)
 (*                                                                           *)
 (*   (a) the DFS classId numbering with subtype ranges                       *)
-(*       formal(src/codegen/types.jl assign_type_ids!)   -- the DFS          *)
-(*       formal(src/codegen/types.jl ensure_type_id!)    -- the lazy path    *)
+(*       formal(src/codegen/types.jl assign_type_ids!)   -- the ONE DFS      *)
+(*       formal(src/codegen/compile.jl _collect_reachable_ir_types)          *)
 (*       read by  values.jl:714 emit_isa_classid!  (concrete `isa`: id ==)   *)
-(*       and      calls.jl:1978-2006             (abstract `isa`: range+extras)*)
+(*       and      calls.jl:1978-2006             (abstract `isa`: range)     *)
 (*       parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange)*)
 (*                                                                           *)
 (*   (b) the ONE flat selector dispatch table                                *)
@@ -19,7 +19,7 @@
 (* WHAT IS ABSTRACTED AND WHY IT SUFFICES.                                   *)
 (*                                                                           *)
 (* Classes are the naturals 1..N and the class NAME is its number: Julia     *)
-(* sorts DFS children by `string(T)` (types.jl:474), so "ascending number"    *)
+(* sorts DFS children by `string(T)` (types.jl:498), so "ascending number"    *)
 (* is exactly "ascending sort key".  Class 0 is the root (`Any`).  The        *)
 (* hierarchy is a tree with parent[c] < c; in Julia the parent map is the     *)
 (* nearest supertype in the collected set, which -- because EVERY abstract   *)
@@ -32,33 +32,34 @@
 (* a concrete one, so it always has a child in the walked set -- the         *)
 (* `(low, low)` single-id branch of dfs! is kept but is unreachable).        *)
 (*                                                                           *)
-(* `early` is the closed world at assign_type_ids! time (registered structs  *)
-(* + _collect_reachable_ir_types); `Late = Concrete \ early` are the types   *)
-(* that reach ensure_type_id! afterwards (non-enrolled closure types,        *)
-(* Core.Box, and any struct registered during body codegen).  The lazy id    *)
-(* is `max(type_ids) + 1` and is pushed onto `type_extra_ids` of every        *)
-(* abstract ancestor except Any (types.jl:546-555).                          *)
+(* Phase 12B (dev/MARCH.md) deleted the SECOND numbering path: every concrete*)
+(* kind that can carry a classId (structs, closures, `Core.Box`, primitives  *)
+(* incl. `Char`/`Int128`, `Memory`) is now admitted by                        *)
+(* `_collect_reachable_ir_types` BEFORE `assign_type_ids!` runs, so the      *)
+(* closed world is numbered exactly ONCE, like dart's ClassIdNumbering       *)
+(* (class_info.dart:831) -- there is no more `early`/`Late` split and no     *)
+(* lazily-allocated id.  `ensure_type_id!` on an unnumbered type is now a    *)
+(* loud collector bug (error), never a second numbering.                    *)
 (*                                                                           *)
 (* The DFS is modeled step by step with an explicit stack (one frame per      *)
 (* abstract node: [node, low, pending kids]), mirroring dfs!'s recursion:     *)
 (* a concrete child takes `counter` and bumps it; an abstract child opens a   *)
-(* frame; closing a frame writes [low, counter-1].  Numbering is therefore   *)
-(* deterministic given (tree, early); the ONLY nondeterminism in phase (a)   *)
-(* is the order in which late types are touched, which in Julia is body      *)
-(* codegen order and, at calls.jl:1891 / values.jl:495 / structs.jl:1189 /   *)
-(* dispatch.jl:75 / types.jl:521, the iteration order of the Dict            *)
-(* `type_registry.structs`.  `UnsortedIteration = TRUE` lets any late type   *)
-(* go next (the real code); FALSE forces name order (the sorted-iteration    *)
-(* fix).  Determinism compares the final ids with a closed-form canonical    *)
-(* numbering (leaf rank in lexicographic root-path order, then late types in *)
-(* name order), which also cross-checks the stepwise DFS.                    *)
+(* frame; closing a frame writes [low, counter-1].  Numbering is a pure       *)
+(* function of the tree PROVIDED siblings are visited in name order          *)
+(* (`sort!(kids, by=T->string(T))`, types.jl:498) -- the one remaining        *)
+(* nondeterminism risk this model checks is THAT sort being lost.            *)
+(* `UnsortedIteration = TRUE` lets `dfs!` visit a node's children in ANY      *)
+(* order instead of name order (the Broken variant: someone drops or         *)
+(* misapplies the `sort!` call).  Determinism compares the final ids with a   *)
+(* closed-form canonical numbering (leaf rank in lexicographic root-path      *)
+(* order), which also cross-checks the stepwise DFS.                         *)
 (*                                                                           *)
 (* Dispatch: a selector is a generic function with a Julia METHOD TABLE       *)
 (* (signatures over Types, abstract allowed); Julia's dispatch answer for a  *)
 (* concrete tuple is the unique componentwise-most-specific applicable       *)
 (* signature (none => MethodError / ambiguity).  WT's DispatchEntry set is   *)
 (* one entry per compiled specialization keyed by classId tuple; the model   *)
-(* takes the closed world to be total over early tuples (every early tuple   *)
+(* takes the closed world to be total over concrete tuples (every tuple      *)
 (* with an answer is a specialization) -- an over-approximation of the       *)
 (* compiled set that can only ADD rows, never change a target.  The table is *)
 (* built exactly as pack_dispatch_selectors!: varying axes on the id tuples, *)
@@ -92,10 +93,6 @@
 (* checks it; a tied group's is re-checked, cheaply).  `NoSpanGuard = TRUE`  *)
 (* removes all three (the pre-fix code, which MissingMethodTraps rejects).   *)
 (*                                                                           *)
-(* The abstract-type `isa` emitter tests the DFS range OR the lazily         *)
-(* recorded extra ids; `ExtrasNeedRange = TRUE` is the pre-fix emitter that  *)
-(* consulted extras only when a range existed (RangeIsa rejects it).         *)
-(*                                                                           *)
 (* All of this is sequential and finite, so exhaustive enumeration over      *)
 (* small trees and method tables checks the algorithmic claims directly; no  *)
 (* concurrency or memory model is involved.                                  *)
@@ -107,11 +104,9 @@ CONSTANTS
     Selectors,          \* generic functions that may own a dispatch table
     Arity,              \* [Selectors -> {1, 2}]
     MethodSpace,        \* set of [Selectors -> SUBSET Sigs(Arity[s])] : candidate method tables
-    MaxLate,            \* bound on |Concrete \ early| : classes numbered lazily
-    UnsortedIteration,  \* Broken: lazy ids follow registry (Dict) order instead of a sort key
+    UnsortedIteration,  \* Broken: dfs! visits a node's children in ANY order, not name order
     NoCascadeReject,    \* Broken: a tied first-axis group takes its first entry, no second hop
-    NoSpanGuard,        \* Broken: no span reservation, no classId guard, no wrapper slot check
-    ExtrasNeedRange     \* Broken: the isa emitter reads extra ids only when a DFS range exists
+    NoSpanGuard         \* Broken: no span reservation, no classId guard, no wrapper slot check
 
 Root    == 0
 Classes == 1..N
@@ -120,15 +115,13 @@ NoSel   == "none"
 
 VARIABLES
     parent,     \* [Classes -> Types] with parent[c] < c : the direct supertype
-    early,      \* SUBSET Concrete : the closed world when assign_type_ids! runs
     methods,    \* [Selectors -> SUBSET Sigs(Arity[s])] : the Julia method tables
-    ent,        \* [Selectors -> SUBSET tuples] : Julia's answered early tuples (the DispatchEntry set)
-    phase,      \* "dfs" -> "pack" -> "lazy" -> "done" (the compile.jl order)
+    ent,        \* [Selectors -> SUBSET tuples] : Julia's answered tuples (the DispatchEntry set)
+    phase,      \* "dfs" -> "pack" -> "done" (the compile.jl order)
     stack,      \* dfs! frames <<[node, low, pend]>>
     counter,    \* the DFS counter (starts at 1; id 0 = unassigned)
     ids,        \* [Classes -> Nat] : registry.type_ids (concrete only; 0 = none)
     ranges,     \* [Types -> <<>> | <<lo, hi>>] : registry.type_ranges
-    extras,     \* [Types -> SUBSET Nat] : registry.type_extra_ids
     table,      \* SUBSET slot records : THE flat selector table (occupied cells)
     offs,       \* [Selectors -> Int] : selector_offset
     casc,       \* SUBSET [sel, cid, off2] : selector_cascades
@@ -137,7 +130,7 @@ VARIABLES
     cur,        \* selector whose tied groups are being packed, or NoSel
     pendCasc    \* tied first-axis cids of `cur` still to pack (ascending order)
 
-vars == <<parent, early, methods, ent, phase, stack, counter, ids, ranges, extras,
+vars == <<parent, methods, ent, phase, stack, counter, ids, ranges,
           table, offs, casc, firstAvail, packed, cur, pendCasc>>
 
 ----------------------------------------------------------------------------
@@ -148,6 +141,16 @@ Max(S) == CHOOSE x \in S : \A y \in S : x >= y
 
 RECURSIVE SortSeq(_)
 SortSeq(S) == IF S = {} THEN <<>> ELSE <<Min(S)>> \o SortSeq(S \ {Min(S)})
+
+(* Every bijective sequence 1..k -> S : every order `dfs!` could visit S's       *)
+(* elements in if the `sort!` call were lost or misapplied.                     *)
+Perms(S) == LET k == Cardinality(S)
+            IN {f \in [1..k -> S] : \A i, j \in 1..k : i # j => f[i] # f[j]}
+
+(* The orders `dfs!` may present a node's children in: exactly the sorted order *)
+(* when the code is right, any permutation when UnsortedIteration models the    *)
+(* `sort!` call being lost. *)
+ChildOrders(S) == IF UnsortedIteration THEN Perms(S) ELSE {SortSeq(S)}
 
 (* Bounded method-table families (used by MC modules to build MethodSpace). *)
 Sigs(k)  == [1..k -> Types]
@@ -171,13 +174,8 @@ Anc(c) == IF c = Root THEN {} ELSE {parent[c]} \cup Anc(parent[c])
 
 Sub(a, b) == a = b \/ b \in Anc(a)          \* a <: b
 
-Late  == Concrete \ early
-World == early \cup UNION {Anc(c) : c \in early}   \* concrete_types + their supertype chains
-WorldKids(n) == {c \in Classes : c \in World /\ parent[c] = n}
-
 (* Closed-form canonical numbering: with children visited in name order, the *)
-(* DFS numbers early leaves in lexicographic order of their root paths; the   *)
-(* sorted-iteration lazy path then appends late types in name order.         *)
+(* DFS numbers leaves in lexicographic order of their root paths.            *)
 RECURSIVE Path(_)
 Path(c) == IF c = Root THEN <<>> ELSE Append(Path(parent[c]), c)
 
@@ -188,11 +186,8 @@ LexLess(p, q) == IF p = <<>> THEN q # <<>>
                  ELSE IF Head(p) > Head(q) THEN FALSE
                  ELSE LexLess(Tail(p), Tail(q))
 
-DfsRank(c)  == 1 + Cardinality({d \in early : LexLess(Path(d), Path(c))})
-LateRank(c) == 1 + Cardinality({d \in Late : d < c})
-CanonicalIds == [c \in Classes |-> IF c \in early THEN DfsRank(c)
-                                   ELSE IF c \in Late THEN Cardinality(early) + LateRank(c)
-                                   ELSE 0]
+DfsRank(c)    == 1 + Cardinality({d \in Concrete : LexLess(Path(d), Path(c))})
+CanonicalIds == [c \in Classes |-> IF c \in Concrete THEN DfsRank(c) ELSE 0]
 
 ----------------------------------------------------------------------------
 (* Julia dispatch on the hierarchy, and WT's DispatchEntry set. *)
@@ -205,8 +200,8 @@ MostSpec(s, t) == {m \in Appl(s, t) : \A m2 \in Appl(s, t) : \A i \in 1..K(s) : 
 HasEntry(s, t) == Cardinality(MostSpec(s, t)) = 1          \* unique most specific; else MethodError
 Target(s, t)   == CHOOSE m \in MostSpec(s, t) : TRUE
 
-JuliaEntries(s) == {t \in Tup(K(s), early) : HasEntry(s, t)}   \* the specializations (dedup by tuple)
-Entries(s) == ent[s]                                            \* build_dispatch_tables' entry set
+JuliaEntries(s) == {t \in Tup(K(s), Concrete) : HasEntry(s, t)}  \* the specializations (dedup by tuple)
+Entries(s) == ent[s]                                              \* build_dispatch_tables' entry set
 
 (* pack_dispatch_selectors!: axes that vary on the id tuples; 1 or 2 are routable. *)
 HasTable(s) == Cardinality(Entries(s)) >= 2                 \* threshold = 2
@@ -256,15 +251,13 @@ HeaviestUnpacked == {s \in Unpacked : \A s2 \in Unpacked : Weight(s) >= Weight(s
 ----------------------------------------------------------------------------
 Init ==
     /\ parent \in {p \in [Classes -> Types] : \A c \in Classes : p[c] < c}
-    /\ early \in {e \in SUBSET Concrete : e # {} /\ Cardinality(Concrete \ e) <= MaxLate}
     /\ methods \in MethodSpace
     /\ ent = [s \in Selectors |-> JuliaEntries(s)]
     /\ phase = "dfs"
-    /\ stack = << [node |-> Root, low |-> 1, pend |-> SortSeq(WorldKids(Root))] >>
+    /\ \E p \in ChildOrders(Kids(Root)) : stack = << [node |-> Root, low |-> 1, pend |-> p] >>
     /\ counter = 1
     /\ ids = [c \in Classes |-> 0]
     /\ ranges = [t \in Types |-> <<>>]
-    /\ extras = [t \in Types |-> {}]
     /\ table = {}
     /\ offs = [s \in Selectors |-> 0]
     /\ casc = {}
@@ -274,10 +267,10 @@ Init ==
     /\ pendCasc = {}
 
 ----------------------------------------------------------------------------
-(* (a) assign_type_ids!: dfs!(Any) with children in sort-key order. *)
+(* (a) assign_type_ids!: dfs!(Any) with children in sort-key order (or ANY   *)
+(* order, per UnsortedIteration -- the regression this model now guards).    *)
 
 Top == stack[Len(stack)]
-Frame(n, low) == [node |-> n, low |-> low, pend |-> SortSeq(WorldKids(n))]
 
 (* dfs!(child): a concrete leaf takes the counter; an abstract child opens a frame. *)
 DfsVisit ==
@@ -290,9 +283,10 @@ DfsVisit ==
                  /\ ranges'  = [ranges EXCEPT ![k] = <<counter, counter>>]
                  /\ counter' = counter + 1
                  /\ stack'   = rest
-            ELSE /\ stack'   = Append(rest, Frame(k, counter))
+            ELSE /\ \E p \in ChildOrders(Kids(k)) :
+                      stack' = Append(rest, [node |-> k, low |-> counter, pend |-> p])
                  /\ UNCHANGED <<ids, ranges, counter>>
-    /\ UNCHANGED <<parent, early, methods, ent, phase, extras, table, offs, casc,
+    /\ UNCHANGED <<parent, methods, ent, phase, table, offs, casc,
                    firstAvail, packed, cur, pendCasc>>
 
 (* All kids visited: [low, counter-1], or the single-id branch when nothing was numbered. *)
@@ -306,13 +300,14 @@ DfsClose ==
               /\ counter' = counter
     /\ stack' = SubSeq(stack, 1, Len(stack) - 1)
     /\ phase' = IF Len(stack) = 1 THEN "pack" ELSE "dfs"
-    /\ UNCHANGED <<parent, early, methods, ent, ids, extras, table, offs, casc,
+    /\ UNCHANGED <<parent, methods, ent, ids, table, offs, casc,
                    firstAvail, packed, cur, pendCasc>>
 
 ----------------------------------------------------------------------------
 (* (b) build_dispatch_tables + pack_dispatch_selectors!: runs after numbering *)
 (* and BEFORE body codegen (compile.jl:1050-1055 vs the bodies at :1100+), so *)
-(* only early ids exist; a late type would have id 0 and its entry dropped.   *)
+(* every concrete type already has an id (Phase 12B: numbering is complete   *)
+(* before this phase runs -- there is no more "a late type has id 0" case).  *)
 
 Slot(p, s, kind, cid, cid2) == [pos |-> p, sel |-> s, kind |-> kind, cid |-> cid, cid2 |-> cid2]
 
@@ -338,7 +333,7 @@ PackLevel1 ==
                  ELSE /\ firstAvail' = firstAvail
                       /\ cur' = s
                       /\ pendCasc' = TiedCids(s)
-    /\ UNCHANGED <<parent, early, methods, ent, phase, stack, counter, ids, ranges, extras, casc>>
+    /\ UNCHANGED <<parent, methods, ent, phase, stack, counter, ids, ranges, casc>>
 
 (* One tied first-axis group: its second-axis rows are first-fit into the SAME table. *)
 PackLevel2 ==
@@ -361,46 +356,20 @@ PackLevel2 ==
                     /\ cur' = NoSel
                ELSE /\ firstAvail' = fa
                     /\ cur' = cur
-    /\ UNCHANGED <<parent, early, methods, ent, phase, stack, counter, ids, ranges, extras, offs, packed>>
+    /\ UNCHANGED <<parent, methods, ent, phase, stack, counter, ids, ranges, offs, packed>>
 
 PackDone ==
     /\ phase = "pack"
     /\ cur = NoSel
     /\ Unpacked = {}
-    /\ phase' = "lazy"
-    /\ UNCHANGED <<parent, early, methods, ent, stack, counter, ids, ranges, extras,
+    /\ phase' = "done"
+    /\ UNCHANGED <<parent, methods, ent, stack, counter, ids, ranges,
                    table, offs, casc, firstAvail, packed, cur, pendCasc>>
 
 ----------------------------------------------------------------------------
-(* (a') ensure_type_id!: body codegen touches a late type -> max(type_ids)+1, *)
-(* recorded on every abstract ancestor's extra ids (never on Any).           *)
-
-Unnumbered == {c \in Late : ids[c] = 0}
-MaxId      == Max({ids[c] : c \in Classes})
-
-Touch ==
-    /\ phase = "lazy"
-    /\ Unnumbered # {}
-    /\ \E c \in Unnumbered :
-         /\ UnsortedIteration \/ c = Min(Unnumbered)
-         /\ LET nid == MaxId + 1
-            IN /\ ids'    = [ids EXCEPT ![c] = nid]
-               /\ extras' = [a \in Types |-> IF a \in Anc(c) /\ a # Root
-                                              THEN extras[a] \cup {nid} ELSE extras[a]]
-    /\ UNCHANGED <<parent, early, methods, ent, phase, stack, counter, ranges,
-                   table, offs, casc, firstAvail, packed, cur, pendCasc>>
-
-LazyDone ==
-    /\ phase = "lazy"
-    /\ Unnumbered = {}
-    /\ phase' = "done"
-    /\ UNCHANGED <<parent, early, methods, ent, stack, counter, ids, ranges, extras,
-                   table, offs, casc, firstAvail, packed, cur, pendCasc>>
-
 Next ==
     \/ DfsVisit \/ DfsClose
     \/ PackLevel1 \/ PackLevel2 \/ PackDone
-    \/ Touch \/ LazyDone
     \/ (phase = "done" /\ UNCHANGED vars)      \* terminal: a compiled module
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
@@ -410,14 +379,13 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
 TypeOK ==
     /\ parent \in [Classes -> Types]
-    /\ early \subseteq Concrete /\ early # {}
-    /\ phase \in {"dfs", "pack", "lazy", "done"}
+    /\ phase \in {"dfs", "pack", "done"}
     /\ ids \in [Classes -> 0..(2 * N)]
     /\ counter \in 1..(2 * N + 1)
     /\ \A t \in Types : ranges[t] = <<>> \/ (Len(ranges[t]) = 2 /\ ranges[t][1] <= ranges[t][2])
     /\ packed \subseteq Selectors
 
-Numbered   == phase \in {"pack", "lazy", "done"}
+Numbered   == phase \in {"pack", "done"}
 HasRange(t) == ranges[t] # <<>>
 Lo(t) == ranges[t][1]
 Hi(t) == ranges[t][2]
@@ -430,19 +398,18 @@ RangesNest ==
          /\ ((~Sub(a, b) /\ ~Sub(b, a)) => (Hi(a) < Lo(b) \/ Hi(b) < Lo(a)))
 
 (* What the emitted `isa` computes: a concrete target compares classIds        *)
-(* (values.jl:714 / calls.jl:1888); an abstract target needs a DFS range and   *)
-(* then tests range OR extras (calls.jl:1978-2006 -- extras are consulted ONLY *)
-(* inside the has-range branch).                                              *)
+(* (values.jl:714 / calls.jl:1888); an abstract target needs a DFS range,      *)
+(* which every abstract ancestor of a numbered concrete type now has          *)
+(* (Phase 12B: the closed world is numbered once, so there is no more         *)
+(* range-less ancestor).                                                      *)
 IsaWT(c, T) ==
     IF T \in Concrete
       THEN ids[c] = ids[T]
-      ELSE IF ExtrasNeedRange
-        THEN HasRange(T) /\ (ids[c] \in Lo(T)..Hi(T) \/ ids[c] \in extras[T])
-        ELSE (HasRange(T) /\ ids[c] \in Lo(T)..Hi(T)) \/ ids[c] \in extras[T]
+      ELSE HasRange(T) /\ ids[c] \in Lo(T)..Hi(T)
 
-(* (1) RangeIsa over every concrete class, including the lazily numbered ones. *)
-(* T ranges over Classes: `isa(x, Any)` is folded by Julia inference before   *)
-(* WT sees it, so the root is never a range-check target.                     *)
+(* (1) RangeIsa over every concrete class. T ranges over Classes: `isa(x, Any)` *)
+(* is folded by Julia inference before WT sees it, so the root is never a     *)
+(* range-check target.                                                        *)
 RangeIsa ==
     phase = "done" => \A c \in Concrete, T \in Classes : IsaWT(c, T) <=> Sub(c, T)
 
@@ -499,14 +466,14 @@ Lookup(s, t) ==
 (* (4a) Every tuple WITH a Julia answer resolves to exactly that method. *)
 DispatchExact ==
     phase = "done" =>
-      \A s \in packed : \A t \in Tup(K(s), early) :
+      \A s \in packed : \A t \in Tup(K(s), Concrete) :
          HasEntry(s, t) => Lookup(s, t) = Ok(Target(s, t))
 
 (* (4b) Every tuple WITHOUT a Julia answer (MethodError) must trap, never run *)
 (* some other row silently.                                                   *)
 MissingMethodTraps ==
     phase = "done" =>
-      \A s \in packed : \A t \in Tup(K(s), early) :
+      \A s \in packed : \A t \in Tup(K(s), Concrete) :
          ~HasEntry(s, t) => Lookup(s, t) = Trap
 
 (* (5) Determinism: the numbering is a function of the hierarchy alone. *)

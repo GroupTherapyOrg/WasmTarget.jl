@@ -7,6 +7,16 @@
 # (see selector_table.jl). The FNV-1a hash apparatus that predated it (per-function
 # hash tables, probe loops, i32-array globals) was DELETED in M8.4.
 
+"""A receiver type can drive class-selector dispatch only when it is REPRESENTED as a
+wasm struct with a classId header field. `isstructtype` alone over-admits: `Memory`/
+`MemoryRef` are `isstructtype` in Julia but WT lowers them to a wasm ARRAY (no classId
+field) — giving one a dispatch axis produced a wrapper with no struct to cast to (the
+`_la_sub` regression, compile.jl `_collect_reachable_ir_types`). Numeric/primitive
+receivers dispatch as compile-time-resolved overloads, never through the selector table."""
+_classid_dispatchable(@nospecialize(T)) =
+    T isa DataType && isstructtype(T) && !isprimitivetype(T) && !(T <: Number) &&
+    !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
+
 """
 One entry in a dispatch table (compile-time): the typeId tuple of a registered
 specialization and its target/wrapper function indices.
@@ -119,8 +129,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
         local _has_class_axis = false
         local _min_ar = minimum(length(i.arg_types) for i in infos)
         for j in 1:_min_ar
-            if all(i -> (local T = i.arg_types[j]; T isa DataType && isstructtype(T) &&
-                         !isprimitivetype(T) && !(T <: Number)), infos)
+            if all(i -> _classid_dispatchable(i.arg_types[j]), infos)
                 _has_class_axis = true
                 break
             end

@@ -836,7 +836,7 @@ function _compile_closed_world_plan(functions::Vector;
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
                    StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
                    DomainError, InexactError, KeyError, MethodError,
-                   AssertionError, UndefVarError)
+                   AssertionError, UndefVarError, FieldError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 
@@ -1715,58 +1715,10 @@ function compile_module(functions::Vector;
         root_bindings, link_roots, optimize_ir, register_ir_types)
 end
 
-"""
-    _collect_reachable_ir_types(function_data) -> Set{DataType}
+# _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
+# ir.jl — it is the boundary's OWN input side, consuming raw CodeInfo exactly like
+# get_typed_ir (R29a/R29b exempt ir.jl for the same reason).
 
-census F2 — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
-number every class of the component once, before codegen). Walks every function's
-typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
-types reachable from the IR so `assign_type_ids!` numbers the whole world in one
-DFS. PURE COLLECTION — registration stays lazy (eager registration reorders field
-resolution and forks layouts); a collected type registered later receives its
-pre-assigned id via `ensure_type_id!`.
-"""
-function _collect_reachable_ir_types(function_data)::Set{DataType}
-    out = Set{DataType}()
-    seen = Set{Any}()
-    function reg!(@nospecialize(T))
-        T === nothing && return
-        T in seen && return
-        push!(seen, T)
-        if T isa Union
-            reg!(T.a); reg!(T.b)
-            return
-        end
-        T isa DataType || return
-        if T <: Type && T !== Type && length(T.parameters) == 1
-            reg!(T.parameters[1])
-            return
-        end
-        # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
-        # wasm arrays (an id here admits them as dispatch candidates whose
-        # wrappers then have no struct to cast to — the _la_sub regression)
-        if isconcretetype(T) && isstructtype(T) &&
-           (!(T <: Function) || T in _ENROLLED_CALLABLE_TYPES[]) && T !== Core.Box &&
-           !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
-            push!(out, T)
-        end
-    end
-    for fd in function_data
-        code_info = fd[4]
-        code_info === nothing && continue
-        for at in fd[2]
-            reg!(at isa Type ? at : typeof(at))
-        end
-        reg!(fd[5])
-        ssats = code_info.ssavaluetypes
-        if ssats isa Vector
-            for t in ssats
-                reg!(Core.Compiler.widenconst(t))
-            end
-        end
-    end
-    return out
-end
 # Julia may discover several specialized functions with the same source-level name.
 # Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
 # ExportsBuilder, rejects duplicate names instead of silently repairing the request.

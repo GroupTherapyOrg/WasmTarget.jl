@@ -66,4 +66,192 @@ function infer_return_type(@nospecialize(f), argtypes::Tuple;
     end
 end
 
+"""
+    _collect_reachable_ir_types(function_data) -> Set{DataType}
+
+Phase 12B — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
+ClassIdNumbering numbers every class of the component ONCE, before codegen, with no
+second pass). Walks every function's typed-IR ssa/arg/return types and decomposes
+Unions, returning EVERY concrete kind reachable from the IR that can carry a classId —
+structs, closures, `Core.Box`, and primitives (`Char`, `Int128`, a user `primitive
+type`, …) — so `assign_type_ids!` numbers the whole world in one DFS and
+`ensure_type_id!` never needs to allocate one afterwards. PURE COLLECTION —
+registration stays lazy (eager registration reorders field resolution and forks
+layouts); a collected type registered later receives its pre-assigned id.
+
+Lives here, not compile.jl: like `get_typed_ir`, this is the boundary's OWN input
+side — the one place that reads a raw `CodeInfo`'s statements directly (R29a/R29b
+exempt ir.jl for exactly that reason).
+
+`Memory`/`MemoryRef` ARE admitted (they are `isstructtype` and reachable — e.g. a
+type-value `getfield(Memory{UInt8}, :layout)` inside `copy(::Dict)`'s native
+`unsafe_copyto!`, which reads a real classId here even though it never boxes a
+`Memory` VALUE); WT lowers them to a wasm ARRAY with no classId struct field, so
+`dispatch.jl`'s `_classid_dispatchable` carries its OWN, narrower exclusion for the
+one place that matters — treating one as a selector-table dispatch axis, which
+needs an actual struct to downcast to (the `_la_sub` regression this guards).
+
+A second walk covers what the INFERRED types above miss: a literal VALUE embedded
+directly in a statement's args (constant-folded, never boxed into its own SSA slot —
+e.g. inference SROAs `Any[1, 2, 3]` into `Base.getfield((1, 2, 3), i)`, so the tuple
+`Tuple{Int64,Int64,Int64}` never appears as any ssa/arg/return type) and an
+effectively-final GLOBAL BINDING's bound value (`const D = Dict(...)`; typed IR reads
+its fields directly off `GlobalRef(Main, :D)` without ever materializing a
+`Dict{...}`-typed SSA value, the same constant-propagation Julia's own inliner uses —
+`_lower_getglobal_constfold!`, builtins.jl, resolves a GlobalRef to its value the same
+way) AND a function passed as ordinary DATA (`Core._apply_iterate(Base.iterate,
+Core.tuple, itr)` — a splat lowering — passes the `iterate` FUNCTION itself as `args[2]`,
+which needs a classId the same as any other boxed value). IR-structural nodes
+(SSAValue, PhiNode, GlobalRef itself, …) are not values and are excluded; the ONE
+callee position (`args[1]` of a `:call`, `args[1:2]` of an `:invoke` — the
+CodeInstance/MethodInstance plus the GlobalRef naming the target) is skipped instead,
+since a statically-dispatched callee is NEVER boxed/isa-checked through
+`ensure_type_id!` — admitting it would number a class nothing consumes.
+
+Also walks `slottypes`: an ARGUMENT slot's own type — e.g. a trailing `Vararg{Any,N}`
+parameter packs into ONE Tuple-typed slot (`Base.kwerr(kw, args::Vararg{Any,N})`) — is
+neither an ssavaluetype (it's not an SSA temporary) nor in a call-site's flattened
+argument types; `slottypes` is the only place it appears. And recurses into a
+registered struct's OWN field types (a Tuple's own elements included): a field can
+itself be a concrete kind that needs a classId nobody else names — e.g. a closure
+struct's captured predicate field `f::typeof(iseven)` — so it is not reachable via any
+ssa/arg/slot type on its own.
+"""
+const _IR_META_TYPES = Set{DataType}([
+    Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.PhiNode, Core.PhiCNode,
+    Core.UpsilonNode, Core.GotoNode, Core.GotoIfNot, Core.ReturnNode, LineNumberNode,
+    Core.NewvarNode, Core.SlotNumber, Core.MethodInstance, Core.CodeInstance, Core.CodeInfo,
+])
+
+"""
+    _collector_static_type(arg, code_info) -> Type
+
+A static, `ctx`-free echo of `infer_value_type` (context.jl) for the branches that
+don't need one — used ONLY to reconstruct the composite type `_lower_tuple!` (the ONE
+`Core.tuple` lowering) will give a `Core.tuple(...)` call's RESULT, so the collector can
+admit that exact composite. SSAValue/Argument read the raw (unrefined) ssa/slot type,
+which is what `ctx.ssa_types`/`ctx.arg_types` are themselves seeded from.
+"""
+function _collector_static_type(@nospecialize(arg), code_info)::Type
+    v = arg isa QuoteNode ? arg.value : arg
+    if v isa Core.SSAValue
+        ssats = code_info.ssavaluetypes
+        return (ssats isa Vector && 1 <= v.id <= length(ssats)) ?
+               Core.Compiler.widenconst(ssats[v.id]) : Any
+    elseif v isa Core.Argument
+        slots = code_info.slottypes
+        return (slots isa Vector && 1 <= v.n <= length(slots)) ?
+               Core.Compiler.widenconst(slots[v.n]) : Any
+    elseif v isa GlobalRef
+        (isdefined(v.mod, v.name) && isconst(v.mod, v.name)) || return Any
+        gv = getfield(v.mod, v.name)
+        return gv isa Type ? Type{gv} : typeof(gv)
+    elseif v isa Type
+        return Type{v}
+    elseif v === nothing
+        return Nothing
+    else
+        return typeof(v)
+    end
+end
+
+function _collect_reachable_ir_types(function_data)::Set{DataType}
+    out = Set{DataType}()
+    seen = Set{Any}()
+    function reg!(@nospecialize(T))
+        T === nothing && return
+        T in seen && return
+        push!(seen, T)
+        if T isa Union
+            reg!(T.a); reg!(T.b)
+            return
+        end
+        T isa DataType || return
+        # is_runtime_vararg_tuple_type (structs.jl): `Tuple{Vararg{E}}` with a concrete
+        # element E is Julia-NON-concrete (unbounded length) but WT gives it ONE
+        # registrable {Object, data, size} representation (register_vararg_tuple_type!)
+        # — a genuine exception to "classId means concrete leaf", not a gap.
+        if is_runtime_vararg_tuple_type(T)
+            push!(out, T)
+            return
+        end
+        if T <: Type && T !== Type && length(T.parameters) == 1
+            reg!(T.parameters[1])
+            return
+        end
+        # A Tuple carrying a `Type{X}` element (an error-message tuple's trailing
+        # `Int64`, boxed by value) is `isdispatchtuple` — Julia's own "this is one
+        # exact compiled signature" test — but NOT `isconcretetype`: Tuple's diagonal
+        # rule treats a `Type{X}` parameter as non-concrete even for concrete X.
+        is_dispatch_tuple = T <: Tuple && Base.isdispatchtuple(T)
+        (isconcretetype(T) || is_dispatch_tuple) || return
+        if isstructtype(T)
+            push!(out, T)
+            for ft in fieldtypes(T)
+                reg!(ft)
+            end
+        elseif isprimitivetype(T)
+            push!(out, T)
+        end
+    end
+    for fd in function_data
+        code_info = fd[4]
+        code_info === nothing && continue
+        for at in fd[2]
+            reg!(at isa Type ? at : typeof(at))
+        end
+        reg!(fd[5])
+        ssats = code_info.ssavaluetypes
+        if ssats isa Vector
+            for t in ssats
+                reg!(Core.Compiler.widenconst(t))
+            end
+        end
+        slots = code_info.slottypes
+        if slots isa Vector
+            for t in slots
+                reg!(Core.Compiler.widenconst(t))
+            end
+        end
+        for stmt in code_info.code
+            # `Core.tuple(a, b, ...)` (builtins.jl `_lower_tuple!`, the ONE Core.tuple
+            # lowering) types the CONSTRUCTED tuple from its own per-argument types —
+            # `Tuple{[infer_value_type(arg, ctx) for arg in args]...}` — a literal Type
+            # argument (e.g. an error-message tuple's trailing `Int64`) becomes the
+            # SINGLETON `Type{Int64}`, not the `DataType` Julia's own inference widens
+            # the whole tuple's ssavaluetype to. No per-argument walk can reconstruct
+            # that composite after the fact, so it is synthesized here the same way.
+            if stmt isa Expr && stmt.head === :call && length(stmt.args) > 1
+                callee = stmt.args[1]
+                callee_v = callee isa GlobalRef ?
+                    (isdefined(callee.mod, callee.name) ? getfield(callee.mod, callee.name) : nothing) :
+                    callee
+                if callee_v === Core.tuple
+                    reg!(Tuple{Type[_collector_static_type(a, code_info) for a in stmt.args[2:end]]...})
+                end
+            end
+            # The callee position is IR structure, not a value: args[1] of a `:call`
+            # (the callee itself) and args[1:2] of an `:invoke` (CodeInstance, then the
+            # GlobalRef naming the target) are skipped; every other slot — including a
+            # function passed as ordinary DATA, e.g. `_apply_iterate`'s `iterate` arg —
+            # is a real value and walked.
+            skip_from = stmt isa Expr ?
+                (stmt.head === :invoke ? 3 : stmt.head === :call ? 2 : 1) : 1
+            args = stmt isa Expr ? stmt.args : (stmt,)
+            for i in skip_from:length(args)
+                lit = args[i]
+                v = lit isa QuoteNode ? lit.value : lit
+                if v isa GlobalRef
+                    (isdefined(v.mod, v.name) && isconst(v.mod, v.name)) || continue
+                    v = getfield(v.mod, v.name)
+                end
+                v === nothing && continue
+                typeof(v) in _IR_META_TYPES && continue
+                reg!(v isa Type ? v : typeof(v))
+            end
+        end
+    end
+    return out
+end
+
 

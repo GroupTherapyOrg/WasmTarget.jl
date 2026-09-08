@@ -110,11 +110,6 @@ mutable struct TypeRegistry
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
     lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
-    # Post-DFS drift ids — a concrete type numbered AFTER the closed-world DFS
-    # (ensure_type_id! max+1) lies outside every abstract's [low,high]; each abstract
-    # ancestor records it here so isa checks the range PLUS these (dart's multi-range,
-    # code_generator.dart:3862-3883). Makes isa sound INDEPENDENT of numbering order.
-    type_extra_ids::Union{Nothing, Dict{Type, Vector{Int32}}}
     # (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
     # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
@@ -143,7 +138,6 @@ TypeRegistry() = TypeRegistry(
     UInt32[],                    # module_init_functions
     Dict{String, UInt32}(),       # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
-    Dict{Type, Vector{Int32}}(),            # type_extra_ids
     nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}()                                # step5 class-DAG synthetics
 )
@@ -166,7 +160,6 @@ TypeRegistry(::Val{:minimal}) = TypeRegistry(
     nothing,  # module_init_functions
     nothing,  # string_constant_globals (census F3)
     nothing,  # lazy_string_globals
-    nothing,  # type_extra_ids
     nothing, nothing, nothing,  # closure layouter
     nothing                     # step5 class-DAG synthetics
 )
@@ -498,8 +491,13 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
         # Sort children deterministically by type name for reproducible IDs
         sort!(kids, by=T -> string(T))
 
-        if isempty(kids) && isconcretetype(node)
-            # Leaf concrete type
+        if isempty(kids) && (isconcretetype(node) || is_runtime_vararg_tuple_type(node) ||
+                             (node <: Tuple && Base.isdispatchtuple(node)))
+            # Leaf concrete type — is_runtime_vararg_tuple_type (structs.jl): `Tuple{Vararg{E}}`
+            # is Julia-non-concrete (unbounded length) but WT gives it ONE registrable
+            # {Object, data, size} representation; a Tuple carrying a `Type{X}` element
+            # is `isdispatchtuple` but not `isconcretetype` (Tuple's diagonal rule) — both
+            # need a real classId leaf too.
             type_ids[node] = counter[]
             type_ranges[node] = (counter[], counter[])
             counter[] += Int32(1)
@@ -601,31 +599,17 @@ end
 """
     ensure_type_id!(registry, T) -> Int32
 
-Get or assign a unique typeId for type T. If T doesn't have one yet,
-assign the next available ID. Returns the typeId.
+Get T's DFS-assigned typeId. Phase 12B: the closed world is numbered exactly ONCE, by
+`assign_type_ids!` — `_collect_reachable_ir_types` admits every concrete kind that can
+carry a classId before it runs, so every `T` codegen ever asks for is already numbered.
+A type reaching here unnumbered is a collector bug (a real, IR-reachable kind the
+collector failed to admit), never a reason to allocate a second, order-dependent id.
 """
 function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
     existing = get_type_id(registry, T)
     existing > 0 && return existing
-    # Assign next available ID (find max + 1)
-    registry.type_ids === nothing && (registry.type_ids = Dict{Type, Int32}())
-    max_id = Int32(0)
-    for (_, id) in registry.type_ids
-        max_id = max(max_id, id)
-    end
-    new_id = max_id + Int32(1)
-    registry.type_ids[T] = new_id
-    # Record the drift id on every abstract ancestor — isa checks the DFS
-    # range PLUS these extras (dart's multi-range), so numbering order can't break it.
-    if registry.type_extra_ids !== nothing && T isa DataType && isconcretetype(T)
-        anc = supertype(T)
-        while anc !== Any && anc isa DataType
-            base = isempty(anc.parameters) ? anc : anc.name.wrapper
-            base isa DataType && push!(get!(Vector{Int32}, registry.type_extra_ids, base), new_id)
-            anc = supertype(anc)
-        end
-    end
-    return new_id
+    error("ensure_type_id!: $T reached codegen unnumbered — _collect_reachable_ir_types " *
+          "must admit every concrete kind that can carry a classId before assign_type_ids! runs")
 end
 
 """
@@ -707,8 +691,8 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 end
 
 """builder-native (THE implementation): push the type's DFS id as i32.
-Uses ensure_type_id! so types registered after assign_type_ids!()
-(isa checks / struct constants) still get unique, matching typeIds."""
+Goes through ensure_type_id! (a pure lookup — Phase 12B: every T here was already
+numbered by assign_type_ids!'s one DFS)."""
 function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
     i32_const!(b, Int64(ensure_type_id!(registry, T)))
     return b

@@ -3325,9 +3325,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     if_!(fb)                                   # discriminable ($JlBase struct)
                     local_get!(fb, UInt32(_ta_tmp))
                     emit_typeof!(fb, _ta_base)
-                    emit_classid_ranges!(fb, ctx, _ta_low, _ta_high,
-                        ctx.type_registry.type_extra_ids === nothing ? Int32[] :
-                        get(ctx.type_registry.type_extra_ids, _ta_target isa DataType && !isempty(_ta_target.parameters) ? _ta_target.name.wrapper : _ta_target, Int32[]))
+                    emit_classid_range_check!(fb, _ta_low, _ta_high)
                     num!(fb, Opcode.I32_EQZ)
                     if_!(fb)                                   # out of range → THROW
                     ensure_exception_tag!(ctx.mod)
