@@ -100,387 +100,69 @@ function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::B
     return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
 end
 
-"""
-Check if a function is a WasmTarget intrinsic that needs special code generation.
-Returns true if the function should be generated as an intrinsic instead of compiling Julia IR.
-"""
-function is_intrinsic_function(f)::Bool
-    # Only functions can be intrinsics, not types (constructors)
-    if !(f isa Function)
-        return false
+# ============================================================================
+# STANDALONE_INTRINSIC_BODIES — Method-keyed, for entries function_data compiles
+# as their OWN body (not a compile_invoke! call-site substitution).
+#
+# Every call site of `rethrow` is already replaced inline by compile_invoke!'s
+# Method-keyed INVOKE_INTRINSICS (_invoke_rethrow_b, invoke.jl) — L115 covers
+# that. But `rethrow`'s native body is itself just a bare `:foreigncall` to
+# `jl_rethrow`/`jl_rethrow_other` with no lowering, and Julia's own closed-world
+# discovery (collect_closed_world) adds `rethrow`'s MethodInstance to
+# function_data as a real entry needing a compiled body whenever ANY reachable
+# `:invoke` resolves to it — independently of whether compile_invoke! later
+# replaces that call site. This is common: `try ... finally ... end` nested
+# inside an enclosing `catch` lowers to an IMPLICIT `rethrow()` call on the
+# exceptional path with no `rethrow` token anywhere in the Julia source
+# (confirmed by deleting this arm: a differential test with two nested
+# try/finally regions inside a catch failed to compile with no source-text
+# `rethrow(` anywhere in the test file). The compiled body below is only ever
+# reached as this closed-world placeholder; per L115 the actual call sites never
+# call it. It ignores its argument, if any — `rethrow(e)`'s `e` is always the
+# ALREADY-caught exception in `$current_exn`, so rethrowing the global slot is
+# exact, not an approximation, for the only valid call shape (`rethrow()`/
+# `rethrow(e)` from inside the handler that caught `e`).
+# ============================================================================
+const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
+
+"""Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use."""
+function _build_standalone_intrinsic_bodies!()
+    isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
+    for m in methods(Base.rethrow)
+        STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body
     end
-    fname = nameof(f)
-    return f === Base.rethrow ||
-           fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new,
-                     :str_setchar!, :str_concat, :str_substr]
+    return nothing
 end
 
-"""
-Generate intrinsic function body for WasmTarget runtime functions.
-These functions have special WASM implementations that differ from their Julia fallbacks.
-Returns the function body bytes, or nothing if not an intrinsic.
-"""
-function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
-                                 return_type::Union{Type, Nothing}=nothing)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
-    # Only functions can have intrinsic bodies
-    if !(f isa Function)
-        return nothing
+"""The one standalone body every `Base.rethrow` MethodInstance compiles to when
+function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above)."""
+function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                           return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
+    _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+    b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
+    ensure_exception_tag!(mod)
+    global_get!(b, ensure_exception_global!(mod), AnyRef)
+    ref_null!(b, ExternRef)
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    end_block!(b)
+    return (builder_code(b), WasmValType[])
+end
+
+"""Look up whether (f, arg_types) resolves to a Method registered in
+STANDALONE_INTRINSIC_BODIES, and if so return its compiled body."""
+function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                    return_type::Union{Type,Nothing}=nothing)::Union{Tuple{Vector{UInt8},Vector{WasmValType}},Nothing}
+    f isa Function || return nothing
+    _build_standalone_intrinsic_bodies!()
+    isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
+    m = try
+        which(f, arg_types)
+    catch
+        nothing
     end
-    fname = nameof(f)
-    # tag-run: the builder declares its params (the same julia→wasm mapping the
-    # emitted function will carry) so the tracker reads truth for every local.get
-    local _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-    local _ib_results = (return_type === nothing || return_type === Nothing || return_type === Union{}) ?
-                        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-    b = InstrBuilder(_ib_params, _ib_results; func_name="generate_intrinsic_body", mod=mod)
-    extra_locals = WasmValType[]
-
-    if f === Base.rethrow
-        ensure_exception_tag!(mod)
-        global_get!(b, ensure_exception_global!(mod), AnyRef)
-        ref_null!(b, ExternRef)
-        throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-    end
-
-    # Get string array type for string operations
-    str_type_idx = get_string_array_type!(mod, type_registry)
-    # parity(class_info.dart:18 FieldIndex): params are the CLASSED string — every string push reads through
-    # to the DATA array (dart: methods read the class's array field).
-    # parity(class_info.dart:18 FieldIndex): string-returning bodies publish the CLASSED string. The caller-visible
-    # result type is $JlString; the array is saved through a dedicated extra local.
-    function _wrap_result_str!(bb, scratch_idx)
-        builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
-        local_set!(bb, scratch_idx)
-        i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
-        i32_const!(bb, 0)
-        local_get!(bb, scratch_idx)
-        i32_const!(bb, -1)
-        struct_new!(bb, get_string_struct_type!(mod, type_registry),
-                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true), I32])
-    end
-    _str0!(bb) = (local_get!(bb, 0);
-                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
-                              ConcreteRef(UInt32(str_type_idx), true)))
-
-    if fname === :str_char
-        # str_char(s::String, i::Int32)::Int32
-        # Gets character at 1-based index
-        # local 0 = string (array ref)
-        # local 1 = index (i32)
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # index
-        # Subtract 1 for 0-based indexing
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        # array.get_u (packed i8 → i32)
-        array_get!(b, str_type_idx, I32; signed=false)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_getchar
-        # str_getchar(s::String, i::Int32)::Int32
-        # Decode UTF-8 character at 1-based byte index → Unicode codepoint as i32
-        # local 0 = string (array ref)
-        # local 1 = index (i32, 1-based)
-        # extra locals: local 2 = b0 (first byte), local 3 = idx0 (0-based index)
-        push!(extra_locals, I32)  # local 2: b0
-        push!(extra_locals, I32)  # local 3: idx0
-
-        # idx0 = i - 1 (convert 1-based to 0-based)
-        local_get!(b, 1)  # i
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        local_set!(b, 3)  # idx0
-
-        # b0 = s[idx0] (array.get_u)
-        _str0!(b)          # string DATA
-        local_get!(b, 3)  # idx0
-        array_get!(b, str_type_idx, I32; signed=false)
-        local_set!(b, 2)  # b0
-
-        # if b0 < 0x80: return b0 (ASCII)
-        # else if b0 < 0xE0: 2-byte
-        # else if b0 < 0xF0: 3-byte
-        # else: 4-byte
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0x80))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))  # result type i32
-
-        # === ASCII: return b0 ===
-        local_get!(b, 2)  # b0
-
-        else_!(b)
-
-        # Check if 2-byte (b0 < 0xE0)
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0xE0))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))
-
-        # === 2-byte: ((b0 & 0x1F) << 6) | (s[idx0+1] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x1F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        # s[idx0+1] & 0x3F
-        _str0!(b)          # string DATA
-        local_get!(b, 3)  # idx0
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        else_!(b)
-
-        # Check if 3-byte (b0 < 0xF0)
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0xF0))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))
-
-        # === 3-byte: ((b0 & 0x0F) << 12) | ((s[idx0+1] & 0x3F) << 6) | (s[idx0+2] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x0F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x0C)  # 12
-        num!(b, Opcode.I32_SHL)
-        # (s[idx0+1] & 0x3F) << 6
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # s[idx0+2] & 0x3F
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 2)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        else_!(b)
-
-        # === 4-byte: ((b0 & 0x07) << 18) | ((s[idx0+1] & 0x3F) << 12) | ((s[idx0+2] & 0x3F) << 6) | (s[idx0+3] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x07)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x12)  # 18
-        num!(b, Opcode.I32_SHL)
-        # (s[idx0+1] & 0x3F) << 12
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x0C)  # 12
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # (s[idx0+2] & 0x3F) << 6
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 2)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # s[idx0+3] & 0x3F
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 3)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        end_block!(b)  # end 3-byte if/else (4-byte)
-        end_block!(b)  # end 2-byte if/else (3/4-byte)
-        end_block!(b)  # end ASCII if/else (multi-byte)
-
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_len
-        # str_len(s::String)::Int32
-        # Returns byte length of string (ncodeunits)
-        # local 0 = string (array ref)
-        _str0!(b)          # string DATA
-        # array.len
-        array_len!(b)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_charlen
-        # str_charlen(s::String)::Int32
-        # Count UTF-8 codepoints by counting non-continuation bytes
-        # A byte is a continuation byte if (byte & 0xC0) == 0x80
-        # local 0 = string (array ref)
-        # local 1 = i (loop counter), local 2 = count, local 3 = len
-        push!(extra_locals, I32)  # local 1: i
-        push!(extra_locals, I32)  # local 2: count
-        push!(extra_locals, I32)  # local 3: len
-
-        # len = array.len(s)
-        _str0!(b)
-        array_len!(b)
-        local_set!(b, 3)  # len
-
-        # i = 0, count = 0 (already zero-initialized)
-
-        # block $exit (result i32)
-        exit_label = block!(b, UInt8(I32))
-
-        # loop $loop (void)
-        loop_label = loop!(b)
-
-        # if i >= len: break with count
-        local_get!(b, 1)  # i
-        local_get!(b, 3)  # len
-        num!(b, Opcode.I32_GE_U)
-        if_!(b)
-        local_get!(b, 2)  # count
-        br!(b, exit_label)
-        end_block!(b)
-
-        # byte = s[i]; if (byte & 0xC0) != 0x80: count++
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, Int32(0xC0))
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, Int32(0x80))
-        num!(b, Opcode.I32_NE)
-        if_!(b)
-        # count++
-        local_get!(b, 2)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 2)
-        end_block!(b)
-
-        # i++
-        local_get!(b, 1)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 1)
-
-        # continue loop
-        br!(b, loop_label)
-
-        end_block!(b)  # end loop
-        unreachable!(b)  # structural trap (dart-legit dead path)
-        end_block!(b)  # end block
-
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_eq
-        # str_eq(a::String, b::String)::Bool — the shared strings.jl core
-        # (reused, not re-derived) does the actual length/element comparison.
-        # local 0 = a (array ref), local 1 = b (array ref)
-        # extra locals: local 2 = len, local 3 = i (loop counter)
-        push!(extra_locals, I32)  # local 2: len
-        push!(extra_locals, I32)  # local 3: i
-        len_local = 2 + length(extra_locals) - 2
-        i_local = 2 + length(extra_locals) - 1
-        builder_set_local_type!(b, len_local, I32)
-        builder_set_local_type!(b, i_local, I32)
-
-        _emit_string_equal_core!(b, str_type_idx, 0, 1, len_local, i_local)
-
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_new
-        # str_new(len::Int32)::String
-        # Create new string array of given length
-        local_get!(b, 0)  # length
-        array_new_default!(b, str_type_idx)
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
-        _wrap_result_str!(b, 1 + length(extra_locals) - 1)   # 1 param
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_setchar!
-        # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
-        # Sets character at 1-based index
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # index
-        # Subtract 1 for 0-based indexing
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        local_get!(b, 2)  # char
-        # array.set
-        array_set!(b, str_type_idx, I32)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_concat
-        # str_concat(a::String, b::String)::String — the shared strings.jl core
-        # (reused, not re-derived) does the actual array.new_default + array.copy work;
-        # this arm only unwraps the CLASSED params into DATA-array locals for it.
-        # local 0 = a (array ref), local 1 = b (array ref)
-        # parity(class_info.dart:18 FieldIndex): params are CLASSED strings — unwrap once into array locals
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
-        _a_data = 2 + length(extra_locals) - 2
-        _b_data = 2 + length(extra_locals) - 1
-        builder_set_local_type!(b, _a_data, extra_locals[end - 1])
-        builder_set_local_type!(b, _b_data, extra_locals[end])
-        _str0!(b); local_set!(b, _a_data)
-        local_get!(b, 1)
-        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
-                    ConcreteRef(UInt32(str_type_idx), true))
-        local_set!(b, _b_data)
-
-        push!(extra_locals, I32)  # offset
-        push!(extra_locals, I32)  # total_len
-        str_ref_type = ConcreteRef(str_type_idx, true)
-        push!(extra_locals, str_ref_type)  # result array ref
-        offset_local = 2 + length(extra_locals) - 3
-        total_len_local = 2 + length(extra_locals) - 2
-        result_local = 2 + length(extra_locals) - 1
-        builder_set_local_type!(b, offset_local, I32)
-        builder_set_local_type!(b, total_len_local, I32)
-        builder_set_local_type!(b, result_local, str_ref_type)
-
-        _emit_string_concat_core!(b, str_type_idx, Int[_a_data, _b_data],
-                                  offset_local, total_len_local, result_local)   # leaves result on the stack
-
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
-        _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_substr
-        # str_substr intrinsic body not implemented.
-        # The inline version at call sites properly implements this using
-        # array.new + array.copy. This path is only hit when str_substr is
-        # called as a standalone function (not inlined at call site).
-        unreachable!(b)  # structural trap (dart-legit dead path)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-    end
-
-    return nothing
+    m === nothing && return nothing
+    haskey(STANDALONE_INTRINSIC_BODIES, m) || return nothing
+    return STANDALONE_INTRINSIC_BODIES[m](arg_types, mod, type_registry; return_type=return_type)
 end
 
 """Return whether a typed `print`/`println`/`show` call has an explicit IO receiver.
@@ -1005,11 +687,11 @@ function _compile_closed_world_plan(functions::Vector;
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
-        # Check if this is an intrinsic function that needs special code generation
-        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type) : nothing
 
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
+
+        standalone_body = _standalone_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type)
 
         # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
@@ -1019,9 +701,8 @@ function _compile_closed_world_plan(functions::Vector;
             dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
         end
 
-        if intrinsic_body !== nothing
-            # Use the intrinsic body directly
-            body, locals = intrinsic_body
+        if standalone_body !== nothing
+            body, locals = standalone_body
         elseif dispatch_dt !== nothing
             # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)

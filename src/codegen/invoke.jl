@@ -39,11 +39,11 @@ end
 # Populated ONCE, lazily, on first use (`_build_invoke_intrinsics!`) from a
 # static list of `methods(f)` calls — never rescanned per invoke.
 #
-# `str_hash`/`str_len`/`repeat`/`lpad`/`rpad` are deliberately ABSENT: they are
-# ordinary Julia functions (or, for `repeat(::String,::Int)`, an
-# `@overlay WASM_METHOD_TABLE` body) that the generic cross-call/devirtualized
-# path already compiles correctly — adding a redundant registry entry would be
-# a second producer for the same op, exactly what L105-style locks forbid.
+# `repeat`/`lpad`/`rpad` are deliberately ABSENT: they are ordinary Julia
+# functions (or, for `repeat(::String,::Int)`, an `@overlay WASM_METHOD_TABLE`
+# body) that the generic cross-call/devirtualized path already compiles
+# correctly — adding a redundant registry entry would be a second producer
+# for the same op, exactly what L105-style locks forbid.
 # ============================================================================
 
 """
@@ -82,168 +82,6 @@ function _register_invoke_intrinsic!(f, entry::InvokeIntrinsicEntry; argtypes=no
 end
 
 # ---- :standalone builders (self-contained; push every input themselves) ----
-
-"""str_char(s,i) -> Int32. REWRITTEN standalone (the pre-migration inline arm
-assumed its string+index were already on `fb`'s stack via the continuation
-convention; that convention is unsound for a freshly-built, unseeded
-`InstrBuilder` — confirmed by the SAME crash `arr_get`/`arr_len` hit before
-this migration, `test/probe_bytes.jl`'s wt_arr_get discovery). Push both
-operands explicitly through the funnel, then the original post-push logic."""
-function _invoke_str_char_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bchr = _ctx_builder(ctx, "compile_invoke")
-    _emit_str_arg!(bchr, args[1], ctx, str_type_idx)
-    emit_value!(bchr, args[2], ctx, I32)   # funnel: I64 args narrow via convert_type!'s numeric ladder
-    i32_const!(bchr, 1)
-    num!(bchr, Opcode.I32_SUB)  # index - 1 for 0-based
-    array_get!(bchr, str_type_idx, I32; signed=false)
-    return bchr
-end
-
-"""str_setchar!(s,i,c) -> Nothing. Moved verbatim (already self-contained)."""
-function _invoke_str_setchar_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bsc = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(bsc, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-    emit_value!(bsc, args[2], ctx, I32)
-    i32_const!(bsc, 1)
-    num!(bsc, Opcode.I32_SUB)
-    emit_value!(bsc, args[3], ctx, I32)
-    array_set!(bsc, str_type_idx, I32)
-    return bsc
-end
-
-"""str_new(len) -> String. REWRITTEN standalone (same continuation-soundness
-issue as str_char — see its docstring)."""
-function _invoke_str_new_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bnew = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(bnew, args[1], ctx, I32)
-    array_new_default!(bnew, str_type_idx)
-    return bnew
-end
-
-"""str_copy(src,src_pos,dst,dst_pos,len) -> Nothing. Moved verbatim (already
-self-contained)."""
-function _invoke_str_copy_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    bcp = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(bcp, args[3], ctx, ConcreteRef(UInt32(str_type_idx), true))
-    emit_value!(bcp, args[4], ctx, I32)
-    i32_const!(bcp, 1)
-    num!(bcp, Opcode.I32_SUB)
-    emit_value!(bcp, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-    emit_value!(bcp, args[2], ctx, I32)
-    i32_const!(bcp, 1)
-    num!(bcp, Opcode.I32_SUB)
-    emit_value!(bcp, args[5], ctx, I32)
-    array_copy!(bcp, str_type_idx, str_type_idx)
-    return bcp
-end
-
-"""str_substr(s,start,len) -> String. Moved verbatim (already self-contained;
-uses caller scratch locals, unchanged from the pre-migration arm)."""
-function _invoke_str_substr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    ctx.scratch_locals === nothing &&
-        error("String operations require scratch locals but none were allocated")
-    result_local, src_local, _, _, _ = ctx.scratch_locals
-    bss = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(bss, args[1], ctx, ConcreteRef(UInt32(str_type_idx), true))
-    local_set!(bss, src_local)
-    emit_value!(bss, args[3], ctx, I32)
-    array_new_default!(bss, str_type_idx)
-    local_set!(bss, result_local)
-    local_get!(bss, result_local)
-    i32_const!(bss, 0)
-    local_get!(bss, src_local)
-    emit_value!(bss, args[2], ctx, I32)
-    i32_const!(bss, 1)
-    num!(bss, Opcode.I32_SUB)
-    emit_value!(bss, args[3], ctx, I32)
-    array_copy!(bss, str_type_idx, str_type_idx)
-    local_get!(bss, result_local)
-    emit_string_wrap!(bss, ctx)
-    return bss
-end
-
-"""arr_new(Type, len) -> Vector{Type}. Moved verbatim (already self-contained)."""
-function _invoke_arr_new_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    type_arg = args[1]
-    elem_type = if type_arg isa Core.SSAValue
-        ctx.ssa_types[type_arg.id]
-    elseif type_arg isa GlobalRef
-        getfield(type_arg.mod, type_arg.name)
-    elseif type_arg isa Type
-        type_arg
-    else
-        Int32
-    end
-    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-    ban = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(ban, args[2], ctx, I32)
-    array_new_default!(ban, arr_type_idx)
-    return ban
-end
-
-"""arr_get(arr,i) -> T. REWRITTEN standalone (same continuation-soundness
-issue as str_char — confirmed broken pre-migration: StackImbalanceError
-underflow, never previously exercised by any test)."""
-function _invoke_arr_get_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    arr_type = infer_value_type(args[1], ctx)
-    elem_type = eltype(arr_type)
-    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-    bget = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(bget, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
-    emit_value!(bget, args[2], ctx, I32)
-    i32_const!(bget, 1)
-    num!(bget, Opcode.I32_SUB)
-    array_get!(bget, arr_type_idx, I32; signed=packed_array_signedness(elem_type))
-    return bget
-end
-
-"""arr_set!(arr,i,val) -> Nothing. Moved verbatim (already self-contained)."""
-function _invoke_arr_set_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    arr_type = infer_value_type(args[1], ctx)
-    elem_type = eltype(arr_type)
-    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-    bas = _ctx_builder(ctx, "compile_invoke")
-    local _arrset_elem_w = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-    local _arrset_elem_w2 = _arrset_elem_w isa WasmValType ? _arrset_elem_w : AnyRef
-    emit_value!(bas, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
-    emit_value!(bas, args[2], ctx, I32)
-    i32_const!(bas, 1)
-    num!(bas, Opcode.I32_SUB)
-    local _as_b = _compile_value_b(args[3], ctx)
-    local val_ty = isempty(_as_b.v.stack) ? nothing : _as_b.v.stack[end]
-    if elem_type === Any
-        if val_ty === I64 || val_ty === I32 || val_ty === F64 || val_ty === F32
-            emit_numeric_to_externref!(bas, args[3], val_ty, ctx)
-        else
-            append_builder!(bas, _as_b)
-            val_ty === ExternRef || maybe_wrap_closure!(bas, ctx, infer_value_type(args[3], ctx))
-            val_ty === ExternRef || extern_convert_any!(bas)
-        end
-    else
-        append_builder!(bas, _as_b)
-    end
-    array_set!(bas, arr_type_idx, _arrset_elem_w2)
-    return bas
-end
-
-"""arr_len(arr) -> Int32. REWRITTEN standalone — the pre-migration arm did not
-even compute the array's wasm type (it relied purely on continuation), which
-is the same unsound assumption `arr_get` made; confirmed broken pre-migration
-the same way."""
-function _invoke_arr_len_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    arr_type = infer_value_type(args[1], ctx)
-    elem_type = eltype(arr_type)
-    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-    blen3 = _ctx_builder(ctx, "compile_invoke")
-    emit_value!(blen3, args[1], ctx, ConcreteRef(UInt32(arr_type_idx), true))
-    array_len!(blen3)
-    return blen3
-end
 
 """isascii(s::String) / isascii(cu::AbstractVector{<:Integer}) — the CodeUnits
 case from `isascii(codeunits(s))`. Moved verbatim; this is the one entry using
@@ -571,24 +409,22 @@ end
 
 """string(n::Integer) — the dedicated positional Integer method (its kwarg body is
 `#string#403`, handled separately for the interpolation fast path near the top of
-compile_invoke!; THIS Method is what a plain `string(x)` call for any Int8..UInt64
-resolves to). Moved verbatim: redirects to int_to_string."""
+compile_invoke!; THIS Method is what a plain `string(x)` call resolves to for any
+Integer subtype with no dedicated overlay). `Base.string(x::Int64)` has its own
+`@overlay WASM_METHOD_TABLE` (interpreter.jl) and never reaches this arm — the
+closed world resolves an `:invoke` of that call to the overlay Method directly.
+No other Integer subtype has a working lowering (test/fuzz/FINDINGS.md's
+integer/float-to-string conversion gap); reject loudly rather than fabricate a
+value."""
 function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
-    value_arg = args[1]
+    arg_type = infer_value_type(args[1], ctx)
+    record_unsupported!(ctx, :unsupported_method,
+        "string(::$(arg_type)) has no lowering — only Base.string(x::Int64) is overlaid";
+        idx=idx, detail=arg_type)
     bis1 = _ctx_builder(ctx, "compile_invoke")
-    int_to_string_info = nothing
-    if ctx.func_registry !== nothing && isdefined(WasmTarget, :int_to_string)
-        int_to_string_func = getfield(WasmTarget, :int_to_string)
-        int_to_string_info = get_function(ctx.func_registry, int_to_string_func, (Int32,))
-    end
-    if int_to_string_info !== nothing
-        emit_value!(bis1, value_arg, ctx, I32)   # funnel: I64/UInt64 narrow via convert_type!
-        call!(bis1, int_to_string_info.wasm_idx, WasmValType[], WasmValType[])
-        return bis1
-    else
-        error("Base.string(::Integer) requires int_to_string in compile_multi. " *
-              "Add WasmTarget.int_to_string and WasmTarget.digit_to_str to your function list.")
-    end
+    unreachable!(bis1)  # polymorphic bottom; no fabricated String value
+    ctx.last_stmt_was_stub = true
+    return bis1
 end
 
 """string(a::String) / string(a::Symbol) — identity (WasmGC represents Symbol using
@@ -1005,15 +841,6 @@ end
 """Populate INVOKE_INTRINSICS once, lazily, on first `compile_invoke!` call."""
 function _build_invoke_intrinsics!()
     isempty(INVOKE_INTRINSICS) || return nothing
-    _register_invoke_intrinsic!(str_char, InvokeIntrinsicEntry(_invoke_str_char_b, :standalone))
-    _register_invoke_intrinsic!(str_setchar!, InvokeIntrinsicEntry(_invoke_str_setchar_b, :standalone))
-    _register_invoke_intrinsic!(str_new, InvokeIntrinsicEntry(_invoke_str_new_b, :standalone))
-    _register_invoke_intrinsic!(str_copy, InvokeIntrinsicEntry(_invoke_str_copy_b, :standalone))
-    _register_invoke_intrinsic!(str_substr, InvokeIntrinsicEntry(_invoke_str_substr_b, :standalone))
-    _register_invoke_intrinsic!(arr_new, InvokeIntrinsicEntry(_invoke_arr_new_b, :standalone))
-    _register_invoke_intrinsic!(arr_get, InvokeIntrinsicEntry(_invoke_arr_get_b, :standalone))
-    _register_invoke_intrinsic!(arr_set!, InvokeIntrinsicEntry(_invoke_arr_set_b, :standalone))
-    _register_invoke_intrinsic!(arr_len, InvokeIntrinsicEntry(_invoke_arr_len_b, :standalone))
     _register_invoke_intrinsic!(isascii, InvokeIntrinsicEntry(_invoke_isascii_b, :append))
     _register_invoke_intrinsic!(Base.:(==), InvokeIntrinsicEntry(_invoke_string_eq_b, :standalone); argtypes=(String, String))
     _register_invoke_intrinsic!(SubString, InvokeIntrinsicEntry(_invoke_substring_b, :standalone))
@@ -1937,27 +1764,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
             # Check for cross-function call within the module first
             cross_call_handled = false
-            # Skip cross-call for runtime intrinsics with proper inline handlers.
-            # str_substr's generate_intrinsic_body is a stub (returns source string unchanged);
-            # the inline handler below implements it using WasmGC array operations with caller
-            # scratch locals. str_trim used to be skipped for the same reason (it calls
-            # str_substr internally) but Phase 5 deleted str_trim's bespoke builder — it now
-            # compiles standalone through ordinary cross-call resolution like any Julia
-            # function, and its internal str_substr call still hits this same skip+inline path.
-            # str_char/str_setchar!/str_new were ADDED here in Phase 5.2: their
-            # `generate_intrinsic_body` (compile.jl) hardcodes an i32 index/length local
-            # regardless of the ACTUAL argument types, so cross-call previously routed
-            # str_char(::String,::Int)/str_setchar!(::String,::Int,::Int32)/
-            # str_new(::Int) — the Int64, not Int32, overloads — into a StackImbalanceError
-            # ("expected I32, found I64") that predates this migration (confirmed against
-            # the unmodified tree). str_copy was ADDED because cross-call was routing it to
-            # its native-Julia no-op fallback (strings are immutable in native Julia; the
-            # real WasmGC array.copy only existed in the shadowed inline arm) — a silent
-            # correctness bug, not merely a crash. All four now route through
-            # INVOKE_INTRINSICS instead, which is correct for every overload.
-            _skip_cross_call = name in (:str_substr, :sizehint!, Symbol("#sizehint!#81"),
-                                     :arr_new, :arr_get, :arr_set!, :arr_len, :arr_fill!,
-                                     :str_char, :str_setchar!, :str_new, :str_copy)
+            # Skip cross-call for sizehint! — it routes through INVOKE_INTRINSICS instead.
+            _skip_cross_call = name in (:sizehint!, Symbol("#sizehint!#81"))
             if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
