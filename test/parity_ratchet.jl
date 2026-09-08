@@ -1542,6 +1542,14 @@ const LOCKS = [
     "L115_invokes_dispatch_through_registry_only" => ("parity(intrinsics.dart:26-64 MemberIntrinsic/StaticIntrinsic; `_lookup` :75-100/:401-428): every invoke target compile_invoke! recognizes is resolved through ONE Method-keyed lookup (INVOKE_INTRINSICS) — a bare-Symbol `name === :sym` ladder arm can never coexist with it in invoke.jl (R20's floor, locked here so it cannot regress back above 0)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
                           exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "L122_closed_world_numbered_once" => ("Phase 12B (dev/MARCH.md, formal(dev/formal/ClassIdDispatch.tla)): assign_type_ids! numbers the WHOLE closed world in ONE DFS — _collect_reachable_ir_types (ir.jl) admits every concrete kind that can carry a classId (structs, closures, Core.Box, Memory/MemoryRef, primitives incl. Char/Int128/a user `primitive type`, a Tuple with a Type{X} element or a runtime-length Vararg tuple) before the DFS runs. A type reaching ensure_type_id! unnumbered is a loud collector bug, never a second, order-dependent id — `type_extra_ids` and its allocating branch are extinct (locked 2026-09-07)",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            required = ["existing > 0 && return existing", "reached codegen unnumbered"]
+            forbidden_alloc = count_sites(r"for \(_, id\) in registry\.type_ids|registry\.type_ids\[T\] = new_id"; roots=[CODEGEN])
+            count_sites(r"type_extra_ids") + forbidden_alloc +
+                count(p -> !occursin(p, types_src), required)
+        end),
 ]
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
