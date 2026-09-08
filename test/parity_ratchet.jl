@@ -349,8 +349,6 @@ const L116_ALLOWLIST = Dict{String,Int}(
     # arms) cannot reproduce without reordering compile_call!'s own callee
     # resolution step.
     ":getglobal" => 1,
-    # L38_no_known_value_substitutions pins this arm's text verbatim.
-    ":ifelse" => 1,
     # getfield/getproperty interleave with raw (func.mod===Core/Base &&
     # func.name===:getfield) identity checks (closure self-capture skip,
     # :signal skip, the P3 layout-pointer fold) whose CURRENT relative order
@@ -365,8 +363,6 @@ const L116_ALLOWLIST = Dict{String,Int}(
     # check and the Core.Box capture-write arm the same way.
     ":setfield!" => 2,
     ":setproperty!" => 2,
-    # L57_exact_typeassert_exception pins this arm's text verbatim.
-    ":typeassert" => 1,
     # `_compile_call_egaleq` and the raw `!==` arm read `fb.v.stack` directly
     # ("the two operands are already on fb") — not self-contained, so they
     # cannot be dispatched from THE identity-keyed builtin funnel, which runs
@@ -950,7 +946,11 @@ const LOCKS = [
         end),
     "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func, context, expected type, and the concretely boxed got value",
         () -> begin
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The typeassert LOWERING is `_lower_typeassert!` (builtins.jl, an
+            # identity-keyed BUILTIN_LOWERINGS entry since Phase 12F); the
+            # `_emit_typeerror_throw!` helper it calls still lives in calls.jl.
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
             required = ["function _emit_typeerror_throw!", "Any[:typeassert, \"\", target, got]",
                         "i == 4 ? get_ssa_type(ctx, got)",
@@ -1209,7 +1209,10 @@ const LOCKS = [
     "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, and grapheme gaps reject instead of substituting null, zero, one, or an arbitrary arm",
         () -> begin
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The ifelse LOWERING is `_lower_ifelse!` (builtins.jl, an
+            # identity-keyed BUILTIN_LOWERINGS entry since Phase 12F).
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             required = ["Memory constant of type \$T has an undefined slot",
                         "array.new_fixed 0",
