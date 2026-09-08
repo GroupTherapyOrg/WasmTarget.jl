@@ -363,6 +363,34 @@ function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
 end
 
 """
+    emit_string_constant_ref!(b, mod, registry, s, scratch)
+
+Push the classed string constant `s` inside an init-function body: the interned global
+when one exists (short strings), else built in place from a passive data segment
+(`array.new_data` is not a constant expression, so long strings have no eager global;
+dart initialises those lazily, constants.dart:445-464). `scratch` is the index of a local of the
+string ARRAY type the caller declares only when `used[]` comes back true.
+"""
+function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                   s::String, scratch::Integer, used::Base.RefValue{Bool})
+    local g = get_string_constant_global!(mod, registry, s)
+    if g !== nothing
+        global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))
+        return b
+    end
+    local arr_idx = get_string_array_type!(mod, registry)
+    used[] || builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
+    used[] = true
+    local bytes = Vector{UInt8}(codeunits(s))
+    local seg_idx = add_passive_data_segment!(mod, bytes)
+    i32_const!(b, 0)
+    i32_const!(b, Int64(length(bytes)))
+    array_new_data!(b, arr_idx, seg_idx)
+    emit_string_wrap!(b, mod, registry, scratch; syntax_flags=symbol_syntax_flags(s))
+    return b
+end
+
+"""
     add_string_global!(mod, registry, s; mutable=true) -> UInt32
 
 Add a global initialized with WT's canonical classed Julia `String`
@@ -1648,6 +1676,10 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
     # global_get! declares the global's TRUE valtype (the AnyRef lie made
     # this the #1 harvest offender — 96k tracked-type mismatches feeding struct_set!).
     b = InstrBuilder(; func_name="_populate_jl_hierarchy!", mod=mod)
+    # local 0: the string-array scratch for Symbol constants built in place (declared
+    # only when a name exceeds the eager-interning threshold)
+    local _pop_str_scratch = 0
+    local _pop_str_used = Ref(false)
 
     # Close Module ancestry before iterating the constant registry, then wire
     # exact parent identities. Root modules point to themselves.
@@ -1821,9 +1853,8 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
         # Fields 2 and 5 are interned Symbol objects, carrying their exact
         # content-derived metadata across ordinary calls.
         string_idx = get_string_struct_type!(mod, registry)
-        name_global = get_string_constant_global!(mod, registry, String(tn.name))
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        global_get!(b, name_global, ConcreteRef(string_idx, false))
+        emit_string_constant_ref!(b, mod, registry, String(tn.name), _pop_str_scratch, _pop_str_used)
         struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(string_idx, true))
 
         # Field 3: an interned Module object, never a name-string surrogate.
@@ -1835,9 +1866,8 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
             struct_set!(b, tn_type_idx, UInt32(3), ConcreteRef(module_idx, true))
         end
 
-        singleton_global = get_string_constant_global!(mod, registry, String(tn.singletonname))
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        global_get!(b, singleton_global, ConcreteRef(string_idx, false))
+        emit_string_constant_ref!(b, mod, registry, String(tn.singletonname), _pop_str_scratch, _pop_str_used)
         struct_set!(b, tn_type_idx, UInt32(5), ConcreteRef(string_idx, true))
 
         # Field 6: whether module.singletonname is a real binding.
@@ -1916,7 +1946,9 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
 
     end_block!(b)  # function-terminating END
     body = builder_code(b)
-    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], body)
+    func_idx = add_function!(mod, WasmValType[], WasmValType[],
+                             _pop_str_used[] ? WasmValType[ConcreteRef(get_string_array_type!(mod, registry), true)] : WasmValType[],
+                             body)
     add_start_function!(mod, func_idx)
 end
 
