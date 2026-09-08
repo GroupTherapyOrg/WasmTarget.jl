@@ -192,9 +192,18 @@ _g("structs_tuples", Any[
 ])
 
 # ---- closures (capture; mutate-capture = F3) ------------------------------
+# Function values called through an ERASED binding ride the closure vtable
+# (closures.jl: one vtable per closure type; entry[arity] = the trampoline). A closure
+# type with several same-arity specializations in the closed world gets a DISPATCHING
+# entry that tests the erased arguments' classIds (_closure_dispatch_trampoline!; the
+# first specialization used to win silently — Int64 vs Float64 below), and the vtable
+# structs chain by arity (dart's parentVtableStruct).
 _g("closures", Any[
     ("capture", (x::Int64) -> (f = y -> y + x; f(10)), Int64(5)),
     ("map_closure", (n::Int64) -> (k = 3; sum(map(i -> i * k, 1:n))), Int64(4)),
+    ("erased_call", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1) + fs[1](2))::Int64), Int64(3)),
+    ("erased_two_closures", (n::Int64) -> (fs = Any[x -> x + n, x -> x * n]; (fs[1](1) + fs[2](2))::Int64), Int64(3)),
+    ("erased_two_specializations", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1)::Int64) + Int64((fs[1](2.5)::Float64) * 2)), Int64(3)),
 ])
 
 # ---- KNOWN-PENDING (xfail) — gaps with an open loop; reported, do NOT fail the gate.
