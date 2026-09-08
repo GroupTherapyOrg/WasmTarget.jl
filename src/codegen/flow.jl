@@ -104,6 +104,8 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
         str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         return ConcreteRef(str_type_idx, false)
+    elseif val isa QuoteNode
+        return get_phi_edge_wasm_type(val.value, ctx)
     elseif val isa GlobalRef
         # Resolve GlobalRef to actual value to determine Wasm type
         if val.name === :nothing
@@ -119,6 +121,9 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         # Use $JlDataType when hierarchy is available
         dt_idx = get_datatype_type_idx(ctx.type_registry)
         return ConcreteRef(dt_idx, true)
+    elseif isstructtype(typeof(val))
+        # a struct literal is compiled as struct_new → a non-nullable concrete ref
+        return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
     end
     return nothing
 end
@@ -147,13 +152,9 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
         return false
     end
     # Abstract ref (StructRef/ArrayRef/AnyRef/EqRef) is NOT directly compatible with ConcreteRef
-    # (requires ref.cast to downcast from abstract/super to concrete)
+    # (requires ref.cast to downcast from abstract/super to concrete); the reverse — a
+    # concrete ref into its abstract supertype local — is a plain wasm subtype store.
     if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
-        return false
-    end
-    # Reverse direction — ConcreteRef value into ArrayRef/StructRef local.
-    # A concrete struct ref is NOT an arrayref (and vice versa). Needs unwrapping/casting.
-    if (local_type === ArrayRef || local_type === StructRef) && value_type isa ConcreteRef
         return false
     end
     # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef/EqRef
