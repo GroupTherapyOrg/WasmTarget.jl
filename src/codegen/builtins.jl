@@ -16,11 +16,16 @@
 # callee's guard did not match — fall through" (dart's nullable-return-funnel
 # shape: intrinsics.dart :607/:685/:995/:1007/:1018).
 #
-# Builtins with MORE THAN ONE call-site fragment in the historical ladder that
-# are order-sensitive against OTHER, non-`is_func` identity checks for the
-# SAME callee (`getfield`/`getproperty`, `setfield!`/`setproperty!`) are NOT
-# migrated here — see the block comment above their remaining `compile_call!`
-# arms for why relocating them is unsafe without a deeper restructuring.
+# A builtin with SEVERAL fragments in the retired ladder holds them as its own
+# guards, tried in their original relative order behind one key (`getglobal`'s
+# const-fold then TypeName trace; `getfield`'s layout fold, signal read,
+# closure self-capture skip, `:signal` skip and general field read;
+# `===`'s string/typeof/nothing special cases then the width-keyed
+# comparison). Every entry emits its OWN operands — dart's intrinsics wrap
+# `node.arguments.positional[i]` themselves and nothing is pre-pushed for them
+# — so no entry depends on where in `compile_call!` the funnel is consulted.
+# That single consult, and the absence of any name-keyed arm after it, is
+# locked (L113, L124) and modelled (dev/formal/ConsultChain.tla).
 # ============================================================================
 
 const BUILTIN_LOWERINGS = IdDict{Any,Function}()
