@@ -493,8 +493,12 @@ const LOCKS = [
             forbidden = ["actual_val = getfield(val.mod, val.name)\n            return get_phi_edge_wasm_type(actual_val",
                          "called_func = try\n            getfield(func.mod, func.name)",
                          "ft_early = try\n            infer_value_type"]
+            # dispatch.jl's own binding test moved to the NIR boundary in Phase 12D
+            # (resolve_call_callee resolves a GlobalRef ONCE, leaving it a GlobalRef when
+            # unbound), so what find_dispatch_call must still state explicitly is that an
+            # unresolved callee is SKIPPED — not swallowed into a table lookup.
             required = ["isdefined(val.mod, val.name) || return nothing",
-                        "isdefined(callee.mod, callee.name)",
+                        "callee_func isa NirNode || callee_func isa GlobalRef",
                         "isdefined(actual_func_ref.mod, actual_func_ref.name)",
                         "isdefined(func.mod, func.name)"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)

@@ -698,7 +698,7 @@ function _compile_closed_world_plan(functions::Vector;
         dispatch_dt = nothing
         if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
            !isempty(dispatch_registry.tables)
-            dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
+            dispatch_dt = find_dispatch_call(build_nir(code_info), dispatch_registry)
         end
 
         if standalone_body !== nothing

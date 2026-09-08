@@ -432,10 +432,10 @@ end
 
 
 """
-Check if a CodeInfo body calls a function with a (selector-routed) dispatch table.
+Check if a body (its NIR boundary) calls a function with a (selector-routed) dispatch table.
 Returns the dispatch table if found, nothing otherwise.
 """
-function find_dispatch_call(code_info::Core.CodeInfo,
+function find_dispatch_call(nir::Vector{NirStmt},
                              dt_registry::DispatchTableRegistry)::Union{Nothing,DispatchTable}
     # This feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
     # for pure FORWARDERS (a body that IS the dispatch call: the call's args are
@@ -444,47 +444,50 @@ function find_dispatch_call(code_info::Core.CodeInfo,
     # its entire body replaced by a 2-param trampoline — validation failure once
     # discovery started registering ≥9-method candidates). In-body megamorphic
     # call SITES are the inline-switch / call-site path's job.
-    code = code_info.code
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            callee = stmt.args[1]
-            callee isa GlobalRef || continue
-            callee_func = isdefined(callee.mod, callee.name) ?
-                getfield(callee.mod, callee.name) : nothing
+    for (i, s) in enumerate(nir)
+        local node = s.node
+        if node isa NirCall
+            # NirCall.callee is the RESOLVED callee object; a NirNode there is a dynamic
+            # callee (no static identity) and an unbound GlobalRef stays a GlobalRef —
+            # neither can key a dispatch table.
+            local callee_func = node.callee
+            (callee_func isa NirNode || callee_func isa GlobalRef) && continue
             callee_func === nothing && continue
             dt = get_dispatch_table(dt_registry, callee_func)
             dt === nothing && continue
             # forwarder shape: args are exactly the params, in order
-            call_args = stmt.args[2:end]
+            local call_args = node.args
             length(call_args) == dt.arity || continue
-            all(k -> call_args[k] isa Core.Argument && call_args[k].n == k + 1, 1:length(call_args)) || continue
+            all(k -> call_args[k] isa NirArgument && call_args[k].n == k + 1, 1:length(call_args)) || continue
             # and the call's value is what the function returns — possibly through the
             # ::T-annotation lowering (convert/typeassert/PiNode and the φ(call, converted)
             # join; M8.3's caller2 taught us the phi)
             local chases_to_call = function(vid::Int, depth::Int)
                 vid == i && return true
                 depth <= 0 && return false
-                local st = code[vid]
-                if st isa Core.PiNode && st.val isa Core.SSAValue
-                    return chases_to_call(st.val.id, depth - 1)
-                elseif st isa Core.PhiNode
-                    for k in 1:length(st.values)
-                        isassigned(st.values, k) || continue
-                        local ev = st.values[k]
-                        ev isa Core.SSAValue && chases_to_call(ev.id, depth - 1) && return true
+                local st = nir[vid].node
+                if st isa NirPi && st.value isa NirSSA
+                    return chases_to_call(st.value.id, depth - 1)
+                elseif st isa NirPhi
+                    for ev in st.values
+                        ev isa NirSSA && chases_to_call(ev.id, depth - 1) && return true
                     end
                     return false
-                elseif st isa Expr && st.head === :call && length(st.args) >= 2
-                    local pay = (st.args[1] isa GlobalRef && st.args[1].name === :typeassert) ?
-                                st.args[2] : st.args[end]
-                    pay isa Core.SSAValue && return chases_to_call(pay.id, depth - 1)
+                elseif st isa NirCall && !isempty(st.args)
+                    # `x::T` lowers to `typeassert(value, T)` — the VALUE is the payload.
+                    # Keyed on the resolved builtin, never on a `:typeassert` name any
+                    # module's own function also answers to (the L124 lesson).
+                    local operands = st.args
+                    local pay = st.callee === Core.typeassert ? operands[1] : operands[end]
+                    pay isa NirSSA && return chases_to_call(pay.id, depth - 1)
                 end
                 return false
             end
             local returned = false
-            for st2 in code
-                if st2 isa Core.ReturnNode && isdefined(st2, :val) && st2.val isa Core.SSAValue
-                    chases_to_call(st2.val.id, 4) && (returned = true; break)
+            for s2 in nir
+                local rnode = s2.node
+                if rnode isa NirReturn && rnode.value isa NirSSA
+                    chases_to_call(rnode.value.id, 4) && (returned = true; break)
                 end
             end
             returned || continue
