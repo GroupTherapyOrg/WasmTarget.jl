@@ -977,7 +977,8 @@ const LOCKS = [
             required = ["foldl(typejoin, returns)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
-                        "stmt0.head === :new",
+                        # the explicit-`%new` runtime class, now read off the boundary (Phase 12D)
+                        "node0 isa NirNew && observe_type!(node0.T)",
                         "entry.specTypes",
                         "target_type <: atypes[p]",
                         "concrete_args = Tuple{spec...}",
@@ -1346,7 +1347,8 @@ const LOCKS = [
             required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
                         "haskey(type_globals, closure_type)",
                         "global_get!(b, type_global",
-                        "observe_callable!(CC.widenconst(t))"]
+                        # the SSA-typed callable observation, now read off the boundary (Phase 12D)
+                        "observe_callable!(s.julia_type)"]
             forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
             count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
             count(p -> occursin(p, types_src * closure_src), forbidden)

@@ -49,48 +49,49 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
-    ir_arg_type = function(arg, src)
+    ir_arg_type = function(node, src, nir)
         joins = get!(numeric_types, src) do
-            propagate_numeric_value_types(src.code, src.ssavaluetypes)
+            propagate_numeric_value_types(nir)
         end
-        T = if arg isa Core.SSAValue && haskey(joins, arg.id)
-            joins[arg.id]
-        elseif arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
-               1 <= arg.id <= length(src.ssavaluetypes)
-            src.ssavaluetypes[arg.id]
-        elseif arg isa Core.Argument && src.slottypes isa Vector &&
-               1 <= arg.n <= length(src.slottypes)
-            src.slottypes[arg.n]
-        elseif arg isa GlobalRef && isdefined(arg.mod, arg.name)
-            Core.Const(getfield(arg.mod, arg.name))
-        elseif arg isa QuoteNode
-            Core.Const(arg.value)
+        T = if node isa NirSSA && haskey(joins, node.id)
+            joins[node.id]
+        elseif node isa NirSSA
+            node.julia_type
+        elseif node isa NirArgument && src.slottypes isa Vector &&
+               1 <= node.n <= length(src.slottypes)
+            src.slottypes[node.n]
+        elseif node isa NirGlobalRef && node.bound
+            Core.Const(node.value)
+        elseif node isa NirLiteral
+            Core.Const(node.value)
         else
-            Core.Const(arg)
+            # A slot, or a GlobalRef whose binding does not exist: no call-site type to
+            # rebuild a specialization from. Declining is the only sound answer — an
+            # invented one would monomorphize the invoke onto a signature the program
+            # never calls.
+            nothing
         end
+        T === nothing && return nothing
         T = CC.widenconst(T)
         return T isa Type ? T : nothing
     end
     for i in 2:2:length(codeinfos)
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
-        for stmt in src.code
-            stmt isa Expr || continue
+        nir = build_nir(src)
+        for (k, s) in enumerate(nir)
+            local node = s.node
             mi = nothing
-            if stmt.head === :invoke && !isempty(stmt.args)
-                target = stmt.args[1]
-                mi = target isa Core.MethodInstance ? target :
-                     target isa Core.CodeInstance ? target.def : nothing
+            if node isa NirInvoke
+                mi = node.mi
                 original_mi = mi
                 # Explicit invoke records the selected Method, but Julia may leave
                 # its MethodInstance abstract. WT's subset monomorphizes: rebuild
                 # the MI from the concrete call-site SSA types, exactly as the
                 # compiler would for an ordinary specialized call.
-                if mi isa Core.MethodInstance && length(stmt.args) >= 2
-                    fref = stmt.args[2]
-                    f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
-                        getfield(fref.mod, fref.name) : fref
-                    arg_types = Any[ir_arg_type(arg, src) for arg in stmt.args[3:end]]
+                if mi isa Core.MethodInstance && node.callee !== nothing
+                    f = node.callee isa NirLiteral ? node.callee.value : node.callee
+                    arg_types = Any[ir_arg_type(a, src, nir) for a in node.args]
                     # Constructors are callable Type objects, not subtypes of
                     # Function. They participate in exactly the same overlay
                     # method-table lookup and concrete MethodInstance
@@ -143,24 +144,23 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     # Keep the optimized IR valid Julia while making its edge agree
                     # with the Wasm overlay dispatch selected for the concrete call.
                     # The superseded abstract/native subtree is pruned below.
-                    stmt.args[1] = mi
+                    nir_retarget_invoke!(nir, k, mi)
                     original_mi in protected || push!(superseded, original_mi)
                 end
-            elseif stmt.head === :call && length(stmt.args) >= 3 &&
-                   stmt.args[1] === Core.invoke_in_world
-                target = stmt.args[3]
-                f = target isa GlobalRef && isdefined(target.mod, target.name) ?
-                    getfield(target.mod, target.name) : target
+            elseif node isa NirCall && length(node.args) >= 2 &&
+                   _nir_callee_object(node.callee) === Core.invoke_in_world
+                # invoke_in_world(world, f, args...) — the callee is the SECOND operand.
+                local operands = node.args
+                local target = operands[2]
+                f = target isa NirGlobalRef ? (target.bound ? target.value : nothing) :
+                    target isa NirLiteral ? target.value : nothing
                 (f isa Function || f isa Type) || continue
                 arg_types = Any[]
                 valid = true
-                for arg in stmt.args[4:end]
-                    T = if arg isa Core.SSAValue && src.ssavaluetypes isa Vector &&
-                           arg.id <= length(src.ssavaluetypes)
-                        CC.widenconst(src.ssavaluetypes[arg.id])
-                    else
-                        Core.Typeof(arg)
-                    end
+                for a in @view operands[3:end]
+                    T = a isa NirSSA ? a.julia_type :
+                        a isa NirLiteral ? Core.Typeof(a.value) :
+                        (a isa NirGlobalRef && a.bound) ? Core.Typeof(a.value) : nothing
                     T isa Type || (valid = false; break)
                     push!(arg_types, T)
                 end
@@ -212,6 +212,12 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # forced the now-deleted trap-repair policy.
     runtime_types = Set{DataType}()
     observed_type_nodes = Set{Any}()
+    # One NIR per collected CodeInfo — this pass walks each body twice (runtime-class
+    # observation, then candidate discovery). Call-local: `_missing_explicit_invoke_mis`
+    # re-targets invoke edges in place between rounds, so a boundary cached across calls
+    # would describe an IR that no longer exists.
+    nir_cache = IdDict{Core.CodeInfo,Vector{NirStmt}}()
+    nir_for(src::Core.CodeInfo)::Vector{NirStmt} = get!(() -> build_nir(src), nir_cache, src)
     function contains_ffi_type(@nospecialize(T), visited=Set{Any}())
         T in visited && return false
         push!(visited, T)
@@ -239,22 +245,33 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         end
         return
     end
-    function observe_runtime_literal!(@nospecialize(x))
+    function observe_runtime_operand!(node::NirNode)
         # Optimized IR may constant-fold `%new(T, fields...)` into an actual
-        # immutable `T(...)` object embedded as a call argument (not a QuoteNode
-        # and no longer an explicit :new). Such a value is stronger evidence of
-        # runtime class membership than an inferred SSA type: it is the value
-        # being stored/passed by the collected program.
-        x isa Core.SSAValue && return
-        x isa Core.Argument && return
-        x isa Core.SlotNumber && return
-        x isa GlobalRef && return
-        if x isa QuoteNode
-            observe_type!(Core.Typeof(x.value))
-        elseif !(x isa Expr)
-            observe_type!(Core.Typeof(x))
-        end
+        # immutable `T(...)` object embedded as a call argument (no longer an
+        # explicit :new). The boundary classifies such an embedded VALUE as a
+        # literal operand; it is stronger evidence of runtime class membership
+        # than an inferred SSA type, because it IS the value the collected
+        # program stores/passes. An SSA/argument/slot/global operand carries no
+        # value here, so only literals are observed.
+        node isa NirLiteral || return
+        node.value isa Expr && return
+        observe_type!(Core.Typeof(node.value))
         return
+    end
+    # The operands one statement carries. Every node's `args` hold exactly the
+    # runtime operands — a foreigncall's ABI preamble and an invoke's
+    # MethodInstance are resolved FIELDS, never operands — so this is the operand
+    # set proper. An invoke's callee operand can itself be an embedded callable
+    # value, so it joins the scan when the boundary classified it as a literal.
+    function statement_operands(node::NirNode)::Vector{NirNode}
+        node isa NirCall && return node.args
+        node isa NirNew && return node.args
+        node isa NirForeignCall && return node.args
+        if node isa NirInvoke
+            local callee = node.callee
+            return callee isa NirLiteral ? NirNode[callee; node.args] : node.args
+        end
+        return NirNode[]
     end
     # Explicit root arguments cross into the component and therefore exist at
     # runtime even if their construction happened in the host.
@@ -265,17 +282,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j] isa Core.CodeInstance &&
          codeinfos[j + 1] isa Core.CodeInfo) || continue
-        local src0 = codeinfos[j + 1]
-        for stmt0 in src0.code
-            if stmt0 isa Expr
-                if stmt0.head === :new && !isempty(stmt0.args)
-                    local nt = stmt0.args[1]
-                    local T = nt isa GlobalRef && isdefined(nt.mod, nt.name) ?
-                              getfield(nt.mod, nt.name) : nt
-                    observe_type!(T)
-                end
-                foreach(observe_runtime_literal!, stmt0.args[2:end])
-            end
+        for s0 in nir_for(codeinfos[j + 1])
+            local node0 = s0.node
+            node0 isa NirNew && observe_type!(node0.T)
+            foreach(observe_runtime_operand!, statement_operands(node0))
         end
     end
     # OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
@@ -323,7 +333,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         host_mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
-        ssat = src.ssavaluetypes
+        local nir = nir_for(src)
         # Capture typing is a closed-world fact, not merely a codegen hint. Feed
         # the same optimistic-and-verified proof used for local representation
         # into dependency discovery, so a call erased by Core.Box inference can
@@ -333,54 +343,54 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             local _selfT = hparams[1]
             if _selfT isa DataType && isstructtype(_selfT)
                 merge!(_capture_joins, f3_self_box_joins(
-                    src.code, ssat, _selfT;
+                    nir, nir, _selfT;
                     argtypes=Tuple(hparams[2:end]), self_shift=1))
             end
         end
         local _call_type = function(a)
-            if a isa Core.SSAValue && haskey(_capture_joins, a.id)
+            if a isa NirSSA && haskey(_capture_joins, a.id)
                 return _capture_joins[a.id]
-            elseif a isa Core.SSAValue
-                return (ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any
-            elseif a isa Core.Argument
+            elseif a isa NirSSA
+                return a.julia_type
+            elseif a isa NirArgument
                 return (a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any
-            elseif a isa GlobalRef && isdefined(a.mod, a.name)
-                return Core.Typeof(getfield(a.mod, a.name))
-            elseif a isa GlobalRef
-                return Any
+            elseif a isa NirGlobalRef
+                return a.bound ? Core.Typeof(a.value) : Any
+            elseif a isa NirLiteral
+                return Core.Typeof(a.value)
             end
-            return Core.Typeof(a)
+            return Any
         end
         # Optimized IR often folds `%new(closure, captures...)` into a constant
         # tuple followed by getfield. The concrete closure types still inhabit SSA
         # types, so collect from that semantic source as well as explicit :new.
-        ssat isa Vector && foreach(t -> observe_callable!(CC.widenconst(t)), ssat)
-        for stmt in src.code
+        foreach(s -> observe_callable!(s.julia_type), nir)
+        for s in nir
+            local node = s.node
             # (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
             # the vtable trampoline, which needs the body compiled. Specialized with
             # the method's own sig (abstract slots stay erased; the trampoline passes
             # anyref and the body's funnel machinery narrows internally).
-            if stmt isa Expr && stmt.head === :new && !isempty(stmt.args)
-                local _nt = stmt.args[1]
-                local _T = _nt isa GlobalRef && isdefined(_nt.mod, _nt.name) ? getfield(_nt.mod, _nt.name) :
-                           _nt isa DataType ? _nt : nothing
+            if node isa NirNew
                 # scope: USERLAND closures only — Base/stdlib-internal closures are
                 # statically called (never through the vtable); enrolling them all
                 # exploded the blast radius (a _growend! trampoline mis-built).
-                observe_callable!(_T)   # staged; folds only on co-occurrence
+                observe_callable!(node.T)   # staged; folds only on co-occurrence
                 continue
             end
+            node isa NirCall || continue
+            local operands = node.args
             # OBSERVED dynamic-call signature: an SSA/erased callee with inferrable args
-            if stmt isa Expr && stmt.head === :call && stmt.args[1] isa Core.SSAValue
+            if node.callee isa NirSSA
                 local _dargs = Any[]
                 local _dok = true
-                for a in stmt.args[2:end]
-                    local t = a isa Core.SSAValue ?
-                                ((ssat isa Vector && a.id <= length(ssat)) ? CC.widenconst(ssat[a.id]) : Any) :
-                              a isa Core.Argument ?
+                for a in operands
+                    local t = a isa NirSSA ? a.julia_type :
+                              a isa NirArgument ?
                                 ((a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any) :
-                                Core.Typeof(a)
+                              a isa NirLiteral ? Core.Typeof(a.value) :
+                              (a isa NirGlobalRef && a.bound) ? Core.Typeof(a.value) : Any
                     (t isa DataType && isconcretetype(t)) || (_dok = false; break)
                     push!(_dargs, t)
                 end
@@ -388,14 +398,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     push!(_fn_dyn_sigs, Tuple(_dargs))
                 end
             end
-            (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
-            cref = stmt.args[1]
-            cref isa GlobalRef || continue
-            isdefined(cref.mod, cref.name) || continue
-            g = getfield(cref.mod, cref.name)
+            isempty(operands) && continue
+            g = _nir_callee_object(node.callee)
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             # Resolve arg types from the optimized IR.
-            cargs = stmt.args[2:end]
+            cargs = operands
             atypes = Any[]
             bad = false
             for a in cargs
@@ -507,14 +514,10 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
         mi in external_leaves && continue
         pair = get(pairs, mi, nothing)
         pair === nothing && continue
-        for stmt in pair[2].code
-            stmt isa Expr || continue
-            if stmt.head === :invoke && !isempty(stmt.args)
-                target = stmt.args[1]
-                target_mi = target isa Core.MethodInstance ? target :
-                            target isa Core.CodeInstance ? target.def : nothing
-                target_mi isa Core.MethodInstance && push!(queue, target_mi)
-            end
+        for s in build_nir(pair[2])
+            local node = s.node
+            node isa NirInvoke || continue
+            node.mi isa Core.MethodInstance && push!(queue, node.mi)
         end
     end
     out = Any[]

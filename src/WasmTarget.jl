@@ -18,13 +18,16 @@ include("builder/instr_builder.jl")
 # Codegen - Julia IR to Wasm bytecode
 include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic field)
 include("codegen/interpreter.jl")
-include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
 
 # Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
 # Loads here (before codegen/types.jl and codegen/context.jl exist) by design — see
 # frontend/nir.jl's header comment.
 include("frontend/nir.jl")
+
+# The closed-world collector reads the boundary (its discovery dispatches on NirNode),
+# so it loads after it.
+include("codegen/trimcollect.jl")
 
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
