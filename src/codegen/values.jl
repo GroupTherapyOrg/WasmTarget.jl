@@ -388,29 +388,43 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
 end
 
 """
-    convert_type!(b, from, to, ctx)
+    convert_type!(b, from, to, ctx; from_julia=nothing)
 
-The single coercion funnel (dart2wasm `translator.dart convertType`). Given a value of wasm
-type `from` already on the stack, emit the ops to coerce it to `to`. Byte-identical extraction
-of the coercion body that was copy-pasted across ~21 sites
-(dev/HISTORY.md#uniform-values-objects-and-class-hierarchy):
+The single coercion funnel (dart2wasm `translator.dart:1597 convertType`). Given a value of
+wasm type `from` already on the stack, emit the ops that leave a value of type `to`, or
+reject through the located diagnostic funnel. Every arm is decided on heap KIND, hierarchy
+and nullability — never on a type index — which is what lets dev/formal/Coercion.tla
+exhaust the whole lattice: for every pair the result is a wasm subtype of `to` or a
+rejection, an upcast emits nothing, and only pairs the wasm type system cannot express
+are rejected (cross-hierarchy without the extern bridge; a numeric into an array/i31/
+func/exn sink; a numeric without a concrete Julia source type to stamp the box's classId).
 
-  * `from === to` OR `wasm_subtype(from,to)` (upcast) ⇒ emit NOTHING.
-  * ref→ref: extern↔any bridge / `ref.as_non_null` (nullability-only narrowing, P9) /
-    `ref.cast` (downcast). Mirrors `emit_return_coerced!`'s ref→ref branch (Loop A).
-  * numeric→numeric: WT's 6-branch widening ladder (dart2wasm throws here; Julia widens).
+  * numeric→ref: BOX through `emit_classid_box!`, then this funnel again for the box ref.
+  * ref→numeric: `any.convert_extern` if extern, then UNBOX through `emit_classid_unbox!`.
+  * ref→ref: the string arms (classed string ↔ its byte array), the extern↔any bridge,
+    then `Narrow`: nothing on an upcast, `ref.as_non_null` when only nullability blocks it,
+    else `ref.cast` to `to`'s heap type with `to`'s nullability.
+  * numeric→numeric: WT's widening ladder plus the two narrowing arms Julia call
+    boundaries need (dart2wasm throws here; Julia widens).
 
-Does NOT handle numeric→ref boxing nor ref→numeric unboxing — those stay at their sites
-(they need a value/typeId, not just a stack coercion). Returns `b`.
+Returns `b`.
 """
+# formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext; from_julia::Union{Type,Nothing}=nothing)
+    local _mod = ctx.mod
     if !_wt_is_ref(from) && _wt_is_ref(to)
         # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
         # canonical {classId,value} struct (real classId when from_julia is known), then upcast
         # the box ref to `to` (the box subtypes $JlBase, so any/eq/struct targets are free).
         (from_julia isa Type && isconcretetype(from_julia)) || error(
             "numeric-to-reference conversion lacks a concrete Julia source type")
+        # a box is a struct in the any hierarchy: an array/i31/func/exn sink can never hold it
+        local _tk = _wt_heap_kind(to, _mod)
+        (_tk === :array || _tk === :concrete_array || _tk === :i31 ||
+         _wt_hierarchy_top(_tk) === :func || _wt_hierarchy_top(_tk) === :exn) &&
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a $(from) value cannot be boxed into a $(to) sink"; detail=from_julia)
         box_idx = emit_classid_box!(b, ctx, from, from_julia)
         convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx)
         return b
@@ -418,7 +432,14 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
         # F8: an externref source crosses the boundary first (the box lives
         # under anyref; ref.cast from externref is not wasm-valid).
-        from === ExternRef && any_convert_extern!(b)
+        local _fk = _wt_heap_kind(from, _mod)
+        if _fk === :extern
+            any_convert_extern!(b)
+        elseif _wt_hierarchy_top(_fk) !== :any
+            # a func/exn ref holds no box; the cast would not validate
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a $(from) value holds no numeric box to unbox as $(to)"; detail=from_julia)
+        end
         emit_classid_unbox!(b, ctx, to)
         return b
     elseif _wt_is_ref(from) && _wt_is_ref(to)
@@ -429,6 +450,17 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
            maybe_wrap_closure!(b, ctx, from_julia)
             return b
         end
+        # The extern hierarchy is bridged to/from any by exactly two ops; func and exn
+        # have no bridge to anything, so a pair crossing into or out of them is
+        # inexpressible (a ref.cast across hierarchies is a validation error).
+        local _fk = _wt_heap_kind(from, _mod)
+        local _tk = _wt_heap_kind(to, _mod)
+        local _fh = _wt_hierarchy_top(_fk)
+        local _th = _wt_hierarchy_top(_tk)
+        local _bridgeable = _fh === _th || (_fh === :extern && _th === :any) ||
+                            (_th === :extern && _fh === :any)
+        _bridgeable || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "no conversion from $(from) to $(to): the hierarchies do not meet"; detail=from_julia)
         # parity(translator.dart:1597 convertType): the STRING arms — the classed string {classId,data} vs its byte
         # array. Ops consume/produce the array; values carry the class (dart: methods
         # read the class's array field; convertType adjusts at every boundary).
@@ -442,9 +474,10 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             if _to_is_sarr && !_from_is_sarr
                 # any string-ish ref → its data array: narrow to $JlString, read data
                 # (an externref source crosses the boundary first)
-                from === ExternRef && any_convert_extern!(b)
+                _fh === :extern && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
+                _wt_ref_nullable(to) || ref_as_non_null!(b)
                 return b
             elseif _from_is_sarr && !_to_is_sarr
                 # a bare data array flowing to a value position: WRAP (the one producer),
@@ -456,70 +489,18 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             end
         end
         # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
-        if to === ExternRef && from !== ExternRef
+        if _th === :extern && _fh !== :extern
             # A KNOWN closure crossing to extern wraps first (the seam)
             from isa ConcreteRef && maybe_wrap_closure!(b, ctx, from_julia)
-            # any→extern at the JS boundary.
+            # any→extern at the JS boundary; the op keeps the source's nullability
             extern_convert_any!(b)
-        elseif from === ExternRef && to !== ExternRef
-            # extern→any boundary, then narrow if the GC target is below `any`.
+            (_wt_ref_nullable(from) && !_wt_ref_nullable(to)) && ref_as_non_null!(b)
+        elseif _fh === :extern && _th !== :extern
+            # extern→any boundary, then land on `to` from the any of the source's nullability
             any_convert_extern!(b)
-            if !wasm_subtype(AnyRef, to, ctx.mod)
-                if to isa ConcreteRef
-                    ref_cast!(b, Int64(to.type_idx), to.nullable)
-                elseif to isa RefType && _wt_gc_refkind(to)
-                    ref_cast!(b, to, true)
-                end
-                # FuncRef/NonNullAbstractRef target after extern→any: nothing principled to emit.
-            end
-        elseif wasm_subtype(from, to, ctx.mod)
-            # Upcast is free — emit nothing.
-        elseif wasm_subtype(_wt_drop_nullable(from), to, ctx.mod)
-            # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
-            # nullability (heap types compatible, source nullable → non-null target).
-            # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
-            ref_as_non_null!(b)
+            _narrow_ref!(b, ctx, _wt_ref_nullable(from) ? AnyRef : NonNullAbstractRef(UInt8(AnyRef)), to, from_julia)
         else
-            # Downcast.
-            if to isa ConcreteRef
-                # A downcast to a CLOSURE's captured struct may receive the
-                # closure OBJECT (the erasure seam wrapped it) — unwrap via .context
-                # when the runtime value is the object; direct cast otherwise.
-                local _cbase = ctx.type_registry.closure_base_idx
-                # unwrap exists ONLY where wrapping exists: no vtable globals in this
-                # module → no closure objects can flow → the plain downcast (the arm
-                # changed emission for Base-internal closure structs otherwise)
-                local _cvg = ctx.type_registry.closure_vtable_globals
-                local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
-                    local _tcj = nothing
-                    for (T, info) in registered_structs(ctx.type_registry)
-                        if info.wasm_type_idx == to.type_idx && is_closure_type(T)
-                            _tcj = T; break
-                        end
-                    end
-                    _tcj !== nothing
-                end
-                if _to_closure
-                    # if (ref.test base) → base.context → cast; else → cast direct
-                    local _uw = allocate_local!(ctx, AnyRef)
-                    local_tee!(b, UInt32(_uw))
-                    ref_test!(b, Int64(_cbase), false)
-                    if_!(b, to)
-                    local_get!(b, UInt32(_uw))
-                    ref_cast!(b, Int64(_cbase), false)
-                    struct_get!(b, _cbase, UInt32(2), AnyRef)   # .context
-                    ref_cast!(b, Int64(to.type_idx), to.nullable)
-                    else_!(b)
-                    local_get!(b, UInt32(_uw))
-                    ref_cast!(b, Int64(to.type_idx), to.nullable)
-                    end_block!(b)
-                else
-                    ref_cast!(b, Int64(to.type_idx), to.nullable)
-                end
-            elseif to isa RefType && _wt_gc_refkind(to)
-                ref_cast!(b, to, true)
-            end
-            # FuncRef / NonNullAbstractRef target: no ref.cast emitted.
+            _narrow_ref!(b, ctx, from, to, from_julia)
         end
     else
         # numeric→numeric: WT's widening ladder (dart2wasm throws here; Julia widens).
@@ -548,6 +529,69 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "no numeric conversion from $(from) to $(to)"; detail=from_julia)
         end
+    end
+    return b
+end
+
+"""
+    _narrow_ref!(b, ctx, from, to, from_julia)
+
+Land a ref of type `from` (already in `to`'s hierarchy) on `to` — Coercion.tla `Narrow`:
+nothing on an upcast; `ref.as_non_null` when only nullability blocks it; otherwise
+`ref.cast` to `to`'s heap type with `to`'s nullability — a concrete index, or an abstract
+GC kind (`ref.cast null` for the nullable shorthand, `ref.cast` for a NonNullAbstractRef).
+A downcast to a CLOSURE's captured struct may receive the closure OBJECT (the erasure seam
+wrapped it): unwrap via `.context` when the runtime value is the object, cast directly
+otherwise. The unwrap exists only where wrapping exists — no vtable globals in the module
+means no closure object can flow, so the plain cast keeps Base-internal closure structs'
+emission unchanged.
+"""
+function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
+                      to::WasmValType, from_julia::Union{Type,Nothing})
+    local _mod = ctx.mod
+    if wasm_subtype(from, to, _mod)
+        # Upcast is free — emit nothing.
+    elseif wasm_subtype(_wt_drop_nullable(from), to, _mod)
+        # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
+        # nullability (heap types compatible, source nullable → non-null target).
+        # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
+        ref_as_non_null!(b)
+    elseif to isa ConcreteRef
+        local _cbase = ctx.type_registry.closure_base_idx
+        local _cvg = ctx.type_registry.closure_vtable_globals
+        local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
+            local _tcj = nothing
+            for (T, info) in registered_structs(ctx.type_registry)
+                if info.wasm_type_idx == to.type_idx && is_closure_type(T)
+                    _tcj = T; break
+                end
+            end
+            _tcj !== nothing
+        end
+        if _to_closure
+            # if (ref.test base) → base.context → cast; else → cast direct
+            local _uw = allocate_local!(ctx, AnyRef)
+            local_tee!(b, UInt32(_uw))
+            ref_test!(b, Int64(_cbase), false)
+            if_!(b, to)
+            local_get!(b, UInt32(_uw))
+            ref_cast!(b, Int64(_cbase), false)
+            struct_get!(b, _cbase, UInt32(2), AnyRef)   # .context
+            ref_cast!(b, Int64(to.type_idx), to.nullable)
+            else_!(b)
+            local_get!(b, UInt32(_uw))
+            ref_cast!(b, Int64(to.type_idx), to.nullable)
+            end_block!(b)
+        else
+            ref_cast!(b, Int64(to.type_idx), to.nullable)
+        end
+    elseif to isa RefType
+        ref_cast!(b, to, true)
+    elseif to isa NonNullAbstractRef
+        ref_cast!(b, RefType(to.heaptype_byte), false)
+    else
+        emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "no conversion from $(from) to $(to)"; detail=from_julia)
     end
     return b
 end
