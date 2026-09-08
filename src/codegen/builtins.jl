@@ -2090,106 +2090,106 @@ function _lower_egal!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,N
     local arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
     emit_call_operands!(fb, ctx, args; include_types=true)
     if callee === Core.:(!==)
-    if is_128bit
-        emit_int128_ne!(fb, ctx, arg_type)
-    elseif arg_type === Float64
-        num!(fb, Opcode.F64_NE)
-    elseif arg_type === Float32
-        num!(fb, Opcode.F32_NE)
-    else
-        local arg2_type_ne = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        local arg1_is_ref_ne = is_ref_type_or_union(arg_type) && arg_type !== Nothing
-        local arg2_is_ref_ne = is_ref_type_or_union(arg2_type_ne) && arg2_type_ne !== Nothing
+        if is_128bit
+            emit_int128_ne!(fb, ctx, arg_type)
+        elseif arg_type === Float64
+            num!(fb, Opcode.F64_NE)
+        elseif arg_type === Float32
+            num!(fb, Opcode.F32_NE)
+        else
+            local arg2_type_ne = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+            local arg1_is_ref_ne = is_ref_type_or_union(arg_type) && arg_type !== Nothing
+            local arg2_is_ref_ne = is_ref_type_or_union(arg2_type_ne) && arg2_type_ne !== Nothing
 
-        # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
-        # they can't be equal, so !== is always true. Drop both and return true.
-        if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
-            drop!(fb); drop!(fb); i32_const!(fb, 1)
-            return append_builder!(b, fb)
-        end
-
-        # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
-        if arg_type === Nothing && arg2_type_ne === Nothing
-            # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
-            local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
-            local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
-            local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
-            local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
-            # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
-            if a1_ref_ne != a2_ref_ne
+            # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
+            # they can't be equal, so !== is always true. Drop both and return true.
+            if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
                 drop!(fb); drop!(fb); i32_const!(fb, 1)
                 return append_builder!(b, fb)
-            elseif a1_ref_ne && a2_ref_ne
-                # Both refs - use ref.eq then negate
-                num!(fb, Opcode.REF_EQ)
-                num!(fb, Opcode.I32_EQZ)
-                return append_builder!(b, fb)
             end
-            # Both numeric - fall through to normal handling
-        end
 
-        # Check actual Wasm representation for Nothing-typed args
-        local arg1_wasm_is_ref_ne = arg1_is_ref_ne
-        local arg2_wasm_is_ref_ne = arg2_is_ref_ne
-        local arg1_is_externref_ne = (arg_type === Any)
-        local arg2_is_externref_ne = (arg2_type_ne === Any)
-        # Check Wasm representation for any potentially mixed comparison
-        if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
-            # For Nothing-typed args, determine ref-ness from the inferred value type
-            # (dart2wasm carries the type with the value rather than scanning bytes).
-            # `nothing` is treated as a ref here (it may be ref.null when compared
-            # against a ref-typed Nothing local).
-            if length(args) >= 1 && arg_type === Nothing
-                arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
-                                      _wt_is_ref(static_wasm_type(args[1], ctx))
+            # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
+            if arg_type === Nothing && arg2_type_ne === Nothing
+                # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
+                local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
+                local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
+                local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
+                local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
+                # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
+                if a1_ref_ne != a2_ref_ne
+                    drop!(fb); drop!(fb); i32_const!(fb, 1)
+                    return append_builder!(b, fb)
+                elseif a1_ref_ne && a2_ref_ne
+                    # Both refs - use ref.eq then negate
+                    num!(fb, Opcode.REF_EQ)
+                    num!(fb, Opcode.I32_EQZ)
+                    return append_builder!(b, fb)
+                end
+                # Both numeric - fall through to normal handling
             end
-            if length(args) >= 2 && arg2_type_ne === Nothing
-                arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
-                                      _wt_is_ref(static_wasm_type(args[2], ctx))
+
+            # Check actual Wasm representation for Nothing-typed args
+            local arg1_wasm_is_ref_ne = arg1_is_ref_ne
+            local arg2_wasm_is_ref_ne = arg2_is_ref_ne
+            local arg1_is_externref_ne = (arg_type === Any)
+            local arg2_is_externref_ne = (arg2_type_ne === Any)
+            # Check Wasm representation for any potentially mixed comparison
+            if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
+                # For Nothing-typed args, determine ref-ness from the inferred value type
+                # (dart2wasm carries the type with the value rather than scanning bytes).
+                # `nothing` is treated as a ref here (it may be ref.null when compared
+                # against a ref-typed Nothing local).
+                if length(args) >= 1 && arg_type === Nothing
+                    arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
+                                          _wt_is_ref(static_wasm_type(args[1], ctx))
+                end
+                if length(args) >= 2 && arg2_type_ne === Nothing
+                    arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
+                                          _wt_is_ref(static_wasm_type(args[2], ctx))
+                end
+            end
+            # BOTH args must be ref types to use ref.eq
+            if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
+                # Convert externref → eqref before ref.eq (same pattern as === handler)
+                local _neb = _ctx_builder(ctx, "compile_call")
+                if arg1_is_externref_ne && arg2_is_externref_ne
+                    local tmp_ne = allocate_local!(ctx, EqRef)
+                    any_convert_extern!(_neb)
+                    ref_cast!(_neb, EqRef, true)
+                    local_set!(_neb, tmp_ne)
+                    any_convert_extern!(_neb)
+                    ref_cast!(_neb, EqRef, true)
+                    local_get!(_neb, tmp_ne)
+                elseif arg1_is_externref_ne
+                    local tmp_ne2 = allocate_local!(ctx, EqRef)
+                    local_set!(_neb, tmp_ne2)
+                    any_convert_extern!(_neb)
+                    ref_cast!(_neb, EqRef, true)
+                    local_get!(_neb, tmp_ne2)
+                elseif arg2_is_externref_ne
+                    any_convert_extern!(_neb)
+                    ref_cast!(_neb, EqRef, true)
+                end
+                num!(_neb, Opcode.REF_EQ)
+                num!(_neb, Opcode.I32_EQZ)  # Negate for !==
+                append_builder!(fb, _neb)
+            elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
+                # Comparing ref with non-ref: type mismatch, always not-equal
+                drop!(fb); drop!(fb); i32_const!(fb, 1)
+            elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
+                # Comparing non-ref with ref: type mismatch, always not-equal
+                drop!(fb); drop!(fb); i32_const!(fb, 1)
+            elseif !is_32bit && arg2_type_ne === Nothing
+                # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+                num!(fb, Opcode.I64_NE)
+            elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
+                # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
+                drop!(fb); drop!(fb); i32_const!(fb, 1)
+            else
+                num!(fb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
             end
         end
-        # BOTH args must be ref types to use ref.eq
-        if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-            # Convert externref → eqref before ref.eq (same pattern as === handler)
-            local _neb = _ctx_builder(ctx, "compile_call")
-            if arg1_is_externref_ne && arg2_is_externref_ne
-                local tmp_ne = allocate_local!(ctx, EqRef)
-                any_convert_extern!(_neb)
-                ref_cast!(_neb, EqRef, true)
-                local_set!(_neb, tmp_ne)
-                any_convert_extern!(_neb)
-                ref_cast!(_neb, EqRef, true)
-                local_get!(_neb, tmp_ne)
-            elseif arg1_is_externref_ne
-                local tmp_ne2 = allocate_local!(ctx, EqRef)
-                local_set!(_neb, tmp_ne2)
-                any_convert_extern!(_neb)
-                ref_cast!(_neb, EqRef, true)
-                local_get!(_neb, tmp_ne2)
-            elseif arg2_is_externref_ne
-                any_convert_extern!(_neb)
-                ref_cast!(_neb, EqRef, true)
-            end
-            num!(_neb, Opcode.REF_EQ)
-            num!(_neb, Opcode.I32_EQZ)  # Negate for !==
-            append_builder!(fb, _neb)
-        elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
-            # Comparing ref with non-ref: type mismatch, always not-equal
-            drop!(fb); drop!(fb); i32_const!(fb, 1)
-        elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-            # Comparing non-ref with ref: type mismatch, always not-equal
-            drop!(fb); drop!(fb); i32_const!(fb, 1)
-        elseif !is_32bit && arg2_type_ne === Nothing
-            # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
-            num!(fb, Opcode.I64_EXTEND_I32_S)
-            num!(fb, Opcode.I64_NE)
-        elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
-            # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
-            drop!(fb); drop!(fb); i32_const!(fb, 1)
-        else
-            num!(fb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-        end
-    end
     else
         _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
     end
