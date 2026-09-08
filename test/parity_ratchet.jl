@@ -598,7 +598,7 @@ const LOCKS = [
                          "constructor_allowlist"]
             required = ["A concrete field-wise constructor is structural, not dynamic",
                         "called_func === _ctor_result && length(args) == fieldcount(_ctor_result)",
-                        "return compile_new!(b, Expr(:new, _ctor_result, args...)",
+                        "return compile_new!(b, nir_new(_ctor_result, args, ctx)",
                         "_la_solve", "_la_lusolve"]
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src * linalg_src), required)

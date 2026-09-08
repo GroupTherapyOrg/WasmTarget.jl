@@ -3802,7 +3802,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                    _ctor_result isa DataType && isconcretetype(_ctor_result) &&
                    isstructtype(_ctor_result) && !isprimitivetype(_ctor_result) &&
                    called_func === _ctor_result && length(args) == fieldcount(_ctor_result)
-                    return compile_new!(b, Expr(:new, _ctor_result, args...), idx, ctx)
+                    return compile_new!(b, nir_new(_ctor_result, args, ctx), idx, ctx)
                 end
                 # WASMTARGET dynamic dispatch: before giving up, try an inline typeId
                 # switch over the compiled specializations (the dynamic call dispatches
@@ -3838,8 +3838,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             # GlobalRef constructor call: SSA return type reveals the struct being constructed
             ssa_type = ctx.code_info.ssavaluetypes[idx]
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
-                new_expr = Expr(:new, ssa_type, args...)
-                return compile_new!(b, new_expr, idx, ctx)
+                return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
             end
             error("Unsupported function call: $func (type: $(typeof(func)))")
         end
@@ -3930,8 +3929,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         if func isa GlobalRef
             ssa_type = ctx.code_info.ssavaluetypes[idx]
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
-                new_expr = Expr(:new, ssa_type, args...)
-                return compile_new!(b, new_expr, idx, ctx)
+                return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
             end
         end
         # Unknown function call — emit unreachable (will trap at runtime)
