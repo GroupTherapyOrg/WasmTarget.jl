@@ -14,9 +14,13 @@ if [ ! -f "$JAR" ]; then
   curl -sSL -o "$JAR" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 fi
 WORKERS="${TLC_WORKERS:-auto}"
+# TLC_FAST=1 skips the instances listed in DEEP (each explores >10^6 states, ~20-60 s):
+# the inner loop (dev/lanes.sh) runs the rest in ~30 s; CI and `bash run_tlc.sh` run all.
+DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg}"
 fail=0
 for cfg in MC*.cfg; do
   [ -e "$cfg" ] || continue
+  if [ "${TLC_FAST:-0}" = "1" ] && [[ " $DEEP " == *" $cfg "* ]]; then printf '  skip %-28s (deep; run without TLC_FAST)\n' "$cfg"; continue; fi
   case "$cfg" in *Broken.cfg) expect=violation; tla="${cfg%Broken.cfg}.tla" ;; *) expect=ok; tla="${cfg%.cfg}.tla" ;; esac
   out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$WORKERS" -config "$cfg" -deadlock "$tla" 2>&1) || true
   if echo "$out" | grep -qE "Error: Invariant .* is violated|Error: Temporal properties were violated|Error: Deadlock reached"; then result=violation

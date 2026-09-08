@@ -1505,6 +1505,14 @@ const LOCKS = [
             end
             n
         end),
+    "L120_one_inference_path" => ("every typed IR WasmTarget consumes comes from the WasmInterpreter through get_typed_ir — Base.code_typed is called with an argument list only inside get_typed_ir, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; locked 2026-09-07)",
+        () -> begin
+            n = count_sites(r"Base\.code_typed\(\w"; roots=[SRC], exclude_files=["codegen/ir.jl"])
+            ir = read(joinpath(CODEGEN, "ir.jl"), String)
+            occursin("interp::WasmInterpreter=get_wasm_interpreter()", ir) || (n += 1)
+            occursin("interp=nothing", ir) && (n += 1)
+            n
+        end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
     "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",

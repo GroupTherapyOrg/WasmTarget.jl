@@ -400,7 +400,8 @@ Keno's futex commit does — the exact shape that breaks, the invariant, and why
 | byte identity | `julia --project=. test/probe_bytes.jl` | 26–29 s | every pure restructuring |
 | family | `WT_PHASE=<name> julia --project=. test/runtests.jl` | 24–48 s | the family touched |
 | behavioral locks | `test/*.jl` testsets (negative controls, canary trip-wires) | per file | never in the ratchet |
-| formal | `bash dev/formal/run_tlc.sh` | seconds–minutes | every change to a modeled algorithm; every commit that touches `dev/formal` |
+| formal | `bash dev/formal/run_tlc.sh` (`TLC_FAST=1` skips the four >10⁶-state instances) | ~1 min fast / ~6 min all | every change to a modeled algorithm; every commit that touches `dev/formal` |
+| **the loop** | **`bash dev/lanes.sh`** — ratchet → smoke → probes → fast formal, one exit code | **~3 min steady-state** (`--fast` ~1 min; `--all` adds the deep TLC set) | **before every commit**; `JULIA="julia +1.13"` for the 1.13 leg |
 | commit | `WT_SHARD=0,4 …` + the touched family's shard | 5–8 min | before each commit |
 | PR | CI matrix | 18–46 min | the authoritative full gate |
 

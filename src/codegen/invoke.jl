@@ -1348,12 +1348,12 @@ function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.Me
     fixed_count = mi.def.nargs - 2  # exclude #self# and the vararg tuple slot
     fieldcount(target) == fixed_count + 1 || return false
     typed = try
-        Base.code_typed(target, arg_types; optimize=true)
+        [get_typed_ir(target, arg_types)]
     catch
         return false
     end
     length(typed) == 1 || return false
-    ci = first(typed).first
+    ci = typed[1][1]
     ci isa Core.CodeInfo || return false
     news = Expr[s for s in ci.code if s isa Expr && s.head === :new]
     length(news) == 1 || return false
