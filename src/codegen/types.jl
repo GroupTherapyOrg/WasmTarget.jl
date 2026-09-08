@@ -218,6 +218,7 @@ it eagerly (a pure constant-expression initializer) on first use; `nothing` when
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
 keep the inline path). IMMUTABLE kinds only.
 """
+# formal(dev/formal/Constants.tla): two structurally-equal immutable constants intern to exactly one global and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     registry.constant_globals === nothing && return nothing
     haskey(registry.constant_globals, val) && return registry.constant_globals[val]
