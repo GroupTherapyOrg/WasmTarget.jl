@@ -3,36 +3,6 @@
 # ============================================================================
 
 """
-    extract_foreigncall_name(name_arg) -> Union{Symbol, Nothing}
-
-Extract the symbol name from a :foreigncall expression's first argument.
-Handles format differences between Julia versions:
-- Julia 1.12: QuoteNode(:name) or bare :name
-- Julia 1.13: QuoteNode((:name,)) — tuple wrapping the symbol
-Also handles GlobalRef (e.g., Base.memhash).
-"""
-function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
-    val = if name_arg isa QuoteNode
-        name_arg.value
-    elseif name_arg isa Symbol
-        name_arg
-    elseif name_arg isa GlobalRef
-        name_arg.name
-    elseif name_arg isa Expr && name_arg.head === :tuple && length(name_arg.args) >= 1
-        # Julia 1.13+: foreigncall names wrapped in tuple Expr: Expr(:tuple, QuoteNode(:name))
-        inner = name_arg.args[1]
-        inner isa QuoteNode ? inner.value : (inner isa Symbol ? inner : nothing)
-    else
-        nothing
-    end
-    # Handle case where value is a Tuple (shouldn't happen with Expr handling above, but defensive)
-    if val isa Tuple && length(val) >= 1 && val[1] isa Symbol
-        return val[1]
-    end
-    return val isa Symbol ? val : nothing
-end
-
-"""
     _trace_memmove_ptr(arg, ctx) -> (vector_value, [(is_add, offset_value)...]) | nothing
 
 Walk a pointer SSA chain (bitcast/add_ptr/sub_ptr over

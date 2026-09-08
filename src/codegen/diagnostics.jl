@@ -141,20 +141,16 @@ Base.showerror(io::IO, e::WasmValidationError) =
 # ctx.code_info is a Core.CodeInfo for normal compilation and a SimpleIR wrapper
 # for the in-place (self-hosting) path; both branches are guarded so either works.
 
-# Per-statement line from the CodeInfo's DebugInfo (Julia 1.12: Core.DebugInfo).
-# getdebugidx returns (line, file, edge); line ≤ 0 means "inherited/none", so we
-# walk backward to the nearest statement that carries a concrete line.
+# Per-statement line from the CodeInfo's DebugInfo — the per-query form of the rule
+# frontend/nir.jl's `_nir_lines` applies in one forward pass to fill `NirStmt.line`:
+# a position whose own entry is ≤ 0 ("inherited/none") takes the nearest earlier
+# statement that carries a concrete line. `_debug_line` (nir.jl) is the one decode.
 function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
-    try
-        di = ci.debuginfo
-        i = idx
-        while i >= 1
-            t = Base.IRShow.getdebugidx(di, i)
-            ln = Int(t[1])
-            ln > 0 && return ln
-            i -= 1
-        end
-    catch
+    di = try; ci.debuginfo; catch; nothing; end
+    di === nothing && return nothing
+    for i in idx:-1:1
+        ln = _debug_line(di, i)
+        ln > 0 && return ln
     end
     return nothing
 end
