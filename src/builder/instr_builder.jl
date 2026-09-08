@@ -610,8 +610,10 @@ function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     _emit!(b, InstrIR.RefCastConcrete(Int64(type_idx), nullable))
 end
 # Cast to an abstract heaptype (i31/array/struct/...): single on-wire heaptype byte.
+# The tracked result is the non-null variant for `ref.cast` (the RefType enum is the
+# nullable shorthand; `ref.cast null` keeps it).
 function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
-    if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, rt); end
+    if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, nullable ? rt : NonNullAbstractRef(UInt8(rt))); end
     _emit!(b, InstrIR.RefCastAbstract(UInt8(rt), nullable))
 end
 function ref_test!(b::InstrBuilder, type_idx::Integer, nullable::Bool)

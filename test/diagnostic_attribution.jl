@@ -104,6 +104,38 @@ end
     @test length(ctx.diagnostics) == 1 && ctx.diagnostics[1].stmt_idx == 1
 end
 
+@testset "diagnostics: the funnel rejects a cross-hierarchy ref pair and lands non-null abstract sinks (Coercion.tla)" begin
+    ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
+    mk() = begin
+        ctx = WasmTarget.CompilationContext(ci, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+        ctx.current_stmt_idx = 1
+        ctx, WasmTarget._ctx_builder(ctx, "funnel_negative")
+    end
+    # funcref → anyref: no bridge op exists between the func and any hierarchies
+    ctx, b = mk()
+    WasmTarget.ref_null!(b, WasmTarget.FuncRef)
+    err = try
+        WasmTarget.convert_type!(b, WasmTarget.FuncRef, WasmTarget.AnyRef, ctx)
+        nothing
+    catch e
+        e
+    end
+    @test err isa WasmTarget.WasmCompileError
+    @test occursin("hierarchies do not meet", sprint(showerror, err))
+    # anyref → (ref struct): a NonNullAbstractRef sink gets a non-null abstract cast
+    # (this pair emitted NOTHING before the model was checked)
+    ctx, b = mk()
+    WasmTarget.ref_null!(b, WasmTarget.AnyRef)
+    WasmTarget.convert_type!(b, WasmTarget.AnyRef, WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.StructRef)), ctx)
+    @test b.instrs[end] isa WasmTarget.InstrIR.RefCastAbstract && !b.instrs[end].nullable
+    @test b.v.stack[end] == WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.StructRef))
+    # externref (nullable) → (ref extern): the bridge is not needed, only a null check
+    ctx, b = mk()
+    WasmTarget.ref_null!(b, WasmTarget.ExternRef)
+    WasmTarget.convert_type!(b, WasmTarget.ExternRef, WasmTarget.NonNullExternRef, ctx)
+    @test b.instrs[end] isa WasmTarget.InstrIR.RefAsNonNull
+end
+
 @testset "diagnostics: the 5-field constructor still builds a located-less report" begin
     d = WasmTarget.WasmDiagnostic(:unsupported_type, "f", "x", nothing, nothing)
     @test d.stmt_idx == 0 && isempty(d.frames) && d.stmt == ""
