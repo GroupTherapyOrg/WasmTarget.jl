@@ -552,7 +552,7 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["struct_type === Random.Xoshiro", "nameof(struct_type)",
                          "primitive_init_proven = true", "allow_uninitialized"]
-            required = ["function _definitely_initializes_in_ir", "intersect(incoming[dest], assigned)",
+            required = ["function _definitely_initializes_in_nir", "intersect(incoming[dest], assigned)",
                         "_partial_new_is_definitely_initialized", "primitive_init_proven",
                         "_wt_make_undefined_field", "_wt_use_definitely_initialized_fields"]
             all_src = stmts_src * test_src
