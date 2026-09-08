@@ -659,7 +659,7 @@ CHECKED_OPS key (R19: a data test against the Symbol the registry looked up
 by, not a re-derivation via `is_func`).
 """
 function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
-                                       op::Symbol, arg_type, is_32bit::Bool)::Nothing
+                                       op::Symbol, arg_type, is_32bit::Bool, _nc_tt::Type)::Nothing
     local _ncw = _julia_int_width(arg_type, is_32bit)
     local _nc_signed = op === :checked_sadd_int || op === :checked_ssub_int ||
                        op === :checked_smul_int
@@ -681,7 +681,6 @@ function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilatio
             num!(_ncb, Opcode.I32_AND)
         end
     end
-    local _nc_tt = Tuple{Int32, Bool}
     if !haskey(ctx.type_registry.structs, _nc_tt)
         register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
     end
@@ -710,7 +709,7 @@ to, not swapped out from under the caller). `op` is the ALREADY-DISPATCHED
 CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
 """
 function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
-                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _cadd_tt::Type)::Nothing
     if is_128bit
         local _cadd128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_cadd128, ctx)
         emit_unsupported_stub!(ctx, _cadd128, :unsupported_method,
@@ -731,7 +730,6 @@ function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
         num!(_caddb, is_32bit ? Opcode.I32_ADD : Opcode.I64_ADD)
         local_set!(_caddb, local_result)
 
-        local _cadd_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
         local _cadd_info = haskey(ctx.type_registry.structs, _cadd_tt) ?
                            ctx.type_registry.structs[_cadd_tt] :
                            register_tuple_type!(ctx.mod, ctx.type_registry, _cadd_tt)
@@ -764,12 +762,7 @@ function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
             num!(_caddb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
         end
 
-        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-        if !haskey(ctx.type_registry.structs, tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-        end
-        local tuple_info = ctx.type_registry.structs[tuple_type]
-        struct_new!(_caddb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        struct_new!(_caddb, _cadd_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fbref[], _caddb)
     end
     return nothing
@@ -786,7 +779,7 @@ result)) has sign bit set. Same `Ref{InstrBuilder}` reassignment need as
 DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
 """
 function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
-                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int)::Nothing
+                                    op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _csub_tt::Type)::Nothing
     if is_128bit
         local _csub128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_csub128, ctx)
         emit_unsupported_stub!(ctx, _csub128, :unsupported_method,
@@ -807,7 +800,6 @@ function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
         num!(_csubb, is_32bit ? Opcode.I32_SUB : Opcode.I64_SUB)
         local_set!(_csubb, local_result)
 
-        local _csub_tt = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
         local _csub_info = haskey(ctx.type_registry.structs, _csub_tt) ?
                            ctx.type_registry.structs[_csub_tt] :
                            register_tuple_type!(ctx.mod, ctx.type_registry, _csub_tt)
@@ -839,12 +831,7 @@ function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::Abs
             num!(_csubb, is_32bit ? Opcode.I32_LT_U : Opcode.I64_LT_U)
         end
 
-        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-        if !haskey(ctx.type_registry.structs, tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-        end
-        local tuple_info = ctx.type_registry.structs[tuple_type]
-        struct_new!(_csubb, tuple_info.wasm_type_idx)   # mod-resolved fields
+        struct_new!(_csubb, _csub_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fbref[], _csubb)
     end
     return nothing
@@ -866,17 +853,24 @@ pre-existing asymmetry, preserved as-is, not unified).
 """
 function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                 op::Symbol, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
+    # The result is Julia's `Tuple{T, Bool}` for the OPERAND type T — the statement's own
+    # inferred type, never a register-width stand-in (Tuple{Int64,Bool} for a UInt64 add
+    # carried the wrong classId; the closed-world numbering rejects it).
+    local _tt = get(ctx.ssa_types, idx, nothing)
+    if !(_tt isa DataType && _tt <: Tuple && length(_tt.parameters) == 2 &&
+         _tt.parameters[2] === Bool && _tt.parameters[1] === arg_type)
+        _tt = Tuple{arg_type, Bool}
+    end
     local _narrow = is_32bit && _julia_int_width(arg_type, is_32bit) < 32
     if _narrow
-        _compile_call_checked_narrow!(fbref[], ctx, op, arg_type, is_32bit)
+        _compile_call_checked_narrow!(fbref[], ctx, op, arg_type, is_32bit, _tt)
     elseif op === :checked_smul_int || op === :checked_umul_int
-        _compile_call_checked_mul(op, args, fbref[], ctx, is_128bit, is_32bit)
+        _compile_call_checked_mul(op, args, fbref[], ctx, is_128bit, is_32bit, _tt)
     elseif op === :checked_sadd_int || op === :checked_uadd_int
-        _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx)
+        _compile_call_checked_add!(fbref, ctx, op, is_128bit, is_32bit, idx, _tt)
     else
-        _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx)
+        _compile_call_checked_sub!(fbref, ctx, op, is_128bit, is_32bit, idx, _tt)
     end
-    local _tt = (_narrow || is_32bit) ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
     return ConcreteRef(UInt32(ctx.type_registry.structs[_tt].wasm_type_idx), true)
 end
 
@@ -1011,17 +1005,16 @@ function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
 end
 
 """
-    _compile_call_checked_mul(op, args, fb, ctx, is_128bit, is_32bit)
+    _compile_call_checked_mul(op, args, fb, ctx, is_128bit, is_32bit, tuple_type)
 
 Extracted handler for checked_smul_int / checked_umul_int. `op` is the
 ALREADY-DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via
 `is_func`. Modifies `bytes` in-place.
 """
-function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool)::Nothing
+function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, tuple_type::Type)::Nothing
     if is_128bit
         # 128-bit checked mul: not supported. Strict-mode Approach A — loud reject
         # (natively returns a value, so a silent trap would diverge).
-        empty!(bytes)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
                                "128-bit checked multiply (Int128/UInt128)")
     else
@@ -1039,7 +1032,6 @@ function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::Abst
         num!(bld, is_32bit ? Opcode.I32_MUL : Opcode.I64_MUL)
         local_set!(bld, local_result)
 
-        local tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
         local tuple_info = haskey(ctx.type_registry.structs, tuple_type) ?
                            ctx.type_registry.structs[tuple_type] :
                            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
@@ -1100,11 +1092,6 @@ function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::Abst
             end_block!(bld)  # end if/else
         end
 
-        tuple_type = is_32bit ? Tuple{Int32, Bool} : Tuple{Int64, Bool}
-        if !haskey(ctx.type_registry.structs, tuple_type)
-            register_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
-        end
-        tuple_info = ctx.type_registry.structs[tuple_type]
         struct_new!(bld, tuple_info.wasm_type_idx)   # mod-resolved fields
         append_builder!(fb, bld)
     end
