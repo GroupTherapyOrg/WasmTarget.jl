@@ -348,18 +348,22 @@ Not in the list, by decision: a rewrite of anything; JuliaLowering (experimental
 pre-inference — revisit when it lands in Base as the source of richer line tables);
 UnifiedIR beyond the harness (#62334 is a draft).
 
-#### Phase 12 progress (2026-09-07/08)
+#### Phase 12 progress (2026-09-08)
 
 | Item | State | Evidence |
 |---|---|---|
-| A | done | `f4e29a9a` — L120, widened `ad01314e` to every native inference entry (box-capture joins asked the native interpreter, which does not see the overlays) |
-| J | done | `f4e29a9a` — `dev/lanes.sh`; TLC fast/deep split |
-| G | 5 of 5 models in | ClosureLayout (`004b0be7`), Constants (`94ffdae6`), BoxJoin (`eef9c890`), NirBuild (`57dbe41e`), Coercion (`0fb73316`) — 11 models, 44 instances; the harness's SIGPIPE misclassification fixed `de94909a`; nightly deep TLC still open |
-| E | steps 1–3 of the census map done | phi-edge typer/compatibility test collapsed to one definition, dead call-arg re-guess deleted (R5 81→78, `61416def`); lengths/offsets through the funnel (R3 93→79, R7 57→35, R27 54→32, `6486466c` `0ec381fe`); the funnel rejects unlisted numeric pairs (`752ad55e`) and, after Coercion.tla, cross-hierarchy pairs, lands non-null abstract sinks and nullability after bridges (`0fb73316`). Remaining: calls.jl's 32 raw ops and 33 R3 sites, the twin call-argument loops (calls.jl / invoke.jl → one `emit_call_argument!`), R5's declared-type floor consolidation — after B lands |
-| Findings closed from the models | | ClosureLayout ArityDrift → `70dbfd8a` (vtable shape read from the global, mismatch errors); BoxJoin one-hop discovery → in flight (`march/p12-boxjoin-transitive`) |
-| B, C, I, H(4) | in flight | worktrees `march/p12B-numbering`, `march/p12C-foldrule`, `march/p12I-strict`, `march/p12H-runtime` |
-| F | done | `march/p12F-callarms` — the fifteen arms are BUILTIN_LOWERINGS entries with their own guards and their own operands; ONE callee resolution and ONE consult; R19 15→0 and L116 (+ its allowlist and `_is_func_site_tally`) retire into **L124** `no_name_keyed_call_arms` = 0; L113 relocked as `consulted_once_and_first`; L38/L57/L77/L91/L25 re-pointed to `calls.jl * builtins.jl`; ConsultChain.tla's `OrderSensitivityWitness` replaced by `AllOrderInvariance` (the finding it was written to surface is closed); probes 235, 0 changed at every step |
-| D, H(1-3,5), K | open | D after B (shared files) |
+| A | done | `f4e29a9a` — L120; widened `ad01314e` to every native inference entry (box-capture joins asked the native interpreter, which does not see the overlays) |
+| B | done | `64ffdd92` — L122; its first full CI run surfaced four latent defects the lazy numbering had absorbed, each root-fixed: `Tuple{Int64,Bool}` stamped on UInt64/Int8 checked ops (`9acc32bd`), long overlay TypeNames past the eager string threshold / `Tuple{}` for empty splats / `Core.SSAValue` stamped by the svec lowering (`b92b0dfe`), non-const globals' value types (`720fb34b`) |
+| C | done | `28d2b832` — the enumeration is gone; a call folds when Julia's effect system says so, it is type-level, its source reads no host layout (mechanical: `ir_reads_host_layout` over the CodeInstance's retained IR), it is not objectid/hash, and the VALUE is a program value (the veto in `concrete_eval_call`). Exposed and fixed: 1.13's backward goto trampolines mistaken for loops by the stackifier (threaded), `Tuple{T,Vararg{T}}` as the runtime Vararg layout, pre-statement analysis failures now attributed to the function. probes 225/0 changed |
+| F | done | `d2872bee`…`b09f3993` — R19 15→0; L116 + allowlist retired into L124; ONE callee resolution, ONE consult; ConsultChain.tla's witness replaced by AllOrderInvariance |
+| G | 5 of 5 models | ClosureLayout, Constants, BoxJoin, NirBuild, Coercion — 11 models, 42 instances (Coercion.tla found 780 silent funnel pairs → `0fb73316`); the harness's SIGPIPE misclassification fixed `de94909a`; nightly deep TLC still open |
+| H | (4) done | `ca874e0c` — the WT-only `str_*`/`arr_*` surface deleted (1929 lines, L123); rethrow kept as ONE Method-keyed standalone body. Open: (1) SimpleATsit5 widening, (2) `==(Any,String)`, (3) `:invoke_modify`, (5) `sum(::AbstractVector)`; NEW from this session: `_apply_iterate` over a runtime Vararg tuple into a vararg callee (sparse `hvcat_internal` when not inlined); an erased multi-method callable (`Any[Adder(n)][1](x)`) |
+| I | done | `87136de2` `32307e87` — R30 (619) and R31 (20, allowlist with reasons) |
+| J | done | `f4e29a9a` — `dev/lanes.sh` |
+| E | steps 1–3 done | R3 93→75, R5 81→76, R7 57→32, R27 54→29; the funnel rejects unlisted numeric pairs and cross-hierarchy refs, lands non-null abstract sinks; remaining calls.jl sites fall with D (NirSSA.julia_type replaces infer_value_type as calls.jl converts) |
+| Findings closed from the models | | ClosureLayout ArityDrift → `70dbfd8a` + `b3a84f9e` (one vtable per closure type, per-arity trampolines, dart's vtable struct chain, a classId-dispatching entry for same-arity specializations — first-wins used to compute with the wrong body); BoxJoin one-hop discovery → `d8b8f8d0` (transitive) |
+| D | in flight | `march/p12D1-nir` — stage 1 of 3: NIR built first and ctx-free, `emit_value!(NirNode)`, statements.jl on nodes (R29a 425 → statements.jl's 179 first); stage 2 context/box_capture/trimcollect analyses over NIR; stage 3 calls/invoke/compile + delete `nir_operand`/`_ctx_ir`/`NirStmt.raw`/the `code_info` field |
+| K | open | |
 
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
