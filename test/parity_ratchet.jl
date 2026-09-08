@@ -1685,7 +1685,8 @@ const LOCKS = [
         () -> begin
             retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
                        "string_hash_func_idx", "_wasm_string_fnv1a",
-                       "resolve_through_dead_boundscheck"]
+                       "resolve_through_dead_boundscheck",
+                       "_is_typelevel_foldable"]   # Phase 12 C: the fold enumeration
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue

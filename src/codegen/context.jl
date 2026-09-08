@@ -134,16 +134,23 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         Dict{Int, Int}(),       # exn_region_locals
         NirStmt[]                # nir — filled in below, once locals/types exist
     )
-    # Analyze SSA types and allocate locals for multi-use SSAs
-    analyze_ssa_types!(ctx)
-    analyze_control_flow!(ctx)  # Find loops and phi nodes
-    analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
-    allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
-    allocate_ssa_locals!(ctx)
-    allocate_scratch_locals!(ctx)  # Extra locals for complex operations
-    # NIR boundary: built last so it can reuse ctx.ssa_types/ctx.locals/ctx.ssa_locals/
-    # ctx.phi_locals (all populated above) rather than re-deriving types.
-    ctx.nir = build_nir(code_info, ctx)
+    # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
+    # any statement is compiled, so a failure inside them is attributed to the FUNCTION
+    # (the statement entry, L119, cannot see it) — never a bare error naming no site.
+    try
+        analyze_ssa_types!(ctx)
+        analyze_control_flow!(ctx)  # Find loops and phi nodes
+        analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
+        allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
+        allocate_ssa_locals!(ctx)
+        allocate_scratch_locals!(ctx)  # Extra locals for complex operations
+        # NIR boundary: built last so it can reuse ctx.ssa_types/ctx.locals/ctx.ssa_locals/
+        # ctx.phi_locals (all populated above) rather than re-deriving types.
+        ctx.nir = build_nir(code_info, ctx)
+    catch e
+        (e isa WasmCompileError || e isa WasmInternalError) && rethrow()
+        throw(WasmInternalError(_ctx_func_name(ctx), 0, "", String[], e))
+    end
     return ctx
 end
 

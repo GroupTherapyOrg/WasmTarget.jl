@@ -43,7 +43,11 @@ end
 @testset "_apply_iterate runtime Vararg tuple" begin
     @test WasmTarget.is_runtime_vararg_tuple_type(Tuple{Vararg{Int64}})
     @test !WasmTarget.is_runtime_vararg_tuple_type(Tuple)
-    @test !WasmTarget.is_runtime_vararg_tuple_type(Tuple{Int64,Vararg{Int64}})
+    # a non-empty narrowing of the same homogeneous layout (a typeassert/PiNode after
+    # `isempty` is ruled out) shares the canonical runtime representation
+    @test WasmTarget.is_runtime_vararg_tuple_type(Tuple{Int64,Vararg{Int64}})
+    @test WasmTarget.runtime_vararg_canonical(Tuple{Int64,Vararg{Int64}}) === Tuple{Vararg{Int64}}
+    @test !WasmTarget.is_runtime_vararg_tuple_type(Tuple{Float64,Vararg{Int64}})
     @test compare_julia_wasm_vec(_wt_runtime_tuple_empty, Int64[]).pass
     @test compare_julia_wasm_vec(_wt_runtime_tuple_empty, Int64[1]).pass
     @test compare_julia_wasm_vec(_wt_runtime_tuple_empty, Int64[1, 2, 3]).pass

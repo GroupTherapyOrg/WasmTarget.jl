@@ -2790,74 +2790,170 @@ function CC.abstract_apply(interp::WasmInterpreter, argtypes::Vector{Any},
                   interp, argtypes, si, sv, max_methods)
 end
 
-# Disable concrete eval (GPUCompiler pattern).
-# Without this, the compiler constant-folds calls using Base implementation,
-# bypassing overlays.
+# Disable concrete eval by default (GPUCompiler pattern): without any override
+# here, a WasmInterpreter would fold calls using Base's real implementation and
+# bypass overlays. `CC.concrete_eval_eligible` below re-enables it PER CALL, by
+# RULE rather than by an enumerated list of function names: trust Julia's own
+# effect system — `is_foldable` + all-const args + overlay-safety, exactly
+# what `Core.Compiler.concrete_eval_eligible` already computes — to decide
+# WHETHER a call folds, then apply two result-level guards that a compiler
+# producing a module meant to outlive this process needs on top of Julia's own
+# answer:
 #
-# DEFERRED (2026-06-22, wt-soundness-loop-4): an overlay-aware exception that folds
-# pure TYPE-LEVEL calls (to fix the `cor` cluster — `one(float(nonmissingtype(T)))`
-# leaking as `dynamic` dispatch on Type values) passed full Pkg.test on Julia 1.12
-# but REGRESSED Julia 1.13-rc1 string-overlay codegen (repeat/lpad/rpad/chop/split/
-# join/string-chains errored — concrete-eval perturbs WT's version-specific string
-# IR shapes). Reverted to the blanket `:none`; the cor root cause + the type-level
-# fold approach are recorded in test/fuzz/failures/3fd2f07bfc5c.md — re-attempt only
-# with a Julia 1.13 environment available to verify against.
-# A CURATED set of pure TYPE-LEVEL functions that concrete-eval may fold. They
-# produce Types (or values trivially derived from Types) that WT fundamentally
-# cannot lower as runtime values — so folding them is MANDATORY, not an
-# optimization. They have no value-level overlays to bypass, and strings never
-# call them, so re-enabling eval for ONLY these can't perturb WT's
-# version-specific string IR (the failure mode that reverted the prior blanket
-# `all-Type-args` attempts — see test/fuzz/failures/3fd2f07bfc5c.md). This is the
-# `cor`/SparseArrays insight generalized: route the runtime type-machinery to its
-# known compile-time constant, scoped surgically. MUST be total (runs during
-# inference of arbitrary code).
-function _is_typelevel_foldable(@nospecialize(f))::Bool
-    # This generated helper exists solely to bake the name of a statically known
-    # type into the module. Letting its `_compute_sparams(Method, ...)` body enter
-    # the runtime graph would incorrectly turn compiler metadata into user data.
-    f === _wt_type_name_str && return true
-    f === Core.apply_type && return true
-    (isdefined(Core, :_compute_sparams) && f === Core._compute_sparams) && return true
-    (isdefined(Core, :_svec_ref)        && f === Core._svec_ref)        && return true
-    (isdefined(Core, :_typevar)         && f === Core._typevar)         && return true
-    f === Base.nonmissingtype && return true
-    f === Base.promote_type   && return true
-    (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
-    f === Base.eltype && return true
-    # the type predicates Base branches on before pointer paths: a function of the
-    # type alone, the same on the host and in the module. Unfolded, `isbitstype(T)`
-    # kept unsafe_copyto!'s memmove branch alive for T = String, and its
-    # aligned_sizeof(String) rejected copy(::Dict{String,V}) at compile time.
-    f === Base.isbitstype && return true
-    f === Base.isprimitivetype && return true
-    f === Base.isconcretetype && return true
-    (isdefined(Base, :_compute_eltype) && f === Base._compute_eltype) && return true
-    # float/one fold only on a Type arg — concrete-eval fires ONLY on constant
-    # args, so the value forms (one(::Float64)) never reach the fold here.
-    f === Base.float && return true
-    f === Base.one   && return true
-    # SciML in-place detection (ODEProblem/ODEFunction): a Bool from method arity,
-    # feeding apply_type. Match `isinplace` AND its kwarg body `#isinplace#NN`.
-    # `nameof` throws for some callables (Base.BottomRF) — guard it.
-    if f isa Function
-        nm = try string(nameof(f)) catch; "" end
-        (startswith(nm, "isinplace") || startswith(nm, "#isinplace#")) && return true
+#  1. NEVER `:semi_concrete_eval`, unconditionally. Native eligibility gates
+#     `:concrete_eval` on overlay-safety but does NOT gate `:semi_concrete_eval`
+#     on it at all (`Compiler/src/abstractinterpretation.jl`), so an
+#     overlay-tainted-but-otherwise-foldable call silently falls through to
+#     it. Unlike `:concrete_eval` — which executes the call exactly once via
+#     `Core._call_in_world_total` and keeps only the returned VALUE —
+#     `:semi_concrete_eval` partially interprets the callee's own optimized
+#     IR, and on that path a `getfield` of an opaque/pointer-typed `DataType`
+#     field (e.g. `.layout`) gets folded to the live pointer itself —
+#     something ordinary type inference's `getfield` tfunc deliberately
+#     refuses (it types `.layout` as widened `Ptr{Nothing}`, never `Const`,
+#     for exactly this reason; confirmed by dumping this file's own baseline
+#     IR). REPRODUCED 2026-09-07: broadening eligibility to "constant args are
+#     all Type/Symbol/Integer" (the prior attempt recorded by a teammate) made
+#     `Base.datatype_arrayelem(Memory{UInt8})` — reached from
+#     `copy(::Memory{UInt8})` — take this path and left
+#     `pointerref($(QuoteNode(Ptr{DataTypeLayout}(0x0000000128c43628))), 1, 1)`
+#     — a live host address baked as a literal IR operand — in the typed IR
+#     (`WasmTarget.get_typed_ir`). Refusing `:semi_concrete_eval` outright
+#     (independent of the eligibility predicate that reached it) closes this;
+#     `:concrete_eval` alone never has the failure mode because it never
+#     exposes intermediate pointer arithmetic, only the callee's final value.
+#  2. Never a `Ptr`-typed result, never a `Ptr`-valued constant argument, and
+#     never `objectid`/`hash`. A folded call's result must be a PROGRAM value.
+#     `Ptr` is a host memory address, never portable. `Base.objectid` (the generic `hash` fallbacks that call it, and the
+#     `Type`-hash helper `hash(::Type, ::UInt)` is built on) are marked fully
+#     `:consistent`+`:nothrow`+`:effect_free` by Julia's own effect system
+#     (verified with `Base.infer_effects`) — yet `hash`'s docstring states
+#     outright: "The hash value may change when a new Julia process is
+#     started." `:consistent` means reproducible within ONE world, not across
+#     the separate processes and architectures a compiled module must run on.
+#
+# `:concrete_eval` itself already tolerates a call that isn't `:nothrow` (e.g.
+# `apply_type`, `nonmissingtype` — both foldable but NOT nothrow per
+# `infer_effects`, and both load-bearing for the `cor`/SparseArrays type-level
+# fold that motivated the original curated list): if the real execution throws,
+# `concrete_eval_call` discards the value and the call's type becomes `Bottom`
+# (dead code), never a bad value. So nothrow is not required here — `is_foldable`
+# (which already excludes any externally-visible side effect), overlay-safety,
+# and the two result guards above are what make this safe.
+# The VALUE a fold produces must be a program value — one the module can carry as a
+# constant and that means the same thing in every process and on every architecture:
+# a Type, a Symbol, a String, a Char, nothing/missing, a Bool or a non-pointer Number,
+# a singleton, or an isbits aggregate / tuple of those with no Ptr anywhere inside.
+# A host memory address (`Ptr`, including one riding inside a struct) is none of
+# these. This is checked on the value itself, after evaluation: eligibility runs
+# before the call, and a result typed `Any` (getproperty on a DataType) or an
+# address already bit-cast to an integer would pass any type-level test.
+function _wt_has_pointer_field(@nospecialize(T))::Bool
+    T isa DataType || return true
+    T <: Ptr && return true
+    for ft in fieldtypes(T)
+        _wt_has_pointer_field(ft) && return true
     end
     return false
 end
+function _wt_program_value(@nospecialize(v))::Bool
+    v isa Type && return true
+    v isa Symbol && return true
+    v isa String && return true
+    v isa Char && return true
+    (v === nothing || v === missing) && return true
+    v isa Ptr && return false
+    v isa Number && return true
+    v isa Tuple && return all(_wt_program_value, v)
+    T = typeof(v)
+    Base.issingletontype(T) && return true
+    return isbits(v) && !_wt_has_pointer_field(T)
+end
+
+# `objectid`/`hash` (and the Type-hash helper they build on) are `:consistent` by
+# Julia's effect system — reproducible within ONE process — yet "may change when a
+# new Julia process is started" (hash's own docstring): not program values.
+function _wt_host_identity_fold(@nospecialize(f))::Bool
+    f === Base.objectid && return true
+    f === Base.hash && return true
+    isdefined(Base, :_jl_type_hash) && f === Base._jl_type_hash && return true
+    return false
+end
+
+# `_wt_type_name_str` is a `@generated` function that exists solely to bake
+# the name of a statically known type into the module (feeds the
+# `Base.string(::Type)` overlay below). Force it through concrete-eval
+# regardless of what native eligibility computes for a generated function's
+# synthesized body: letting its generator-staging machinery
+# (`Core._compute_sparams` and friends, used to resolve the static parameter)
+# leak into the IR as if it were ordinary user code would turn compiler
+# metadata into runtime data. The one genuinely special case left, with a
+# reason: everything else is the general rule above.
+_wt_forced_concrete_eval(@nospecialize(f))::Bool = f === _wt_type_name_str
 
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
-    # Delegate to the normal effect-based eligibility ONLY for whitelisted pure
-    # type-level functions; everything else stays disabled (overlays win, and
-    # value-level/string codegen is byte-for-byte unchanged).
-    if _is_typelevel_foldable(f)
-        return @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
-                                                 f, result, arginfo, sv)
+    eligibility = @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
+                                                     f, result, arginfo, sv)
+    if _wt_forced_concrete_eval(f)
+        return eligibility === :none ? :none : :concrete_eval
+    elseif eligibility !== :concrete_eval
+        return :none   # never :semi_concrete_eval
+    elseif _wt_host_identity_fold(f)
+        return :none
+    elseif !_wt_type_level_call(arginfo.argtypes, result.rt)
+        return :none
+    elseif _wt_reads_host_layout(result.edge)
+        return :none
     end
-    return :none
+    return :concrete_eval
+end
+
+# A fold may not depend on the HOST's memory layout of a type. `datatype_layoutsize`,
+# `datatype_alignment`, `fieldoffset`, `datatype_pointerfree`, `Core.sizeof(::Type)` …
+# are `@assume_effects :total` in Base and read `DataType.layout` — the host ABI's
+# sizes, not the module's (WT lays out its own structs and arrays; e.g.
+# memory_element_stride is the element stride the wasm side uses). `isbitstype` and
+# its kin read `DataType.flags`, a property of the Julia type, and stay foldable. A
+# foreigncall into libjulia (`allocatedinline` → jl_stored_inline) answers for the host
+# too. Decided mechanically from the callee's own typed IR (the one inference path),
+# transitively through its invokes, memoized per specialization.
+function _wt_reads_host_layout(@nospecialize(edge))::Bool
+    edge isa Core.CodeInstance || return true    # no edge to inspect: never fold blind
+    return ir_reads_host_layout(edge)
+end
+
+# WT folds TYPE-LEVEL calls only — a call with a Type among its constant arguments, or
+# one whose result is a Type: the runtime type machinery (apply_type, promote_type,
+# isbitstype, eltype, datatype_layoutsize, isinplace …) that the module cannot carry as
+# values and MUST resolve at compile time. Value-level constant arithmetic
+# (`1 + 2`, tuple destructuring of a constant, `Val(1)`) is left to Julia's own
+# constant propagation, exactly as before: folding it too changed inlining decisions
+# downstream (SparseArrays' hvcat_internal stopped inlining and reached a runtime
+# Vararg splat WT has no lowering for) without any type-level need.
+function _wt_type_level_call(argtypes::Vector{Any}, @nospecialize(rt))::Bool
+    for i in 2:length(argtypes)
+        local a = argtypes[i]
+        a isa CC.Const && a.val isa Type && return true
+        (a isa Type && a <: Type && a !== Type) && return true    # Type{T} / Const-like singleton
+    end
+    local w = CC.widenconst(rt)
+    return w <: Type && w !== Type
+end
+
+# The value-level half of the rule ("allow external abstract interpreters to disable
+# concrete evaluation ad-hoc" — Compiler/src/abstractinterpretation.jl): evaluate as
+# Julia would, then keep the fold only when what came back is a program value.
+function CC.concrete_eval_call(interp::WasmInterpreter,
+        @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
+        sv::Union{CC.InferenceState, CC.IRInterpretationState},
+        invokecall::Union{CC.InvokeCall, Nothing}=nothing)
+    r = @invoke CC.concrete_eval_call(interp::CC.AbstractInterpreter, f, result, arginfo, sv, invokecall)
+    r === nothing && return nothing
+    rt = r.rt
+    rt isa CC.Const && !_wt_program_value(rt.val) && return nothing
+    return r
 end
 
 """

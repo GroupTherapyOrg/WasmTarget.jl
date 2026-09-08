@@ -172,7 +172,7 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # registrable {Object, data, size} representation (register_vararg_tuple_type!)
         # — a genuine exception to "classId means concrete leaf", not a gap.
         if is_runtime_vararg_tuple_type(T)
-            push!(out, T)
+            push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return
         end
         if T <: Type && T !== Type && length(T.parameters) == 1
@@ -263,4 +263,54 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
     return out
 end
 
+"""
+    ir_reads_host_layout(ci::Core.CodeInstance) -> Bool
 
+Whether the specialization's inferred source — transitively through its invokes — reads
+`DataType.layout`, calls `Core.sizeof` on a type, or makes a foreigncall: the ways a
+type-level computation can answer for the HOST's memory layout rather than for the
+program (the constant-evaluation rule in interpreter.jl refuses to fold such a call).
+Reads the CodeInstance's own `inferred` source (the result of the inference that just
+ran — never a nested inference from inside an eligibility query); memoized per
+specialization; a CodeInstance without retained source, or a chain deeper than six
+invokes, counts as a read (never fold blind).
+"""
+const _IR_LAYOUT_READ_MEMO = IdDict{Any, Bool}()
+function ir_reads_host_layout(ci::Core.CodeInstance, depth::Int=0)::Bool
+    depth > 6 && return true
+    local mi = ci.def
+    local key = mi isa Core.MethodInstance ? mi.specTypes : ci
+    haskey(_IR_LAYOUT_READ_MEMO, key) && return _IR_LAYOUT_READ_MEMO[key]
+    _IR_LAYOUT_READ_MEMO[key] = false            # cycle guard
+    local src = isdefined(ci, :inferred) ? ci.inferred : nothing
+    src isa String && (src = try Base._uncompressed_ir(ci, src) catch; nothing end)
+    local found = !(src isa Core.CodeInfo)
+    if !found
+        for st in src.code
+            st isa Expr || continue
+            if st.head === :call && length(st.args) >= 3
+                local callee = st.args[1]
+                local nm = callee isa GlobalRef ? callee.name :
+                           callee isa Function ? nameof(callee) : nothing
+                if nm === :getfield || nm === :getproperty
+                    local fld = st.args[3]
+                    fld isa QuoteNode && (fld = fld.value)
+                    fld === :layout && (found = true; break)
+                elseif nm === :sizeof && (callee isa GlobalRef ? callee.mod === Core : callee === Core.sizeof)
+                    found = true; break
+                end
+            elseif st.head === :foreigncall
+                found = true; break
+            elseif st.head === :invoke
+                local tgt = st.args[1]
+                if tgt isa Core.CodeInstance
+                    ir_reads_host_layout(tgt, depth + 1) && (found = true; break)
+                else
+                    found = true; break          # an invoke without its CodeInstance: unknown
+                end
+            end
+        end
+    end
+    _IR_LAYOUT_READ_MEMO[key] = found
+    return found
+end
