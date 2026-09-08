@@ -10,9 +10,10 @@
 @testset "F3 L0: pure box_contents_type inference (dart2wasm-aligned)" begin
     _btype(fn) = begin
         ci = code_typed(fn, (Int64,); optimize=true)[1].first
-        bs = WasmTarget.find_box_news(ci.code)
+        nir = WasmTarget.build_nir(ci)
+        bs = WasmTarget.find_box_news(nir)
         @assert length(bs) == 1
-        WasmTarget.box_contents_type(ci.code, ci.ssavaluetypes, bs[1])
+        WasmTarget.box_contents_type(nir, nir, bs[1])
     end
 
     # MONOMORPHIC captures → typed cell (the variable's real concrete type).
@@ -29,7 +30,7 @@
     @test _btype(hetero) === nothing
 
     # A box with no resolvable write in this IR → nothing (no false concrete type).
-    @test WasmTarget.box_contents_type(Any[], Any[], 1) === nothing
+    @test WasmTarget.box_contents_type(WasmTarget.NirStmt[], Any[], 1) === nothing
 end
 
 # formal(dev/formal/BoxJoin.tla) — TRANSITIVE closure-write discovery. `_f3_capturing_closure_bodies`
@@ -56,16 +57,17 @@ end
         x
     end
     ci, _ = WasmTarget.get_typed_ir(_f3_l0_outer_boxjoin, (Int64,))
-    bs = WasmTarget.find_box_news(ci.code)
+    nir = WasmTarget.build_nir(ci)
+    bs = WasmTarget.find_box_news(nir)
     @assert length(bs) == 1
     box_id = bs[1]
 
     # The root's own one-hop scan finds `level1` only; `level1` never writes the box directly (it
     # only creates+invokes `level2`, which does). Transitive discovery must surface BOTH bodies.
-    bodies = WasmTarget._f3_capturing_closure_bodies(ci.code, box_id)
+    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id)
     @test length(bodies) == 2
 
     # The join over ALL writes (Int64 init, Int64 `+=` in level2, Float64 literal in level2) must
     # widen to dynamic (`nothing`) — Int64 alone (the one-hop answer) is the documented soundness gap.
-    @test WasmTarget.box_contents_type(ci.code, ci.ssavaluetypes, box_id) === nothing
+    @test WasmTarget.box_contents_type(nir, nir, box_id) === nothing
 end
