@@ -368,15 +368,7 @@ function _lower_memoryrefoffset!(b, fb, ctx, expr, idx, args, callee)
     if ref_arg isa Core.SSAValue && haskey(ctx.memoryref_offsets, ref_arg.id)
         # This MemoryRef has a recorded offset - compile the index value
         index_val = ctx.memoryref_offsets[ref_arg.id]
-        idx_type = infer_value_type(index_val, ctx)
-        emit_value!(_mrob, index_val, ctx,
-                    (idx_type === Int64 || idx_type === Int) ? I64 : I32)
-
-        # Ensure result is i64 (Julia's Int)
-        if idx_type !== Int64 && idx_type !== Int
-            # Convert to i64 if needed
-            num!(_mrob, Opcode.I64_EXTEND_I32_S)
-        end
+        emit_value!(_mrob, index_val, ctx, I64)   # the offset is Julia's Int; a narrower index widens through the funnel
     else
         # Fresh MemoryRef - offset is always 1
         i64_const!(_mrob, 1)  # 1
@@ -580,8 +572,7 @@ function _lower_memorynew!(b, fb, ctx, expr, idx, args, callee)
         i32_const!(_mnb, actual_size)
     else
         # SSA or other expression - compile, convert to i32, apply minimum
-        emit_value!(_mnb, size_arg, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
-        num!(_mnb, Opcode.I32_WRAP_I64)
+        emit_value!(_mnb, size_arg, ctx, I32)   # a Julia Int size narrows through the funnel
         # Ensure minimum capacity: max(size, min_capacity)
         local cap_check_local = allocate_local!(ctx, I32)
         local_tee!(_mnb, cap_check_local)
@@ -654,17 +645,8 @@ function _lower_memoryrefnew!(b, fb, ctx, expr, idx, args, callee)
         local _mrnb = _ctx_builder(ctx, "compile_call")
         emit_value!(_mrnb, base_ref, ctx)  # R17-floor: base may itself be a virtual MemoryRef pair
 
-        # Compile and convert index to i32 (Julia uses 1-based Int64, Wasm uses 0-based)
-        emit_value!(_mrnb, index, ctx)  # R17-floor: actual index width selects the explicit wrap below
-
-        # Check BOTH Julia type AND actual WASM type for i64→i32 wrap.
-        # infer_value_type may return Any/Union while the actual local is i64.
-        idx_type = infer_value_type(index, ctx)
-        idx_wasm = get_phi_edge_wasm_type(index, ctx)
-        if idx_type === Int64 || idx_type === Int || idx_wasm === I64
-            # Convert to i32 and subtract 1 for 0-based indexing
-            num!(_mrnb, Opcode.I32_WRAP_I64)  # i64 -> i32
-        end
+        # the index narrows to i32 through the funnel (Julia is 1-based Int; wasm is 0-based i32)
+        emit_value!(_mrnb, index, ctx, I32)
         i32_const!(_mrnb, 1)  # 1
         num!(_mrnb, Opcode.I32_SUB)  # index - 1 for 0-based
 

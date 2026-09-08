@@ -1339,11 +1339,7 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx:
 
             # Compile length argument
             if len_arg !== nothing
-                len_type = infer_value_type(len_arg, ctx)
-                emit_value!(b, len_arg, ctx, (len_type === Int64 || len_type === Int) ? I64 : I32)   # step4
-                if len_type === Int64 || len_type === Int
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
             else
                 # Default length of 0
                 i32_const!(b, 0)
@@ -1470,11 +1466,7 @@ function _fc_jl_alloc_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstra
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             if length(expr.args) >= 6
                 size_arg = expr.args[6]
-                size_type = infer_value_type(size_arg, ctx)
-                emit_value!(b, size_arg, ctx, (size_type === Int64 || size_type === Int || size_type === UInt64) ? I64 : I32)   # step4
-                if size_type === Int64 || size_type === Int || size_type === UInt64
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, size_arg, ctx, I32)   # a Julia Int length narrows through the funnel
             else
                 record_unsupported!(ctx, :value_stub,
                     "jl_alloc_string without its required length operand";
@@ -1528,11 +1520,7 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, expr::Expr, idx::Int, 
                 push!(ctx.locals, I32)
 
                 # Compile n and convert to i32
-                len_type = infer_value_type(len_arg, ctx)
-                emit_value!(b, len_arg, ctx, (len_type === Int64 || len_type === Int || len_type === UInt64) ? I64 : I32)   # step4
-                if len_type === Int64 || len_type === Int || len_type === UInt64
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
                 local_tee!(b, len_local)
 
                 # Create new array of exactly n elements
@@ -1602,11 +1590,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abs
                     push!(ctx.locals, I32)
 
                     # Compile n and convert to i32
-                    len_type = infer_value_type(len_arg, ctx)
-                    emit_value!(b, len_arg, ctx, (len_type === Int64 || len_type === Int || len_type === UInt64) ? I64 : I32)   # step4
-                    if len_type === Int64 || len_type === Int || len_type === UInt64
-                        num!(b, Opcode.I32_WRAP_I64)
-                    end
+                    emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
                     local_tee!(b, len_local)
 
                     # Create new array of exactly n elements
@@ -1688,15 +1672,7 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abs
                     # M3: real classId for the Tuple{Int64} size header
                     emit_struct_prefix!(b, ctx.type_registry, size_tuple_type, size_info)
                     if len_arg !== nothing
-                        len_type = infer_value_type(len_arg, ctx)
-                        emit_value!(b, len_arg, ctx,
-                                    (len_type === Int32 || len_type === UInt32) ? I32 : I64)
-                        if len_type === UInt64
-                            # UInt64 → i64 is already i64, but need signed interpretation
-                            # For Wasm purposes, UInt64 and Int64 are both i64
-                        elseif len_type === Int32 || len_type === UInt32
-                            num!(b, Opcode.I64_EXTEND_I32_S)
-                        end
+                        emit_value!(b, len_arg, ctx, I64)   # the size tuple holds i64; a narrower Int widens through the funnel
                     else
                         i64_const!(b, 0)
                     end
@@ -1854,8 +1830,7 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx
             local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
             local _gmc_sz = memory_element_stride(_gmc_te)
             local _gmc_off = a -> begin
-                emit_value!(b, a, ctx, I64)
-                num!(b, Opcode.I32_WRAP_I64)
+                emit_value!(b, a, ctx, I32)   # a Julia Int offset narrows through the funnel
                 if _gmc_sz > 1
                     i32_const!(b, Int64(_gmc_sz))
                     num!(b, Opcode.I32_DIV_U)
@@ -1865,12 +1840,7 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx
             _gmc_off(expr.args[7])
             emit_value!(b, expr.args[8], ctx, ConcreteRef(UInt32(_gmc_arr), true))
             _gmc_off(expr.args[9])
-            local _gmc_nt = infer_value_type(expr.args[10], ctx)
-            emit_value!(b, expr.args[10], ctx,
-                        _gmc_nt in (Int64, UInt64, Int) ? I64 : I32)
-            if _gmc_nt in (Int64, UInt64, Int)
-                num!(b, Opcode.I32_WRAP_I64)
-            end
+            emit_value!(b, expr.args[10], ctx, I32)   # a Julia Int count narrows through the funnel
             array_copy!(b, _gmc_arr, _gmc_arr)
             return b   # Cvoid — no value
         end
@@ -2105,25 +2075,13 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                 # Dest array
                 emit_value!(b, arr_ssa, ctx, ConcreteRef(UInt32(arr_copy_type), true))
                 # Dest offset: compile pointer value as i64, wrap to i32
-                emit_value!(b, dest_ptr_arg, ctx, I64)
-                _dest_type = infer_value_type(dest_ptr_arg, ctx)
-                if _dest_type === Int64 || _dest_type === Int || _dest_type === UInt64 || _dest_type <: Ptr
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, dest_ptr_arg, ctx, I32)   # an i64 pointer narrows to its i32 array offset through the funnel
                 # Src array (same array)
                 emit_value!(b, arr_ssa, ctx, ConcreteRef(UInt32(arr_copy_type), true))
                 # Src offset: compile pointer value as i64, wrap to i32
-                emit_value!(b, src_ptr_arg, ctx, I64)
-                _src_type = infer_value_type(src_ptr_arg, ctx)
-                if _src_type === Int64 || _src_type === Int || _src_type === UInt64 || _src_type <: Ptr
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, src_ptr_arg, ctx, I32)
                 # Length
-                _nbytes_type = infer_value_type(nbytes_arg, ctx)
-                emit_value!(b, nbytes_arg, ctx, (_nbytes_type === Int64 || _nbytes_type === Int || _nbytes_type === UInt64) ? I64 : I32)   # step4
-                if _nbytes_type === Int64 || _nbytes_type === Int || _nbytes_type === UInt64
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, nbytes_arg, ctx, I32)
                 # Emit array.copy
                 array_copy!(b, arr_copy_type, arr_copy_type)
                 # C memmove returns the exact destination pointer. In WT's
@@ -2155,11 +2113,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             if dest_offset_ssa === nothing
                 i32_const!(b, 0)
             else
-                dest_offset_type = infer_value_type(dest_offset_ssa, ctx)
-                emit_value!(b, dest_offset_ssa, ctx, (dest_offset_type === Int64 || dest_offset_type === Int) ? I64 : I32)   # step4
-                if dest_offset_type === Int64 || dest_offset_type === Int
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, dest_offset_ssa, ctx, I32)   # a Julia Int offset narrows through the funnel
                 i32_const!(b, 1)
                 num!(b, Opcode.I32_SUB)
             end
@@ -2198,11 +2152,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                     try; _elem_size = sizeof(_el_type); catch; end
                 end
             end
-            nbytes_type = infer_value_type(nbytes_arg, ctx)
-            emit_value!(b, nbytes_arg, ctx, (nbytes_type === Int64 || nbytes_type === Int || nbytes_type === UInt64) ? I64 : I32)   # step4
-            if nbytes_type === Int64 || nbytes_type === Int || nbytes_type === UInt64
-                num!(b, Opcode.I32_WRAP_I64)
-            end
+            emit_value!(b, nbytes_arg, ctx, I32)   # a Julia Int byte count narrows through the funnel
             if _elem_size > 1
                 i32_const!(b, Int64(_elem_size))
                 num!(b, Opcode.I32_DIV_U)
