@@ -67,17 +67,17 @@ mutable struct DispatchTableRegistry
         Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}
 end
 
-DispatchTableRegistry() = DispatchTableRegistry(Dict{Any, DispatchTable}(),
+DispatchTableRegistry()::DispatchTableRegistry = DispatchTableRegistry(Dict{Any, DispatchTable}(),
     Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0,
     Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
         Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}())
 
 """Get the dispatch table for a function."""
-get_dispatch_table(reg::DispatchTableRegistry, func_ref) = get(reg.tables, func_ref, nothing)
+get_dispatch_table(reg::DispatchTableRegistry, func_ref)::Union{Nothing,DispatchTable} = get(reg.tables, func_ref, nothing)
 
 """A selector's program-determined order key: its first entry's target function index
 (entries are built in registration order, which is itself index-ordered)."""
-selector_order_key(reg::DispatchTableRegistry, func_ref) =
+selector_order_key(reg::DispatchTableRegistry, func_ref)::Int =
     minimum(Int(e.target_idx) for e in reg.tables[func_ref].entries)
 
 # ==================== Table Building ====================
@@ -252,7 +252,7 @@ Does NOT add wrapper functions — those are deferred to emit_dispatch_wrappers!
 """
 function emit_dispatch_metadata!(mod::WasmModule,
                                   type_registry::TypeRegistry,
-                                  dt_registry::DispatchTableRegistry)
+                                  dt_registry::DispatchTableRegistry)::Nothing
     isempty(dt_registry.tables) && return
     # parity(dispatch_table.dart:63 SelectorInfo.signature): the FNV hash-table apparatus (i32-array globals, per-table funcref
     # tables) is DELETED — the selector table is the only dispatch structure. All this
@@ -272,7 +272,7 @@ values (set from func_registry during build_dispatch_tables) are correct.
 """
 function emit_dispatch_wrappers!(mod::WasmModule,
                                   type_registry::TypeRegistry,
-                                  dt_registry::DispatchTableRegistry)
+                                  dt_registry::DispatchTableRegistry)::Nothing
     isempty(dt_registry.tables) && return
 
     for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
@@ -436,7 +436,7 @@ Check if a CodeInfo body calls a function with a (selector-routed) dispatch tabl
 Returns the dispatch table if found, nothing otherwise.
 """
 function find_dispatch_call(code_info::Core.CodeInfo,
-                             dt_registry::DispatchTableRegistry)
+                             dt_registry::DispatchTableRegistry)::Union{Nothing,DispatchTable}
     # This feeds the WHOLE-BODY dispatch replacement — it must fire ONLY
     # for pure FORWARDERS (a body that IS the dispatch call: the call's args are
     # exactly the function's params in order, and the call's result is returned).

@@ -25,7 +25,7 @@ end
 Convert a Julia 1-based field index to the Wasm 0-based field index,
 accounting for the representation's inherited prefix.
 """
-wasm_field_idx(info::StructInfo, julia_field_idx::Int) = UInt32(julia_field_idx - 1 + info.field_offset)
+wasm_field_idx(info::StructInfo, julia_field_idx::Int)::UInt32 = UInt32(julia_field_idx - 1 + info.field_offset)
 
 # (B4/U2 — dart2wasm parity: the `UnionInfo` tagged-union descriptor + the whole
 # {typeId,tag,value} wrapper scheme are DELETED. A Union value is a boxed AnyRef
@@ -123,7 +123,7 @@ mutable struct TypeRegistry
     abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
 end
 
-TypeRegistry() = TypeRegistry(
+TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, nothing,
     Dict{WasmValType, UInt32}(),
     Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
@@ -145,7 +145,7 @@ TypeRegistry() = TypeRegistry(
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
 # All Dict fields are nothing — safe for MVP Int64 arithmetic where
 # no struct/array/union type registration is needed.
-TypeRegistry(::Val{:minimal}) = TypeRegistry(
+TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing,  # structs, arrays, string_array_idx, string_struct_idx
     nothing, nothing,            # unions, numeric_boxes
     nothing, nothing,            # type_constant_globals, typename_constant_globals
@@ -433,7 +433,7 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
 
 IDs start at 1 (0 is reserved for unknown/unassigned).
 """
-function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)
+function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)::Union{Nothing,Dict{Type,Tuple{Int32,Int32}}}
     # formal(dev/formal/ClassIdDispatch.tla): sorted-children DFS gives nested, sibling-disjoint ranges and a numbering that is a function of the closed world; only the lazy ensure_type_id! path makes ids history-dependent
     # Collect all concrete types from the registry that have typeId (field_offset > 0)
     concrete_types = Set{DataType}()
@@ -568,7 +568,7 @@ counted in: `sizeof(T)` for an isbits element, 8 for a boxed reference slot
 (`Base.aligned_sizeof(Any)`). Every lowering that converts between a byte offset and an
 element index uses this one rule.
 """
-memory_element_stride(@nospecialize(T)) =
+memory_element_stride(@nospecialize(T))::Int =
     (T isa DataType && isbitstype(T)) ? max(sizeof(T), 1) : 8
 
 """
@@ -599,14 +599,14 @@ different order. dart numbers and emits everything from the program structure
 (class_info.dart:831 ClassIdNumbering; constants.dart's map is walked in
 insertion order).
 """
-ordered_pairs(dict::AbstractDict, keyfn) = sort!(collect(dict); by = p -> keyfn(p.first))
+ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = sort!(collect(dict); by = p -> keyfn(p.first))
 
 """A type's program-determined order key: its printed name, then its defining module
 (two modules may define a `Foo`), then the wrapper's name for UnionAll bodies."""
-type_order_key(@nospecialize(T)) =
+type_order_key(@nospecialize(T))::Tuple{String,String} =
     (string(T), T isa DataType ? string(T.name.module) : (T isa UnionAll ? string(Base.unwrap_unionall(T).name.module) : ""))
 
-typename_order_key(tn::Core.TypeName) = (string(tn.module), string(tn.name))
+typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))
 
 """
     is_shared_wasm_type(registry, wasm_type_idx, T) -> Bool
@@ -721,7 +721,7 @@ end
 """builder-native (THE implementation): push the type's DFS id as i32.
 Goes through ensure_type_id! (a pure lookup — Phase 12B: every T here was already
 numbered by assign_type_ids!'s one DFS)."""
-function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
+function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(registry, T)))
     return b
 end
@@ -768,10 +768,10 @@ function get_object_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
 end
 
 """The inherited field prefix of every identity-bearing Julia heap object."""
-object_prefix_fields() = FieldType[FieldType(I32, false), FieldType(I32, true)]
+object_prefix_fields()::Vector{FieldType} = FieldType[FieldType(I32, false), FieldType(I32, true)]
 
 """Emit the allocation prefix shared by every identity-bearing heap object."""
-function emit_object_prefix!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))
+function emit_object_prefix!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))::InstrBuilder
     emit_type_id!(b, registry, T)
     i32_const!(b, 0) # identityHash is assigned lazily by `objectid`
     return b
@@ -779,7 +779,7 @@ end
 
 """Emit exactly the representation prefix declared by `StructInfo`."""
 function emit_struct_prefix!(b::InstrBuilder, registry::TypeRegistry,
-                             @nospecialize(T), info::StructInfo)
+                             @nospecialize(T), info::StructInfo)::InstrBuilder
     if info.field_offset == 2
         emit_object_prefix!(b, registry, T)
     elseif info.field_offset == 1
@@ -800,7 +800,7 @@ function get_identity_counter_global!(mod::WasmModule, registry::TypeRegistry)::
 end
 
 """Extract classId field 0 from a value through the common object base."""
-function emit_typeof!(b::InstrBuilder, base_idx::UInt32)
+function emit_typeof!(b::InstrBuilder, base_idx::UInt32)::InstrBuilder
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
     # struct.get $JlBase 0 — extract typeId field
@@ -835,7 +835,7 @@ Hierarchy (from §3.2.5):
 
 Must be called early, before type constant globals are created.
 """
-function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
+function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,StructInfo}
     registry.jl_type_idx !== nothing && return  # Already created
 
     # 1. $JlType base: (struct (field $kind (mut i32)))
@@ -1026,7 +1026,7 @@ struct FunctionInfo
                             # compile. Default false (base function).
 end
 # Back-compat: 5-arg construction is a non-candidate (base) function.
-FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type) =
+FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type)::FunctionInfo =
     FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, false)
 
 """Finish the canonical source-vararg tuple projection (a runtime ABI value, not a constant)."""
@@ -1048,7 +1048,7 @@ mutable struct FunctionRegistry
     by_ref::Vector{Tuple{Any, Vector{FunctionInfo}}}     # func_ref -> infos (linear scan)
 end
 
-FunctionRegistry() = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[])
+FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[])
 
 """
     serialize_function_table(registry::FunctionRegistry) -> Vector{Dict{String, Any}}
@@ -1073,7 +1073,7 @@ end
 """
 Register a function in the registry.
 """
-function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any; is_candidate::Bool=false)
+function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any; is_candidate::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
     # arg types, index) — for hunting call-site/callee signature divergence
     OPTIONS[].log_registry &&
@@ -1278,11 +1278,11 @@ end
 """
 Get or create an array type for a given element type.
 """
-@inline packed_array_storage(@nospecialize(T)) =
+@inline packed_array_storage(@nospecialize(T))::Union{Nothing,UInt8} =
     T === Int8 || T === UInt8 ? UInt8(0x78) :
     T === Int16 || T === UInt16 ? UInt8(0x77) : nothing
 
-@inline packed_array_signedness(@nospecialize(T)) =
+@inline packed_array_signedness(@nospecialize(T))::Union{Nothing,Bool} =
     T === Int8 || T === Int16 ? true :
     T === UInt8 || T === UInt16 ? false : nothing
 
@@ -1634,7 +1634,7 @@ When \$JlType hierarchy is available, populates \$JlDataType fields:
 And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
 """
-function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)
+function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,WasmModule}
     # TRUE-INT-002: Guard for Dict-free TypeRegistry (minimal constructor)
     (registry.type_constant_globals === nothing || isempty(registry.type_constant_globals)) && return
 
@@ -1648,7 +1648,7 @@ Compose every generated closed-world initializer behind the module's single star
 entry. Mutable constant globals contain only nullable storage before this runs;
 their initializer functions construct exact object snapshots and publish them.
 """
-function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)
+function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)::Nothing
     funcs = registry.module_init_functions
     (funcs === nothing || isempty(funcs)) && return
     previous_start = mod.start_function
@@ -1666,7 +1666,7 @@ end
 """
 Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
 """
-function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)
+function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,WasmModule}
     dt_type_idx = registry.jl_datatype_idx
     tn_type_idx = registry.jl_typename_idx
     svec_idx = registry.jl_svec_idx
@@ -1965,7 +1965,7 @@ struct that can be returned by typeof(x).
 
 Must be called AFTER assign_type_ids!.
 """
-function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)
+function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)::Nothing
     # Collect all types that need globals: those with DFS IDs or DFS ranges
     all_typed = Set{Type}()
     for T in keys(registry.type_ids)
@@ -1991,7 +1991,7 @@ This enables typeof(x) to return a \$JlDataType struct by looking up the typeId.
 
 Must be called AFTER ensure_all_type_globals!.
 """
-function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)
+function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,Int32}
     isempty(registry.type_constant_globals) && return
 
     dt_type_idx = registry.jl_datatype_idx
@@ -2037,7 +2037,7 @@ For each type with a DFS ID and a DataType global, emits:
 
 Must be called from within populate_type_constant_globals! (appended to the body).
 """
-function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)
+function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)::InstrBuilder
     registry.type_lookup_global === nothing && return b
     registry.type_lookup_array_idx === nothing && return b
 
@@ -2068,7 +2068,7 @@ end
 
 """Resolve a value's classId through the module's canonical type-object table."""
 function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
-                                         registry::TypeRegistry, temp_local::UInt32)
+                                         registry::TypeRegistry, temp_local::UInt32)::InstrBuilder
     registry.type_lookup_global === nothing && error("Type lookup table global is unavailable")
     registry.type_lookup_array_idx === nothing && error("Type lookup table array is unavailable")
     # Extract typeId: ref.cast $JlBase + struct.get → i32
@@ -2488,7 +2488,7 @@ The synthetic {classId:i32} struct for an ABSTRACT Julia type, `sub` its parent'
 synthetic (recursion roots at \$JlBase = Any). Parents recurse FIRST → their indices
 precede the child's (the wasm ordering rule).
 """
-function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)
+function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)::Union{Nothing,UInt32}
     (A === Any || !(A isa DataType)) && return registry.base_struct_idx
     d = registry.abstract_struct_idxs
     d === nothing && return registry.base_struct_idx
