@@ -543,6 +543,41 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     return out
 end
 
+"""Does `node` use SSA value `id` as an operand? ONE reference test covering every node
+kind — an `Expr`-shaped walk has to be written per consumer and the existing one
+(`references_ssa`) silently misses PhiNode/PiNode operands, which the storage-relative
+pointer-escape proof depends on seeing. A NirUnsupported node has no resolved operands,
+so its raw statement is walked: an unrecognized consumer must never look like a
+non-consumer."""
+function nir_refs_ssa(node::NirNode, id::Int)::Bool
+    node isa NirSSA && return node.id == id
+    _r(x) = x !== nothing && nir_refs_ssa(x, id)
+    node isa NirPi && return _r(node.value)
+    node isa NirPhi && return any(_r, node.values)
+    node isa NirPhiC && return any(_r, node.values)
+    node isa NirReturn && return _r(node.value)
+    node isa NirGotoIfNot && return _r(node.cond)
+    node isa NirUpsilon && return _r(node.value)
+    node isa NirThrowUndefIfNot && return _r(node.cond)
+    node isa NirCall && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.args)
+    node isa NirInvoke && return any(_r, node.args)
+    node isa NirNew && return any(_r, node.args)
+    node isa NirForeignCall && return any(_r, node.args)
+    node isa NirUnsupported && return _raw_refs_ssa(node.raw, id)
+    return false
+end
+
+function _raw_refs_ssa(x, id::Int)::Bool
+    x isa Core.SSAValue && return x.id == id
+    x isa Expr && return any(a -> _raw_refs_ssa(a, id), x.args)
+    x isa Core.PiNode && return _raw_refs_ssa(x.val, id)
+    x isa Core.PhiNode && return any(i -> isassigned(x.values, i) && _raw_refs_ssa(x.values[i], id),
+                                     eachindex(x.values))
+    (x isa Core.ReturnNode && isdefined(x, :val)) && return _raw_refs_ssa(x.val, id)
+    x isa Core.GotoIfNot && return _raw_refs_ssa(x.cond, id)
+    return false
+end
+
 """True for the node kinds an `Expr` statement classifies to. compile_statement! emits
 those through a per-statement FRAGMENT builder (the value they may leave on the stack is
 then stored/coerced/dropped by one tail); the IR-node kinds — return/goto/phi/pi/enter/

@@ -35,20 +35,6 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
     return b
 end
 
-function _pointer_node_refs(value, ssa_id::Int)::Bool
-    value isa Core.SSAValue && return value.id == ssa_id
-    value isa Expr && return any(arg -> _pointer_node_refs(arg, ssa_id), value.args)
-    value isa Core.PiNode && return _pointer_node_refs(value.val, ssa_id)
-    if value isa Core.PhiNode
-        return any(eachindex(value.values)) do i
-            isassigned(value.values, i) && _pointer_node_refs(value.values[i], ssa_id)
-        end
-    end
-    value isa Core.ReturnNode && isdefined(value, :val) &&
-        return _pointer_node_refs(value.val, ssa_id)
-    return false
-end
-
 """
 Prove that a `jl_value_ptr` result never escapes WT's storage-relative pointer
 algebra. In that algebra a storage object's base offset is exactly zero; the
@@ -56,32 +42,35 @@ backing object is carried by the recognized consumer and may never be observed a
 a fabricated numeric address. Any return, aggregate store, comparison, or unknown
 consumer rejects the compilation.
 """
+# The only consumers that keep a storage-relative pointer inside the algebra.
+const _STORAGE_RELATIVE_PTR_OPS = (Core.Intrinsics.add_ptr, Core.Intrinsics.sub_ptr,
+                                   Core.Intrinsics.bitcast, Core.Intrinsics.pointerref,
+                                   Core.Intrinsics.pointerset)
+
 function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                                              root_ssa::Int)::Bool
-    code = ctx.code_info.code
     pending = Int[root_ssa]
     seen = Set{Int}()
     while !isempty(pending)
         source = pop!(pending)
         source in seen && continue
         push!(seen, source)
-        for (consumer_idx, consumer) in enumerate(code)
+        for (consumer_idx, rec) in enumerate(ctx.nir)
             consumer_idx == source && continue
-            _pointer_node_refs(consumer, source) || continue
-            if consumer isa Core.PiNode || consumer isa Core.PhiNode
+            consumer = rec.node
+            nir_refs_ssa(consumer, source) || continue
+            # A slot assignment stores the pointer into a variable — an escape.
+            rec.slot == 0 || return false
+            if consumer isa NirPi || consumer isa NirPhi
                 push!(pending, consumer_idx)
                 continue
             end
-            consumer isa Expr || return false
-            if consumer.head === :call
-                callee = consumer.args[1]
-                name = callee isa GlobalRef ? callee.name : callee
-                name in (:add_ptr, :sub_ptr, :bitcast, :pointerref, :pointerset) || return false
+            if consumer isa NirCall
+                consumer.callee in _STORAGE_RELATIVE_PTR_OPS || return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)
                 result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
-            elseif consumer.head === :foreigncall
-                name = extract_foreigncall_name(consumer.args[1])
-                name in (:memcpy, :memmove, :memset) || return false
+            elseif consumer isa NirForeignCall
+                consumer.c_symbol in (:memcpy, :memmove, :memset) || return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)
                 result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
             else
@@ -103,35 +92,33 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
         _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
         return nothing
     end
-    cur = arg
+    cur = nir_node(ctx, arg)
     for _ in 1:48
-        cur isa Core.SSAValue || return _fail("non-ssa", cur)
+        cur isa NirSSA || return _fail("non-ssa", cur)
         cur.id in _seen && return _fail("pointer-cycle", cur)
+        (1 <= cur.id <= length(ctx.nir)) || return _fail("out-of-range", cur)
         push!(_seen, cur.id)
-        st = ctx.code_info.code[cur.id]
+        st = ctx.nir[cur.id].node
         _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
-        if st isa Core.PiNode
-            cur = st.val
-        elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
-               extract_foreigncall_name(st.args[1]) === :jl_value_ptr
+        if st isa NirPi
+            cur = st.value
+        elseif st isa NirForeignCall && st.c_symbol === :jl_value_ptr && !isempty(st.args)
             # `jl_value_ptr(obj)` contributes the backing identity; its exact
             # target address component is the storage-relative base offset.
-            cur = st.args[6]
-        elseif st isa Expr && st.head === :foreigncall &&
-               extract_foreigncall_name(st.args[1]) === :jl_string_to_genericmemory
+            cur = st.args[1]
+        elseif st isa NirForeignCall && st.c_symbol === :jl_string_to_genericmemory
             # This foreigncall's Wasm representation is the source String's
             # byte array, so its SSA result is itself a valid backing identity.
             return cur
-        elseif st isa Expr && st.head === :foreigncall && length(st.args) >= 6 &&
-               extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)
+        elseif st isa NirForeignCall &&
+               st.c_symbol in (:jl_string_ptr, :jl_symbol_name) && !isempty(st.args)
             # The pointed-to bytes belong to the classed String/Symbol operand.
-            return st.args[6]
-        elseif st isa Core.PhiNode
+            return st.args[1]
+        elseif st isa NirPhi
             terminals = Any[]
-            for i in eachindex(st.values)
-                isassigned(st.values, i) || continue
-                value = st.values[i]
-                value isa Core.SSAValue && value.id == cur.id && continue
+            for value in st.values
+                value === nothing && continue
+                value isa NirSSA && value.id == cur.id && continue
                 terminal = _trace_memmove_ptr(value, ctx; eltypes, allow_ref,
                                               _seen=copy(_seen))
                 terminal === nothing && return _fail("phi-untraceable", st)
@@ -139,21 +126,20 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
             end
             length(terminals) == 1 || return _fail("phi-multiple-storage", st)
             return terminals[1]
-        elseif allow_ref && st isa Expr && st.head === :new
+        elseif allow_ref && st isa NirNew
             # P4-stdlib: pointer into a Base.RefValue{T} box (radix sort
             # counters use pointer_from_objref(Ref(...))) — the terminal IS
             # the box; the caller emits struct.get/set on it.
             local _nt = infer_value_type(cur, ctx)
             (_nt isa DataType && _nt <: Base.RefValue) || return _fail("new-non-refvalue: $_nt", st)
             return cur
-        elseif st isa Expr && st.head === :call && length(st.args) >= 2
-            cf = st.args[1]
-            call_name = cf isa GlobalRef ? cf.name : cf
-            if call_name === :bitcast
-                cur = st.args[3]
-            elseif call_name === :add_ptr || call_name === :sub_ptr
+        elseif st isa NirCall && !isempty(st.args)
+            call_fn = st.callee
+            if call_fn === Core.Intrinsics.bitcast && length(st.args) >= 2
                 cur = st.args[2]
-            elseif call_name === :memorynew
+            elseif call_fn === Core.Intrinsics.add_ptr || call_fn === Core.Intrinsics.sub_ptr
+                cur = st.args[1]
+            elseif call_fn === Core.memorynew
                 # P4-stdlib: pointer into a freshly-allocated Memory{T} —
                 # Memory compiles DIRECTLY as a wasm array; valid terminal
                 # (callers use _emit_backing_array! which skips the Vector
@@ -162,7 +148,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                 local _mn_el = _mn_t isa DataType && length(_mn_t.parameters) >= 2 ? _mn_t.parameters[2] : nothing
                 _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
                 return cur
-            elseif call_name === :memoryrefnew
+            elseif call_fn === Core.memoryrefnew
                 # The MemoryRef value itself is the runtime owner. Keeping it as
                 # the terminal preserves resize/copy phis that legitimately select
                 # different allocations; following into one constructor arm would
@@ -173,33 +159,30 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                                (_mr_t isa DataType && !isempty(_mr_t.parameters) ? _mr_t.parameters[1] : nothing)
                 _mr_el in eltypes || return _fail("memoryrefnew-elty: $_mr_t", st)
                 return cur
-            elseif call_name === :getfield && length(st.args) >= 3
-                fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
+            elseif call_fn === Core.getfield && length(st.args) >= 2
+                fld = _nir_field_name(st.args[2])
                 if fld === :ptr_or_offset || fld === :ptr
-                    owner = st.args[2]
+                    owner = st.args[1]
                     owner_type = get_ssa_type(ctx, owner)
                     if owner_type isa DataType &&
                        owner_type.name.name in (:MemoryRef, :GenericMemoryRef) &&
-                       owner isa Core.SSAValue
+                       owner isa NirSSA
                         # Normalize a MemoryRef pointer projection to its sibling
                         # `.mem` projection when present. Julia's layout branch forms
                         # both `mem.ptr + offset` and `ref.ptr_or_offset`; they denote
                         # the same dynamic allocation and must converge before a phi.
-                        for (projection_idx, projection) in enumerate(ctx.code_info.code)
-                            projection isa Expr && projection.head === :call &&
-                                length(projection.args) >= 3 || continue
-                            projection.args[1] isa GlobalRef &&
-                                projection.args[1].name === :getfield || continue
-                            projection.args[2] == owner || continue
-                            projected_field = projection.args[3] isa QuoteNode ?
-                                projection.args[3].value : projection.args[3]
-                            projected_field === :mem || continue
-                            return Core.SSAValue(projection_idx)
+                        for (projection_idx, projection_rec) in enumerate(ctx.nir)
+                            local projection = projection_rec.node
+                            projection isa NirCall && projection.callee === Core.getfield &&
+                                length(projection.args) >= 2 || continue
+                            projection.args[1] == owner || continue
+                            _nir_field_name(projection.args[2]) === :mem || continue
+                            return NirSSA(projection_idx, projection_rec.julia_type)
                         end
                         return owner
                     elseif owner_type isa DataType &&
                        owner_type.name.name in (:Memory, :GenericMemory)
-                        if owner isa Core.SSAValue
+                        if owner isa NirSSA
                             cur = owner
                         else
                             return owner
@@ -211,28 +194,25 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                     memory_type = get_ssa_type(ctx, cur)
                     if memory_type isa DataType &&
                        memory_type.name.name in (:Memory, :GenericMemory)
-                        owner = st.args[2]
-                        if owner isa Core.SSAValue
+                        owner = st.args[1]
+                        if owner isa NirSSA
                             # Canonicalize repeated `.mem` projections of the same
                             # MemoryRef so pointer-layout phis compare by semantic
                             # owner, not by incidental SSA projection number.
-                            for (projection_idx, projection) in enumerate(ctx.code_info.code)
-                                projection isa Expr && projection.head === :call &&
-                                    length(projection.args) >= 3 || continue
-                                projection.args[1] isa GlobalRef &&
-                                    projection.args[1].name === :getfield || continue
-                                projection.args[2] == owner || continue
-                                projected_field = projection.args[3] isa QuoteNode ?
-                                    projection.args[3].value : projection.args[3]
-                                projected_field === :mem || continue
-                                return Core.SSAValue(projection_idx)
+                            for (projection_idx, projection_rec) in enumerate(ctx.nir)
+                                local projection = projection_rec.node
+                                projection isa NirCall && projection.callee === Core.getfield &&
+                                    length(projection.args) >= 2 || continue
+                                projection.args[1] == owner || continue
+                                _nir_field_name(projection.args[2]) === :mem || continue
+                                return NirSSA(projection_idx, projection_rec.julia_type)
                             end
                         end
                         return cur
                     end
-                    cur = st.args[2]
+                    cur = st.args[1]
                 elseif fld === :ref
-                    vec = st.args[2]
+                    vec = st.args[1]
                     vt = infer_value_type(vec, ctx)
                     (vt isa DataType && vt <: Vector &&
                      eltype(vt) in eltypes) || return _fail("elty-not-allowed: $vt", vec)
@@ -252,7 +232,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
                     return _fail("getfield-fld=$fld", st)
                 end
             else
-                return _fail("call-fn=$call_name", st)
+                return _fail("call-fn=$call_fn", st)
             end
         else
             return _fail("stmt-kind", st)
@@ -477,7 +457,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             stmt_bytes = builder_code(_sf)
         elseif node isa NirForeignCall
             # Handle foreign calls - specifically for Vector allocation
-            compile_foreigncall!(_sf, stmt, idx, ctx)
+            compile_foreigncall!(_sf, node, idx, ctx)
             stmt_bytes = builder_code(_sf)
         elseif node isa NirTheException
             # Retrieve the caught exception value from the $current_exn global.
@@ -1192,23 +1172,14 @@ value, but the same "correct-or-loud" violation. Scan every statement for a
 reference to `ssa_id` and reject unless it is exactly the safe getfield/setfield!
 pattern.
 """
-function _task_ssa_used_unsafely(code::Vector{Any}, ssa_id::Int)::Bool
-    _is_safe_rng_access(stmt) =
-        stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
-        (is_func(stmt.args[1], :getfield) || is_func(stmt.args[1], :setfield!)) &&
-        stmt.args[2] isa Core.SSAValue && stmt.args[2].id == ssa_id &&
-        (stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]) in
-            (:rngState0, :rngState1, :rngState2, :rngState3)
-    _refs(x) = x isa Core.SSAValue ? x.id == ssa_id :
-               x isa Expr ? any(_refs, x.args) :
-               x isa Core.PhiNode ? any(i -> isassigned(x.values, i) && _refs(x.values[i]), 1:length(x.values)) :
-               x isa Core.PiNode ? _refs(x.val) :
-               x isa Core.ReturnNode ? (isdefined(x, :val) && _refs(x.val)) :
-               x isa Core.GotoIfNot ? _refs(x.cond) :
-               false
-    for stmt in code
-        _is_safe_rng_access(stmt) && continue
-        _refs(stmt) && return true
+function _task_ssa_used_unsafely(ctx::AbstractCompilationContext, ssa_id::Int)::Bool
+    _is_safe_rng_access(n) =
+        n isa NirCall && (n.callee === Core.getfield || n.callee === Core.setfield!) &&
+        length(n.args) >= 2 && n.args[1] isa NirSSA && n.args[1].id == ssa_id &&
+        _nir_field_name(n.args[2]) in (:rngState0, :rngState1, :rngState2, :rngState3)
+    for rec in ctx.nir
+        _is_safe_rng_access(rec.node) && continue
+        nir_refs_ssa(rec.node, ssa_id) && return true
     end
     return false
 end
@@ -1232,35 +1203,28 @@ caller's builder. Handles patterns like jl_alloc_genericmemory for Vector alloca
 # registration text as a structural invariant.
 # ============================================================================
 
-function _fc_jl_alloc_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # Extract element type from return type
             # args[2] is like Ref{Memory{Int32}}
             # args[7] is Memory{Int32}
-            ret_type = length(expr.args) >= 2 ? expr.args[2] : nothing
+            ret_type = node.ret_julia_type
 
             # Get the element type from Memory{T}
             # Memory{T} is actually GenericMemory{:not_atomic, T, ...}
             # The memory type is at args[6] (not args[7])
             elem_type = Int32  # default
-            if length(expr.args) >= 6
-                mem_type = expr.args[6]
+            if length(node.args) >= 1
+                mem_type = _nir_const_operand(node.args[1])
                 if mem_type isa DataType && mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
                     # GenericMemory parameters: (atomicity, element_type, addrspace)
                     elem_type = mem_type.parameters[2]
                 elseif mem_type isa DataType && mem_type.name.name === :Memory && length(mem_type.parameters) >= 1
                     elem_type = mem_type.parameters[1]
-                elseif mem_type isa GlobalRef
-                    resolved = try getfield(mem_type.mod, mem_type.name) catch; nothing end
-                    if resolved isa DataType && resolved.name.name === :GenericMemory && length(resolved.parameters) >= 2
-                        elem_type = resolved.parameters[2]
-                    elseif resolved isa DataType && resolved.name.name === :Memory && length(resolved.parameters) >= 1
-                        elem_type = resolved.parameters[1]
-                    end
                 end
             end
 
             # Get the length argument (at args[7] or args[8])
-            len_arg = length(expr.args) >= 7 ? expr.args[7] : nothing
+            len_arg = length(node.args) >= 2 ? node.args[2] : nothing
 
             # Get or create array type for this element type
             arr_type_idx = if elem_type <: AbstractVector || (elem_type isa DataType && isstructtype(elem_type))
@@ -1289,15 +1253,16 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx:
             return b
 end
 
-function _fc_memset!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # memset(ptr, value, size) — fill memory with a byte value.
             # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
             # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
             # (Dict/Set constructor, rehash!) use value=0 (a literal 0x00).
             # SOUNDNESS: a *literal* non-zero fill would silently produce wrong results,
             # so we refuse it (foreigncall args: [name,rt,argtypes,nreq,cc, ptr, value, size]).
-            if length(expr.args) >= 7 && (expr.args[7] isa Number) && !iszero(expr.args[7])
-                record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=expr)
+            if length(node.args) >= 2 && node.args[2] isa NirLiteral &&
+               (node.args[2].value isa Number) && !iszero(node.args[2].value)
+                record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
@@ -1309,23 +1274,21 @@ function _fc_memset!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompila
             # Latent until a
             # reachable block `end` closed over the orphan (gaps
             # 4be58371947f / 203da15d789c).
-            if length(expr.args) >= 6 && haskey(ctx.ssa_locals, idx)
-                emit_value!(b, expr.args[6], ctx,
-                            static_wasm_type(expr.args[6], ctx))
+            if length(node.args) >= 1 && haskey(ctx.ssa_locals, idx)
+                emit_value!(b, node.args[1], ctx,
+                            static_wasm_type(node.args[1], ctx))
             end
             return b
 end
 
-function _fc_jl_types_equal!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
             # compile-time type literals, fold to a constant (gap 01c21040d51f:
             # the unknown-foreigncall stub made every Float32^Float32 trap).
-            _resolve_type_lit(a) = a isa GlobalRef ? (try getfield(a.mod, a.name) catch; nothing end) :
-                                   a isa QuoteNode ? a.value : a
-            if length(expr.args) >= 7
-                t1 = _resolve_type_lit(expr.args[6])
-                t2 = _resolve_type_lit(expr.args[7])
+            if length(node.args) >= 2
+                t1 = _nir_const_operand(node.args[1])
+                t2 = _nir_const_operand(node.args[2])
                 if t1 isa Type && t2 isa Type
                     i32_const!(b, t1 === t2 ? 1 : 0)
                     return b
@@ -1335,10 +1298,10 @@ function _fc_jl_types_equal!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstrac
     return nothing
 end
 
-function _fc_jl_object_id!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
             # assign a non-zero module-local identity on first observation.
-            local object_arg = length(expr.args) >= 6 ? expr.args[6] : nothing
+            local object_arg = length(node.args) >= 1 ? node.args[1] : nothing
             local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
             local object_idx = (object_type === String || object_type === Symbol) ?
                                get_string_struct_type!(ctx.mod, ctx.type_registry) :
@@ -1375,20 +1338,20 @@ function _fc_jl_object_id!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractC
                 extend_identity_hash_to_u64!(b)
                 return b
             end
-            record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=expr)
+            record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=node)
             unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b
 end
 
-function _fc_jl_string_to_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
             # So this is essentially just passing through the underlying array
 
             # The string argument is at args[6]
-            if length(expr.args) >= 6
-                str_arg = expr.args[6]
+            if length(node.args) >= 1
+                str_arg = node.args[1]
                 # parity(translator.dart:1597 convertType): the classed string → its DATA array (the funnel adjusts)
                 emit_value!(b, str_arg, ctx,
                             ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
@@ -1397,25 +1360,25 @@ function _fc_jl_string_to_genericmemory!(b::InstrBuilder, expr::Expr, idx::Int, 
             return b
 end
 
-function _fc_jl_alloc_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
             # Create a zero-filled array of the requested size.
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            if length(expr.args) >= 6
-                size_arg = expr.args[6]
+            if length(node.args) >= 1
+                size_arg = node.args[1]
                 emit_value!(b, size_arg, ctx, I32)   # a Julia Int length narrows through the funnel
             else
                 record_unsupported!(ctx, :value_stub,
                     "jl_alloc_string without its required length operand";
-                    idx=idx, detail=expr, soundness_fatal=true)
+                    idx=idx, detail=node, soundness_fatal=true)
             end
             array_new_default!(b, str_arr_type)
             emit_string_wrap!(b, ctx)   # parity(constants.dart:872 visitStringConstant): a String is classed from birth
             return b
 end
 
-function _fc_jl_string_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
             # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
@@ -1426,29 +1389,29 @@ function _fc_jl_string_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstract
             return b
 end
 
-function _fc_strlen!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
-            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
+            traced = _trace_string_ptr(node.args[1], ctx)
             if traced !== nothing
                 source, _ = traced
                 str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
                 emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
                 array_len!(b)
-                julia_to_wasm_type(expr.args[2]) === I64 && widen_length_to_i64!(b)
+                julia_to_wasm_type(node.ret_julia_type) === I64 && widen_length_to_i64!(b)
                 return b
             end
     return nothing
 end
 
-function _fc_jl_genericmemory_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
             # The underlying WasmGC array may have more capacity than n
             # (Julia allocates Memory with minimum size 16), so we must
             # create a new array of exactly n elements and copy.
-            if length(expr.args) >= 7
-                mem_arg = expr.args[6]
-                len_arg = expr.args[7]
+            if length(node.args) >= 2
+                mem_arg = node.args[1]
+                len_arg = node.args[2]
                 str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
                 # Allocate locals for dest array and length
@@ -1475,18 +1438,18 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, expr::Expr, idx::Int, 
                 # parity(constants.dart:872 visitStringConstant): publish as the CLASSED string
                 local_get!(b, dest_local)
                 emit_string_wrap!(b, ctx)
-            elseif length(expr.args) >= 6
+            elseif length(node.args) >= 1
                 # Fallback: no length arg — wrap the passed-through memory as a string
-                mem_arg = expr.args[6]
+                mem_arg = node.args[1]
                 emit_value!(b, mem_arg, ctx, ConcreteRef(UInt32(str_arr_type), true))
                 emit_string_wrap!(b, ctx)
             end
             return b
 end
 
-function _fc_jl_cstr_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
-            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
+            traced = _trace_string_ptr(node.args[1], ctx)
             if traced !== nothing
                 source, _ = traced
                 str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
@@ -1495,24 +1458,24 @@ function _fc_jl_cstr_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abst
             end
             record_unsupported!(ctx, :unsupported_method,
                 "jl_cstr_to_string pointer cannot be traced to a String/Symbol";
-                idx=idx, detail=expr)
+                idx=idx, detail=node)
             unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b
 end
 
-function _fc_jl_pchar_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
             # the pointer back to the underlying array, then copy exactly n bytes.
-            if length(expr.args) >= 7
-                ptr_arg = expr.args[6]
-                len_arg = expr.args[7]
+            if length(node.args) >= 2
+                ptr_arg = node.args[1]
+                len_arg = node.args[2]
                 # Julia passes the GC owner as the final preserve argument. Prefer
                 # that runtime value over reconstructing identity from pointer phis:
                 # resize! legitimately switches an IOBuffer from its empty allocation
                 # to a grown allocation, so the owner phi is the exact dynamic storage.
-                owner_arg = length(expr.args) >= 9 ? expr.args[end] : nothing
+                owner_arg = length(node.args) >= 4 ? node.args[end] : nothing
                 owner_type = owner_arg === nothing ? nothing : get_ssa_type(ctx, owner_arg)
                 owner_is_memory = owner_type isa DataType &&
                     owner_type.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
@@ -1552,19 +1515,19 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abs
                     return b
                 end
                 record_unsupported!(ctx, :unsupported_method,
-                    "jl_pchar_to_string pointer cannot be traced to owned WasmGC storage"; idx=idx, detail=expr)
+                    "jl_pchar_to_string pointer cannot be traced to owned WasmGC storage"; idx=idx, detail=node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
-            elseif length(expr.args) >= 6
+            elseif length(node.args) >= 1
                 record_unsupported!(ctx, :unsupported_method,
-                    "jl_pchar_to_string lacks a traceable pointer/length pair"; idx=idx, detail=expr)
+                    "jl_pchar_to_string lacks a traceable pointer/length pair"; idx=idx, detail=node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
             end
             return b
 end
 
-function _fc_utf8proc_grapheme_break_stateful!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_utf8proc_grapheme_break_stateful!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
             # Returns true if there's a grapheme cluster break between c1 and c2.
             # WT has no utf8proc runtime yet.  Returning a constant here silently
@@ -1572,19 +1535,19 @@ function _fc_utf8proc_grapheme_break_stateful!(b::InstrBuilder, expr::Expr, idx:
             # until the real Unicode state machine is available.
             record_unsupported!(ctx, :value_stub,
                 "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime";
-                idx=idx, detail=expr, soundness_fatal=true)
+                idx=idx, detail=node, soundness_fatal=true)
             return b
 end
 
-function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
             # The pointer arg traces back through bitcast/getfield(:ptr) to a Memory
             # (= array in WasmGC). We trace the IR to find the original data array,
             # then wrap it in a Vector struct (data_array_ref, size_tuple).
-            ret_type = length(expr.args) >= 2 ? expr.args[2] : nothing
-            ptr_arg = length(expr.args) >= 7 ? expr.args[7] : nothing
-            len_arg = length(expr.args) >= 8 ? expr.args[8] : nothing
+            ret_type = node.ret_julia_type
+            ptr_arg = length(node.args) >= 2 ? node.args[2] : nothing
+            len_arg = length(node.args) >= 3 ? node.args[3] : nothing
 
             if ret_type !== nothing && ret_type <: AbstractVector
                 # Trace ptr back through bitcast/getfield(:ptr) to find the data source
@@ -1623,14 +1586,14 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abs
     return nothing
 end
 
-function _fc_memchr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 8 || return nothing
-        ptr_arg = expr.args[6]   # Ptr{UInt8} — traces back to string + offset
-        byte_arg = expr.args[7]  # Int32 — the byte to search for
-        count_arg = expr.args[8] # UInt64 — number of bytes to search
+function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 3 || return nothing
+        ptr_arg = node.args[1]   # Ptr{UInt8} — traces back to string + offset
+        byte_arg = node.args[2]  # Int32 — the byte to search for
+        count_arg = node.args[3] # UInt64 — number of bytes to search
 
         # Trace the pointer back to find the string array ref
-        str_info = ptr_arg isa Core.SSAValue ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
+        str_info = ptr_arg isa NirSSA ? _trace_string_ptr(ptr_arg, ctx) : nothing
         if str_info !== nothing
             str_ssa, _idx_ssa = str_info
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -1720,32 +1683,32 @@ function _fc_memchr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompila
     return nothing
 end
 
-function _fc_jl_symbol_n!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
         # jl_symbol_n(ptr::Ptr{UInt8}, len::Int64) -> Ref{Symbol}
         # In WasmGC, Symbol is represented as a string byte array (same as String).
-        # The GC root argument (expr.args[8]) is the original String — just return it.
-        if length(expr.args) >= 8
-            gc_root = expr.args[8]
+        # The GC root argument (node.args[3]) is the original String — just return it.
+        if length(node.args) >= 3
+            gc_root = node.args[3]
             emit_value!(b, gc_root, ctx, static_wasm_type(gc_root, ctx))
             return b
         end
     return nothing
 end
 
-function _fc_jl_get_current_task!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     # The Task value is phantom (no bytecode): sound ONLY for rand()'s
     # rngState field pattern — any other consumer rejects loudly.
-    if _task_ssa_used_unsafely(ctx.code_info.code, idx)
+    if _task_ssa_used_unsafely(ctx, idx)
         record_unsupported!(ctx, :unsupported_method,
             "current_task() (Task identity / scheduler state) used outside the rand() RNG-state field pattern";
-            idx=idx, detail=expr, soundness_fatal=true)
+            idx=idx, detail=node, soundness_fatal=true)
         ctx.last_stmt_was_stub = true
         return b
     end
     return b
 end
 
-function _fc_jl_hrtime!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
         perf_now_idx = ensure_perf_now_import!(ctx.mod)
         call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
         # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
@@ -1758,13 +1721,13 @@ function _fc_jl_hrtime!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractComp
 end
 
 
-function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 10 || return nothing
-        local _gmc_mt = infer_value_type(expr.args[6], ctx)
+function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 5 || return nothing
+        local _gmc_mt = infer_value_type(node.args[1], ctx)
         local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
         # any element kind: the byte offsets divide by Julia's element stride (sizeof
         # for isbits, 8 for a boxed reference slot) — the rule :ptr_or_offset multiplies by
-        if _gmc_te isa Type && infer_value_type(expr.args[8], ctx) === _gmc_mt
+        if _gmc_te isa Type && infer_value_type(node.args[3], ctx) === _gmc_mt
             local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
             local _gmc_sz = memory_element_stride(_gmc_te)
             local _gmc_off = a -> begin
@@ -1774,25 +1737,25 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, expr::Expr, idx::Int, ctx
                     num!(b, Opcode.I32_DIV_U)
                 end
             end
-            emit_value!(b, expr.args[6], ctx, ConcreteRef(UInt32(_gmc_arr), true))
-            _gmc_off(expr.args[7])
-            emit_value!(b, expr.args[8], ctx, ConcreteRef(UInt32(_gmc_arr), true))
-            _gmc_off(expr.args[9])
-            emit_value!(b, expr.args[10], ctx, I32)   # a Julia Int count narrows through the funnel
+            emit_value!(b, node.args[1], ctx, ConcreteRef(UInt32(_gmc_arr), true))
+            _gmc_off(node.args[2])
+            emit_value!(b, node.args[3], ctx, ConcreteRef(UInt32(_gmc_arr), true))
+            _gmc_off(node.args[4])
+            emit_value!(b, node.args[5], ctx, I32)   # a Julia Int count narrows through the funnel
             array_copy!(b, _gmc_arr, _gmc_arr)
             return b   # Cvoid — no value
         end
     return nothing
 end
 
-function _fc_jl_type_intersection!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 7 || return nothing
+function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 2 || return nothing
         # P4-stdlib (Random hash_seed): dispatch guards compare
         # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
         # the host and emit the resulting type constant (NOT a stub: the
         # stub flag dead-coded the live loop-exit condition that follows).
-        local _ti_a = expr.args[6]
-        local _ti_b = expr.args[7]
+        local _ti_a = node.args[1]
+        local _ti_b = node.args[2]
         _ti_a isa QuoteNode && (_ti_a = _ti_a.value)
         _ti_b isa QuoteNode && (_ti_b = _ti_b.value)
         if _ti_a isa GlobalRef
@@ -1811,7 +1774,7 @@ function _fc_jl_type_intersection!(b::InstrBuilder, expr::Expr, idx::Int, ctx::A
     return nothing
 end
 
-function _fc_jl_value_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
         # Internal pointer_from_objref is representable only when its entire use
         # graph stays inside the storage-relative pointer algebra proved above.
         # The backing storage is recovered by the consuming array operation, and
@@ -1819,7 +1782,7 @@ function _fc_jl_value_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractC
         _storage_relative_pointer_is_closed(ctx, idx) || begin
             record_unsupported!(ctx, :unsupported_method,
                 "jl_value_ptr escapes storage-relative WasmGC operations";
-                idx=idx, detail=expr, soundness_fatal=true)
+                idx=idx, detail=node, soundness_fatal=true)
             ctx.last_stmt_was_stub = true
             return b
         end
@@ -1827,15 +1790,15 @@ function _fc_jl_value_ptr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractC
         return b
 end
 
-function _fc_jl_get_tls_world_age!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     i64_const!(b, Int64(WASM_WORLD_AGE))
     return b
 end
 
-function _fc_jl_is_const!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 7 || return nothing
-        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
-        name_owner = _trace_field_owner(expr.args[7], :singletonname, ctx)
+function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 2 || return nothing
+        module_owner = _trace_field_owner(node.args[1], :module, ctx)
+        name_owner = _trace_field_owner(node.args[2], :singletonname, ctx)
         if module_owner !== nothing && isequal(module_owner, name_owner)
             tn_idx = ctx.type_registry.jl_typename_idx
             emit_value!(b, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
@@ -1845,36 +1808,32 @@ function _fc_jl_is_const!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCo
     return nothing
 end
 
-function _fc_jl_is_binding_deprecated!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 7 || return nothing
-        module_owner = _trace_field_owner(expr.args[6], :module, ctx)
-        symbol_owner = _trace_typename_symbol_owner(expr.args[7], ctx)
+function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 2 || return nothing
+        module_owner = _trace_field_owner(node.args[1], :module, ctx)
+        symbol_owner = _trace_typename_symbol_owner(node.args[2], ctx)
         if module_owner !== nothing && isequal(module_owner, symbol_owner)
-            emit_typename_symbol_metadata!(b, expr.args[7], module_owner,
+            emit_typename_symbol_metadata!(b, node.args[2], module_owner,
                                            UInt32(11), UInt32(12), ctx)
             return b
         end
     return nothing
 end
 
-function _fc_jl_genericmemory_owner!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
+function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
         # Julia's GenericMemory owner is the memory allocation itself. Memory is
         # represented directly by its non-null WasmGC array, so ownership is an
         # identity operation widened to the foreigncall's `Any` result.
-        emit_value!(b, expr.args[6], ctx, AnyRef)
+        emit_value!(b, node.args[1], ctx, AnyRef)
         return b
 end
 
-function _fc_jl_stored_inline!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
+function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
         # datatype_storedinline(T) — pure layout predicate; fold when the
         # type argument is a compile-time constant.
-        local _fc_t = expr.args[6]
-        _fc_t isa QuoteNode && (_fc_t = _fc_t.value)
-        if _fc_t isa GlobalRef
-            _fc_t = try getfield(_fc_t.mod, _fc_t.name) catch; _fc_t end
-        end
+        local _fc_t = _nir_const_operand(node.args[1])
         if _fc_t isa Type
             i32_const!(b, (try Base.allocatedinline(_fc_t) catch; false end) ? 1 : 0)
             return b
@@ -1882,14 +1841,14 @@ function _fc_jl_stored_inline!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstr
     return nothing
 end
 
-function _fc_operator_flags!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
-    name = extract_foreigncall_name(first(expr.args))
-            traced = _trace_string_ptr(expr.args[6], ctx.code_info.code)
+function _fc_operator_flags!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
+    name = node.c_symbol
+            traced = _trace_string_ptr(node.args[1], ctx)
             if traced !== nothing
                 source, _ = traced
                 bit = name === :jl_is_operator ? Int32(0x01) : Int32(0x02)
-                literal = source isa QuoteNode ? source.value : source
+                literal = source isa NirLiteral ? source.value : source
                 if literal isa Symbol || literal isa AbstractString
                     i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
                     return b
@@ -1914,10 +1873,10 @@ function _fc_operator_flags!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstrac
     return nothing
 end
 
-function _fc_jl_id_start_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
-                "jl_id_start_char missing codepoint"; idx=idx, detail=expr)
-            emit_value!(b, expr.args[6], ctx, I32)
+function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+            length(node.args) >= 1 || record_unsupported!(ctx, :value_stub,
+                "jl_id_start_char missing codepoint"; idx=idx, detail=node)
+            emit_value!(b, node.args[1], ctx, I32)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
             call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
             i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
@@ -1925,10 +1884,10 @@ function _fc_jl_id_start_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abstr
             return b
 end
 
-function _fc_jl_id_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-            length(expr.args) >= 6 || record_unsupported!(ctx, :value_stub,
-                "jl_id_char missing codepoint"; idx=idx, detail=expr)
-            emit_value!(b, expr.args[6], ctx, I32)
+function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+            length(node.args) >= 1 || record_unsupported!(ctx, :value_stub,
+                "jl_id_char missing codepoint"; idx=idx, detail=node)
+            emit_value!(b, node.args[1], ctx, I32)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
             call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
             i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
@@ -1936,16 +1895,16 @@ function _fc_jl_id_char!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             return b
 end
 
-function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
     # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
     # In WasmGC, we emit array.copy between the underlying array<i32> representations.
     # Trace: memmove args come from getfield(memoryref, :ptr_or_offset) which is i64.const 0.
     # The real arrays are found by tracing back through memoryrefnew to the backing Memory.
-    length(expr.args) >= 8 || return nothing
-        dest_ptr_arg = expr.args[6]   # Ptr{Nothing} — traces to dest MemoryRef
-        src_ptr_arg = expr.args[7]    # Ptr{Nothing} — traces to src MemoryRef
-        nbytes_arg = expr.args[8]     # UInt64 — byte count
+    length(node.args) >= 3 || return nothing
+        dest_ptr_arg = node.args[1]   # Ptr{Nothing} — traces to dest MemoryRef
+        src_ptr_arg = node.args[2]    # Ptr{Nothing} — traces to src MemoryRef
+        nbytes_arg = node.args[3]     # UInt64 — byte count
 
         # P4-stdlib (Statistics median): memmove between TYPED vectors
         # (copy(::Vector{Float64}) inlines to memmove of f64 storage). Trace
@@ -1991,9 +1950,8 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             end
         end
 
-        code = ctx.code_info.code
-        dest_info = _trace_memmove_array(dest_ptr_arg, code, ctx)
-        src_info = _trace_memmove_array(src_ptr_arg, code, ctx)
+        dest_info = _trace_memmove_array(dest_ptr_arg, ctx)
+        src_info = _trace_memmove_array(src_ptr_arg, ctx)
 
         # Fallback for Ryu pattern where pointers come from
         # bitcast(Ptr{Nothing}, add_ptr(getfield(:mem), offset)) instead of
@@ -2001,9 +1959,9 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         # (base is always 0), so we trace to find the array and use pointer
         # values directly as offsets.
         if dest_info === nothing || src_info === nothing
-            arr_ssa = _trace_ptr_to_memory_array(dest_ptr_arg, code)
+            arr_ssa = _trace_ptr_to_memory_array(dest_ptr_arg, ctx)
             if arr_ssa === nothing
-                arr_ssa = _trace_ptr_to_memory_array(src_ptr_arg, code)
+                arr_ssa = _trace_ptr_to_memory_array(src_ptr_arg, ctx)
             end
             if arr_ssa !== nothing
                 # Found the array — use pointer values as offsets directly
@@ -2036,7 +1994,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             # Determine actual array type from the SSA's wasm local type
             # Default to string array (i32[]) but use correct type if SSA local is a ConcreteRef
             arr_copy_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            if dest_arr_ssa isa Core.SSAValue && haskey(ctx.ssa_locals, dest_arr_ssa.id)
+            if dest_arr_ssa isa NirSSA && haskey(ctx.ssa_locals, dest_arr_ssa.id)
                 local_idx = ctx.ssa_locals[dest_arr_ssa.id]
                 local_type = _get_local_type(ctx, local_idx)
                 if local_type isa ConcreteRef
@@ -2069,7 +2027,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             # memmove passes byte count, but array.copy needs element count.
             # Determine element size from the Memory/MemoryRef type parameter.
             _elem_size = 1  # default for UInt8/i8 arrays
-            if dest_arr_ssa isa Core.SSAValue
+            if dest_arr_ssa isa NirSSA
                 _mem_type = get(ctx.ssa_types, dest_arr_ssa.id, Any)
                 _el_type = nothing
                 if _mem_type isa DataType
@@ -2100,41 +2058,41 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
     return nothing
 end
 
-function _fc_jl_module_parent!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
+function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
-        emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
+        emit_value!(b, node.args[1], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(3), AnyRef)
         ref_cast!(b, Int64(module_info.wasm_type_idx), false)
         return b
 end
 
-function _fc_jl_module_name!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
+function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
         string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-        emit_value!(b, expr.args[6], ctx, ConcreteRef(module_info.wasm_type_idx, false))
+        emit_value!(b, node.args[1], ctx, ConcreteRef(module_info.wasm_type_idx, false))
         struct_get!(b, module_info.wasm_type_idx, UInt32(2),
                     ConcreteRef(UInt32(string_idx), true))
         return b
 end
 
-function _fc_jl_type_unionall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
+function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
         # Julia 1.13 lowers `x isa UnionAll` to this runtime predicate on
         # platforms where inference cannot prove x. The target already has one
         # canonical $JlUnionAll subtype in the JlType hierarchy, so the exact
         # operation is a nominal ref.test—not a host call or name-based guess.
         unionall_idx = ctx.type_registry.jl_unionall_idx
         unionall_idx === nothing && error("JlUnionAll hierarchy type is unavailable")
-        emit_value!(b, expr.args[6], ctx, AnyRef)
+        emit_value!(b, node.args[1], ctx, AnyRef)
         ref_test!(b, Int64(unionall_idx), false)
         return b
 end
 
-function _fc_utf8proc_charwidth!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
-        emit_value!(b, expr.args[6], ctx, I32)
+function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
+        emit_value!(b, node.args[1], ctx, I32)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
         call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
         i32_const!(b, 5); num!(b, Opcode.I32_SHR_U)
@@ -2142,9 +2100,9 @@ function _fc_utf8proc_charwidth!(b::InstrBuilder, expr::Expr, idx::Int, ctx::Abs
         return b
 end
 
-function _fc_utf8proc_category!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-    length(expr.args) >= 6 || return nothing
-        emit_value!(b, expr.args[6], ctx, I32)
+function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    length(node.args) >= 1 || return nothing
+        emit_value!(b, node.args[1], ctx, I32)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
         call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
         i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
@@ -2191,85 +2149,92 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :utf8proc_category => _fc_utf8proc_category!,
 )
 
-function compile_foreigncall!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-
-    # foreigncall format: Expr(:foreigncall, name, return_type, arg_types, nreq, calling_conv, args...)
-    if isempty(expr.args)
-        record_unsupported!(ctx, :unsupported_method, "foreigncall with no target symbol"; idx=idx, detail=expr)
+function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+    # The C symbol was decoded ONCE at the boundary (NirForeignCall.c_symbol) and
+    # `node.args` holds only the runtime operands — the ABI preamble
+    # (name, return_type, arg_types, nreq, calling_conv) is not reachable from a lowering.
+    name = node.c_symbol
+    if name === nothing
+        record_unsupported!(ctx, :unsupported_method, "foreigncall with no target symbol"; idx=idx, detail=node)
         unreachable!(b)  # structural trap after recorded unsupported
         ctx.last_stmt_was_stub = true
         return b
     end
-    name = extract_foreigncall_name(expr.args[1])
 
     handler = get(FOREIGN_LOWERINGS, name, nothing)
     if handler !== nothing
-        result = handler(b, expr, idx, ctx)
+        result = handler(b, node, idx, ctx)
         result !== nothing && return result
     end
 
     # Unknown foreigncall: dart-style loud unsupported path. It is never valid to
     # synthesize a type-default and continue; that silently turns effectful calls
     # (memmove was the historical example) into wrong computations.
-    record_unsupported!(ctx, :unsupported_method, "foreigncall `$(name)` (no lowering)"; idx=idx, detail=expr)
+    record_unsupported!(ctx, :unsupported_method, "foreigncall `$(name)` (no lowering)"; idx=idx, detail=node)
     unreachable!(b)  # loud unsupported trap
     ctx.last_stmt_was_stub = true
     return b
 end
 
+# ============================================================================
+# The storage-relative pointer walks. Each takes a NirNode and walks `ctx.nir`; a call is
+# recognized by its RESOLVED callee OBJECT (dart keys intrinsics on the resolved member,
+# intrinsics.dart:401 KernelNodes._lookup), never by a bare name any module could answer to.
+# ============================================================================
+
+"""The compile-time value a constant operand carries — a literal (the boundary already
+unwrapped `QuoteNode`) or a bound global's value; `nothing` for anything with no
+compile-time value (an SSA, an argument, an unbound global)."""
+_nir_const_operand(node::NirNode)::Any =
+    node isa NirLiteral ? node.value : (node isa NirGlobalRef && node.bound ? node.value : nothing)
+
+"""The Symbol/index a `getfield`-style field operand names, or `nothing` when it is not a
+literal (`Expr.args` carried it quoted or bare; the boundary unwrapped both to a literal)."""
+_nir_field_name(node::NirNode)::Any = node isa NirLiteral ? node.value : nothing
+
 """
 Trace a pointerref argument back through add_ptr/sub_ptr to find a jl_string_ptr foreigncall.
-Returns (string_ssa, index_ssa) if found, or nothing if not a string pointer pattern.
-The index_ssa is the offset argument to add_ptr (the 1-based codeunit index).
+Returns (string_node, index_node) if found, or nothing if not a string pointer pattern.
+The index node is the offset argument to add_ptr (the 1-based codeunit index).
 """
-function _trace_string_ptr(ptr_ssa, code)
-    # ptr_ssa should be SSAValue pointing to sub_ptr or add_ptr or jl_string_ptr
-    if !(ptr_ssa isa Core.SSAValue)
-        return nothing
+function _trace_string_ptr(ptr_ssa, ctx::AbstractCompilationContext)
+    ptr = nir_node(ctx, ptr_ssa)
+    ptr isa NirSSA || return nothing
+    (1 <= ptr.id <= length(ctx.nir)) || return nothing
+    node = ctx.nir[ptr.id].node
+    if node isa NirForeignCall &&
+       node.c_symbol in (:jl_string_ptr, :jl_symbol_name) && !isempty(node.args)
+        return (node.args[1], nothing)
     end
-    stmt = code[ptr_ssa.id]
-    if stmt isa Expr && stmt.head === :foreigncall &&
-       extract_foreigncall_name(stmt.args[1]) in (:jl_string_ptr, :jl_symbol_name) &&
-       length(stmt.args) >= 6
-        return (stmt.args[6], nothing)
-    end
-    if !(stmt isa Expr && stmt.head === :call)
-        return nothing
-    end
-    func = stmt.args[1]
-    if !(func isa GlobalRef)
-        return nothing
-    end
-    args = stmt.args[2:end]
+    node isa NirCall || return nothing
+    args = node.args
 
-    if func.name === :sub_ptr && length(args) >= 2
+    if node.callee === Core.Intrinsics.sub_ptr && length(args) >= 2
         # sub_ptr(ptr, offset) — recurse on ptr
-        return _trace_string_ptr(args[1], code)
-    elseif func.name === :add_ptr && length(args) >= 2
+        return _trace_string_ptr(args[1], ctx)
+    elseif node.callee === Core.Intrinsics.add_ptr && length(args) >= 2
         # add_ptr(ptr, index) — ptr should be jl_string_ptr, index is codeunit index
         inner = args[1]
-        if inner isa Core.SSAValue
-            inner_stmt = code[inner.id]
-            if inner_stmt isa Expr && inner_stmt.head === :foreigncall
-                fname_val = extract_foreigncall_name(inner_stmt.args[1])
-                if fname_val === :jl_string_ptr && length(inner_stmt.args) >= 6
-                    # Found it! Return (string_arg, index_arg)
-                    return (inner_stmt.args[6], args[2])
-                end
+        if inner isa NirSSA && 1 <= inner.id <= length(ctx.nir)
+            inner_node = ctx.nir[inner.id].node
+            if inner_node isa NirForeignCall && inner_node.c_symbol === :jl_string_ptr &&
+               !isempty(inner_node.args)
+                # Found it! Return (string_arg, index_arg)
+                return (inner_node.args[1], args[2])
             end
         end
         return nothing
-    elseif func.name === :bitcast && length(args) >= 2
-        return _trace_string_ptr(args[end], code)
+    elseif node.callee === Core.Intrinsics.bitcast && length(args) >= 2
+        return _trace_string_ptr(args[end], ctx)
     else
         return nothing
     end
 end
 
 """
-Trace a pointer SSA back through bitcast/getfield(:ptr) to find the original data source.
+Trace a pointer node back through bitcast/getfield(:ptr) to find the original data source.
 Used by jl_ptr_to_array_1d to find the underlying Memory/array reference.
-Returns the SSA value that produces the data array, or nothing if trace fails.
+Returns the node that produces the data array, or nothing if the trace fails.
 
 The typical IR pattern is:
   %data = getfield(%iobuf, :data)      -> Memory{T} (= array in WasmGC)
@@ -2281,48 +2246,36 @@ The typical IR pattern is:
 We trace from %ptr2 back to %data (the Memory reference).
 """
 function _trace_ptr_to_data(ptr_val, ctx::AbstractCompilationContext)
-    code = ctx.code_info.code
-    # Walk backwards through SSA values
-    current = ptr_val
+    current = nir_node(ctx, ptr_val)
     for _ in 1:10  # max depth to prevent infinite loops
-        if !(current isa Core.SSAValue)
-            return nothing
-        end
-        stmt = code[current.id]
-        if stmt isa Expr
-            if stmt.head === :call
-                func = stmt.args[1]
-                if func isa GlobalRef
-                    call_name = func.name
-                    if call_name === :bitcast && length(stmt.args) >= 3
-                        # bitcast(TargetType, source) — continue tracing source
-                        current = stmt.args[3]
-                        continue
-                    elseif call_name === :getfield && length(stmt.args) >= 3
-                        field_ref = stmt.args[3]
-                        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-                        if field_sym === :ptr
-                            # getfield(memory, :ptr) — the source is the memory obj
-                            # The memory IS the data array in WasmGC
-                            obj = stmt.args[2]
-                            return obj
-                        elseif field_sym === :data
-                            # getfield(iobuf, :data) — this IS the data array
-                            return current
-                        else
-                            return nothing
-                        end
-                    end
+        current isa NirSSA || return nothing
+        (1 <= current.id <= length(ctx.nir)) || return nothing
+        node = ctx.nir[current.id].node
+        if node isa NirCall
+            if node.callee === Core.Intrinsics.bitcast && length(node.args) >= 2
+                # bitcast(TargetType, source) — continue tracing source
+                current = node.args[2]
+                continue
+            elseif node.callee === Core.getfield && length(node.args) >= 2
+                field_sym = _nir_field_name(node.args[2])
+                if field_sym === :ptr
+                    # getfield(memory, :ptr) — the source is the memory obj
+                    # The memory IS the data array in WasmGC
+                    return node.args[1]
+                elseif field_sym === :data
+                    # getfield(iobuf, :data) — this IS the data array
+                    return current
+                else
+                    return nothing
                 end
-            elseif stmt.head === :foreigncall
-                # May be jl_string_ptr or similar — check
-                call_name = extract_foreigncall_name(stmt.args[1])
-                if call_name === :jl_string_ptr && length(stmt.args) >= 6
-                    # jl_string_ptr(s) — the string IS the data in WasmGC
-                    return stmt.args[6]
-                end
-                return nothing
             end
+        elseif node isa NirForeignCall
+            # May be jl_string_ptr or similar — check
+            if node.c_symbol === :jl_string_ptr && !isempty(node.args)
+                # jl_string_ptr(s) — the string IS the data in WasmGC
+                return node.args[1]
+            end
+            return nothing
         end
         return nothing
     end
@@ -2331,9 +2284,9 @@ end
 
 """
 Trace a memmove pointer argument back through getfield(:ptr_or_offset) → memoryrefnew
-to find the underlying array SSA and offset SSA.
-Returns (array_ssa, offset_ssa) or nothing if trace fails.
-offset_ssa may be nothing if the memoryrefnew has no offset (starts at beginning).
+to find the underlying array node and offset node.
+Returns (array_node, offset_node) or nothing if the trace fails.
+The offset may be nothing if the memoryrefnew has no offset (starts at the beginning).
 
 IR pattern:
   %142 = getfield(%69, :ref)          — Vector's ref field (a MemoryRef = array in WasmGC)
@@ -2341,85 +2294,65 @@ IR pattern:
   %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
   memmove(%159, ...)
 """
-function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
-    if !(ptr_ssa isa Core.SSAValue)
-        return nothing
-    end
-    stmt = code[ptr_ssa.id]
+function _trace_memmove_array(ptr_ssa, ctx::AbstractCompilationContext)
+    ptr = nir_node(ctx, ptr_ssa)
+    ptr isa NirSSA || return nothing
+    (1 <= ptr.id <= length(ctx.nir)) || return nothing
+    node = ctx.nir[ptr.id].node
     # Should be getfield(memoryref, :ptr_or_offset)
-    if !(stmt isa Expr && stmt.head === :call)
-        return nothing
-    end
-    func = stmt.args[1]
-    if !(func isa GlobalRef && func.name === :getfield && length(stmt.args) >= 3)
-        return nothing
-    end
-    field_ref = stmt.args[3]
-    field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-    if field_sym !== :ptr_or_offset
-        return nothing
-    end
+    (node isa NirCall && node.callee === Core.getfield && length(node.args) >= 2) || return nothing
+    _nir_field_name(node.args[2]) === :ptr_or_offset || return nothing
     # The object is a MemoryRef SSA
-    memref_ssa = stmt.args[2]
-    if !(memref_ssa isa Core.SSAValue)
-        return nothing
-    end
-    memref_stmt = code[memref_ssa.id]
+    memref = node.args[1]
+    memref isa NirSSA || return nothing
+    (1 <= memref.id <= length(ctx.nir)) || return nothing
+    memref_node = ctx.nir[memref.id].node
 
     # Should be memoryrefnew(base) or memoryrefnew(base, offset, boundscheck)
     # or getfield(vector, :ref) — broadcast pattern
     # or PhiNode (sizehint! pattern where dest ref is selected via phi)
-    if memref_stmt isa Expr && memref_stmt.head === :call
-        fn = memref_stmt.args[1]
-        if fn isa GlobalRef && fn.name === :memoryrefnew
-            if length(memref_stmt.args) >= 4
+    if memref_node isa NirCall
+        if memref_node.callee === Core.memoryrefnew
+            if length(memref_node.args) >= 3
                 # memoryrefnew(base, offset, boundscheck)
-                base_ssa = memref_stmt.args[2]
-                offset_ssa = memref_stmt.args[3]
+                base = memref_node.args[1]
+                offset = memref_node.args[2]
                 # base could be another memoryrefnew or a Memory/array directly
-                arr_ssa = _resolve_memref_to_array(base_ssa, code)
-                return (arr_ssa !== nothing ? arr_ssa : base_ssa, offset_ssa)
-            elseif length(memref_stmt.args) >= 2
+                arr = _resolve_memref_to_array(base, ctx)
+                return (arr !== nothing ? arr : base, offset)
+            elseif length(memref_node.args) >= 1
                 # memoryrefnew(memory) — no offset
-                base_ssa = memref_stmt.args[2]
-                arr_ssa = _resolve_memref_to_array(base_ssa, code)
-                return (arr_ssa !== nothing ? arr_ssa : base_ssa, nothing)
+                base = memref_node.args[1]
+                arr = _resolve_memref_to_array(base, ctx)
+                return (arr !== nothing ? arr : base, nothing)
             end
-        elseif fn isa GlobalRef && fn.name === :getfield && length(memref_stmt.args) >= 3
+        elseif memref_node.callee === Core.getfield && length(memref_node.args) >= 2
             # getfield(vector, :ref) — MemoryRef obtained directly from Vector
             # instead of via memoryrefnew. Common in broadcasting copy paths.
-            field_ref = memref_stmt.args[3]
-            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-            if field_sym === :ref
+            if _nir_field_name(memref_node.args[2]) === :ref
                 # The MemoryRef IS the result of getfield(vector, :ref).
                 # In WasmGC, this is the array data field of the Vector struct.
                 # Use _resolve_memref_to_array which handles getfield(..., :ref).
-                arr_ssa = _resolve_memref_to_array(memref_ssa, code)
-                return (arr_ssa !== nothing ? arr_ssa : memref_ssa, nothing)
+                arr = _resolve_memref_to_array(memref, ctx)
+                return (arr !== nothing ? arr : memref, nothing)
             end
         end
-    elseif memref_stmt isa Core.PhiNode
+    elseif memref_node isa NirPhi
         # PhiNode selecting between MemoryRef branches.
         # Common in sizehint! where dest ref depends on shrink=true/false path.
         # All phi branches typically reference the same underlying Memory.
         # Trace each branch to find the base Memory (via _resolve_memref_to_array).
-        for val in memref_stmt.values
-            if val isa Core.SSAValue
-                branch_stmt = code[val.id]
-                if branch_stmt isa Expr && branch_stmt.head === :call
-                    fn2 = branch_stmt.args[1]
-                    if fn2 isa GlobalRef && fn2.name === :memoryrefnew
-                        # Trace memoryrefnew → base Memory
-                        base = length(branch_stmt.args) >= 2 ? branch_stmt.args[2] : nothing
-                        if base !== nothing
-                            arr_ssa = _resolve_memref_to_array(base, code)
-                            if arr_ssa !== nothing
-                                return (arr_ssa, nothing)
-                            end
-                            # Base is a Memory directly (from memorynew)
-                            return (base, nothing)
-                        end
-                    end
+        for val in memref_node.values
+            if val isa NirSSA && 1 <= val.id <= length(ctx.nir)
+                branch = ctx.nir[val.id].node
+                if branch isa NirCall && branch.callee === Core.memoryrefnew &&
+                   !isempty(branch.args)
+                    # Trace memoryrefnew → base Memory
+                    base = branch.args[1]
+                    arr = _resolve_memref_to_array(base, ctx)
+                    arr !== nothing && return (arr, nothing)
+                    # Base is a Memory directly (from memorynew)
+                    return (base, nothing)
                 end
             end
         end
@@ -2428,55 +2361,47 @@ function _trace_memmove_array(ptr_ssa, code, ctx::AbstractCompilationContext)
 end
 
 """
-Resolve a MemoryRef base SSA to the actual array.
+Resolve a MemoryRef base node to the actual array.
 For memmove, we need the WasmGC array reference that backs the data.
 In WasmGC:
-  - Vector field :ref → struct_get field 0 → array ref (use the SSA of getfield)
-  - IOBuffer field :data → the Memory which IS the array (use the SSA of getfield)
+  - Vector field :ref → struct_get field 0 → array ref (use the node of getfield)
+  - IOBuffer field :data → the Memory which IS the array (use the node of getfield)
   - jl_string_to_genericmemory → returns the String which IS the array
   - memoryrefnew(base) → the base IS the array
-Returns the SSA whose compile_value produces the array ref, or nothing.
+Returns the node whose emission produces the array ref, or nothing.
 """
-function _resolve_memref_to_array(ssa, code)
-    if !(ssa isa Core.SSAValue)
-        return nothing
-    end
-    stmt = code[ssa.id]
-    if !(stmt isa Expr)
-        return nothing
-    end
-    if stmt.head === :call
-        func = stmt.args[1]
-        if func isa GlobalRef
-            if func.name === :memoryrefnew && length(stmt.args) >= 2
-                # Another memoryrefnew — recurse on its base
-                return _resolve_memref_to_array(stmt.args[2], code)
-            elseif func.name === :getfield && length(stmt.args) >= 3
-                field_ref = stmt.args[3]
-                field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
-                if field_sym === :ref || field_sym === :data
-                    # getfield(vector, :ref) or getfield(iobuf, :data)
-                    # The RESULT of this getfield is the array in WasmGC
-                    # So return the SSA of the getfield itself
-                    return ssa
-                end
+function _resolve_memref_to_array(ssa, ctx::AbstractCompilationContext)
+    val = nir_node(ctx, ssa)
+    val isa NirSSA || return nothing
+    (1 <= val.id <= length(ctx.nir)) || return nothing
+    node = ctx.nir[val.id].node
+    if node isa NirCall
+        if node.callee === Core.memoryrefnew && !isempty(node.args)
+            # Another memoryrefnew — recurse on its base
+            return _resolve_memref_to_array(node.args[1], ctx)
+        elseif node.callee === Core.getfield && length(node.args) >= 2
+            field_sym = _nir_field_name(node.args[2])
+            if field_sym === :ref || field_sym === :data
+                # getfield(vector, :ref) or getfield(iobuf, :data)
+                # The RESULT of this getfield is the array in WasmGC
+                # So return the node of the getfield itself
+                return val
             end
         end
-    elseif stmt.head === :foreigncall
-        call_name = extract_foreigncall_name(stmt.args[1])
-        if call_name === :jl_string_to_genericmemory && length(stmt.args) >= 6
+    elseif node isa NirForeignCall
+        if node.c_symbol === :jl_string_to_genericmemory && !isempty(node.args)
             # In WasmGC, jl_string_to_genericmemory returns the String which IS the array
-            return stmt.args[6]
+            return node.args[1]
         end
     end
     return nothing
 end
 
 """
-    _trace_ptr_to_memory_array(ptr_ssa, code)
+    _trace_ptr_to_memory_array(ptr_ssa, ctx)
 
-Trace a pointer SSA back through bitcast/add_ptr/sub_ptr/getfield(:mem)
-to find the underlying Memory array SSA. Used as fallback for memmove when the pointer
+Trace a pointer node back through bitcast/add_ptr/sub_ptr/getfield(:mem)
+to find the underlying Memory array. Used as fallback for memmove when the pointer
 doesn't come from getfield(:ptr_or_offset) but from add_ptr on a Memory reference.
 
 Ryu pattern:
@@ -2485,44 +2410,33 @@ Ryu pattern:
   %ptr = add_ptr(%mem, %off)               → Ptr at offset
   %raw = bitcast(Ptr{Nothing}, %ptr)       → passed to memmove
 
-Returns the SSA that produces the Memory/array ref, or nothing.
+Returns the node that produces the Memory/array ref, or nothing.
 """
-function _trace_ptr_to_memory_array(ptr_ssa, code)
-    if !(ptr_ssa isa Core.SSAValue)
-        return nothing
-    end
-    current = ptr_ssa
+function _trace_ptr_to_memory_array(ptr_ssa, ctx::AbstractCompilationContext)
+    current = nir_node(ctx, ptr_ssa)
+    current isa NirSSA || return nothing
     for _ in 1:15  # max depth
-        if !(current isa Core.SSAValue)
-            return nothing
-        end
-        stmt = code[current.id]
-        if !(stmt isa Expr && stmt.head === :call)
-            return nothing
-        end
-        func = stmt.args[1]
-        if !(func isa GlobalRef)
-            return nothing
-        end
-        call_name = func.name
-        if call_name === :bitcast && length(stmt.args) >= 3
-            current = stmt.args[3]
-        elseif call_name === :add_ptr && length(stmt.args) >= 3
-            current = stmt.args[2]
-        elseif call_name === :sub_ptr && length(stmt.args) >= 3
-            current = stmt.args[2]
-        elseif call_name === :getfield && length(stmt.args) >= 3
-            field_ref = stmt.args[3]
-            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+        current isa NirSSA || return nothing
+        (1 <= current.id <= length(ctx.nir)) || return nothing
+        node = ctx.nir[current.id].node
+        node isa NirCall || return nothing
+        args = node.args
+        if node.callee === Core.Intrinsics.bitcast && length(args) >= 2
+            current = args[2]
+        elseif node.callee === Core.Intrinsics.add_ptr && length(args) >= 2
+            current = args[1]
+        elseif node.callee === Core.Intrinsics.sub_ptr && length(args) >= 2
+            current = args[1]
+        elseif node.callee === Core.getfield && length(args) >= 2
+            field_sym = _nir_field_name(args[2])
             if field_sym === :mem
                 # getfield(memoryref, :mem) → Memory{T}
                 # In WasmGC, the MemoryRef IS the array. Return the memoryref.
-                return stmt.args[2]
+                return args[1]
             elseif field_sym === :ref
                 return current
             elseif field_sym === :ptr_or_offset || field_sym === :ptr
-                memref_ssa = stmt.args[2]
-                return _resolve_memref_to_array(memref_ssa, code)
+                return _resolve_memref_to_array(args[1], ctx)
             else
                 return nothing
             end

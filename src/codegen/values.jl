@@ -1273,7 +1273,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 elseif def isa NirNew
                     compile_new!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirForeignCall
-                    compile_foreigncall!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                    compile_foreigncall!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 end
             end
             # For non-PiNode SSAs without locals, assume on stack (single-use in sequence)
