@@ -5555,7 +5555,7 @@ function _emit_svec_values!(b::InstrBuilder, values, ctx::AbstractCompilationCon
     arr_def isa ArrayType || error("SimpleVector did not register as a Wasm array")
     elem_type = arr_def.elem.valtype
     for value in values
-        emit_value!(b, value, ctx, elem_type; from_julia=typeof(value))
+        emit_value!(b, value, ctx, elem_type)   # the funnel reads the value's static Julia type
     end
     array_new_fixed!(b, arr_idx, length(values), elem_type)
     return b

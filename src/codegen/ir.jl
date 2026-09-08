@@ -228,6 +228,12 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                     callee
                 if callee_v === Core.tuple
                     reg!(Tuple{Type[_collector_static_type(a, code_info) for a in stmt.args[2:end]]...})
+                elseif callee_v === Core._apply_iterate
+                    # a splat's argument pack is a tuple the LOWERING builds (calls.jl's
+                    # _apply_iterate route); an empty collection yields Tuple{}, which no
+                    # statement of the program names — the class the MethodError path
+                    # then reports
+                    reg!(Tuple{})
                 end
             end
             # The callee position is IR structure, not a value: args[1] of a `:call`
