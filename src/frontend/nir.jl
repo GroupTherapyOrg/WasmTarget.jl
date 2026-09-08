@@ -128,7 +128,7 @@ struct NirPopException <: NirNode end
 that has no static identity — `Any` because both shapes are legitimate."""
 struct NirCall <: NirNode
     callee::Any
-    args::Vector{NirNode}
+    operands::Vector{NirNode}
 end
 
 """`mi`/`method` are `Union{_,Nothing}` — resolve_invoke_mi/resolve_invoke_method are
@@ -138,7 +138,7 @@ equally defensive (see resolve_invoke_method's docstring)."""
 struct NirInvoke <: NirNode
     mi::Union{Core.MethodInstance,Nothing}
     method::Union{Core.Method,Nothing}
-    args::Vector{NirNode}
+    operands::Vector{NirNode}
 end
 
 """`%new(T, fields...)`, with `T` resolved ONCE here from whichever operand shape named it:
@@ -152,20 +152,20 @@ exotic `T`."""
 struct NirNew <: NirNode
     T::Type
     field_types::Vector{Type}
-    args::Vector{NirNode}
+    operands::Vector{NirNode}
     type_kind::Symbol
     type_detail::Type
 end
 
-"""`Expr(:foreigncall, name, rettype, argtypes, nreq, cc, args...)` — `args` holds ONLY the
-runtime operands (raw `args[6:end]`), so a lowering indexes them from 1 and can never read
-the ABI preamble by accident. `arg_julia_types` is the declared `Core.SimpleVector` of C
+"""`Expr(:foreigncall, name, rettype, argtypes, nreq, cc, args...)` — `operands` holds ONLY
+the runtime arguments (raw `args[6:end]`), so a lowering indexes them from 1 and can never
+read the ABI preamble by accident. `arg_julia_types` is the declared `Core.SimpleVector` of C
 argument types; `ret_julia_type` the declared return type."""
 struct NirForeignCall <: NirNode
     c_symbol::Union{Symbol,Nothing}
     arg_julia_types::Vector{Any}
     ret_julia_type::Any
-    args::Vector{NirNode}
+    operands::Vector{NirNode}
 end
 
 """Julia-only, quarantine tier (no dart Kernel equivalent — bounds-check elision has no
@@ -543,15 +543,18 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     return out
 end
 
-"""Does `node` use SSA value `id` as an operand? ONE reference test covering every node
-kind — an `Expr`-shaped walk has to be written per consumer and the existing one
-(`references_ssa`) silently misses PhiNode/PiNode operands, which the storage-relative
-pointer-escape proof depends on seeing. A NirUnsupported node has no resolved operands,
-so its raw statement is walked: an unrecognized consumer must never look like a
-non-consumer."""
-function nir_refs_ssa(node::NirNode, id::Int)::Bool
-    node isa NirSSA && return node.id == id
-    _r(x) = x !== nothing && nir_refs_ssa(x, id)
+"""Does `node` use `subject` — an SSA definition (`NirSSA`, matched by id) or a parameter
+(`NirArgument`, matched by slot) — as an operand, transitively through its own operands?
+ONE reference test covering every node kind. An `Expr`-shaped walk has to be written per
+consumer, and the two that existed disagreed: `references_ssa` (context.jl) silently
+misses PhiNode/PiNode operands, which the storage-relative pointer-escape proof depends
+on seeing. A NirUnsupported node has no resolved operands, so its raw statement is walked:
+an unrecognized consumer must never look like a non-consumer."""
+function nir_uses(node::NirNode, subject::NirNode)::Bool
+    _same(x) = (subject isa NirSSA && x isa NirSSA && x.id == subject.id) ||
+               (subject isa NirArgument && x isa NirArgument && x.n == subject.n)
+    _same(node) && return true
+    _r(x) = x !== nothing && nir_uses(x, subject)
     node isa NirPi && return _r(node.value)
     node isa NirPhi && return any(_r, node.values)
     node isa NirPhiC && return any(_r, node.values)
@@ -559,22 +562,25 @@ function nir_refs_ssa(node::NirNode, id::Int)::Bool
     node isa NirGotoIfNot && return _r(node.cond)
     node isa NirUpsilon && return _r(node.value)
     node isa NirThrowUndefIfNot && return _r(node.cond)
-    node isa NirCall && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.args)
-    node isa NirInvoke && return any(_r, node.args)
-    node isa NirNew && return any(_r, node.args)
-    node isa NirForeignCall && return any(_r, node.args)
-    node isa NirUnsupported && return _raw_refs_ssa(node.raw, id)
+    node isa NirCall && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.operands)
+    node isa NirInvoke && return any(_r, node.operands)
+    node isa NirNew && return any(_r, node.operands)
+    node isa NirForeignCall && return any(_r, node.operands)
+    node isa NirUnsupported && return _raw_uses(node.raw, subject)
     return false
 end
 
-function _raw_refs_ssa(x, id::Int)::Bool
-    x isa Core.SSAValue && return x.id == id
-    x isa Expr && return any(a -> _raw_refs_ssa(a, id), x.args)
-    x isa Core.PiNode && return _raw_refs_ssa(x.val, id)
-    x isa Core.PhiNode && return any(i -> isassigned(x.values, i) && _raw_refs_ssa(x.values[i], id),
+nir_refs_ssa(node::NirNode, id::Int)::Bool = nir_uses(node, NirSSA(id, Any))
+
+function _raw_uses(x, subject::NirNode)::Bool
+    subject isa NirSSA && x isa Core.SSAValue && return x.id == subject.id
+    subject isa NirArgument && x isa Core.Argument && return x.n == subject.n
+    x isa Expr && return any(a -> _raw_uses(a, subject), x.args)
+    x isa Core.PiNode && return _raw_uses(x.val, subject)
+    x isa Core.PhiNode && return any(i -> isassigned(x.values, i) && _raw_uses(x.values[i], subject),
                                      eachindex(x.values))
-    (x isa Core.ReturnNode && isdefined(x, :val)) && return _raw_refs_ssa(x.val, id)
-    x isa Core.GotoIfNot && return _raw_refs_ssa(x.cond, id)
+    (x isa Core.ReturnNode && isdefined(x, :val)) && return _raw_uses(x.val, subject)
+    x isa Core.GotoIfNot && return _raw_uses(x.cond, subject)
     return false
 end
 
