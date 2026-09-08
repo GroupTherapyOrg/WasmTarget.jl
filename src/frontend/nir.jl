@@ -543,6 +543,18 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     return out
 end
 
+"""True for the node kinds an `Expr` statement classifies to. compile_statement! emits
+those through a per-statement FRAGMENT builder (the value they may leave on the stack is
+then stored/coerced/dropped by one tail); the IR-node kinds — return/goto/phi/pi/enter/
+upsilon/newvar — emit straight onto the caller's builder. The split is the statement
+visitor's, not the boundary's, so it is stated here once instead of being re-derived as a
+list of `isa` tests at the dispatch."""
+_nir_from_expr(node::NirNode)::Bool =
+    node isa NirCall || node isa NirInvoke || node isa NirNew || node isa NirForeignCall ||
+    node isa NirBoundscheck || node isa NirThrowUndefIfNot || node isa NirLeave ||
+    node isa NirPopException || node isa NirTheException || node isa NirNoOp ||
+    node isa NirUnsupported
+
 """Reconstruct the raw statement array from `ctx.nir` — the ONE place a not-yet-NIR-aware
 consumer (has_try_catch/find_try_regions/compile_call!/...) gets back exactly
 `code_info.code`, without that consumer ever writing the identifier `code_info` itself."""

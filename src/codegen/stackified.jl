@@ -832,7 +832,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # preserved; the enclosing edge is then stack-polymorphic by Wasm
                     # validation, exactly as in dart's unreachable expression handling.
                     stmt !== nothing && !(stmt isa Core.PhiNode) ?
-                        compile_statement!(pvb, stmt, val.id, ctx) :
+                        compile_statement!(pvb, val.id, ctx) :
                         emit_phi_failure!(pvb, "bottom phi source has no terminating statement";
                                           idx=phi_idx)
                     return _cpv_ret()
@@ -853,7 +853,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx, I32)
                 elseif stmt !== nothing && !(stmt isa Core.PhiNode)
-                    compile_statement!(pvb, stmt, val.id, ctx)   # THE visitor — tracked
+                    compile_statement!(pvb, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
                     emit_value!(pvb, val, ctx)  # R17-floor: i32 phi widening is selected after actual emission
@@ -1008,7 +1008,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         for i in block.start_idx:block.end_idx
             stmt = code[i]
             stmt isa Core.ReturnNode && continue
-            compile_statement!(tb, stmt, i, ctx)
+            compile_statement!(tb, i, ctx)
             (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
         end
         if isempty(tb.instrs) || !(tb.instrs[end] isa InstrIR.Unreachable)
@@ -1222,7 +1222,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # logic reads the emission's node window (byte sniffs are gone).
                 local _stmt_i0 = length(bb.instrs)
                 local _stmt_stack0 = length(bb.v.stack)
-                compile_statement!(bb, stmt, i, ctx)
+                compile_statement!(bb, i, ctx)
                 local _stmt_emitted = length(bb.instrs) > _stmt_i0
                 local _stmt_pushed_value = length(bb.v.stack) > _stmt_stack0
 
