@@ -375,6 +375,7 @@ end
 analyze_ssa_types!/analyze_control_flow!/allocate_ssa_locals! in the CompilationContext
 constructor) — those are what let this pass reuse already-computed types/locals instead of
 adding new get_concrete_wasm_type/infer_value_type call sites (R3/R5 unaffected: 0 added)."""
+# formal(dev/formal/NirBuild.tla): classification is total (every statement kind maps to Known or Unsupported, never a silent no-op) and positionally aligned (nir[i] always describes code[i]); resolved identities and static types are computed exactly once, never re-derived by a consumer.
 function build_nir(code_info::Core.CodeInfo, ctx)::Vector{NirStmt}
     code = code_info.code
     n = length(code)
