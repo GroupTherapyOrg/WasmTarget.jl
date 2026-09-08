@@ -1166,7 +1166,6 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # only a plain definition is re-emitted from its node.
             def = _rec.slot > 0 ? nothing : _rec.node
             if def isa NirPi
-                stmt = def
                 pi_type = get(ctx.ssa_types, node.id, Any)
                 if pi_type === Nothing
                     # PiNode narrowed to Nothing - emit appropriate null/zero value

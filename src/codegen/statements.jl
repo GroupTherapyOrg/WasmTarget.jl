@@ -1739,16 +1739,8 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
         # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
         # the host and emit the resulting type constant (NOT a stub: the
         # stub flag dead-coded the live loop-exit condition that follows).
-        local _ti_a = node.operands[1]
-        local _ti_b = node.operands[2]
-        _ti_a isa QuoteNode && (_ti_a = _ti_a.value)
-        _ti_b isa QuoteNode && (_ti_b = _ti_b.value)
-        if _ti_a isa GlobalRef
-            _ti_a = try getfield(_ti_a.mod, _ti_a.name) catch; _ti_a end
-        end
-        if _ti_b isa GlobalRef
-            _ti_b = try getfield(_ti_b.mod, _ti_b.name) catch; _ti_b end
-        end
+        local _ti_a = _nir_const_operand(node.operands[1])
+        local _ti_b = _nir_const_operand(node.operands[2])
         if _ti_a isa Type && _ti_b isa Type
             local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
             if _ti_r !== nothing
