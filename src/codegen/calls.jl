@@ -2035,15 +2035,17 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         end
     end
     length(cands) < 2 && return nothing
-    # Each candidate's dispatch type must be a concrete struct with a typeId and a
-    # registered concrete wasm type (so emit_typeof! / ref.cast are valid).
-    branches = Tuple{Int32, ConcreteRef, FunctionInfo}[]
+    # Each candidate's dispatch type must carry a classId (a concrete struct, a boxed
+    # numeric, the classed String/Symbol — every $JlTop subtype; emit_typeof! reads the
+    # header) and have a concrete wasm representation for the callee's parameter: a
+    # ConcreteRef the branch casts to, or a numeric the branch unboxes through the funnel.
+    branches = Tuple{Int32, WasmValType, FunctionInfo}[]
     for c in cands
         Tc = c.arg_types[dpos]
-        (Tc isa DataType && isconcretetype(Tc) && isstructtype(Tc) && !(Tc <: Tuple) &&
-         Tc !== String && Tc !== Symbol) || return nothing
+        (Tc isa DataType && isconcretetype(Tc) && !(Tc <: Tuple) &&
+         (isstructtype(Tc) || isprimitivetype(Tc))) || return nothing
         cw = get_concrete_wasm_type(Tc, ctx.mod, ctx.type_registry)
-        cw isa ConcreteRef || return nothing
+        (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing
         tid = ensure_type_id!(ctx.type_registry, Tc)
         tid > 0 || return nothing
         push!(branches, (tid, cw, c))
@@ -2095,7 +2097,9 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         for (j, l) in enumerate(arg_locals)
             local_get!(eb, l)
             if j == dpos
-                ref_cast!(eb, Int64(cw.type_idx), true)
+                # the row's class is proven: narrow the erased operand to the callee's
+                # parameter (a concrete ref, or the unboxed numeric) through the funnel
+                coerce_stack_top!(eb, cw, ctx; from_julia=c.arg_types[dpos])
             end
         end
         call!(eb, c.wasm_idx, WasmValType[], WasmValType[])
@@ -2241,6 +2245,24 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                            ctx.code_info.ssavaluetypes[func.id] : nothing
                 if raw_type isa Core.Const
                     func = raw_type.val
+                end
+            end
+        end
+    elseif func isa Core.Argument
+        # a function value passed as a parameter with a SINGLETON type (`length` in
+        # `sum(length, v)`'s mapreduce_first(f::typeof(length), …)) is statically that
+        # function — the same resolution Julia's inference already made
+        local _fa_idx = ctx.is_compiled_closure ? func.n : func.n - 1
+        if _fa_idx >= 1 && _fa_idx <= length(ctx.arg_types)
+            local _fa_T = ctx.arg_types[_fa_idx]
+            if _fa_T isa DataType && Base.issingletontype(_fa_T) && _fa_T <: Function
+                # as the GlobalRef naming it (the shape every named-function arm below
+                # reads), when the function is bound under its own name
+                local _fa_f = _fa_T.instance
+                local _fa_m = parentmodule(_fa_f)
+                local _fa_n = nameof(_fa_f)
+                if isdefined(_fa_m, _fa_n) && getfield(_fa_m, _fa_n) === _fa_f
+                    func = GlobalRef(_fa_m, _fa_n)
                 end
             end
         end

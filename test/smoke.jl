@@ -247,6 +247,11 @@ _smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _s
 _g("dispatch", Any[
     ("dispatch_int", (x::Int64) -> _disp(x), Int64(5)),
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
+    # a dynamic call whose abstract position holds boxed numerics and a classed string:
+    # the discovery builds a row per observed class (Int64, String, Float64 — dart's rows
+    # for every class of the component) and the switch unboxes/casts per row; it used to
+    # skip non-struct classes and trap at runtime with no row
+    ("eq_any_mixed", (n::Int64) -> (v = Any[1, "x", 2.5]; (v[1] == 1 ? 1 : 0) + (v[2] == "x" ? 10 : 0) + (v[3] == 2.5 ? 100 : 0) + n), Int64(1)),
     ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
 ])
 

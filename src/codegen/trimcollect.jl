@@ -390,9 +390,20 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
-            cref isa GlobalRef || continue
-            isdefined(cref.mod, cref.name) || continue
-            g = getfield(cref.mod, cref.name)
+            local g
+            if cref isa GlobalRef
+                isdefined(cref.mod, cref.name) || continue
+                g = getfield(cref.mod, cref.name)
+            elseif cref isa Core.Argument
+                # a function value passed as a parameter with a SINGLETON type
+                # (`mapreduce_first(f::typeof(length), …)`'s `f(x)`) is statically that
+                # function; the same resolution calls.jl makes at the call site
+                local _ct = (cref.n >= 1 && cref.n <= length(hparams)) ? hparams[cref.n] : Any
+                (_ct isa DataType && Base.issingletontype(_ct) && _ct <: Function) || continue
+                g = _ct.instance
+            else
+                continue
+            end
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             # Resolve arg types from the optimized IR.
             cargs = stmt.args[2:end]
@@ -431,10 +442,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # selector rows likewise contain the concrete target selected for each
             # instantiated class. Discovery still feeds both inline switches and
             # dispatch tables; there is no target-count cap.
+            # dart builds a row for every class of the component that can reach the
+            # slot: concrete structs, and — boxed behind the same $JlTop classId header —
+            # the numerics and the classed String/Symbol (`==(::Any, ::String)` over
+            # Any[1, "x", 2.5] needs the Int64/Float64/String rows; without them the
+            # switch had no row and trapped at runtime). Tuples keep their own path.
             for target_type in runtime_types
-                (isconcretetype(target_type) && isstructtype(target_type) &&
-                 !(target_type <: Tuple) && target_type !== String &&
-                 target_type !== Symbol && target_type <: atypes[p]) || continue
+                (isconcretetype(target_type) && !(target_type <: Tuple) &&
+                 (isstructtype(target_type) || isprimitivetype(target_type)) &&
+                 target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
                 concrete_args = Tuple{spec...}
                 hasmethod(g, concrete_args) || continue
