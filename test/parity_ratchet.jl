@@ -1120,13 +1120,15 @@ const LOCKS = [
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; unspecialized Vararg signatures never become physical Wasm entries",
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; an unspecialized Vararg signature becomes a physical Wasm entry ONLY as the one packed runtime-Vararg-tuple parameter — the {Object, data, size} struct the splat call site already holds (Phase 12 H) — and every other open-ended signature is still skipped",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["function _missing_explicit_invoke_mis",
                         "changed = collect_new_pairs!(_missing_explicit_invoke_mis(",
                         "original_mi in protected || push!(superseded, original_mi)",
-                        "any(T -> T isa Core.TypeofVararg, arg_types) && continue"]
+                        "if any(T -> T isa Core.TypeofVararg, arg_types)",
+                        "is_runtime_vararg_tuple_type(packed_vararg) || continue",
+                        "arg_types = (packed_vararg,)"]
             count(p -> !occursin(p, trim_src), required)
         end),
     "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",

@@ -264,6 +264,50 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
 end
 
 """
+    _apply_iterate_vararg_target_mi(stmt, code_info, lookup_table) -> MethodInstance | nothing
+
+THE call edge of `Core._apply_iterate(iterate, f, t)` when `t` is a runtime-length
+Vararg tuple — the one splat shape calls.jl lowers to a DIRECT call
+(`_emit_apply_iterate_vararg_call!`).
+
+parity(quarantine: Julia varargs — dart has no runtime-length parameter list, so every
+dart call site names a static arity and dart2wasm has no counterpart to this edge).
+
+It is a static edge: `f` is named right there in the statement, and `t`'s
+`{Object, data, size}` representation IS the callee's one packed parameter. But it
+wears a builtin's clothes, so neither Julia's own collector nor `trimcollect.jl`'s
+reachability walk sees it. Both consult this ONE resolver — enrolling the callee
+without also walking the edge would let the pruner drop it straight back out.
+
+Lives here, with `_collect_reachable_ir_types`, because it is the same boundary-input
+question: what does a raw `CodeInfo` statement mean. It reuses `_collector_static_type`
+for the container's type rather than reading `ssavaluetypes` a third way.
+
+`nothing` unless every condition holds: the callee resolves to an ordinary function
+(never a builtin/intrinsic — those have no compiled body), the container carries the one
+representable layout (`is_runtime_vararg_tuple_type`, structs.jl), and EXACTLY ONE
+method answers the open-ended signature. An arity-overloaded callee has no single static
+target and stays a loud reject at the call site.
+"""
+function _apply_iterate_vararg_target_mi(@nospecialize(stmt), code_info,
+                                         lookup_table)::Union{Core.MethodInstance,Nothing}
+    (stmt isa Expr && stmt.head === :call && length(stmt.args) == 4) || return nothing
+    local aref = stmt.args[1]
+    (aref isa GlobalRef && isdefined(aref.mod, aref.name) &&
+     getfield(aref.mod, aref.name) === Core._apply_iterate) || return nothing
+    local fref = stmt.args[3]
+    local f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
+              getfield(fref.mod, fref.name) : fref
+    (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction)) || return nothing
+    local T = _collector_static_type(stmt.args[4], code_info)
+    (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
+    local sig = Tuple{Core.Typeof(f), Vararg{vararg_tuple_eltype(T)}}
+    local matches = CC.findall(sig, lookup_table; limit=-1)
+    (matches !== nothing && length(matches) == 1) || return nothing
+    return CC.specialize_method(matches[1])
+end
+
+"""
     ir_reads_host_layout(ci::Core.CodeInstance) -> Bool
 
 Whether the specialization's inferred source — transitively through its invokes — reads

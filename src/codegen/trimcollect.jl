@@ -171,7 +171,11 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                         m, Tuple{Core.Typeof(f), arg_types...}, Core.svec()))
                 end
             else
-                continue
+                # The runtime-Vararg splat edge (_apply_iterate_vararg_target_mi, ir.jl):
+                # a static call the collector cannot see, because it hides behind a
+                # builtin and no `:invoke` records it.
+                mi = _apply_iterate_vararg_target_mi(stmt, src, lookup_table)
+                mi === nothing && continue
             end
             mi isa Core.MethodInstance || continue
             mi in seen && continue
@@ -507,6 +511,7 @@ const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
                                         external_leaves::Set{Any})
     isempty(external_leaves) && return codeinfos
+    lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
     for i in 1:2:length(codeinfos)
         (i + 1 <= length(codeinfos) && codeinfos[i] isa Core.CodeInstance &&
@@ -530,6 +535,13 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
                 target_mi = target isa Core.MethodInstance ? target :
                             target isa Core.CodeInstance ? target.def : nothing
                 target_mi isa Core.MethodInstance && push!(queue, target_mi)
+            else
+                # The reachability relation must contain EVERY call edge, including the
+                # runtime-Vararg splat's (_apply_iterate_vararg_target_mi, ir.jl) —
+                # otherwise the callee that _missing_explicit_invoke_mis enrolled is
+                # pruned right back out and the call site rejects a lowerable splat.
+                splat_mi = _apply_iterate_vararg_target_mi(stmt, pair[2], lookup_table)
+                splat_mi === nothing || push!(queue, splat_mi)
             end
         end
     end
@@ -821,7 +833,20 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         # with a known arity are represented by their concrete specialization;
         # intrinsic/error constructors are lowered at the call site. Never let
         # the open-ended signature become a second, fake compilation route.
-        any(T -> T isa Core.TypeofVararg, arg_types) && continue
+        # THE ONE EXCEPTION, and it is a representation fact, not a route: a
+        # homogeneous runtime Vararg tuple (`is_runtime_vararg_tuple_type`,
+        # structs.jl) IS one physical parameter — the `{Object, data, size}`
+        # struct the splat call site already holds. The signature becomes that
+        # single packed parameter, which is what the body reads: values.jl's
+        # `packed_vararg_source_type` returns `nothing` for a one-parameter tail
+        # that already IS the source tuple, so the argument is a direct
+        # `local.get` of the struct instead of a reconstructed fixed tuple.
+        # parity(quarantine: Julia varargs).
+        if any(T -> T isa Core.TypeofVararg, arg_types)
+            local packed_vararg = Tuple{arg_types...}
+            is_runtime_vararg_tuple_type(packed_vararg) || continue
+            arg_types = (packed_vararg,)
+        end
         # `check_world_bounded(::TypeName)` is a closed-world metadata operation,
         # lowered directly at its call site from TypeName constants. Enrolling
         # Base's mutable BindingPartition walker would create a second runtime

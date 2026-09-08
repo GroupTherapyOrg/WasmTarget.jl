@@ -3249,18 +3249,26 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Get container Julia type
         container_type = infer_value_type(container_arg, ctx)
 
-        # Core.tuple is only directly representable when the iterable is proven
-        # empty. A runtime-length Julia tuple needs a genuine variable-tuple
-        # representation; never fabricate Tuple{} for a nonempty/unknown input.
-        target_is_tuple = (target_func isa GlobalRef && target_func.name === :tuple && target_func.mod === Core)
-        target_is_vect = (target_func isa GlobalRef && target_func.name === :vect && target_func.mod === Base)
-        target_is_typed_vect = (target_func isa GlobalRef && target_func.name === :getindex && target_func.mod === Base)
+        # ONE callee resolution, then identity on the resolved OBJECT (L124's rule):
+        # the splat target reaches this position under three spellings and a
+        # name+module test answers only one of them —
+        #   `Tuple(v)`        → GlobalRef(Core, :tuple)
+        #   `tuple(v...)`     → GlobalRef(Main, :tuple)   (name matches, module does not)
+        #   `Core.tuple(v...)`→ the builtin VALUE, no GlobalRef at all
+        # — so the last two used to fall through to the loud reject for a splat the
+        # first one lowers.
         target_value = target_func isa GlobalRef ?
             (isdefined(target_func.mod, target_func.name) ? getfield(target_func.mod, target_func.name) : nothing) : target_func
+        target_is_tuple = target_value === Core.tuple
+        target_is_vect = target_value === Base.vect
+        target_is_typed_vect = target_value === Base.getindex
         target_is_compose = target_value === (∘)
         prefix_values = length(args) == 4 ? _apply_iterate_svec_values(args[3], ctx) : nothing
         tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
 
+        # Core.tuple is only directly representable when the iterable is proven
+        # empty. A runtime-length Julia tuple needs a genuine variable-tuple
+        # representation; never fabricate Tuple{} for a nonempty/unknown input.
         if target_is_tuple
             local result_type = get(ctx.ssa_types, idx, Any)
             if container_type isa DataType && container_type <: Vector &&
@@ -3277,6 +3285,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     "runtime-length Core.tuple materialization requires a variable-tuple representation";
                     idx=idx)
             end
+        # `f(t...)` where `t` is a runtime-length Vararg tuple: the callee's own
+        # trailing `Vararg{E}` parameter IS this value's representation, so the
+        # splat is a direct call. (Never reached for a Vector container — that
+        # one still iterates.)
+        elseif length(args) == 3 && is_runtime_vararg_tuple_type(container_type)
+            _emit_apply_iterate_vararg_call!(fb, target_value, container_arg,
+                                             container_type, ctx, idx)
         # Single-container Vector{T} splatting: vector-literal collect (`[v...]`)
         # or a known binary-reduce intrinsic.
         elseif target_is_compose && length(args) == 3 &&
@@ -3298,13 +3313,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local container_args = args[3:end]
             local container_types = DataType[get_ssa_type(ctx, a) for a in container_args]
             elem_type = eltype(container_type)
-            target_name = target_func isa GlobalRef ? target_func.name : nothing
-            target_mod  = target_func isa GlobalRef ? target_func.mod  : nothing
 
             if any(T -> eltype(T) !== elem_type, container_types)
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
                     "_apply_iterate containers have different element types"; idx=idx)
-            elseif target_name === :vect && target_mod === Base && length(container_args) == 1
+            elseif target_is_vect && length(container_args) == 1
                 # `[v...]` ⇒ Base.vect(v...) ⇒ a shallow copy of the vector.
                 _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx)
             else
@@ -4029,6 +4042,61 @@ function _emit_runtime_composition_context!(fb::InstrBuilder, container_arg,
     struct_new!(bld, info.wasm_type_idx)
     append_builder!(fb, bld)
     return fb
+end
+
+"""
+Lower `Core._apply_iterate(iterate, f, t)` where `t` is a runtime-length Vararg tuple.
+
+parity(quarantine: Julia varargs — dart has no runtime-length parameter list; every
+dart call site names a static arity, so dart2wasm has no `_apply_iterate` counterpart
+and nothing here mirrors a dart structure).
+
+There is no iteration to emit. `t`'s representation is the `{Object, data, size}`
+struct (`register_vararg_tuple_type!`, structs.jl), and the callee's Vararg
+specialization takes exactly that struct as its ONE physical parameter
+(`trim_compile_plan`'s packed projection). So the splat IS the call: push `t`, call.
+
+The callee must be in the closed world with that exact packed signature and that exact
+return type — `_apply_iterate_vararg_target_mi` (ir.jl) enrolls it when, and only when,
+exactly one method answers the open-ended signature. Anything else (a callee with no
+Vararg specialization, an arity-overloaded callee, a non-function target) is a loud
+reject: `f(t...)` returns a value natively.
+
+There is no result bridge, because none can be needed. The enrolled signature is
+derived from THIS container type, so the callee's compiled return type and inference's
+answer for the splat statement are one question asked once. A disagreement would mean
+the two disagree about what was called — that is the finding, not something to coerce
+past.
+"""
+function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
+                                          container_arg, container_type::DataType,
+                                          ctx, idx::Int)::Nothing
+    local bld = _ctx_builder(ctx, "_emit_apply_iterate_vararg_call!")
+    local target = (ctx.func_registry === nothing || !(target_value isa Function)) ? nothing :
+                   get_function(ctx.func_registry, target_value, (container_type,))
+    local want = get(ctx.ssa_types, idx, Any)
+    # EXACT signature only. get_function's subtype-tolerant passes exist for
+    # overload resolution; here a near-miss would run a body compiled for a
+    # different packed layout (a non-empty narrowing's body assumes length >= 1).
+    if target === nothing || target.arg_types != (container_type,) ||
+       target.return_type !== want
+        emit_unsupported_stub!(ctx, bld, :unsupported_method,
+            "_apply_iterate over a runtime Vararg tuple whose callee has no compiled " *
+            "$(container_type) → $(want) specialization"; idx=idx)
+        append_builder!(fb, bld)
+        return nothing
+    end
+    local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, container_type)
+    emit_value!(bld, container_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
+    call!(bld, target.wasm_idx, WasmValType[], WasmValType[])
+    if want === Union{}
+        # The callee always throws, so its Wasm type has no result and everything
+        # after the call is dead: a structural trap on a path Julia proves dead.
+        unreachable!(bld)   # structural trap (the callee returns Bottom)
+        ctx.last_stmt_was_stub = true
+    end
+    append_builder!(fb, bld)
+    return nothing
 end
 
 """Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""

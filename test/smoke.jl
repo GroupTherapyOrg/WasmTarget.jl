@@ -272,6 +272,25 @@ _g("higherorder", Any[
     ("mapreduce", (n::Int64) -> mapreduce(x -> x^2, +, 1:n), Int64(4)),
 ])
 
+# ---- runtime-length varargs (Phase 12 H) ----------------------------------
+# `f(t...)` where `t` is a runtime-length Vararg tuple: the callee's own trailing
+# `Vararg{E}` parameter IS that value's {Object, data, size} representation, so the
+# splat compiles to a direct call. Nothing in dart2wasm answers to this
+# (parity(quarantine: Julia varargs)); before Phase 12 H it was a loud reject.
+@noinline _sm_vsum(xs::Int64...) = (s = 0; for x in xs; s += x; end; s)
+@noinline _sm_vmaxf(xs::Float64...) = (m = -Inf; for x in xs; x > m && (m = x); end; m)
+@noinline _sm_mktup(v::Vector{Int64}) = Core.tuple(v...)      # the builtin VALUE spelling
+@noinline _sm_mktupf(v::Vector{Float64}) = tuple(v...)        # GlobalRef(Main, :tuple)
+@noinline _sm_mktup_ne(v::Vector{Int64}) = (t = Core.tuple(v...); isempty(t) ? (0,) : t)
+_g("varargs", Any[
+    ("splat_vararg_sum", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(5)),
+    ("splat_vararg_sum_empty", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(0)),
+    ("splat_vararg_sum_one", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(1)),
+    ("splat_vararg_maxf", (n::Int64) -> _sm_vmaxf(_sm_mktupf(Float64[i * 1.5 for i in 1:n])...), Int64(4)),
+    # the non-empty narrowing Tuple{T, Vararg{T}} shares the canonical layout
+    ("splat_vararg_nonempty", (n::Int64) -> _sm_vsum(_sm_mktup_ne(collect(1:n))...), Int64(3)),
+])
+
 # ============================================================================
 function main()
     t0 = time()
