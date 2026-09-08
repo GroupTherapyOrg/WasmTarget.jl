@@ -35,6 +35,14 @@ runs the harness on every push.
 - Commit messages for algorithmic fixes narrate the protocol: the exact shape that breaks, the
   invariant, and why the fix restores it.
 
+## Nightly
+
+`formal.yml` also runs on a schedule with `TLC_NIGHTLY=1` and a 5-hour budget: the harness then
+adds `dev/formal/nightly/MC*.cfg` — instances too large for the 20-minute gate, checked against
+the same model modules (a `nightly/MCStackifierN5.cfg` would check `MCStackifier.tla` at N=5).
+Nothing lives there yet: every current instance fits the gate. Add one only when it terminates
+in the budget on a 2-core runner — a job that never finishes proves nothing either.
+
 ## Running
 
 ```

@@ -18,13 +18,19 @@ WORKERS="${TLC_WORKERS:-auto}"
 # the inner loop (dev/lanes.sh) runs the rest in ~30 s; CI and `bash run_tlc.sh` run all.
 DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg}"
 fail=0
-for cfg in MC*.cfg; do
+# TLC_NIGHTLY=1 (the scheduled formal.yml job, 5-hour budget) also runs dev/formal/nightly/:
+# instances too large for the 20-minute gate — same naming rules, checked against the
+# models one directory up.
+cfgs=(MC*.cfg)
+[ "${TLC_NIGHTLY:-0}" = "1" ] && [ -d nightly ] && cfgs+=(nightly/MC*.cfg)
+for cfg in "${cfgs[@]}"; do
   [ -e "$cfg" ] || continue
   if [ "${TLC_FAST:-0}" = "1" ] && [[ " $DEEP " == *" $cfg "* ]]; then printf '  skip %-28s (deep; run without TLC_FAST)\n' "$cfg"; continue; fi
   # MC<Name>[Variant]Broken.cfg checks MC<Name>[Variant].tla when that module exists (a
   # variant with its own constants), else the model's MC<Name>.tla (a variant that only
   # flips a CONSTANT flag of the same instance).
   case "$cfg" in *Broken.cfg) expect=violation; tla="${cfg%Broken.cfg}.tla" ;; *) expect=ok; tla="${cfg%.cfg}.tla" ;; esac
+  tla="${tla#nightly/}"   # a nightly instance checks the model's own MC module
   if [ ! -e "$tla" ] && [ "$expect" = violation ]; then
     base=$(ls MC*.tla | sed 's/\.tla$//' | awk -v c="${cfg%Broken.cfg}" 'index(c, $0) == 1 { print length($0), $0 }' | sort -rn | head -1 | cut -d" " -f2)
     [ -n "$base" ] && tla="$base.tla"

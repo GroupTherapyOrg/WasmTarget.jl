@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 3 * * *'   # nightly: the same harness plus dev/formal/nightly (instances too large for a 20-minute gate)
 # Only the newest push per branch runs; a superseded run is cancelled.
 concurrency:
   group: formal-${{ github.ref }}
@@ -11,7 +13,9 @@ concurrency:
 jobs:
   tlc:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'schedule' && 300 || 20 }}
+    env:
+      TLC_NIGHTLY: ${{ github.event_name == 'schedule' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
