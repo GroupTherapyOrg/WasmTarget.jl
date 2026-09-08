@@ -248,6 +248,18 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
             local pj = c.params[j + (takes_context ? 1 : 0)]
             pj === AnyRef && continue                   # accepts anything
             local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
+            if Tj isa DataType && Tj <: Type && length(Tj.parameters) == 1 && Tj.parameters[1] isa Type
+                # a `Type{X}` parameter: the operand is X's one type object — identity
+                # against its global (a type object's class is DataType, not X)
+                local tg = get_type_constant_global!(mod, registry, Tj.parameters[1])
+                local_get!(tb, UInt32(j))
+                ref_cast!(tb, EqRef, true)          # ref.eq takes eqref operands
+                global_get!(tb, tg, mod.globals[Int(tg) + 1].valtype)
+                num!(tb, Opcode.REF_EQ)
+                num!(tb, Opcode.I32_EQZ)
+                br_if!(tb, lbl)
+                continue
+            end
             (Tj isa DataType && isconcretetype(Tj)) || error(
                 "closure $closure_type: a dispatching entry needs a concrete Julia parameter type at position $j, got $Tj")
             # arg j is a $JlTop subtype whose classId is Tj's
