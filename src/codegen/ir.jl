@@ -39,4 +39,31 @@ function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
     return code_info, return_type
 end
 
+"""
+    get_typed_ir(sig::Type{<:Tuple}) -> Vector{Pair{CodeInfo, Any}}
+
+The same one path for a full signature (function type first), as a closure body reached
+through an `invoke`'s `MethodInstance.specTypes` is: every match, inferred by the
+WasmInterpreter.
+"""
+function get_typed_ir(sig::Type{<:Tuple}; optimize::Bool=true,
+                      interp::WasmInterpreter=get_wasm_interpreter())
+    return Base.code_typed_by_type(sig; optimize=optimize, interp=interp)
+end
+
+"""
+    infer_return_type(f, argtypes) -> Type
+
+The return type of `f(::argtypes...)` under the one inference path (overlays applied): the
+question a box-capture join asks about a write's value. `Any` when inference fails.
+"""
+function infer_return_type(@nospecialize(f), argtypes::Tuple;
+                           interp::WasmInterpreter=get_wasm_interpreter())
+    return try
+        Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
+    catch
+        Any
+    end
+end
+
 
