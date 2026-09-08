@@ -2427,15 +2427,21 @@ end
 
 Per-max-arity vtable struct: one (ref null func) entry per positional arity
 0..max_arity (dart: vtableBaseIndex + posArgCount; named combinations N/A — WT
-kwargs are pre-positionalized).
+kwargs are pre-positionalized). The structs form a subtype CHAIN by arity —
+vt(n) <: vt(n-1) <: … <: vt(0) — exactly dart's `parentVtableStruct` (closures.dart:
+573-578): a vtable built for a type's largest arity is then a subtype of the struct a
+dynamic call of any smaller arity casts to, so one vtable serves every arity the
+type is called with.
 """
 function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max_arity::Int)::UInt32
     d = registry.closure_vtable_struct_idxs
     d === nothing && error("closure layouter unavailable on a minimal registry")
     haskey(d, max_arity) && return d[max_arity]
+    max_arity >= 0 || error("closure vtable arity must be non-negative, got $max_arity")
+    parent = max_arity == 0 ? nothing : get_closure_vtable_struct!(mod, registry, max_arity - 1)
     # (ref null func) entries — set once at vtable-global creation, read at call_ref
     fields = FieldType[FieldType(UInt8(FuncRef), false) for _ in 0:max_arity]
-    idx = UInt32(add_type!(mod, StructType(fields)))
+    idx = UInt32(add_type!(mod, StructType(fields, parent)))
     d[max_arity] = idx
     return idx
 end

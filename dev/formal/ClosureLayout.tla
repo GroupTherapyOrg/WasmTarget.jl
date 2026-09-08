@@ -6,7 +6,7 @@
 (*   get_closure_base_struct!/get_closure_vtable_struct!                    *)
 (*     (src/codegen/types.jl:2425-2456)  -- the Object prefix and the        *)
 (*     one-struct-per-ARITY vtable shape                                     *)
-(*   ensure_closure_vtable!/emit_closure_wrap!                              *)
+(*   build_closure_vtable!/closure_vtable/emit_closure_wrap!                              *)
 (*     (src/codegen/closures.jl:31-162) -- the one vtable GLOBAL per closure *)
 (*     body and the erasure-seam wrap that reads it back                     *)
 (* dart anchor: ClosureLayouter, closures.dart:41-118 (Object fields          *)
@@ -62,7 +62,7 @@
 (*     (typeCount, positionalCount), memoized by SHAPE, never by which        *)
 (*     closure asked.                                                        *)
 (*                                                                           *)
-(* (C) VTABLE GLOBAL PER CLOSURE BODY (ensure_closure_vtable!, closures.jl:  *)
+(* (C) VTABLE GLOBAL PER CLOSURE BODY (build_closure_vtable!, closures.jl:  *)
 (*     31-118). `registry.closure_vtable_globals` is a Dict keyed by         *)
 (*     `closure_type` (T), NOT by shape. On the FIRST sight of T: computes    *)
 (*     `arity = length(body_params) - (takes_context?1:0)` from THIS call's  *)
@@ -121,7 +121,7 @@
 (*    under test are about which STRUCT SHAPE a slot lives in, never the     *)
 (*    bytes inside it, matching Stackifier.tla erasing values/phi for a      *)
 (*    purely-control claim.                                                 *)
-(*  - `register_closure_type!` must run before `ensure_closure_vtable!` for  *)
+(*  - `register_closure_type!` must run before `build_closure_vtable!` for  *)
 (*    the same T (closures.jl:49-50 throws otherwise for a context-taking    *)
 (*    closure) -- modeled as an explicit preconditon, not a free choice.     *)
 (*  - Every action is atomic (no concurrency: compilation is single-         *)
@@ -152,7 +152,7 @@
 (*    cache-hit-recompute code path, not a hypothetical one.                 *)
 (*                                                                           *)
 (* formal(src/codegen/structs.jl register_closure_type!, src/codegen/       *)
-(* closures.jl ensure_closure_vtable!): a closure type's context struct      *)
+(* closures.jl build_closure_vtable!): a closure type's context struct      *)
 (* lists its captured fields in exactly the program's declared order, never *)
 (* a hash-dependent one; two distinct closure types never share a context   *)
 (* struct or vtable-global id; one struct type is shared by every closure    *)
@@ -188,7 +188,7 @@ VARIABLES
     fieldSeq,          \* [Types -> Seq(FieldClasses)] -- the RECORDED field order (meaningful once seenCtx)
     structId,          \* [Types -> Nat] -- register_closure_type!'s struct-type index (0 = unassigned)
     nextStructId,      \* Nat -- add_struct_type!'s monotonic type-section counter
-    vtArrivals,        \* [Types -> 0..MaxArrivals] -- ensure_closure_vtable! calls so far
+    vtArrivals,        \* [Types -> 0..MaxArrivals] -- vtable arrivals (build_closure_vtable! / closure_vtable) so far
     seenVt,            \* SUBSET Types -- T's whose vtable global exists
     globalId,          \* [Types -> Nat] -- the one vtable global per closure body (0 = unassigned)
     nextGlobalId,      \* Nat -- add_global_ref!'s monotonic counter
@@ -261,7 +261,7 @@ RegisterContext(T) ==
                    lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId>>
 
 ----------------------------------------------------------------------------
-(* (B)+(C) ensure_closure_vtable!: requires T's context already registered  *)
+(* (B)+(C) build_closure_vtable!: requires T's context already registered   *)
 (* (closures.jl:49-50). Every arrival -- first sight AND every later one --  *)
 (* picks an arity `ar` for THIS call: the real algorithm always derives it   *)
 (* from T's own compiled body, so a first sight is PINNED to DeclaredArity  *)
