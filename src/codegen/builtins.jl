@@ -128,7 +128,7 @@ end
 # discriminating and disjoint, so one entry holding both is dart's shape: ONE
 # identity, its own guards in order (intrinsics.dart's per-intrinsic shape
 # tests). formal(dev/formal/ConsultChain.tla).
-function _lower_getglobal_constfold!(b, fb, ctx, expr, idx, args, callee)
+function _lower_getglobal!(b, fb, ctx, expr, idx, args, callee)
     length(args) >= 2 || return nothing
     _gg_mod = args[1] isa QuoteNode ? args[1].value :
               args[1] isa GlobalRef ? (isdefined(args[1].mod, args[1].name) ?
@@ -2297,7 +2297,7 @@ BUILTIN_LOWERINGS[_closed_world_isvisible] = _lower_isvisible!
 BUILTIN_LOWERINGS[Base.check_world_bounded] = _lower_check_world_bounded!
 BUILTIN_LOWERINGS[_closed_world_type_bounds] = _lower_check_world_bounded!
 
-BUILTIN_LOWERINGS[Core.getglobal] = _lower_getglobal_constfold!
+BUILTIN_LOWERINGS[Core.getglobal] = _lower_getglobal!
 # `Core.sizeof` (the builtin `code_typed` actually resolves calls to) and
 # `Base.sizeof` (the generic function) are DIFFERENT objects — `is_func`
 # matched either by bare name, so both keys route to the same lowering.
