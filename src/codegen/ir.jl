@@ -248,7 +248,10 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                 lit = args[i]
                 v = lit isa QuoteNode ? lit.value : lit
                 if v isa GlobalRef
-                    (isdefined(v.mod, v.name) && isconst(v.mod, v.name)) || continue
+                    # the value the lowering will read (values.jl's GlobalRef arm bakes a
+                    # non-const binding's CURRENT value as a mutable-global initializer,
+                    # so its type is reachable too)
+                    isdefined(v.mod, v.name) || continue
                     v = getfield(v.mod, v.name)
                 end
                 v === nothing && continue
