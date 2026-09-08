@@ -86,27 +86,69 @@ function _f3_write_result_type(code, sst, spectypes, rhs, T)
     return _f3_operand_type(rhs, sst, T, nothing, code)
 end
 
-# Retrieve the typed IR + specTypes of each closure invoked in `code` that captures `box_id`
-# (via the `invoke`'s CodeInstance/MethodInstance — the robust, non-guessing way). The box writes
-# live in these bodies. Returns Vector{(code, ssavaluetypes, spectypes)}.
-# The set of closure types that capture the box at SSA index `box_id` (from `%new(clo, …, box, …)`).
-function _f3_box_captors(code, box_id::Int)::Set{Type}
-    captors = Set{Type}()
+# Every `getfield(#self#, fld)` read in `code` for `fld` ∈ `fields` — the pattern by which a
+# closure body reaches one of its OWN Core.Box-typed captured fields (dart2wasm `Capture.type`'s
+# context-field read, closures.dart:1436). Returns ssa_id → the field read. Shared by
+# `f3_closure_box_seeds` (seed the box's known contents type into the closure body) and
+# `_f3_collect_capturing_bodies!` (find where a further-nested closure re-captures the SAME box).
+function _f3_self_field_reads(code, fields::Set{Symbol})::Dict{Int,Symbol}
+    out = Dict{Int,Symbol}()
+    for (i, stmt) in enumerate(code)
+        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
+        op = stmt.args[1]
+        (op isa GlobalRef && op.name === :getfield) || continue
+        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue   # #self#
+        fld = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
+        fld in fields && (out[i] = fld)
+    end
+    return out
+end
+
+# Which field (by :new argument position) of each closure type created in `code` captures the box
+# at SSA index `box_id` — (closure type, field name) pairs, matched the same way `_f3_box_captors`
+# always has (`%new(clo, …, box, …)` via `_f3_refers_to_box`). The field name is what lets discovery
+# recurse: a captor closure's OWN body reaches the SAME box one hop further in as
+# `getfield(#self#, thatfield)`, not another literal `%new(Core.Box)`.
+function _f3_box_captor_fields(code, box_id::Int)::Vector{Tuple{Type,Symbol}}
+    out = Tuple{Type,Symbol}[]
     for stmt in code
         stmt isa Expr && stmt.head === :new && length(stmt.args) >= 2 || continue
-        any(j -> _f3_refers_to_box(stmt.args[j], box_id, code), 2:length(stmt.args)) || continue
         a1 = stmt.args[1]
         ty = a1 isa GlobalRef ? (isdefined(a1.mod, a1.name) ? getfield(a1.mod, a1.name) : nothing) :
              (a1 isa Type ? a1 : nothing)
-        ty isa Type && ty !== Core.Box && push!(captors, ty)
+        (ty isa Type && ty !== Core.Box) || continue
+        for j in 2:length(stmt.args)
+            _f3_refers_to_box(stmt.args[j], box_id, code) || continue
+            fidx = j - 1
+            (isstructtype(ty) && 1 <= fidx <= fieldcount(ty)) || continue
+            push!(out, (ty, fieldname(ty, fidx)))
+        end
     end
-    return captors
+    return out
 end
 
+# The set of closure types that capture the box at SSA index `box_id` (from `%new(clo, …, box, …)`).
+_f3_box_captors(code, box_id::Int)::Set{Type} =
+    Set{Type}(ty for (ty, _) in _f3_box_captor_fields(code, box_id))
+
+# Retrieve the typed IR + specTypes of EVERY closure body that captures `box_id` — directly, via a
+# literal `%new(clo, …, box, …)` in `code`, OR TRANSITIVELY through any chain of further-nested
+# closure creation. The box writes this join must fold in live in these bodies. Recursion: a
+# discovered closure's own body reaches the SAME box one hop deeper as `getfield(#self#, boxfield)`
+# (boxfield = the field `_f3_box_captor_fields` matched for it); `_f3_box_captor_fields` and
+# `_f3_refers_to_box` already treat "the box" as any SSA value regardless of how it arrived, so the
+# same one-hop matching recurses unchanged on that SSA id, any depth. `visited` (keyed by specTypes)
+# guards a recursive closure that captures itself. Returns Vector{(code, ssavaluetypes, spectypes)}.
 function _f3_capturing_closure_bodies(code, box_id::Int)
     out = Tuple{Vector{Any}, Vector{Any}, Any}[]
-    captors = _f3_box_captors(code, box_id)
-    isempty(captors) && return out
+    _f3_collect_capturing_bodies!(out, Set{Any}(), code, box_id)
+    return out
+end
+
+function _f3_collect_capturing_bodies!(out, visited::Set{Any}, code, box_id::Int)
+    field_captors = _f3_box_captor_fields(code, box_id)
+    isempty(field_captors) && return out
+    captor_types = Set{Type}(ty for (ty, _) in field_captors)
     # find the invokes of those closures → their MethodInstance.specTypes → typed IR
     for stmt in code
         stmt isa Expr && stmt.head === :invoke || continue
@@ -116,12 +158,22 @@ function _f3_capturing_closure_bodies(code, box_id::Int)
         mi isa Core.MethodInstance || continue
         st = mi.specTypes
         st isa DataType && st <: Tuple && length(st.parameters) >= 1 || continue
-        (st.parameters[1] in captors) || continue
+        clo_T = st.parameters[1]
+        (clo_T in captor_types) || continue
+        st in visited && continue
+        push!(visited, st)
         irs = try get_typed_ir(st) catch; nothing end
         irs === nothing && continue
+        boxfields = Set{Symbol}(f for (ty, f) in field_captors if ty === clo_T)
         for pair in irs
             b = pair.first
-            push!(out, (b.code, b.ssavaluetypes, collect(st.parameters)))
+            ccode = b.code
+            push!(out, (ccode, b.ssavaluetypes, collect(st.parameters)))
+            # A further-nested closure reaches the SAME box as `getfield(#self#, boxfield)` — find
+            # that read's SSA id in this body and recurse discovery one hop deeper from it.
+            for i in keys(_f3_self_field_reads(ccode, boxfields))
+                _f3_collect_capturing_bodies!(out, visited, ccode, i)
+            end
         end
     end
     return out
@@ -140,9 +192,10 @@ field by the variable's own type — reconstructing what Julia erased. F3 L0; no
 """
 # formal(dev/formal/BoxJoin.tla): the join below is SOUND (a concrete type is chosen only
 # when every write the box can ever receive, any nesting depth, agrees on it), order-
-# independent, and never lets an invisible write narrow the cell — provided closure-write
-# discovery is transitive. It is currently ONE HOP ONLY (_f3_capturing_closure_bodies below
-# never recurses into a discovered closure's own body), the documented gap TLC finds.
+# independent, and never lets an invisible write narrow the cell. Closure-write discovery
+# (_f3_capturing_closure_bodies) is TRANSITIVE — it recurses into a discovered closure's own
+# body to find a further-nested captor, any depth — matching MCBoxJoin.cfg's TransitiveDiscovery
+# = TRUE, the shape this model requires for the four claims to hold.
 function box_contents_type(code, ssa_types, box_id::Int)::Union{Type,Nothing}
     # 1) enclosing init write(s)
     init = nothing
@@ -499,14 +552,8 @@ function f3_closure_box_seeds(code, selfT, contents_T)::Dict{Int,Type}
     (selfT isa DataType && isstructtype(selfT) && contents_T isa Type) || return out
     boxfields = Set{Symbol}(fieldname(selfT, i) for i in 1:fieldcount(selfT) if fieldtype(selfT, i) === Core.Box)
     isempty(boxfields) && return out
-    for (i, stmt) in enumerate(code)
-        (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3) || continue
-        op = stmt.args[1]
-        (op isa GlobalRef && op.name === :getfield) || continue
-        (stmt.args[2] isa Core.Argument && stmt.args[2].n == 1) || continue   # #self#
-        fld = stmt.args[3]
-        fldn = fld isa QuoteNode ? fld.value : fld
-        fldn in boxfields && (out[i] = contents_T)
+    for i in keys(_f3_self_field_reads(code, boxfields))
+        out[i] = contents_T
     end
     return out
 end

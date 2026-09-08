@@ -31,3 +31,41 @@
     # A box with no resolvable write in this IR → nothing (no false concrete type).
     @test WasmTarget.box_contents_type(Any[], Any[], 1) === nothing
 end
+
+# formal(dev/formal/BoxJoin.tla) — TRANSITIVE closure-write discovery. `_f3_capturing_closure_bodies`
+# must recurse into a discovered closure's OWN body to find a FURTHER-nested closure that captures
+# the SAME box (through a getfield of the outer closure's captured field) and writes it there —
+# not just the box's own function's directly-created closures (one hop). A grandchild-only write
+# reached the model's real typed IR (via `WasmTarget.get_typed_ir`, the one inference path) BEFORE
+# this fix returned `Int64` (WRONG — should widen to `nothing`/anyref, since the write two hops down
+# is Float64, divergent from the Int64 init). This test fails on the pre-fix (one-hop) code:
+# verified by temporarily reverting box_capture.jl to its pre-fix content and re-running.
+@testset "F3 L0: transitive closure-write discovery (BoxJoin.tla gap)" begin
+    @eval const _F3_L0_BIG = 1_000_000
+    @eval function _f3_l0_outer_boxjoin(n::Int64)
+        x = 0
+        @noinline function level1(m)
+            @noinline function level2(k)
+                k > _F3_L0_BIG ? (x = 3.5) : (x += k)
+            end
+            for i in 1:m
+                level2(i)
+            end
+        end
+        level1(n)
+        x
+    end
+    ci, _ = WasmTarget.get_typed_ir(_f3_l0_outer_boxjoin, (Int64,))
+    bs = WasmTarget.find_box_news(ci.code)
+    @assert length(bs) == 1
+    box_id = bs[1]
+
+    # The root's own one-hop scan finds `level1` only; `level1` never writes the box directly (it
+    # only creates+invokes `level2`, which does). Transitive discovery must surface BOTH bodies.
+    bodies = WasmTarget._f3_capturing_closure_bodies(ci.code, box_id)
+    @test length(bodies) == 2
+
+    # The join over ALL writes (Int64 init, Int64 `+=` in level2, Float64 literal in level2) must
+    # widen to dynamic (`nothing`) — Int64 alone (the one-hop answer) is the documented soundness gap.
+    @test WasmTarget.box_contents_type(ci.code, ci.ssavaluetypes, box_id) === nothing
+end
