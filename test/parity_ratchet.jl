@@ -695,7 +695,7 @@ const LOCKS = [
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             required = ["duplicated_terminal_targets = Set{Int}()",
                         "terminal && phi_free && !prev_can_fallthrough",
-                        "compile_statement!(tb, stmt, i, ctx)",
+                        "compile_statement!(tb, i, ctx)",
                         "crossing control regions at block",
                         "_lb == length(label_stack)",
                         "_lp == length(label_stack)"]
@@ -1400,7 +1400,7 @@ const LOCKS = [
             forbidden_count = count_sites(
                 r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch|Push a type-correct default|compile_value produced empty bytes")
             forbidden_count +
-                (occursin("emit_return_coerced!(b, stmt.val, ctx)", statements_src) ? 0 : 1)
+                (occursin("emit_return_coerced!(b, node.value, ctx)", statements_src) ? 0 : 1)
         end),
     "L17_one_compilation_path" => ("public compilation always enters the closed-world planner; legacy discovery, recursive mode switching, byte shells, and legacy body compilers are extinct",
         () -> count_sites(r"_TRIM_ACTIVE|discovery=:legacy|discover_dependencies|AUTODISCOVER|FrozenCompilationState|InplaceCompilationContext|compile_from_ir_(?:inplace|prebaked)|compile_module_from_ir_frozen|compile_handler|compile_closure_body|compile_function_into!|compile_const_value|overlay_entries|_autodiscover_closure_deps!|run_selfhost|run_direct|to_bytes_mvp|FakeGlobalRef|wasm_compile_(?:flat|source)|function _compile_function_legacy|function compile_(?:value|statement|call|invoke|new|foreigncall|condition_to_i32)\([^!]")),
@@ -1613,7 +1613,7 @@ const LOCKS = [
     "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement and inline chain; _compile_statement_located! has no other caller (locked 2026-09-02)",
         () -> begin
             src = read(joinpath(CODEGEN, "statements.jl"), String)
-            required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, stmt, idx, ctx)",
+            required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, idx, ctx)",
                         "(err isa WasmCompileError || err isa WasmInternalError) && rethrow()",
                         "throw(located_internal_error(ctx, idx, err))"]
             callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")

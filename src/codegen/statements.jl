@@ -269,30 +269,33 @@ front seam and accumulator are gone.
 # diagnostic through record_unsupported! (already attributed), and any OTHER
 # exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
 # the same statement and inline chain, so nothing surfaces without a site.
-function compile_statement!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
+function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
     try
-        return _compile_statement_located!(b, stmt, idx, ctx)
+        return _compile_statement_located!(b, idx, ctx)
     catch err
         (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
         throw(located_internal_error(ctx, idx, err))
     end
 end
 
-function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::AbstractCompilationContext)
+function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)
+    rec = ctx.nir[idx]     # THE statement's node — the visitor never re-reads the raw IR
+    node = rec.node
     # Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
     # block boundaries — the next block is reachable via a different control flow path.
     # Check: (a) previous stmt is a terminator, OR (b) this idx is a jump target.
     if ctx.last_stmt_was_stub && idx > 1
         _should_reset = false
-        _prev_stmt = ctx.code_info.code[idx - 1]
-        if _prev_stmt isa Core.GotoNode || _prev_stmt isa Core.GotoIfNot || _prev_stmt isa Core.ReturnNode
+        _prev_node = ctx.nir[idx - 1].node
+        if _prev_node isa NirGoto || _prev_node isa NirGotoIfNot || _prev_node isa NirReturn
             _should_reset = true
         else
-            # Check if this idx is a jump target of any GotoNode/GotoIfNot
-            for _s in ctx.code_info.code
-                if (_s isa Core.GotoIfNot && _s.dest == idx) || (_s isa Core.GotoNode && _s.label == idx)
+            # Check if this idx is a jump target of any goto
+            for _s in ctx.nir
+                _n = _s.node
+                if (_n isa NirGotoIfNot && _n.target == idx) || (_n isa NirGoto && _n.target == idx)
                     _should_reset = true
                     break
                 end
@@ -312,53 +315,52 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
         return b
     end
 
-    # Handle slot assignments in unoptimized IR (may_optimize=false).
-    # Unwrap Expr(:(=), SlotNumber(n), inner_expr) → compile inner_expr, store to slot local.
-    _slot_assign_id = 0  # SlotNumber.id if this is a slot assignment, 0 otherwise
-    if stmt isa Expr && stmt.head === :(=) && length(stmt.args) >= 2 && stmt.args[1] isa Core.SlotNumber
-        _slot_assign_id = stmt.args[1].id
-        stmt = stmt.args[2]  # Unwrap to inner expression
-    end
+    # Unoptimized IR (may_optimize=false) assigns into a slot: the boundary already
+    # separated the SlotNumber from the RHS, so `node` IS the value-producing operation.
+    _slot_assign_id = rec.slot   # SlotNumber.id if this is a slot assignment, 0 otherwise
 
     # When a slot assignment RHS is a bare value (SlotNumber, SSAValue, literal,
-    # GlobalRef), it won't match any Expr/Return/Goto handler below. Compile it directly
+    # GlobalRef), it won't match any statement handler below. Compile it directly
     # as a value so the slot LOCAL_SET at the bottom of this function has something on the stack.
-    if _slot_assign_id > 0 && !(stmt isa Expr) && !(stmt isa Core.ReturnNode) &&
-       !(stmt isa Core.GotoNode) && !(stmt isa Core.GotoIfNot) && !(stmt isa Core.PhiNode) &&
-       !(stmt isa Core.PhiCNode) && !(stmt isa Core.UpsilonNode) && !(stmt isa Core.NewvarNode)
+    if _slot_assign_id > 0 && (node isa NirSSA || node isa NirArgument || node isa NirSlot ||
+                               node isa NirGlobalRef || node isa NirLiteral)
         if haskey(ctx.slot_locals, _slot_assign_id)
             local slot_idx = ctx.slot_locals[_slot_assign_id]
             local slot_type = ctx.locals[slot_idx - ctx.n_params + 1]
-            emit_value!(b, stmt, ctx, slot_type)   # THE typed value channel
+            emit_value!(b, node, ctx, slot_type)   # THE typed value channel
             local_set!(b, slot_idx)
         end
         return b   # `bytes` untouched on this path
     end
 
-    if stmt isa Core.ReturnNode
-        if isdefined(stmt, :val)
-            emit_return_coerced!(b, stmt.val, ctx)
+    if node isa NirReturn
+        if node.value !== nothing
+            emit_return_coerced!(b, node.value, ctx)
         else
             return_!(b)
         end
-    elseif stmt isa Core.GotoNode
+    elseif node isa NirGoto
         # Unconditional branch - handled by control flow analysis
 
-    elseif stmt isa Core.GotoIfNot
+    elseif node isa NirGotoIfNot
         # Conditional branch - handled by control flow analysis
 
-    elseif stmt isa Core.UpsilonNode
+    elseif node isa NirPhi
+        # A phi is materialized by its EDGES (set_phi_locals_for_edge!), never here.
+
+    elseif node isa NirUpsilon
         # UpsilonNode stores a value for later PhiCNode retrieval.
         # Semantics: local.set into the associated PhiCNode's local.
         # The association is: PhiCNode.values contains SSAValue(this_upsilon_idx).
         # Find which PhiCNode references this UpsilonNode.
-        if isdefined(stmt, :val)
-            for (phic_idx, phic_stmt) in enumerate(ctx.code_info.code)
-                if phic_stmt isa Core.PhiCNode && haskey(ctx.phi_locals, phic_idx)
-                    for v in phic_stmt.values
-                        if v isa Core.SSAValue && v.id == idx
+        if node.value !== nothing
+            for (phic_idx, phic_rec) in enumerate(ctx.nir)
+                local phic = phic_rec.node
+                if phic isa NirPhiC && haskey(ctx.phi_locals, phic_idx)
+                    for v in phic.values
+                        if v isa NirSSA && v.id == idx
                             # The upsilon store wraps to the PhiC local's declared type
-                            emit_value!(b, stmt.val, ctx,
+                            emit_value!(b, node.value, ctx,
                                         ctx.locals[ctx.phi_locals[phic_idx] - ctx.n_params + 1])
                             local_set!(b, ctx.phi_locals[phic_idx])
                             @goto upsilon_done
@@ -370,12 +372,12 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
         @label upsilon_done
         # If no PhiCNode found, UpsilonNode is dead — no-op
 
-    elseif stmt isa Core.PhiCNode
+    elseif node isa NirPhiC
         # PhiCNode is a no-op at the statement level.
         # The value was already stored into phi_locals[idx] by the associated UpsilonNode.
         # When other statements use SSAValue(idx), compile_value reads from phi_locals[idx].
 
-    elseif stmt isa Core.PiNode
+    elseif node isa NirPi
         # A PiNode narrows an existing value. Like dart's wrap/convertType path,
         # preserve that value and coerce its emitted physical type; never repair a
         # failed narrowing with zero or ref.null.
@@ -385,17 +387,17 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
             local_array_idx = local_idx - ctx.n_params + 1
             if !(1 <= local_array_idx <= length(ctx.locals))
                 record_unsupported!(ctx, :unsupported_type,
-                    "PiNode local has no declared Wasm type"; idx=idx, detail=stmt)
+                    "PiNode local has no declared Wasm type"; idx=idx, detail=nir_value_raw(rec))
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
             end
             expected = ctx.locals[local_array_idx]
-            value_builder = _compile_value_b(stmt.val, ctx)
+            value_builder = _compile_value_b(node.value, ctx)
             if length(value_builder.v.stack) != 1
                 record_unsupported!(ctx, :unsupported_type,
                     "PiNode source must emit exactly one value, emitted $(length(value_builder.v.stack))";
-                    idx=idx, detail=stmt)
+                    idx=idx, detail=nir_value_raw(rec))
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
@@ -407,25 +409,25 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
             local_set!(b, local_idx)
         end
 
-    elseif stmt isa Core.NewvarNode
+    elseif node isa NirNewvar
         # Unoptimized IR slot initialization — no-op in WASM
         # (WASM locals are default-initialized to null/zero)
 
-    elseif stmt isa Core.EnterNode
+    elseif node isa NirEnter
         # Deliberately emits no instruction here.  THE stackifier owns the
         # control boundary: after this block it opens the typed try_table and
         # catch landing for this EnterNode (stackified.jl: try_open_at).  Keeping
         # region structure out of the scalar statement visitor gives exceptions
         # one lowering route, mirroring dart2wasm's visitTryCatch ownership.
 
-    elseif stmt isa GlobalRef
-        # MIGRATED: straight-line global.get/local.set via typed methods on `b`; the
-        # value_bytes safety-scan stays a local buffer (byte-inspecting) then bridges via
-        # emit_raw!. `bytes` stays empty for this branch (trailing common code appends after).
-        isdefined(stmt.mod, stmt.name) || record_unsupported!(ctx, :unsupported_global,
-            "GlobalRef $(stmt) is not defined in its source module"; idx=idx, detail=stmt,
+    elseif node isa NirGlobalRef
+        # A bare global read as a statement: straight-line global.get/local.set via typed
+        # methods on `b`. `bytes` stays empty for this branch (trailing common code appends after).
+        local _gr = GlobalRef(node.mod, node.name)
+        node.bound || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(_gr) is not defined in its source module"; idx=idx, detail=_gr,
             soundness_fatal=true)
-        val = getfield(stmt.mod, stmt.name)
+        val = node.value
         local _gv_b = _compile_value_b(val, ctx)
         append_builder!(b, _gv_b)
         if haskey(ctx.ssa_locals, idx) && !isempty(_gv_b.v.stack)
@@ -438,10 +440,11 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
             local_set!(b, local_idx)
         end
 
-    elseif stmt isa Expr
+    elseif _nir_from_expr(node)
         # Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/HISTORY.md#exceptions-and-structured-control-flow).
+        local stmt = nir_value_raw(rec)   # transitional: what compile_call!/compile_invoke! still take
         local _sf = _ctx_builder(ctx, "compile_statement.frag")
         set_context!(_sf, first(string(stmt), 80))   # errors name the stmt
         # Statements legitimately consume values earlier statements left on
@@ -451,32 +454,32 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
         _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # reset before dispatch
-        if stmt.head === :call
+        if node isa NirCall
             compile_call!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
             if tracing(:mm) && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
                 println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
             end
-        elseif stmt.head === :invoke
+        elseif node isa NirInvoke
             compile_invoke!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
-        elseif stmt.head === :new
+        elseif node isa NirNew
             # Struct construction: %new(Type, args...)
             compile_new!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
-        elseif stmt.head === :boundscheck
+        elseif node isa NirBoundscheck
             # Compile to the expr's REAL value (true unless @inbounds).
             # We previously pushed false ("wasm has its own bounds checking"), but
             # wasm's array.get check is an UNCATCHABLE TRAP — skipping Julia's own
             # check branch meant getindex OOB could never reach the catchable
             # throw_boundserror path (gap 3ead683e6ff9 family / divergent_throw).
-            i32_const!(_sf, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
+            i32_const!(_sf, node.flag === false ? 0 : 1)
             stmt_bytes = builder_code(_sf)
-        elseif stmt.head === :foreigncall
+        elseif node isa NirForeignCall
             # Handle foreign calls - specifically for Vector allocation
             compile_foreigncall!(_sf, stmt, idx, ctx)
             stmt_bytes = builder_code(_sf)
-        elseif stmt.head === :the_exception
+        elseif node isa NirTheException
             # Retrieve the caught exception value from the $current_exn global.
             # Julia IR emits :the_exception in catch blocks to get the caught exception.
             # We stash exception values into a (mut anyref) global before throw,
@@ -513,18 +516,15 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
                 ref_cast!(_sf, Int64(_exn_local_wasm.type_idx), true)
             end
             stmt_bytes = builder_code(_sf)
-        elseif stmt.head === :leave
+        elseif node isa NirLeave
             # Exception handling: Leave try block — no-op in WASM
             # (try_table control flow handles this structurally)
-        elseif stmt.head === :pop_exception
+        elseif node isa NirPopException
             # Exception handling: Pop exception from handler stack — no-op in WASM
-        elseif stmt.head === :gc_preserve_begin
-            # GC preservation — no-op in WasmGC (browser GC handles this)
-        elseif stmt.head === :gc_preserve_end
-            # GC preservation end — no-op in WasmGC
-        elseif stmt.head === :loopinfo
-            # Loop optimization hint (e.g., @simd) — no-op in Wasm
-        elseif (_tu_node = ctx.nir[idx].node) isa NirThrowUndefIfNot
+        elseif node isa NirNoOp
+            # A hint with no runtime effect: :gc_preserve_begin/:gc_preserve_end (WasmGC's
+            # host collector owns liveness) and :loopinfo (@simd).
+        elseif (_tu_node = node) isa NirThrowUndefIfNot
             # Julia: `cond || throw(UndefVarError(var, :local))` for a captured
             # variable that may be unassigned. The exception is the exact Julia
             # object, thrown through the one exception tag (never a skipped check
@@ -534,14 +534,14 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
             local _tu_info = register_struct_type!(ctx.mod, ctx.type_registry, UndefVarError)
             _tu_info === nothing && error("UndefVarError layout is unavailable")
             local _tu_fields = ctx.mod.types[_tu_info.wasm_type_idx + 1].fields
-            emit_value!(_sf, nir_operand(_tu_node.cond), ctx, I32)
+            emit_value!(_sf, _tu_node.cond, ctx, I32)
             num!(_sf, Opcode.I32_EQZ)
             if_!(_sf)
             emit_struct_prefix!(_sf, ctx.type_registry, UndefVarError, _tu_info)
-            emit_value!(_sf, QuoteNode(_tu_node.var), ctx,
+            emit_value!(_sf, NirLiteral(_tu_node.var), ctx,
                         _tu_fields[Int(wasm_field_idx(_tu_info, 1)) + 1].valtype; from_julia=Symbol)
             i64_const!(_sf, Int64(WASM_WORLD_AGE))
-            emit_value!(_sf, QuoteNode(:local), ctx,
+            emit_value!(_sf, NirLiteral(:local), ctx,
                         _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
             struct_new!(_sf, _tu_info.wasm_type_idx)
             global_set!(_sf, _tu_exn)
@@ -551,13 +551,15 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
             end_block!(_sf)
             stmt_bytes = builder_code(_sf)
         else
-            # Every other Expr head (e.g. :splatnew, :copyast) has zero lowering.
-            # Falling through silently here would leave `stmt_bytes` empty and
+            # NirUnsupported: every other Expr head (e.g. :splatnew, :copyast) has zero
+            # lowering. Falling through silently here would leave `stmt_bytes` empty and
             # this statement's SSA local unstored — a silently WRONG module,
             # not a compile failure. Reject loudly instead (dart's structured
             # DiagnosticReporter shape; L8 "no silent traps").
-            record_unsupported!(ctx, :ir_node, "IR head `:$(stmt.head)` has no lowering";
-                                idx=idx, detail=stmt)
+            # formal(dev/formal/NirBuild.tla): claim (5) — a NirUnsupported node is routed
+            # to record_unsupported!, never reinterpreted as a no-op.
+            record_unsupported!(ctx, :ir_node, "IR head `:$(node.head)` has no lowering";
+                                idx=idx, detail=node.raw)
             unreachable!(_sf)  # structural trap after recorded unsupported
             stmt_bytes = builder_code(_sf)
             ctx.last_stmt_was_stub = true
@@ -578,9 +580,8 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
         # MemoryRef is a virtual two-operand value `(memory, offset)`. Its
         # definition has no runtime effect and its consumer re-emits both
         # operands, so materializing the definition would duplicate the pair.
-        pure_virtual_memoryref = !haskey(ctx.ssa_locals, idx) && stmt.head === :call &&
-            !isempty(stmt.args) && stmt.args[1] isa GlobalRef &&
-            stmt.args[1].name === :memoryrefnew
+        pure_virtual_memoryref = !haskey(ctx.ssa_locals, idx) &&
+            node isa NirCall && node.callee === Core.memoryrefnew
         (pure_recomputed_tuple || pure_virtual_memoryref) || append_builder!(b, _sf)
 
         # If the statement type is Union{} (bottom/never returns), emit unreachable
@@ -643,8 +644,7 @@ function _compile_statement_located!(b::InstrBuilder, stmt, idx::Int, ctx::Abstr
     if ctx.func_idx == 8
         local n_drops = count(i -> i isa InstrIR.Drop, b.instrs)
         if n_drops >= 2
-            stmt_str = stmt isa Expr ? string(stmt)[1:min(80, length(string(stmt)))] : string(typeof(stmt))
-            @debug "STMT $idx has $n_drops DROPs: $stmt_str"
+            @debug "STMT $idx has $n_drops DROPs: $(first(string(nir_value_raw(rec)), 80))"
         end
     end
 
