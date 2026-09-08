@@ -977,7 +977,7 @@ end
 # function) and `Core.ifelse` (the builtin) are DIFFERENT objects — the retired
 # `is_func(func, :ifelse)` matched either by bare name, so both are keys here.
 # L38_no_known_value_substitutions pins this body's two reject messages.
-function _lower_ifelse!(b, fb, ctx, expr, idx, args, callee)
+function _lower_ifelse!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) == 3 || return nothing
     # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
     # Julia ifelse(cond, true_val, false_val)
@@ -1066,7 +1066,7 @@ end
 # (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
 # Self-contained: emits its own operand through `emit_value!`.
 # L57_exact_typeassert_exception pins this body's `_emit_typeerror_throw!` call.
-function _lower_typeassert!(b, fb, ctx, expr, idx, args, callee)
+function _lower_typeassert!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
     if length(args) >= 1
         local _ta_target = length(args) >= 2 ? (args[2] isa Type ? args[2] :
             args[2] isa GlobalRef ? Core.eval(args[2].mod, args[2].name) : nothing) : nothing
@@ -1144,7 +1144,7 @@ end
 # an unresolved SSAValue is not a registry key. So consulting the funnel once,
 # up front, preserves each guard's relative order exactly.
 
-function _lower_getfield_layout!(b, fb, ctx, expr, idx, args)
+function _lower_getfield_layout!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
     # pointer is compile-time host metadata; its loads are folded in
     # _try_fold_layout_pointerref. Represent the opaque, non-null layout handle
@@ -1162,7 +1162,7 @@ function _lower_getfield_layout!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_getfield_signal_read!(b, fb, ctx, expr, idx, args)
+function _lower_getfield_signal_read!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
     # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
@@ -1182,7 +1182,7 @@ function _lower_getfield_signal_read!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_setfield_signal_write!(b, fb, ctx, expr, idx, args)
+function _lower_setfield_signal_write!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for signal write: setfield!(Signal, :value, x) -> global.set
     # This is detected by analyze_signal_captures! and stored in signal_ssa_setters
     # ONLY applies to actual setfield!/setproperty! calls (WasmGlobal pattern), NOT closure field access
@@ -1224,7 +1224,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_getfield_closure_capture!(b, fb, ctx, expr, idx, args)
+function _lower_getfield_closure_capture!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for getfield on closure (_1) accessing captured signal fields
     # These produce intermediate SSA values (getter/setter functions)
     # Skip them - the actual read/write happens when the function is invoked
@@ -1256,7 +1256,7 @@ function _lower_getfield_closure_capture!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_getfield_signal_skip!(b, fb, ctx, expr, idx, args)
+function _lower_getfield_signal_skip!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Skip getfield(CompilableSignal/Setter, :signal) - intermediate step
     # We track this in analyze_signal_captures! but don't need to emit anything
     # IMPORTANT: Only skip for actual CompilableSignal/Setter types, not any struct with a :signal field
@@ -1276,7 +1276,7 @@ function _lower_getfield_signal_skip!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_getfield_general!(b, fb, ctx, expr, idx, args)
+function _lower_getfield_general!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for getfield/getproperty - struct/tuple field access
     # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
     # rather than Core.getfield(obj, :field)
@@ -1847,7 +1847,7 @@ function _lower_getfield_general!(b, fb, ctx, expr, idx, args)
 end
 
 
-function _lower_setfield_general!(b, fb, ctx, expr, idx, args)
+function _lower_setfield_general!(b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for setfield!/setproperty! - mutable struct field assignment
     # Also handles WasmGlobal (:value -> global.set)
     # In newer Julia, obj.field = val compiles to Base.setproperty!(obj, :field, val)
@@ -2039,20 +2039,246 @@ end
 
 # `Core.getfield` (=== `Base.getfield`, measured): the two raw-identity guards
 # are its own, so they run here and nowhere else.
-_lower_getfield!(b, fb, ctx, expr, idx, args, callee) =
+_lower_getfield!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
                   _lower_getfield_closure_capture!, _lower_getfield_signal_skip!,
                   _lower_getfield_general!), b, fb, ctx, expr, idx, args)
 
 # `Base.getproperty` / `Core.getproperty` (DIFFERENT objects, measured): the
 # raw-identity guards never matched `getproperty`, so they are absent here.
-_lower_getproperty!(b, fb, ctx, expr, idx, args, callee) =
+_lower_getproperty!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
                   _lower_getfield_general!), b, fb, ctx, expr, idx, args)
 
-_lower_setfield!(b, fb, ctx, expr, idx, args, callee) =
+_lower_setfield!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_setfield_signal_write!, _lower_setfield_general!),
                  b, fb, ctx, expr, idx, args)
+
+# ---- The self-contained operator entries -----------------------------------
+# parity(intrinsics.dart:995 `_binaryOperatorMap` / :1018 the direct-call
+# funnel): each of these emits its OWN operands through `emit_call_operand!`
+# before choosing an opcode, exactly as a dart intrinsic wraps
+# `node.arguments.positional[i]` itself. They were the last arms that read
+# operands someone else had pushed (`compile_call!`'s generic pre-push loop),
+# which is why they could not be identity-keyed until now.
+
+"""
+    _call_operand_shape(args, ctx) -> (arg_type, is_32bit, is_128bit)
+
+THE operand-width classification for a call, read from the FIRST argument's
+Julia type BEFORE any operand is emitted (dart's `node.getStaticType`, the
+pre-emit query that picks which `_binaryOperatorMap` row applies). One
+definition, shared by `compile_call!`'s own ladder and by the self-contained
+operator entries here, so the two can never disagree about a call's width.
+"""
+function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
+    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
+    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
+               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
+               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
+    is_128bit = arg_type === Int128 || arg_type === UInt128
+    return arg_type, is_32bit, is_128bit
+end
+
+# `===` / `!==`. Guard 1 is the string/typeof/nothing special-casing
+# (`_lower_egal_early!`); guard 2 is the general width-keyed comparison, which
+# needs both operands on the stack — INCLUDING Type-valued ones, since for
+# these two callees a Type IS the runtime value being compared.
+function _lower_egal!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
+    local early = _lower_egal_early!(b, fb, ctx, expr, idx, args, callee)
+    early === nothing || return early
+    local arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
+    emit_call_operands!(fb, ctx, args; include_types=true)
+    if callee === Core.:(!==)
+    if is_128bit
+        emit_int128_ne!(fb, ctx, arg_type)
+    elseif arg_type === Float64
+        num!(fb, Opcode.F64_NE)
+    elseif arg_type === Float32
+        num!(fb, Opcode.F32_NE)
+    else
+        local arg2_type_ne = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
+        local arg1_is_ref_ne = is_ref_type_or_union(arg_type) && arg_type !== Nothing
+        local arg2_is_ref_ne = is_ref_type_or_union(arg2_type_ne) && arg2_type_ne !== Nothing
+
+        # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
+        # they can't be equal, so !== is always true. Drop both and return true.
+        if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
+            drop!(fb); drop!(fb); i32_const!(fb, 1)
+            return append_builder!(b, fb)
+        end
+
+        # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
+        if arg_type === Nothing && arg2_type_ne === Nothing
+            # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
+            local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
+            local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
+            local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
+            local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
+            # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
+            if a1_ref_ne != a2_ref_ne
+                drop!(fb); drop!(fb); i32_const!(fb, 1)
+                return append_builder!(b, fb)
+            elseif a1_ref_ne && a2_ref_ne
+                # Both refs - use ref.eq then negate
+                num!(fb, Opcode.REF_EQ)
+                num!(fb, Opcode.I32_EQZ)
+                return append_builder!(b, fb)
+            end
+            # Both numeric - fall through to normal handling
+        end
+
+        # Check actual Wasm representation for Nothing-typed args
+        local arg1_wasm_is_ref_ne = arg1_is_ref_ne
+        local arg2_wasm_is_ref_ne = arg2_is_ref_ne
+        local arg1_is_externref_ne = (arg_type === Any)
+        local arg2_is_externref_ne = (arg2_type_ne === Any)
+        # Check Wasm representation for any potentially mixed comparison
+        if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
+            # For Nothing-typed args, determine ref-ness from the inferred value type
+            # (dart2wasm carries the type with the value rather than scanning bytes).
+            # `nothing` is treated as a ref here (it may be ref.null when compared
+            # against a ref-typed Nothing local).
+            if length(args) >= 1 && arg_type === Nothing
+                arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
+                                      _wt_is_ref(static_wasm_type(args[1], ctx))
+            end
+            if length(args) >= 2 && arg2_type_ne === Nothing
+                arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
+                                      _wt_is_ref(static_wasm_type(args[2], ctx))
+            end
+        end
+        # BOTH args must be ref types to use ref.eq
+        if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
+            # Convert externref → eqref before ref.eq (same pattern as === handler)
+            local _neb = _ctx_builder(ctx, "compile_call")
+            if arg1_is_externref_ne && arg2_is_externref_ne
+                local tmp_ne = allocate_local!(ctx, EqRef)
+                any_convert_extern!(_neb)
+                ref_cast!(_neb, EqRef, true)
+                local_set!(_neb, tmp_ne)
+                any_convert_extern!(_neb)
+                ref_cast!(_neb, EqRef, true)
+                local_get!(_neb, tmp_ne)
+            elseif arg1_is_externref_ne
+                local tmp_ne2 = allocate_local!(ctx, EqRef)
+                local_set!(_neb, tmp_ne2)
+                any_convert_extern!(_neb)
+                ref_cast!(_neb, EqRef, true)
+                local_get!(_neb, tmp_ne2)
+            elseif arg2_is_externref_ne
+                any_convert_extern!(_neb)
+                ref_cast!(_neb, EqRef, true)
+            end
+            num!(_neb, Opcode.REF_EQ)
+            num!(_neb, Opcode.I32_EQZ)  # Negate for !==
+            append_builder!(fb, _neb)
+        elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
+            # Comparing ref with non-ref: type mismatch, always not-equal
+            drop!(fb); drop!(fb); i32_const!(fb, 1)
+        elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
+            # Comparing non-ref with ref: type mismatch, always not-equal
+            drop!(fb); drop!(fb); i32_const!(fb, 1)
+        elseif !is_32bit && arg2_type_ne === Nothing
+            # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
+            num!(fb, Opcode.I64_EXTEND_I32_S)
+            num!(fb, Opcode.I64_NE)
+        elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
+            # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
+            drop!(fb); drop!(fb); i32_const!(fb, 1)
+        else
+            num!(fb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
+        end
+    end
+    else
+        _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    end
+    return append_builder!(b, fb)
+end
+
+# The high-level operator fallback: a `+`/`-`/`*` call that reached codegen
+# unspecialised (a closure-compiled body presents `Base.:+` as a plain call,
+# not an invoke). ONE (callee → per-width opcode) table replaces three copies
+# of the same ladder; `*` additionally routes String/Symbol operands to
+# concatenation. parity(intrinsics.dart:995 `_binaryOperatorMap`, which is
+# likewise a table from (receiver type, operator) to one opcode.)
+const _OPERATOR_OPCODES = IdDict{Any,NamedTuple{(:f32, :f64, :i32, :i64),NTuple{4,UInt8}}}(
+    (+) => (f32=Opcode.F32_ADD, f64=Opcode.F64_ADD, i32=Opcode.I32_ADD, i64=Opcode.I64_ADD),
+    (-) => (f32=Opcode.F32_SUB, f64=Opcode.F64_SUB, i32=Opcode.I32_SUB, i64=Opcode.I64_SUB),
+    (*) => (f32=Opcode.F32_MUL, f64=Opcode.F64_MUL, i32=Opcode.I32_MUL, i64=Opcode.I64_MUL),
+)
+
+function _lower_operator!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
+    local ops = _OPERATOR_OPCODES[callee]
+    local arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
+
+    # The operands, plus the anyref unbox the retired pre-push loop applied to
+    # the generic arithmetic operators: dynamic call sites with everything
+    # typed Any (e.g. `4 - %foldl` in Random.hash_seed) default to the i64
+    # opcodes but would consume raw anyref.
+    local boxed_operand_unboxed = false
+    for arg in args
+        _is_type_operand(arg) && continue
+        emit_call_operand!(fb, ctx, arg)
+        if _is_boxed_numeric_operand(arg, ctx)
+            emit_classid_unbox!(fb, ctx, is_32bit ? I32 : I64; nullable=true)
+            boxed_operand_unboxed = true
+        end
+    end
+
+    # String/Symbol `*` is CONCATENATION, not arithmetic: the plain-call path
+    # (closure-compiled bodies present concat as `call *`, not invoke) fell
+    # into the numeric branch and emitted i64.mul on two string refs — the
+    # E-003 island's fn#107 validation failure. Route to the same
+    # compile_string_concat the invoke path uses; the operands are on `fb`, so
+    # rebuild the fragment (pattern).
+    local _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
+    local _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
+    if callee === (*) && length(args) == 2 &&
+       (_conc1 === String || _conc1 === Symbol) && (_conc2 === String || _conc2 === Symbol)
+        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        append_builder!(fb, compile_string_concat_many_b([args[1], args[2]], ctx))
+    elseif arg_type === Float32
+        num!(fb, ops.f32)
+    elseif arg_type === Float64
+        num!(fb, ops.f64)
+    elseif is_32bit
+        num!(fb, ops.i32)
+    else
+        num!(fb, ops.i64)
+    end
+
+    # parity(translator.dart:1621 Translator.convertType): the symmetric RESULT
+    # side of the anyref-OPERAND unbox above — a numeric arith result flowing
+    # into a ref-typed SSA local boxes through THE one producer (the
+    # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store).
+    if boxed_operand_unboxed && !ctx.last_stmt_was_stub
+        local _dl = get(ctx.ssa_locals, idx, nothing)
+        if _dl !== nothing
+            local _doff = _dl - ctx.n_params
+            if _doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef
+                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
+                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
+                    record_unsupported!(ctx, :unsupported_type,
+                        "boxed arithmetic result lacks a concrete Julia source type";
+                        idx=idx, detail=expr)
+                emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
+            end
+        end
+    end
+    return append_builder!(b, fb)
+end
+
+# `isa(value, T)` — type checking for Union discrimination. `T` is a
+# compile-time Type parameter (skipped by the shared operand rule), so exactly
+# one operand reaches `_compile_call_isa`, which is what its `_sub_builder(fb,
+# ctx, "_compile_call_isa", 1)` seeds.
+function _lower_isa!(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    emit_call_operands!(fb, ctx, args)
+    _compile_call_isa(args, fb, ctx)
+    return append_builder!(b, fb)
+end
 
 # ---- Registry population ---------------------------------------------------
 # One entry per builtin identity. Aliases (e.g. isvisible/_closed_world_isvisible)
@@ -2089,8 +2315,12 @@ BUILTIN_LOWERINGS[Core.donotdelete] = _lower_donotdelete!
 BUILTIN_LOWERINGS[Core.compilerbarrier] = _lower_compilerbarrier!
 BUILTIN_LOWERINGS[Core.apply_type] = _lower_apply_type!
 BUILTIN_LOWERINGS[Core.typeof] = _lower_typeof!
-BUILTIN_LOWERINGS[Core.:(===)] = _lower_egal_early!
-BUILTIN_LOWERINGS[Core.:(!==)] = _lower_egal_early!
+BUILTIN_LOWERINGS[Core.:(===)] = _lower_egal!
+BUILTIN_LOWERINGS[Core.:(!==)] = _lower_egal!
+BUILTIN_LOWERINGS[Core.isa] = _lower_isa!                  # === Base.isa
+BUILTIN_LOWERINGS[+] = _lower_operator!
+BUILTIN_LOWERINGS[-] = _lower_operator!
+BUILTIN_LOWERINGS[*] = _lower_operator!
 BUILTIN_LOWERINGS[Core.ifelse] = _lower_ifelse!
 BUILTIN_LOWERINGS[Base.ifelse] = _lower_ifelse!
 BUILTIN_LOWERINGS[Core.typeassert] = _lower_typeassert!

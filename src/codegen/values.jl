@@ -924,6 +924,70 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Uni
     return ty
 end
 
+"""
+    _is_type_operand(arg) -> Bool
+
+True when a call argument is a compile-time TYPE parameter rather than a runtime
+value — `sext_int(Int64, x)`'s first argument, `isa(x, T)`'s second. `===`/`!==`
+are the exception (there a Type IS the runtime value being compared), which is
+why `emit_call_operands!` takes `include_types`.
+"""
+_is_type_operand(arg)::Bool =
+    arg isa Type || (arg isa GlobalRef && isdefined(arg.mod, arg.name) &&
+                     getfield(arg.mod, arg.name) isa Type)
+
+"""
+    emit_call_operand!(b, ctx, arg) -> Union{WasmValType,Nothing}
+
+THE call-operand emission point: emit one call argument at its natural type and
+return the type it ACTUALLY pushed. parity(intrinsics.dart:995 `_binaryOperator
+Map` call sites / :1007 / :1018): in dart2wasm every intrinsic wraps its OWN
+operands (`codeGen.wrap(node.arguments.positional[i], …)`) — nothing is
+pre-pushed for it — so `compile_call!`'s generic loop and every self-contained
+`BUILTIN_LOWERINGS` entry emit through this one point instead of one of them
+inheriting the other's stack.
+"""
+emit_call_operand!(b::InstrBuilder, ctx::AbstractCompilationContext, arg)::Union{WasmValType,Nothing} =
+    emit_value!(b, arg, ctx)  # R17-floor: the operand's ACTUAL width drives the caller's normalisation
+
+"""
+    emit_call_operands!(b, ctx, args; include_types=false) -> b
+
+Every runtime operand of one call, in argument order, through
+`emit_call_operand!`; compile-time Type parameters are skipped unless
+`include_types`.
+"""
+function emit_call_operands!(b::InstrBuilder, ctx::AbstractCompilationContext, args;
+                             include_types::Bool=false)::InstrBuilder
+    for arg in args
+        (_is_type_operand(arg) && !include_types) && continue
+        emit_call_operand!(b, ctx, arg)
+    end
+    return b
+end
+
+"""
+    _is_boxed_numeric_operand(arg, ctx) -> Bool
+
+True when `arg` arrives in a physically `AnyRef` local — the erased/boxed
+operand shape a numeric operation must unbox before consuming (P4-stdlib:
+`Any`-returning callees box numerics, and `Union{Nothing,UInt64}`-style SSAs
+live in AnyRef locals). An SSA whose REFINED type is already numeric is NOT
+included: parity(translator.dart:2100 Translator.translateTypeOfLocalVariable)
+the load is THE single unbox source there, and a second unbox double-converted.
+"""
+function _is_boxed_numeric_operand(arg, ctx::AbstractCompilationContext)::Bool
+    arg isa Core.SSAValue || return false
+    _is_externref_value(arg, ctx) && return false
+    get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
+        return false
+    li = get(ctx.ssa_locals, arg.id, nothing)
+    li === nothing && (li = get(ctx.phi_locals, arg.id, nothing))
+    li === nothing && return false
+    off = li - ctx.n_params
+    return off >= 0 && off < length(ctx.locals) && ctx.locals[off + 1] === AnyRef
+end
+
 function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)::Tuple{InstrBuilder,Vector{WasmValType}}
     saved_n_params = ctx.n_params
     saved_locals = ctx.locals
