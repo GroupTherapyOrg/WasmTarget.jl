@@ -138,6 +138,11 @@ genuinely dynamic ⇒ anyref-boxed, dart2wasm's top-type field). Mirrors dart2wa
 field by the variable's own type — reconstructing what Julia erased. F3 L0; not yet wired
 (byte-identical). See dev/HISTORY.md#closures-and-dynamic-dispatch.
 """
+# formal(dev/formal/BoxJoin.tla): the join below is SOUND (a concrete type is chosen only
+# when every write the box can ever receive, any nesting depth, agrees on it), order-
+# independent, and never lets an invisible write narrow the cell — provided closure-write
+# discovery is transitive. It is currently ONE HOP ONLY (_f3_capturing_closure_bodies below
+# never recurses into a discovered closure's own body), the documented gap TLC finds.
 function box_contents_type(code, ssa_types, box_id::Int)::Union{Type,Nothing}
     # 1) enclosing init write(s)
     init = nothing
