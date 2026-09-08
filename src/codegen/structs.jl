@@ -834,26 +834,49 @@ end
 is_vararg_tuple_type(@nospecialize(T)) =
     T isa DataType && T <: Tuple && any(p -> typeof(p) === Core.TypeofVararg, T.parameters)
 
-"""True only for the homogeneous runtime tuple layout this backend represents."""
+"""
+True only for the homogeneous runtime tuple layout this backend represents:
+`Tuple{Vararg{E}}` with `E` concrete, or its non-empty narrowing `Tuple{E, …, Vararg{E}}`
+(what a `typeassert`/PiNode leaves after `isempty` is ruled out) — the same runtime-length
+value, so the same layout (`runtime_vararg_canonical`).
+"""
 function is_runtime_vararg_tuple_type(@nospecialize(T))
-    (T isa DataType && T <: Tuple && length(T.parameters) == 1) || return false
-    local v = T.parameters[1]
+    (T isa DataType && T <: Tuple && length(T.parameters) >= 1) || return false
+    local v = T.parameters[end]
     typeof(v) === Core.TypeofVararg || return false
     isdefined(v, :T) || return false
-    return v.T isa Type && isconcretetype(v.T)
+    (v.T isa Type && isconcretetype(v.T)) || return false
+    for i in 1:length(T.parameters) - 1
+        T.parameters[i] === v.T || return false
+    end
+    return true
+end
+
+"""The one layout key for a runtime Vararg tuple type: `Tuple{Vararg{E}}`."""
+function runtime_vararg_canonical(T::DataType)::DataType
+    is_runtime_vararg_tuple_type(T) ||
+        error("no homogeneous runtime Vararg tuple representation for $T")
+    return Tuple{Vararg{T.parameters[end].T}}
 end
 
 function vararg_tuple_eltype(T::DataType)::Type
     is_runtime_vararg_tuple_type(T) ||
         error("no homogeneous runtime Vararg tuple representation for $T")
-    return T.parameters[1].T
+    return T.parameters[end].T
 end
 
-"""Register the runtime-length tuple wrapper `{Object, data, size}`."""
+"""Register the runtime-length tuple wrapper `{Object, data, size}` (one struct per element
+type; a non-empty narrowing of the same layout aliases the canonical entry)."""
 function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     is_runtime_vararg_tuple_type(T) ||
         error("cannot register unsupported runtime Vararg tuple layout $T")
     haskey(registry.structs, T) && return registry.structs[T]
+    local C = runtime_vararg_canonical(T)
+    if C !== T
+        local cinfo = register_vararg_tuple_type!(mod, registry, C)
+        registry.structs[T] = cinfo
+        return cinfo
+    end
     local E = vararg_tuple_eltype(T)
     local size_type = Tuple{Int64}
     local size_info = haskey(registry.structs, size_type) ? registry.structs[size_type] :

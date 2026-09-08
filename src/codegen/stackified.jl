@@ -121,6 +121,102 @@ function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{
     return out
 end
 
+"""
+    _thread_backward_trampolines!(blocks, code, try_regions) -> blocks
+
+Julia's optimizer may place a phi's predecessor AFTER the phi block as a one-statement
+`goto` trampoline: `%39 goto %53 if not …` / `%44 = φ(%43 => …, %53 => …)` / `%53 goto %44`.
+By linear order the edge 53→44 looks like a loop back edge, but the "header" does not
+dominate the "latch" (block 9 reaches 53 without passing 44): it is a forward diamond
+laid out backwards, and a `loop` opened at 44 would have to contain a block entered from
+outside it. Such an edge is threaded away at the IR level — every predecessor that
+jumps to the trampoline jumps to its target instead, and the phi edges keyed by the
+trampoline's terminator are re-keyed to each predecessor's — after which the trampoline
+is unreachable and drops out by reachability like any dead block. Only explicit jumps
+are threaded (a fall-through into a trampoline is left for the stackifier's own error).
+Kernel never produces this shape; it is a Julia-layout quarantine
+(parity(quarantine: Julia IR block order)).
+"""
+function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, code, try_regions)::Vector{BasicBlock}
+    region_bounds = Set{Int}()
+    for r in try_regions
+        push!(region_bounds, r.enter_idx); push!(region_bounds, r.catch_dest)
+    end
+    # fast path: no one-statement goto block that jumps backwards → nothing to thread
+    any(b -> b.terminator isa Core.GotoNode && b.start_idx == b.end_idx &&
+             b.terminator.label < b.start_idx, blocks) || return blocks
+    for _ in 1:16   # each round threads one trampoline and re-derives the CFG
+        n = length(blocks)
+        stmt_to_block = Dict{Int,Int}()
+        for (bi, b) in enumerate(blocks), i in b.start_idx:b.end_idx
+            stmt_to_block[i] = bi
+        end
+        succs = [Int[] for _ in 1:n]; preds = [Int[] for _ in 1:n]
+        for (bi, b) in enumerate(blocks)
+            t = b.terminator
+            if t isa Core.GotoIfNot
+                bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
+                d = get(stmt_to_block, t.dest, nothing)
+                d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
+            elseif t isa Core.GotoNode
+                d = get(stmt_to_block, t.label, nothing)
+                d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
+            elseif !(t isa Core.ReturnNode)
+                bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
+            end
+        end
+        # dominators over the raw CFG (regions' catch edges are irrelevant to this shape)
+        dom = [Set{Int}(1:n) for _ in 1:n]; dom[1] = Set([1])
+        changed = true
+        while changed
+            changed = false
+            for bi in 2:n
+                isempty(preds[bi]) && continue
+                d = copy(dom[preds[bi][1]])
+                for p in Iterators.drop(preds[bi], 1); intersect!(d, dom[p]); end
+                push!(d, bi)
+                d == dom[bi] || (dom[bi] = d; changed = true)
+            end
+        end
+        threaded = false
+        for (s, b) in enumerate(blocks)
+            t = b.terminator
+            (t isa Core.GotoNode && b.start_idx == b.end_idx) || continue   # a pure goto block
+            d = get(stmt_to_block, t.label, nothing)
+            (d !== nothing && d <= s && !(d in dom[s])) || continue           # backward, not a loop
+            isempty(preds[s]) && continue
+            (b.start_idx in region_bounds || t.label in region_bounds) && continue
+            all(p -> (pt = blocks[p].terminator; (pt isa Core.GotoNode && pt.label == b.start_idx) ||
+                      (pt isa Core.GotoIfNot && pt.dest == b.start_idx)), preds[s]) || continue
+            # re-key the target's phi edges from the trampoline to each predecessor
+            for i in blocks[d].start_idx:blocks[d].end_idx
+                ph = code[i]
+                ph isa Core.PhiNode || continue
+                k = findfirst(==(b.end_idx), ph.edges)
+                k === nothing && continue
+                edges = Any[ph.edges...]; values = Any[]
+                for j in eachindex(ph.edges); push!(values, isassigned(ph.values, j) ? ph.values[j] : nothing); end
+                v = values[k]
+                deleteat!(edges, k); deleteat!(values, k)
+                for p in preds[s]
+                    push!(edges, blocks[p].end_idx); push!(values, v)
+                end
+                code[i] = Core.PhiNode(Int32[e for e in edges], values)
+            end
+            for p in preds[s]
+                pb = blocks[p]; pt = pb.terminator
+                nt = pt isa Core.GotoNode ? Core.GotoNode(t.label) : Core.GotoIfNot(pt.cond, t.label)
+                code[pb.end_idx] = nt
+                blocks[p] = BasicBlock(pb.start_idx, pb.end_idx, nt)
+            end
+            threaded = true
+            break
+        end
+        threaded || break
+    end
+    return blocks
+end
+
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder
@@ -133,6 +229,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         ensure_exception_tag!(ctx.mod)
         ensure_exception_global!(ctx.mod)
     end
+    blocks = _thread_backward_trampolines!(blocks, code, try_regions)
     # ========================================================================
     # STEP 0: FOLD THE ALWAYS-TAKEN BOUNDSCHECK BRANCHES
     # ========================================================================
@@ -279,6 +376,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         for bi in eachindex(blocks)
             filter!(x -> !(x in dead_blocks), successors[bi])
             filter!(x -> !(x in dead_blocks), predecessors[bi])
+        end
+        # a dead block's own edges are not edges of the folded CFG either: a threaded
+        # trampoline's backward goto would otherwise still register as a loop
+        for bi in dead_blocks
+            empty!(successors[bi])
         end
     end
 
@@ -977,8 +1079,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                  label_stack)
             _lb === nothing && break
             _lb == length(label_stack) || error(
-                "crossing control regions at block $block_idx: forward label is not " *
-                "the innermost open control label (open=$(label_stack))")
+                "crossing control regions at block $block_idx " *
+                "[$(block.start_idx):$(block.end_idx)] of `$(ctx.func_ref)`: forward label is not " *
+                "the innermost open control label (open=$(Tuple{Symbol,Int}[(e[1], e[2]) for e in label_stack]))")
             deleteat!(label_stack, _lb)
             end_block!(b)  # End the block for this target
             if _debug_stackified
