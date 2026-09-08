@@ -79,7 +79,7 @@ canaries. Each phase: dart anchor, verification lane, agent tier, exit.
 ### Phase 1 — Instrument and build the inner loop **[rev: everything here measured after it exists]**
 
 1. Ratchets in `test/parity_ratchet.jl`, all with **anchored** regexes: `R19_call_is_func_arms`
-   (123) · `R20_invoke_name_arms` — `(?<![.\w])name === :\w+` (54) · `R21_foreigncall_arms` — rooted
+   (123; retired into `L124` by Phase 12F) · `R20_invoke_name_arms` — `(?<![.\w])name === :\w+` (54) · `R21_foreigncall_arms` — rooted
    on the real dispatch variable `_fc_sym`/`fname` inside `compile_foreigncall!` (23; rebaselined by
    reading the ladder, not grepping a bare word) · `R22_table_covered_ladder_arms` — keys parsed
    from **every `const INTRINSIC_*` dict** in `intrinsics_table.jl` (35 today; catches the unop
@@ -272,7 +272,7 @@ rows of `dev/CERTIFICATION.md`.
 | Exit | State |
 |---|---|
 | ratchets at 0 → locks | R22 → **L104**; R21 → **L114** (foreigncalls registry-only); R20 → **L115** (invokes registry-only); R23/R24/R26/R11 locked in Phase 2 |
-| floors, written down | R19 15 → **L116** (an explicit allowlist: every remaining `is_func` symbol with its reason — pre-resolution getglobal, the interleaved getfield/setfield! family, the L38/L57 text pins, the operand-on-stack fallbacks); R14 10 (the four mutable kinds + funnel tails); R3 93 · R5 81 · R7 57 · R27 54 · R17 29 · R15 2 hold and only fall; R29a 427 · R29b 145 seeded for the frontend migration |
+| floors, written down | R19 15 → **L116** (an explicit allowlist: every remaining `is_func` symbol with its reason — pre-resolution getglobal, the interleaved getfield/setfield! family, the L38/L57 text pins, the operand-on-stack fallbacks; Phase 12F took all fifteen to 0 and retired both into **L124**); R14 10 (the four mutable kinds + funnel tails); R3 93 · R5 81 · R7 57 · R27 54 · R17 29 · R15 2 hold and only fall; R29a 427 · R29b 145 seeded for the frontend migration |
 | locks | 102 → **114**; every one negative-tested before it counted |
 | size | src 39,052 → 38,542 lines (the frontend boundary, the registries, the dispatch guards and the formal anchors are in; the ladders, the bespoke string builders, the FNV hash, the Dict special case and the dead resolver are out); `compile_call!` 4,583 → **2,977**, `compile_invoke!` and `compile_foreigncall!` are consult sites over registries |
 | docs | `dev/PARITY_MASTER.md` (architecture rows for registries, determinism, the frontend boundary and the formal layer; roadmap items 3–5 updated), `dev/CERTIFICATION.md` (eight revalidation rows) |
@@ -358,7 +358,8 @@ UnifiedIR beyond the harness (#62334 is a draft).
 | E | steps 1–3 of the census map done | phi-edge typer/compatibility test collapsed to one definition, dead call-arg re-guess deleted (R5 81→78, `61416def`); lengths/offsets through the funnel (R3 93→79, R7 57→35, R27 54→32, `6486466c` `0ec381fe`); the funnel rejects unlisted numeric pairs (`752ad55e`) and, after Coercion.tla, cross-hierarchy pairs, lands non-null abstract sinks and nullability after bridges (`0fb73316`). Remaining: calls.jl's 32 raw ops and 33 R3 sites, the twin call-argument loops (calls.jl / invoke.jl → one `emit_call_argument!`), R5's declared-type floor consolidation — after B lands |
 | Findings closed from the models | | ClosureLayout ArityDrift → `70dbfd8a` (vtable shape read from the global, mismatch errors); BoxJoin one-hop discovery → in flight (`march/p12-boxjoin-transitive`) |
 | B, C, I, H(4) | in flight | worktrees `march/p12B-numbering`, `march/p12C-foldrule`, `march/p12I-strict`, `march/p12H-runtime` |
-| D, F, H(1-3,5), K | open | D after B (shared files); F needs calls.jl |
+| F | done | `march/p12F-callarms` — the fifteen arms are BUILTIN_LOWERINGS entries with their own guards and their own operands; ONE callee resolution and ONE consult; R19 15→0 and L116 (+ its allowlist and `_is_func_site_tally`) retire into **L124** `no_name_keyed_call_arms` = 0; L113 relocked as `consulted_once_and_first`; L38/L57/L77/L91/L25 re-pointed to `calls.jl * builtins.jl`; ConsultChain.tla's `OrderSensitivityWitness` replaced by `AllOrderInvariance` (the finding it was written to surface is closed); probes 235, 0 changed at every step |
+| D, H(1-3,5), K | open | D after B (shared files) |
 
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
