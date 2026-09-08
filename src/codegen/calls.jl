@@ -4871,7 +4871,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # Push arguments with type checking
                 for (arg_idx, arg) in enumerate(args)
                     local _cab = _compile_value_b(arg, ctx)
-                    local _cw_arg_ty = isempty(_cab.v.stack) ? nothing : _cab.v.stack[end]
                     local _cab_merged = false
                     # Check if arg type matches expected param type (the merge happens
                     # AFTER the phantom/numeric-replacement decisions — the pop! surgeries
@@ -4880,7 +4879,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                         expected_julia_type = target_info.arg_types[arg_idx]
                         expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                         actual_julia_type = call_arg_types[arg_idx]
-                        actual_wasm = get_concrete_wasm_type(actual_julia_type, ctx.mod, ctx.type_registry)
 
                         # Handle Nothing→ref conversion BEFORE type bridging.
                         # compile_value emits i32_const 0 for Nothing,
@@ -4897,21 +4895,18 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                                     ref_null!(fb, expected_wasm)
                                 end
                                 _cab_merged = true   # the phantom replaced the arg
-                                # Update actual_wasm so bridging logic below is a no-op
-                                actual_wasm = expected_wasm
                             end
                         end
 
                         # F8 (twin of the invoke collapse): the bridging chain IS
-                        # one convertType call (dart code_generator.dart:879). The tracked
-                        # emission type refines `actual`; replaced arms incl. the phantom
-                        # handled above.
-                        _cw_arg_ty isa WasmValType && actual_julia_type !== Nothing && (actual_wasm = _cw_arg_ty)
+                        # one convertType call (dart code_generator.dart:879) reading the
+                        # tracked emission type off the builder stack; the phantom arm above
+                        # already left the expected type there.
                         _cab_merged || (append_builder!(fb, _cab); _cab_merged = true)
                         coerce_stack_top!(fb, expected_wasm, ctx;
                                           from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
-                        end
-             end
+                    end
+                end
                 # Cross-function call - emit call instruction with target index
                 # Arguments already live on `fb`; emit the call and result bridge
                 # on that same authoritative builder stack. A detached fragment

@@ -762,7 +762,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if haskey(ctx.phi_locals, phi_idx)
                 phi_local_idx = ctx.phi_locals[phi_idx]
                 phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
-                edge_val_type = get_phi_edge_wasm_type(val)
+                edge_val_type = get_phi_edge_wasm_type(val, ctx)
                 if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
                     # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
                     local _ne_b = _compile_value_b(val, ctx)
@@ -780,131 +780,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             emit_value!(pvb, val, ctx)  # R17-floor: literal phi edge has no sink when destination is unavailable
         end
         return _cpv_ret()
-    end
-
-    # Helper: determine the Wasm type that a phi edge value will produce on the stack
-    function get_phi_edge_wasm_type(val)::Union{WasmValType, Nothing}
-        # Handle literal nothing — compile_value(nothing) emits i32_const 0
-        if val === nothing
-            return I32
-        end
-        # Handle GlobalRef to nothing (e.g., Core.nothing)
-        if val isa GlobalRef && val.name === :nothing
-            return I32
-        end
-        if val isa Core.SSAValue
-            # If the SSA has a local allocated, return the local's actual Wasm type.
-            # This is what local.get will actually push on the stack, which may differ
-            # from the Julia-inferred type when PiNodes narrow types.
-            if haskey(ctx.ssa_locals, val.id)
-                local_idx = ctx.ssa_locals[val.id]
-                local_array_idx = local_idx - ctx.n_params + 1
-                if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
-                    return ctx.locals[local_array_idx]
-                end
-            elseif haskey(ctx.phi_locals, val.id)
-                local_idx = ctx.phi_locals[val.id]
-                local_array_idx = local_idx - ctx.n_params + 1
-                if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
-                    return ctx.locals[local_array_idx]
-                end
-            end
-            edge_julia_type = get(ctx.ssa_types, val.id, nothing)
-            if edge_julia_type !== nothing
-                return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
-            end
-        elseif val isa Core.Argument
-            # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
-            # Julia IR uses _1 for function type (not in arg_types), _2 for first arg (arg_types[1]), etc.
-            # So arg_types index = val.n - 1 for non-closures.
-            arg_types_idx = val.n - 1  # _2 → arg_types[1], _3 → arg_types[2], etc.
-            if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
-                return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
-            end
-        elseif val isa Int64 || val isa UInt64 || val isa Int
-            return I64
-        elseif val isa Int32 || val isa UInt32 || val isa Bool || val isa UInt8 || val isa Int8 || val isa UInt16 || val isa Int16
-            return I32
-        elseif val isa Float64
-            return F64
-        elseif val isa Float32
-            return F32
-        elseif val isa Symbol || val isa String
-            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
-            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-            return ConcreteRef(str_type_idx, false)
-        elseif val isa QuoteNode
-            # QuoteNode wraps a value - recursively determine its Wasm type
-            return get_phi_edge_wasm_type(val.value)
-        elseif val isa GlobalRef
-            # Resolve GlobalRef to its actual value and determine its Wasm type.
-            # Without this, GlobalRef falls to the else branch where typeof(val) is GlobalRef
-            # and isstructtype(GlobalRef) is true, causing a false type mismatch that replaces
-            # the actual value with i32.const 0 (e.g., EOF_CHAR = Char(0xFFFFFFFF) → i32(-1)
-            # gets replaced with i32(0), breaking the JuliaSyntax Lexer).
-            if val.name === :nothing
-                return I32
-            end
-            isdefined(val.mod, val.name) || return nothing
-            return get_phi_edge_wasm_type(getfield(val.mod, val.name))
-        elseif val isa Char
-            # Char is a 4-byte primitive type, compiled as I32
-            return I32
-        elseif val isa Type
-            # Type{T} values are now represented as DataType struct refs (global.get).
-            # Use $JlDataType when hierarchy is available
-            dt_idx = get_datatype_type_idx(ctx.type_registry)
-            return ConcreteRef(dt_idx, true)
-        else
-            # For any other value, try to get its Julia type and convert to Wasm type
-            julia_type = typeof(val)
-            if isstructtype(julia_type)
-                # This will be compiled as struct_new, producing a non-nullable ref
-                return get_concrete_wasm_type(julia_type, ctx.mod, ctx.type_registry)
-            end
-        end
-        return nothing
-    end
-
-    # Helper: check if two Wasm types are compatible for local.set
-    function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)::Bool
-        if local_type == value_type
-            return true
-        end
-        # Numeric types: i32 can be widened to i64 (via i64.extend_i32_s)
-        # but they're NOT directly compatible for local.set
-        local_is_numeric = local_type === I32 || local_type === I64 || local_type === F32 || local_type === F64
-        value_is_numeric = value_type === I32 || value_type === I64 || value_type === F32 || value_type === F64
-        local_is_ref = local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === ExternRef || local_type === AnyRef || local_type === EqRef
-        value_is_ref = value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === ExternRef || value_type === AnyRef || value_type === EqRef
-        # Numeric and ref are never compatible
-        if local_is_numeric && value_is_ref
-            return false
-        end
-        if local_is_ref && value_is_numeric
-            return false
-        end
-        # Two different numeric types are NOT compatible (i32 != i64 for local.set)
-        if local_is_numeric && value_is_numeric && local_type != value_type
-            return false
-        end
-        # Different concrete refs are not directly compatible
-        if local_type isa ConcreteRef && value_type isa ConcreteRef && local_type.type_idx != value_type.type_idx
-            return false
-        end
-        # Abstract ref (StructRef/ArrayRef/AnyRef/EqRef) is NOT directly compatible with ConcreteRef
-        # (requires ref.cast to downcast from abstract/super to concrete)
-        if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
-            return false
-        end
-        # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef/EqRef
-        if local_type === ExternRef && (value_type isa ConcreteRef || value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
-            return false
-        end
-        if value_type === ExternRef && (local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef || local_type === AnyRef || local_type === EqRef)
-            return false
-        end
-        return true
     end
 
     # Helper to set all phi locals at destination
