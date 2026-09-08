@@ -15,9 +15,9 @@
 (*                       SSAValue->GlobalRef callee-resolution step. Keyed   *)
 (*                       on the CALLEE OBJECT's identity (an IdDict), not a  *)
 (*                       Symbol -- e.g. `Core.getglobal`, `Core.:(===)`.     *)
-(*                       Several of its entries (`_lower_getglobal_          *)
-(*                       constfold!`, `_lower_egal_early!`) themselves       *)
-(*                       decline for a SUBSET of their callee's call shapes, *)
+(*                       Several of its entries (`_lower_getglobal!`,        *)
+(*                       `_lower_egal!`) themselves decline for a SUBSET of  *)
+(*                       their callee's call shapes,                         *)
 (*                       by the SAME nullable-return convention, one level   *)
 (*                       down -- and an entry may hold SEVERAL such guards in *)
 (*                       sequence (getglobal's const-fold guard, then its    *)
@@ -132,8 +132,8 @@ AltOrder == <<"LATE_ARMS", "TABLE", "BUILTIN">>
 
 ----------------------------------------------------------------------------
 (* Each funnel's claimed keys, read from source:                             *)
-(*  - BUILTIN claims "getglobal_const" (`_lower_getglobal_constfold!` hits    *)
-(*    the isconst case) and "getglobal_typename" (the SAME entry's second     *)
+(*  - BUILTIN claims "getglobal_const" (`_lower_getglobal!` hits its isconst *)
+(*    guard) and "getglobal_typename" (the SAME entry's second     *)
 (*    guard, module_owner === name_owner -- a SPECIFIC, independently         *)
 (*    discriminating test, genuinely disjoint from the isconst case, tried    *)
 (*    after it in the entry's own guard order), and BOTH egal shapes:         *)

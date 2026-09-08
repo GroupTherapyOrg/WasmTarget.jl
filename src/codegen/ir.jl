@@ -98,7 +98,7 @@ e.g. inference SROAs `Any[1, 2, 3]` into `Base.getfield((1, 2, 3), i)`, so the t
 effectively-final GLOBAL BINDING's bound value (`const D = Dict(...)`; typed IR reads
 its fields directly off `GlobalRef(Main, :D)` without ever materializing a
 `Dict{...}`-typed SSA value, the same constant-propagation Julia's own inliner uses —
-`_lower_getglobal_constfold!`, builtins.jl, resolves a GlobalRef to its value the same
+`_lower_getglobal!`, builtins.jl, resolves a GlobalRef to its value the same
 way) AND a function passed as ordinary DATA (`Core._apply_iterate(Base.iterate,
 Core.tuple, itr)` — a splat lowering — passes the `iterate` FUNCTION itself as `args[2]`,
 which needs a classId the same as any other boxed value). IR-structural nodes
