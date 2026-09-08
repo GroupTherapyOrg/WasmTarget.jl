@@ -171,7 +171,11 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                         m, Tuple{Core.Typeof(f), arg_types...}, Core.svec()))
                 end
             else
-                continue
+                # The runtime-Vararg splat edge (_apply_iterate_vararg_target_mi, ir.jl):
+                # a static call the collector cannot see, because it hides behind a
+                # builtin and no `:invoke` records it.
+                mi = _apply_iterate_vararg_target_mi(stmt, src, lookup_table)
+                mi === nothing && continue
             end
             mi isa Core.MethodInstance || continue
             mi in seen && continue
@@ -278,7 +282,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             end
         end
     end
-    # march16: OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
+    # OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
     # inference makes the body REAL instead of an any-erased stub).
     callable_invocations = Set{Tuple{DataType,Tuple}}()
@@ -315,7 +319,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
-        # march16 co-occurrence fold: a function's constructed closures enroll ONLY
+        # Co-occurrence fold: a function's constructed closures enroll ONLY
         # if that function ALSO makes dynamic (SSA-callee) calls — enrolling every
         # userland closure perturbed modules with purely-static closures (the
         # randsubseq suite regression).
@@ -356,7 +360,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # types, so collect from that semantic source as well as explicit :new.
         ssat isa Vector && foreach(t -> observe_callable!(CC.widenconst(t)), ssat)
         for stmt in src.code
-            # march16 (dart: creating a Lambda compiles its target): a CONSTRUCTED
+            # (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
             # the vtable trampoline, which needs the body compiled. Specialized with
             # the method's own sig (abstract slots stay erased; the trampoline passes
@@ -390,9 +394,20 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             end
             (stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2) || continue
             cref = stmt.args[1]
-            cref isa GlobalRef || continue
-            isdefined(cref.mod, cref.name) || continue
-            g = getfield(cref.mod, cref.name)
+            local g
+            if cref isa GlobalRef
+                isdefined(cref.mod, cref.name) || continue
+                g = getfield(cref.mod, cref.name)
+            elseif cref isa Core.Argument
+                # a function value passed as a parameter with a SINGLETON type
+                # (`mapreduce_first(f::typeof(length), …)`'s `f(x)`) is statically that
+                # function; the same resolution calls.jl makes at the call site
+                local _ct = (cref.n >= 1 && cref.n <= length(hparams)) ? hparams[cref.n] : Any
+                (_ct isa DataType && Base.issingletontype(_ct) && _ct <: Function) || continue
+                g = _ct.instance
+            else
+                continue
+            end
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             # Resolve arg types from the optimized IR.
             cargs = stmt.args[2:end]
@@ -431,10 +446,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # selector rows likewise contain the concrete target selected for each
             # instantiated class. Discovery still feeds both inline switches and
             # dispatch tables; there is no target-count cap.
+            # dart builds a row for every class of the component that can reach the
+            # slot: concrete structs, and — boxed behind the same $JlTop classId header —
+            # the numerics and the classed String/Symbol (`==(::Any, ::String)` over
+            # Any[1, "x", 2.5] needs the Int64/Float64/String rows; without them the
+            # switch had no row and trapped at runtime). Tuples keep their own path.
             for target_type in runtime_types
-                (isconcretetype(target_type) && isstructtype(target_type) &&
-                 !(target_type <: Tuple) && target_type !== String &&
-                 target_type !== Symbol && target_type <: atypes[p]) || continue
+                (isconcretetype(target_type) && !(target_type <: Tuple) &&
+                 (isstructtype(target_type) || isprimitivetype(target_type)) &&
+                 target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
                 concrete_args = Tuple{spec...}
                 hasmethod(g, concrete_args) || continue
@@ -482,7 +502,7 @@ end
 # their candidate compilation discovers transitively.
 const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 
-# march16: the conversion-arm allowlist — callable types whose bodies the candidate
+# The conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
 const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
@@ -491,6 +511,7 @@ const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
                                         external_leaves::Set{Any})
     isempty(external_leaves) && return codeinfos
+    lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
     for i in 1:2:length(codeinfos)
         (i + 1 <= length(codeinfos) && codeinfos[i] isa Core.CodeInstance &&
@@ -514,6 +535,13 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
                 target_mi = target isa Core.MethodInstance ? target :
                             target isa Core.CodeInstance ? target.def : nothing
                 target_mi isa Core.MethodInstance && push!(queue, target_mi)
+            else
+                # The reachability relation must contain EVERY call edge, including the
+                # runtime-Vararg splat's (_apply_iterate_vararg_target_mi, ir.jl) —
+                # otherwise the callee that _missing_explicit_invoke_mis enrolled is
+                # pruned right back out and the call site rejects a lowerable splat.
+                splat_mi = _apply_iterate_vararg_target_mi(stmt, pair[2], lookup_table)
+                splat_mi === nothing || push!(queue, splat_mi)
             end
         end
     end
@@ -529,6 +557,18 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
     return out
 end
 
+# Julia 1.13.0-rc4 added a REQUIRED `external_linkage::Bool` keyword to
+# Compiler.compile! (typeinfer.jl): `true` skips a CodeInstance already compiled
+# into the sysimage and links to it instead — juliac's case. WasmTarget has no
+# image to link against; every reachable method must enter the closed world, so
+# the value is `false` — the ClosedWorld.tla Completeness invariant, stated as a
+# keyword. Keyed on the method's actual signature, not on a version number.
+const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compile!))) ?
+    (; external_linkage = false) : (;)
+
+# formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
+# below always collects exactly the methods reachable from the roots, never stops
+# early, and never silently drops a reachable method whose specialization fails.
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
@@ -539,8 +579,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     codeinfos = Any[]
     workqueue = CC.CompilationQueue(; interp)
     append!(workqueue, entries)
-    CC.compile!(codeinfos, workqueue; invokelatest_queue)
-    CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue)
+    CC.compile!(codeinfos, workqueue; invokelatest_queue, _COMPILE_KW...)
+    CC.compile!(codeinfos, invokelatest_queue; invokelatest_queue, _COMPILE_KW...)
     # Imports are typed call-graph leaves. Julia inference may inspect their
     # native fallback bodies, but those bodies and their dependencies do not
     # belong to the Wasm component. Cut them before invoke completion and
@@ -597,8 +637,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
             push!(fresh_wq, resolved_mi)
         end
-        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq)
-        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq)
+        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
+        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
         for k in 1:2:length(fresh_ci)
             (fresh_ci[k] isa Core.CodeInstance &&
              fresh_ci[k + 1] isa Core.CodeInfo) || continue
@@ -664,7 +704,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # discovery cannot change how base functions compile (the COLLECTION layer). Registry
     # isolation — so candidates don't perturb base get_function cross-call resolution — is
     # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
-    # to PURE-9060 for megamorphic (≥9-method) functions, the base pass is byte-identical
+    # to for megamorphic (≥9-method) functions, the base pass is byte-identical
     # whether or not discovery runs.
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
@@ -755,7 +795,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             f = ftyp.parameters[1]       # constructors: Type{T} → T
             (f isa DataType || f isa UnionAll) || (f = nothing)
         elseif ftyp isa DataType && is_closure_type(ftyp)
-            # march16: a CAPTURING closure has no instance — key its body by the
+            # A CAPTURING closure has no instance — key its body by the
             # closure TYPE (the vtable machinery resolves by type; no static
             # caller resolves these by value). dart: creating a Lambda compiles
             # its target. USERLAND ONLY: converting Base-internal closure pairs
@@ -793,7 +833,20 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         # with a known arity are represented by their concrete specialization;
         # intrinsic/error constructors are lowered at the call site. Never let
         # the open-ended signature become a second, fake compilation route.
-        any(T -> T isa Core.TypeofVararg, arg_types) && continue
+        # THE ONE EXCEPTION, and it is a representation fact, not a route: a
+        # homogeneous runtime Vararg tuple (`is_runtime_vararg_tuple_type`,
+        # structs.jl) IS one physical parameter — the `{Object, data, size}`
+        # struct the splat call site already holds. The signature becomes that
+        # single packed parameter, which is what the body reads: values.jl's
+        # `packed_vararg_source_type` returns `nothing` for a one-parameter tail
+        # that already IS the source tuple, so the argument is a direct
+        # `local.get` of the struct instead of a reconstructed fixed tuple.
+        # parity(quarantine: Julia varargs).
+        if any(T -> T isa Core.TypeofVararg, arg_types)
+            local packed_vararg = Tuple{arg_types...}
+            is_runtime_vararg_tuple_type(packed_vararg) || continue
+            arg_types = (packed_vararg,)
+        end
         # `check_world_bounded(::TypeName)` is a closed-world metadata operation,
         # lowered directly at its call site from TypeName constants. Enrolling
         # Base's mutable BindingPartition walker would create a second runtime

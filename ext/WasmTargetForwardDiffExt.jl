@@ -27,7 +27,7 @@
 module WasmTargetForwardDiffExt
 
 using WasmTarget
-using ForwardDiff
+using ForwardDiff: ForwardDiff
 using ForwardDiff: Dual, Tag, partials
 using Base.Experimental: @overlay
 

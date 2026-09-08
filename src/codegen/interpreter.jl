@@ -611,7 +611,7 @@ end
 # NOTE: Two-pass approach avoids codegen bug where `===` comparison combined with
 # push! in a loop produces wrong results. Pass 1 finds the boundary index, Pass 2
 # does an unconditional copy.
-# P2-batch7: scan/copy bounds are BYTE counts — these loops index codeunits, and
+# Scan/copy bounds are BYTE counts — these loops index codeunits, and
 # the old `length(s)` bound (char count) truncated multibyte strings
 # (strip("héllo") dropped the last byte → gap 0beb5ec969a2 family). The
 # ncodeunits-on-String(bytes) aliasing bug that originally forced length() here
@@ -635,7 +635,7 @@ end
         start += 1
     end
     start > n && return ""
-    # Pass 2: unconditional copy from start to the LAST BYTE. P2-batch7: the
+    # Pass 2: unconditional copy from start to the LAST BYTE. The
     # copy bound must be the byte count — the old length(s) bound truncated
     # multibyte strings (strip("héllo") dropped a byte, gap 0beb5ec969a2).
     nb = sizeof(s)
@@ -649,7 +649,7 @@ end
 end
 
 @noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
-    n = sizeof(s)   # P2-batch7: BYTE count — backward scan starts at the last
+    n = sizeof(s)   # BYTE count — backward scan starts at the last
     # byte; UTF-8 continuation bytes (0x80-0xBF) never match ASCII whitespace,
     # so byte-wise scanning is multibyte-safe. (The old length(s) bound started
     # the scan mid-string for multibyte inputs and truncated the result.)
@@ -778,7 +778,7 @@ end
     return String(out)
 end
 
-# ─── reinterpret Overlay (P2-batch20) ─────────────────────────────────────
+# ─── reinterpret Overlay  ─────────────────────────────────────
 # Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
 #      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
 #      error paths) that miscompiles (gap e817213d1890). For same-size
@@ -1576,7 +1576,7 @@ end
 
 # ─── Char Classification & Case Overlays ──────────────────────────────────
 # Why: Base implementations use foreigncall(:utf8proc_category) / _toupper /
-#      _tolower — C library calls that can't compile to WASM. P2-batch8:
+#      _tolower — C library calls that can't compile to WASM.
 #      extended from ASCII-only to EXACT ASCII + Latin-1 (U+0000–U+00FF)
 #      coverage, table-verified against native Julia (uppercase('é')='É',
 #      µ→Μ, ß→ẞ, ÿ→Ÿ, NEL/NBSP isspace, ª/µ/º letters). The fuzz generator's
@@ -1938,7 +1938,6 @@ end
 #      rtol=1e-9 in the band [1e-12, 1e-7] (below 1e-12 the atol covers it).
 #      tanh = sinh/cosh with a |x|>20 ⇒ ±1 guard so large x can't make Inf/Inf.
 # Remove when: native libm-style hyperbolic codegen exists.
-const _WASM_LN2 = 0.6931471805599453             # log(2), for the overflow-safe eᵃ/2
 
 # P3 gap c9f2efb08deb: the previous exp(a - ln2) trick for a > 20 carried ~3
 # ulp error (argument rounding amplified by exp), which sin(sinh(x)) blew into
@@ -2292,35 +2291,267 @@ end
     return s
 end
 
-# ─── String hash Overlay (Julia 1.13+) ─────────────────────────────────────
-# Why: 1.13 replaced the memhash foreigncall with pure-Julia rapidhash
-#      (Base.hash_bytes) that reads string memory through 4/8-byte
-#      pointerref(Ptr{UInt32/UInt64}) loads — WasmGC has no raw pointers, so
-#      the inlined loads stubbed to unreachable (every Dict{String,...} op
-#      trapped). The :invoke-level hash_bytes handler in invoke.jl only
-#      catches the non-inlined form.
-# Fix: Overlay hash(::String, ::UInt) with FNV-1a over codeunit() reads,
-#      matching get_or_create_string_hash_func! (types.jl) EXACTLY — same
-#      offset basis, prime, and low-32-bit seed mix — so Julia-level hashing
-#      and the wasm helper (used by the memhash/hash_bytes fallback paths)
-#      agree within one module. Hash values intentionally differ from native
-#      Julia (1.12 precedent: internal consistency is what Dict needs).
-# Remove when: codegen supports wide pointerref loads traced to string refs.
+# ─── String hash Overlay — bit-exact with native Julia ─────────────────────
+# Why: Base's hash(::String,::UInt)/hash(::SubString{String},::UInt) reach
+#      string bytes through raw pointers (1.12: `ccall(:memhash_seed,...)`
+#      over Ptr{UInt8}; 1.13: pointerref(Ptr{UInt32/UInt64}) loads inside the
+#      pure-Julia rapidhash `hash_bytes`) — WasmGC has no raw pointers, so the
+#      inlined loads stub to unreachable and every Dict{String,...}/
+#      Set{String} op traps. A prior version of this overlay used FNV-1a,
+#      internally consistent but NOT bit-exact with native — which silently
+#      broke any Dict{String,V}/Set{String} CONSTANT built natively and
+#      embedded as a compile-time struct.new (its slots array was placed by
+#      the native hash; probing it with a different wasm hash landed in the
+#      wrong slot and KeyError'd/missed).
+# Fix: Overlay hash(::String,::UInt) and hash(::SubString{String},::UInt)
+#      with a pure-Julia port of Julia's OWN native algorithm — ground truth,
+#      not a WT invention — reading bytes via codeunit(s,i) instead of
+#      pointers:
+#        1.12 (base/hashing.jl:195-200): `h += memhash_seed; ccall(memhash,
+#        UInt, (Ptr{UInt8},Csize_t,UInt32), s, sizeof(s), h % UInt32) + h`
+#        where C `memhash_seed` (support/hashing.c) is
+#        `MurmurHash3_x64_128(buf, n, seed, out); return out[1]`
+#        (support/MurmurHash3.c, JuliaLang/julia @ v1.12.7). Ported straight
+#        over codeunit reads — verified bit-exact against the live
+#        `ccall(:memhash_seed,...)` over every length 0..64, every 16-byte
+#        tail-remainder class (0..15) crossed with 0..3 leading full blocks,
+#        ASCII/binary/non-ASCII UTF-8, 7 fixed + 200 random seeds, exhaustive
+#        SubString slices of a 90-codepoint string, and the full hash(s,h)
+#        formula (6537 cases total, 0 mismatches).
+#        1.13 (base/hashing.jl): `hash_bytes(pointer(s), sizeof(s),
+#        UInt64(h), HASH_SECRET)`, an adaptation of rapidhash. Ported the
+#        same way (codeunit reads); the 64×64→128 multiply (`mul_parts`/
+#        `hash_mix`) is done with plain UInt64 arithmetic (32-bit-half
+#        decomposition) instead of Int128/widemul, so it rests only on
+#        integer ops WT already lowers everywhere — independently verified
+#        against native `widemul` (5064 cases) and the full port verified
+#        bit-exact against native `Base.hash` (16000 cases: every length
+#        0..80, the <=16/>16 and 4/8/16/32/48-byte boundary classes, non-ASCII,
+#        500 random (h,len) pairs, and exhaustive SubString slices of a
+#        140+-byte string — 0 mismatches).
+#      grep of Base (1.12.7 and 1.13.0-rc1) confirms String/SubString{String}
+#      hash are the ONLY callers of memhash/memhash_seed/hash_bytes for
+#      strings (1.13's gmp.jl also calls hash_bytes, for BigInt — unrelated,
+#      out of WT's scope), so overlaying these two methods makes the
+#      `:memhash` foreigncall and the hash_bytes pointer path unreachable for
+#      every string-hashing call site.
+# Remove when: codegen supports wide pointerref loads traced to string refs
+#      (only relevant if some future Base version routes a THIRD caller
+#      through memhash/hash_bytes for strings).
 
-@static if VERSION >= v"1.13.0-"
-    @noinline function _wasm_string_fnv1a(s::String, h::UInt)
-        hv = 0xcbf29ce484222325 ⊻ UInt64(UInt32(h & 0xffffffff))
-        i = 1
-        n = ncodeunits(s)
-        while i <= n
-            hv = (hv ⊻ UInt64(codeunit(s, i))) * 0x00000100000001b3
+@inline function _wasm_rotl64(x::UInt64, r::Int)::UInt64
+    return (x << r) | (x >> (64 - r))
+end
+
+@static if VERSION < v"1.13.0-"
+    # MurmurHash3_x64_128(buf, n, seed, out) -> out[1] (1.12 Base memhash_seed).
+    @inline function _wasm_mm3_load_u64(s, start::Int, nbytes::Int)::UInt64
+        v = UInt64(0)
+        i = 0
+        while i < nbytes
+            v |= UInt64(codeunit(s, start + i)) << (8 * i)
             i += 1
         end
-        return hv % UInt
+        return v
     end
 
-    @overlay WASM_METHOD_TABLE function Base.hash(data::String, h::UInt)
-        return _wasm_string_fnv1a(data, h)
+    @inline function _wasm_mm3_fmix64(k::UInt64)::UInt64
+        k ⊻= k >> 33
+        k *= 0xff51afd7ed558ccd
+        k ⊻= k >> 33
+        k *= 0xc4ceb9fe1a85ec53
+        k ⊻= k >> 33
+        return k
+    end
+
+    @noinline function _wasm_memhash_seed(s::Union{String,SubString{String}}, seed::UInt32)::UInt64
+        n = ncodeunits(s)
+        c1 = 0x87c37b91114253d5
+        c2 = 0x4cf5ad432745937f
+        h1 = UInt64(seed)
+        h2 = UInt64(seed)
+
+        nblocks = n >> 4   # div(n, 16)
+        blk = 0
+        while blk < nblocks
+            base = blk * 16 + 1
+            k1 = _wasm_mm3_load_u64(s, base, 8)
+            k2 = _wasm_mm3_load_u64(s, base + 8, 8)
+
+            k1 *= c1
+            k1 = _wasm_rotl64(k1, 31)
+            k1 *= c2
+            h1 ⊻= k1
+            h1 = _wasm_rotl64(h1, 27)
+            h1 += h2
+            h1 = h1 * 5 + 0x52dce729
+
+            k2 *= c2
+            k2 = _wasm_rotl64(k2, 33)
+            k2 *= c1
+            h2 ⊻= k2
+            h2 = _wasm_rotl64(h2, 31)
+            h2 += h1
+            h2 = h2 * 5 + 0x38495ab5
+
+            blk += 1
+        end
+
+        tailstart = nblocks * 16
+        rem = n - tailstart
+
+        if rem >= 9
+            k2 = _wasm_mm3_load_u64(s, tailstart + 9, rem - 8)
+            k2 *= c2
+            k2 = _wasm_rotl64(k2, 33)
+            k2 *= c1
+            h2 ⊻= k2
+        end
+        if rem >= 1
+            nb = rem >= 8 ? 8 : rem
+            k1 = _wasm_mm3_load_u64(s, tailstart + 1, nb)
+            k1 *= c1
+            k1 = _wasm_rotl64(k1, 31)
+            k1 *= c2
+            h1 ⊻= k1
+        end
+
+        h1 ⊻= UInt64(n)
+        h2 ⊻= UInt64(n)
+        h1 += h2
+        h2 += h1
+        h1 = _wasm_mm3_fmix64(h1)
+        h2 = _wasm_mm3_fmix64(h2)
+        h1 += h2
+        h2 += h1
+
+        return h2
+    end
+
+    const _WASM_MEMHASH_SEED = 0x71e729fd56419c81
+
+    @noinline function _wasm_hash_string(s::Union{String,SubString{String}}, h::UInt)::UInt
+        h2 = h + _WASM_MEMHASH_SEED
+        return (_wasm_memhash_seed(s, h2 % UInt32) + h2) % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+    @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+else
+    # rapidhash hash_bytes(ptr, n, seed, secret) -> UInt (1.13+ Base), ported
+    # over codeunit reads; the widening multiply avoids Int128/widemul (see
+    # comment above).
+    @inline function _wasm_rh_umul128(a::UInt64, b::UInt64)
+        a_lo = a & 0x00000000ffffffff
+        a_hi = a >> 32
+        b_lo = b & 0x00000000ffffffff
+        b_hi = b >> 32
+
+        lo_lo = a_lo * b_lo
+        hi_lo = a_hi * b_lo
+        lo_hi = a_lo * b_hi
+        hi_hi = a_hi * b_hi
+
+        cross = (lo_lo >> 32) + (hi_lo & 0x00000000ffffffff) + (lo_hi & 0x00000000ffffffff)
+        hi = hi_hi + (hi_lo >> 32) + (lo_hi >> 32) + (cross >> 32)
+        lo = (cross << 32) | (lo_lo & 0x00000000ffffffff)
+        return hi, lo
+    end
+
+    @inline function _wasm_rh_mix(a::UInt64, b::UInt64)::UInt64
+        hi, lo = _wasm_rh_umul128(a, b)
+        return hi ⊻ lo
+    end
+
+    @inline function _wasm_rh_load_le64(s, i::Int)::UInt64
+        v = UInt64(0)
+        j = 0
+        while j < 8
+            v |= UInt64(codeunit(s, i + j)) << (8 * j)
+            j += 1
+        end
+        return v
+    end
+
+    @inline function _wasm_rh_load_le32(s, i::Int)::UInt64
+        v = UInt64(0)
+        j = 0
+        while j < 4
+            v |= UInt64(codeunit(s, i + j)) << (8 * j)
+            j += 1
+        end
+        return v
+    end
+
+    @noinline function _wasm_hash_bytes(s::Union{String,SubString{String}}, seed_in::UInt64,
+                                         secret::NTuple{4,UInt64})::UInt64
+        n = ncodeunits(s)
+        buflen = UInt64(n)
+        seed = seed_in ⊻ _wasm_rh_mix(seed_in ⊻ secret[3], secret[2])
+
+        a = UInt64(0)
+        b = UInt64(0)
+        i = buflen
+
+        if buflen <= 16
+            if buflen >= 4
+                seed ⊻= buflen
+                if buflen >= 8
+                    a = _wasm_rh_load_le64(s, 1)
+                    b = _wasm_rh_load_le64(s, n - 7)
+                else
+                    a = _wasm_rh_load_le32(s, 1)
+                    b = _wasm_rh_load_le32(s, n - 3)
+                end
+            elseif buflen > 0
+                a = (UInt64(codeunit(s, 1)) << 45) | UInt64(codeunit(s, n))
+                b = UInt64(codeunit(s, div(n, 2) + 1))
+            end
+        else
+            pos = 1
+            if i > 48
+                see1 = seed
+                see2 = seed
+                while i > 48
+                    seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos) ⊻ secret[1], _wasm_rh_load_le64(s, pos + 8) ⊻ seed)
+                    see1 = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 16) ⊻ secret[2], _wasm_rh_load_le64(s, pos + 24) ⊻ see1)
+                    see2 = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 32) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 40) ⊻ see2)
+                    pos += 48
+                    i -= 48
+                end
+                seed ⊻= see1
+                seed ⊻= see2
+            end
+            if i > 16
+                seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 8) ⊻ seed)
+                if i > 32
+                    seed = _wasm_rh_mix(_wasm_rh_load_le64(s, pos + 16) ⊻ secret[3], _wasm_rh_load_le64(s, pos + 24) ⊻ seed)
+                end
+            end
+
+            a = _wasm_rh_load_le64(s, n - 15) ⊻ i
+            b = _wasm_rh_load_le64(s, n - 7)
+        end
+
+        a = a ⊻ secret[2]
+        b = b ⊻ seed
+        b, a = _wasm_rh_umul128(a, b)
+        return _wasm_rh_mix(a ⊻ secret[4], b ⊻ secret[2] ⊻ i)
+    end
+
+    @noinline function _wasm_hash_string(s::Union{String,SubString{String}}, h::UInt)::UInt
+        return _wasm_hash_bytes(s, UInt64(h), Base.HASH_SECRET) % UInt
+    end
+
+    @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
+        return _wasm_hash_string(s, h)
+    end
+    @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
+        return _wasm_hash_string(s, h)
     end
 end
 
@@ -2559,67 +2790,170 @@ function CC.abstract_apply(interp::WasmInterpreter, argtypes::Vector{Any},
                   interp, argtypes, si, sv, max_methods)
 end
 
-# Disable concrete eval (GPUCompiler pattern).
-# Without this, the compiler constant-folds calls using Base implementation,
-# bypassing overlays.
+# Disable concrete eval by default (GPUCompiler pattern): without any override
+# here, a WasmInterpreter would fold calls using Base's real implementation and
+# bypass overlays. `CC.concrete_eval_eligible` below re-enables it PER CALL, by
+# RULE rather than by an enumerated list of function names: trust Julia's own
+# effect system — `is_foldable` + all-const args + overlay-safety, exactly
+# what `Core.Compiler.concrete_eval_eligible` already computes — to decide
+# WHETHER a call folds, then apply two result-level guards that a compiler
+# producing a module meant to outlive this process needs on top of Julia's own
+# answer:
 #
-# DEFERRED (2026-06-22, wt-soundness-loop-4): an overlay-aware exception that folds
-# pure TYPE-LEVEL calls (to fix the `cor` cluster — `one(float(nonmissingtype(T)))`
-# leaking as `dynamic` dispatch on Type values) passed full Pkg.test on Julia 1.12
-# but REGRESSED Julia 1.13-rc1 string-overlay codegen (repeat/lpad/rpad/chop/split/
-# join/string-chains errored — concrete-eval perturbs WT's version-specific string
-# IR shapes). Reverted to the blanket `:none`; the cor root cause + the type-level
-# fold approach are recorded in test/fuzz/failures/3fd2f07bfc5c.md — re-attempt only
-# with a Julia 1.13 environment available to verify against.
-# A CURATED set of pure TYPE-LEVEL functions that concrete-eval may fold. They
-# produce Types (or values trivially derived from Types) that WT fundamentally
-# cannot lower as runtime values — so folding them is MANDATORY, not an
-# optimization. They have no value-level overlays to bypass, and strings never
-# call them, so re-enabling eval for ONLY these can't perturb WT's
-# version-specific string IR (the failure mode that reverted the prior blanket
-# `all-Type-args` attempts — see test/fuzz/failures/3fd2f07bfc5c.md). This is the
-# `cor`/SparseArrays insight generalized: route the runtime type-machinery to its
-# known compile-time constant, scoped surgically. MUST be total (runs during
-# inference of arbitrary code).
-function _is_typelevel_foldable(@nospecialize(f))::Bool
-    # This generated helper exists solely to bake the name of a statically known
-    # type into the module. Letting its `_compute_sparams(Method, ...)` body enter
-    # the runtime graph would incorrectly turn compiler metadata into user data.
-    f === _wt_type_name_str && return true
-    f === Core.apply_type && return true
-    (isdefined(Core, :_compute_sparams) && f === Core._compute_sparams) && return true
-    (isdefined(Core, :_svec_ref)        && f === Core._svec_ref)        && return true
-    (isdefined(Core, :_typevar)         && f === Core._typevar)         && return true
-    f === Base.nonmissingtype && return true
-    f === Base.promote_type   && return true
-    (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
-    f === Base.eltype && return true
-    (isdefined(Base, :_compute_eltype) && f === Base._compute_eltype) && return true
-    # float/one fold only on a Type arg — concrete-eval fires ONLY on constant
-    # args, so the value forms (one(::Float64)) never reach the fold here.
-    f === Base.float && return true
-    f === Base.one   && return true
-    # SciML in-place detection (ODEProblem/ODEFunction): a Bool from method arity,
-    # feeding apply_type. Match `isinplace` AND its kwarg body `#isinplace#NN`.
-    # `nameof` throws for some callables (Base.BottomRF) — guard it.
-    if f isa Function
-        nm = try string(nameof(f)) catch; "" end
-        (startswith(nm, "isinplace") || startswith(nm, "#isinplace#")) && return true
+#  1. NEVER `:semi_concrete_eval`, unconditionally. Native eligibility gates
+#     `:concrete_eval` on overlay-safety but does NOT gate `:semi_concrete_eval`
+#     on it at all (`Compiler/src/abstractinterpretation.jl`), so an
+#     overlay-tainted-but-otherwise-foldable call silently falls through to
+#     it. Unlike `:concrete_eval` — which executes the call exactly once via
+#     `Core._call_in_world_total` and keeps only the returned VALUE —
+#     `:semi_concrete_eval` partially interprets the callee's own optimized
+#     IR, and on that path a `getfield` of an opaque/pointer-typed `DataType`
+#     field (e.g. `.layout`) gets folded to the live pointer itself —
+#     something ordinary type inference's `getfield` tfunc deliberately
+#     refuses (it types `.layout` as widened `Ptr{Nothing}`, never `Const`,
+#     for exactly this reason; confirmed by dumping this file's own baseline
+#     IR). REPRODUCED 2026-09-07: broadening eligibility to "constant args are
+#     all Type/Symbol/Integer" (the prior attempt recorded by a teammate) made
+#     `Base.datatype_arrayelem(Memory{UInt8})` — reached from
+#     `copy(::Memory{UInt8})` — take this path and left
+#     `pointerref($(QuoteNode(Ptr{DataTypeLayout}(0x0000000128c43628))), 1, 1)`
+#     — a live host address baked as a literal IR operand — in the typed IR
+#     (`WasmTarget.get_typed_ir`). Refusing `:semi_concrete_eval` outright
+#     (independent of the eligibility predicate that reached it) closes this;
+#     `:concrete_eval` alone never has the failure mode because it never
+#     exposes intermediate pointer arithmetic, only the callee's final value.
+#  2. Never a `Ptr`-typed result, never a `Ptr`-valued constant argument, and
+#     never `objectid`/`hash`. A folded call's result must be a PROGRAM value.
+#     `Ptr` is a host memory address, never portable. `Base.objectid` (the generic `hash` fallbacks that call it, and the
+#     `Type`-hash helper `hash(::Type, ::UInt)` is built on) are marked fully
+#     `:consistent`+`:nothrow`+`:effect_free` by Julia's own effect system
+#     (verified with `Base.infer_effects`) — yet `hash`'s docstring states
+#     outright: "The hash value may change when a new Julia process is
+#     started." `:consistent` means reproducible within ONE world, not across
+#     the separate processes and architectures a compiled module must run on.
+#
+# `:concrete_eval` itself already tolerates a call that isn't `:nothrow` (e.g.
+# `apply_type`, `nonmissingtype` — both foldable but NOT nothrow per
+# `infer_effects`, and both load-bearing for the `cor`/SparseArrays type-level
+# fold that motivated the original curated list): if the real execution throws,
+# `concrete_eval_call` discards the value and the call's type becomes `Bottom`
+# (dead code), never a bad value. So nothrow is not required here — `is_foldable`
+# (which already excludes any externally-visible side effect), overlay-safety,
+# and the two result guards above are what make this safe.
+# The VALUE a fold produces must be a program value — one the module can carry as a
+# constant and that means the same thing in every process and on every architecture:
+# a Type, a Symbol, a String, a Char, nothing/missing, a Bool or a non-pointer Number,
+# a singleton, or an isbits aggregate / tuple of those with no Ptr anywhere inside.
+# A host memory address (`Ptr`, including one riding inside a struct) is none of
+# these. This is checked on the value itself, after evaluation: eligibility runs
+# before the call, and a result typed `Any` (getproperty on a DataType) or an
+# address already bit-cast to an integer would pass any type-level test.
+function _wt_has_pointer_field(@nospecialize(T))::Bool
+    T isa DataType || return true
+    T <: Ptr && return true
+    for ft in fieldtypes(T)
+        _wt_has_pointer_field(ft) && return true
     end
     return false
 end
+function _wt_program_value(@nospecialize(v))::Bool
+    v isa Type && return true
+    v isa Symbol && return true
+    v isa String && return true
+    v isa Char && return true
+    (v === nothing || v === missing) && return true
+    v isa Ptr && return false
+    v isa Number && return true
+    v isa Tuple && return all(_wt_program_value, v)
+    T = typeof(v)
+    Base.issingletontype(T) && return true
+    return isbits(v) && !_wt_has_pointer_field(T)
+end
+
+# `objectid`/`hash` (and the Type-hash helper they build on) are `:consistent` by
+# Julia's effect system — reproducible within ONE process — yet "may change when a
+# new Julia process is started" (hash's own docstring): not program values.
+function _wt_host_identity_fold(@nospecialize(f))::Bool
+    f === Base.objectid && return true
+    f === Base.hash && return true
+    isdefined(Base, :_jl_type_hash) && f === Base._jl_type_hash && return true
+    return false
+end
+
+# `_wt_type_name_str` is a `@generated` function that exists solely to bake
+# the name of a statically known type into the module (feeds the
+# `Base.string(::Type)` overlay below). Force it through concrete-eval
+# regardless of what native eligibility computes for a generated function's
+# synthesized body: letting its generator-staging machinery
+# (`Core._compute_sparams` and friends, used to resolve the static parameter)
+# leak into the IR as if it were ordinary user code would turn compiler
+# metadata into runtime data. The one genuinely special case left, with a
+# reason: everything else is the general rule above.
+_wt_forced_concrete_eval(@nospecialize(f))::Bool = f === _wt_type_name_str
 
 function CC.concrete_eval_eligible(interp::WasmInterpreter,
         @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
-    # Delegate to the normal effect-based eligibility ONLY for whitelisted pure
-    # type-level functions; everything else stays disabled (overlays win, and
-    # value-level/string codegen is byte-for-byte unchanged).
-    if _is_typelevel_foldable(f)
-        return @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
-                                                 f, result, arginfo, sv)
+    eligibility = @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
+                                                     f, result, arginfo, sv)
+    if _wt_forced_concrete_eval(f)
+        return eligibility === :none ? :none : :concrete_eval
+    elseif eligibility !== :concrete_eval
+        return :none   # never :semi_concrete_eval
+    elseif _wt_host_identity_fold(f)
+        return :none
+    elseif !_wt_type_level_call(arginfo.argtypes, result.rt)
+        return :none
+    elseif _wt_reads_host_layout(result.edge)
+        return :none
     end
-    return :none
+    return :concrete_eval
+end
+
+# A fold may not depend on the HOST's memory layout of a type. `datatype_layoutsize`,
+# `datatype_alignment`, `fieldoffset`, `datatype_pointerfree`, `Core.sizeof(::Type)` …
+# are `@assume_effects :total` in Base and read `DataType.layout` — the host ABI's
+# sizes, not the module's (WT lays out its own structs and arrays; e.g.
+# memory_element_stride is the element stride the wasm side uses). `isbitstype` and
+# its kin read `DataType.flags`, a property of the Julia type, and stay foldable. A
+# foreigncall into libjulia (`allocatedinline` → jl_stored_inline) answers for the host
+# too. Decided mechanically from the callee's own typed IR (the one inference path),
+# transitively through its invokes, memoized per specialization.
+function _wt_reads_host_layout(@nospecialize(edge))::Bool
+    edge isa Core.CodeInstance || return true    # no edge to inspect: never fold blind
+    return ir_reads_host_layout(edge)
+end
+
+# WT folds TYPE-LEVEL calls only — a call with a Type among its constant arguments, or
+# one whose result is a Type: the runtime type machinery (apply_type, promote_type,
+# isbitstype, eltype, datatype_layoutsize, isinplace …) that the module cannot carry as
+# values and MUST resolve at compile time. Value-level constant arithmetic
+# (`1 + 2`, tuple destructuring of a constant, `Val(1)`) is left to Julia's own
+# constant propagation, exactly as before: folding it too changed inlining decisions
+# downstream (SparseArrays' hvcat_internal stopped inlining and reached a runtime
+# Vararg splat WT has no lowering for) without any type-level need.
+function _wt_type_level_call(argtypes::Vector{Any}, @nospecialize(rt))::Bool
+    for i in 2:length(argtypes)
+        local a = argtypes[i]
+        a isa CC.Const && a.val isa Type && return true
+        (a isa Type && a <: Type && a !== Type) && return true    # Type{T} / Const-like singleton
+    end
+    local w = CC.widenconst(rt)
+    return w <: Type && w !== Type
+end
+
+# The value-level half of the rule ("allow external abstract interpreters to disable
+# concrete evaluation ad-hoc" — Compiler/src/abstractinterpretation.jl): evaluate as
+# Julia would, then keep the fold only when what came back is a program value.
+function CC.concrete_eval_call(interp::WasmInterpreter,
+        @nospecialize(f), result::CC.MethodCallResult, arginfo::CC.ArgInfo,
+        sv::Union{CC.InferenceState, CC.IRInterpretationState},
+        invokecall::Union{CC.InvokeCall, Nothing}=nothing)
+    r = @invoke CC.concrete_eval_call(interp::CC.AbstractInterpreter, f, result, arginfo, sv, invokecall)
+    r === nothing && return nothing
+    rt = r.rt
+    rt isa CC.Const && !_wt_program_value(rt.val) && return nothing
+    return r
 end
 
 """

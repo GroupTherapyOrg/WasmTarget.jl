@@ -53,6 +53,21 @@ repair is certified or permitted.
 | Module strategy | dart module strategies are explicit | one monolithic closed-world module | Deferred loading excluded | ✅ |
 | No validator repair loop | dart relies on its builder rather than repairing binaries | strict builder validity is unconditional; Binaryen is optimization only; wasm-tools is an optional independent cross-check | L6, L7, L14, L22, L27 | ✅ |
 
+## Finishing-march revalidation (2026-09-02, PR #122)
+
+Rows added or re-audited by the march (`dev/MARCH.md`), each with source correspondence at the pinned oracle, a lock, and executable evidence.
+
+| Invariant | Audited dart2wasm oracle | Audited WasmTarget implementation | Machine evidence | Result |
+|---|---|---|---|---|
+| Numeric operator tables | `intrinsics.dart:436-472` `_binaryOperatorMap` (diagonal), `:474-503` `_unaryOperatorMap`, `:578-583` result map; entry funnels `:607/:685/:1007/:1018` return null for "not mine" | `INTRINSIC_BINOPS`/`INTRINSIC_UNOPS` diagonal tables with the callback-shaped div/rem guard; the Julia-only tier (Int128, checked overflow, shifts, fma, conversions) quarantined in `julia_numeric_tier.jl` with differential proof | L104 (a table key never has a ladder arm); R22=0 | ✅ |
+| Identity-keyed call registries | `MemberIntrinsic`/`StaticIntrinsic` keyed on resolved `Reference`s, `_lookup` `:75-100/:401-428`; unknown ⇒ throw | `BUILTIN_LOWERINGS` (IdDict on the builtin object), `INVOKE_INTRINSICS` (Method identity), `FOREIGN_LOWERINGS` (C symbol); registry consulted before any name-keyed arm; unknown IR heads reject loudly | L113, L114; R19/R20 ratchets; `test/unknown_ir_heads.jl` | ✅ |
+| Host boundary | `translateExternalType` `translator.dart:1239-1268` (total, widening to anyref); import funnel `functions.dart:90-189` | `translate_external_type` + import-stub signature check in the closed-world plan; framework builder surface `public` | `test/host_boundary_types.jl` | ✅ |
+| Dynamic dispatch, Julia guards | `_virtualCall` `code_generator.dart:2028` is unguarded (static typing guarantees the member); packing `dispatch_table.dart:405-458` | same table shape, plus the quarantined Julia-only guards: span reservation, classId span guard in caller and trampolines, per-entry non-axis slot check — a receiver tuple with no method traps (MethodError), never runs another row | `dev/formal/ClassIdDispatch.tla`; `test/dispatch_method_error.jl` | ✅ |
+| String hashing | dart's constant maps index at runtime with the target's own hash (no host/target split) | `hash(::String)`/`hash(::SubString)` are Julia's own algorithm (MurmurHash3_x64_128 on 1.12, rapidhash on 1.13) ported over codeunits, bit-exact with native; native-built Dict/Set constants resolve | `test/string_hash_ground_truth.jl` | ✅ |
+| Determinism | class ids are a function of the program (`ClassIdNumbering`, `class_info.dart:831`); no world ages; no host hashes in the object model | every identity-keyed registry walked in program order; a program-derived type hash; one `WASM_WORLD_AGE`; Dict constants serialize only occupied slots; byte identity witnessed across processes and architectures | L112, L117; `test/probe_bytes.jl` (235 probes, x64 = aarch64) | ✅ |
+| Structured flow, dead code | Kernel is structured; dead code is unreachable code | stackifier folds always-taken boundscheck branches and drops only blocks unreachable in the folded CFG | L89 (re-pinned); `dev/formal/Stackifier.tla` | ✅ |
+| Formal layer | — (Julia core practice: `SchedulerWake.tla`, JuliaLang/julia#61826) | `dev/formal/`: Diagnostics, ClosedWorld, ConsultChain, Sidecar, Stackifier, ClassIdDispatch — each with a Broken instance TLC must reject; run in CI | L111; `dev/formal/run_tlc.sh`; `formal.yml` | ✅ |
+
 ## Machine-enforced locks
 
 `test/parity_ratchet.jl` and `dev/parity_baseline.toml` provide committed structural

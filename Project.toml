@@ -36,6 +36,7 @@ WasmTargetStatisticsExt = "Statistics"
 # compiler consumes is version-specific, so each minor needs explicit support.
 Aqua = "0.8"
 Binaryen_jll = "0.130.0"
+ExplicitImports = "1"
 Dates = "1"
 # The SimpleDiffEq ext constructs SciMLBase's ODEFunction/ODEProblem CONCRETELY
 # (explicit field layout) — version-sensitive. Pinned to the verified majors;
@@ -47,6 +48,7 @@ ForwardDiff = "0.10, 1"
 # (the differential fuzzer then reports spurious wrong_value divergences).
 JSON = "1"
 LinearAlgebra = "1"
+Logging = "1"
 PrecompileTools = "1"
 Random = "1"
 SHA = "0.7, 1"
@@ -62,9 +64,11 @@ julia = "~1.12, ~1.13"
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+ExplicitImports = "7d51a73a-1435-4ff3-83d9-f097790105c7"
 DiffEqBase = "2b5f629d-d688-5b77-993f-72d75c75574e"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
@@ -76,4 +80,4 @@ Supposition = "5a0628fe-1738-4658-9b6d-0b7605a9755b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "Dates", "DiffEqBase", "ForwardDiff", "LinearAlgebra", "Random", "SHA", "SciMLBase", "SimpleDiffEq", "SparseArrays", "StaticArrays", "Statistics", "Supposition", "Test"]
+test = ["Aqua", "Dates", "DiffEqBase", "ExplicitImports", "ForwardDiff", "LinearAlgebra", "Logging", "Random", "SHA", "SciMLBase", "SimpleDiffEq", "SparseArrays", "StaticArrays", "Statistics", "Supposition", "Test"]

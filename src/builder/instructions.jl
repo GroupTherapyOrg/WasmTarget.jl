@@ -363,7 +363,7 @@ struct WasmElemSegment
     table_idx::UInt32        # Which table to initialize
     offset::UInt32           # Offset in table (constant)
     func_indices::Vector{UInt32}  # Function indices to place in table
-    declared::Bool           # march16: flags=3 declarative segment (ref.func in const exprs)
+    declared::Bool           # flags=3 declarative segment (ref.func in const exprs)
 end
 WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32}) = WasmElemSegment(t, o, f, false)
 
@@ -758,7 +758,7 @@ end
 """
     declare_funcs!(mod, func_indices)
 
-march16: a DECLARATIVE element segment (flags=3) — makes the functions legal
+A DECLARATIVE element segment (flags=3) — makes the functions legal
 `ref.func` targets in constant expressions (the vtable-global initializers).
 """
 function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})
@@ -815,7 +815,7 @@ Add a passive data segment (used with array.new_data or memory.init).
 Returns the 0-based index of the data segment.
 """
 function add_passive_data_segment!(mod::WasmModule, data::Vector{UInt8})::UInt32
-    # march7 (dart constants.dart:541 — shared segments): passive segments are
+    # Passive segments are
     # read-only sources for array.new_data, so CONTENT-equal segments are
     # semantically identical — dedup by content. Repeated string/symbol
     # constants stop minting fresh segments.
@@ -1052,7 +1052,7 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
             write_u32!(section, length(mod.elem_segments))
             for elem in mod.elem_segments
                 if elem.declared
-                    # march16 flags=3: declarative — elemkind + vec(funcidx), no table/offset
+                    # Declarative — elemkind + vec(funcidx), no table/offset
                     write_byte!(section, 0x03)
                     write_byte!(section, 0x00)  # elemkind: funcref
                 elseif elem.table_idx == UInt32(0)
@@ -1149,7 +1149,7 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         end
     end
 
-    # PURE-9036: Name section (custom section) for stack trace readability
+    # Name section (custom section) for stack trace readability
     # Includes function names from exports so stack traces show meaningful names
     func_names = Dict{UInt32, String}()
     # Collect names from imports
@@ -1369,7 +1369,7 @@ function to_bytes_no_dict(mod::WasmModule)::Vector{UInt8}
             write_u32!(section, length(mod.elem_segments))
             for elem in mod.elem_segments
                 if elem.declared
-                    write_byte!(section, 0x03)   # march16: declarative
+                    write_byte!(section, 0x03)
                     write_byte!(section, 0x00)
                 elseif elem.table_idx == UInt32(0)
                     write_byte!(section, 0x00)
@@ -1567,7 +1567,7 @@ end
 
 function write_composite_type!(w::WasmWriter, st::StructType)
     if st.supertype_idx !== nothing
-        # PURE-9026: Non-final subtype with one supertype
+        # Non-final subtype with one supertype
         write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final, allows further subtyping)
         write_u32!(w, 1)                # 1 supertype
         write_u32!(w, st.supertype_idx) # supertype index

@@ -13,7 +13,7 @@
 module WasmTargetRandomExt
 
 using WasmTarget
-using Random
+using Random: Random, Xoshiro
 import SHA
 using Base.Experimental: @overlay
 
