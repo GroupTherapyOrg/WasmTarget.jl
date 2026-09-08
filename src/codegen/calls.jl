@@ -1209,6 +1209,7 @@ _egal_num_eqop(w::WasmValType)::UInt8 =
     w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
 
 function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContext)
+    value isa NirNode && (value = nir_operand(value))   # transitional (R29 stage 1): ONE entry, either shape
     value isa Core.SSAValue || return nothing
     1 <= value.id <= length(ctx.code_info.code) || return nothing
     stmt = ctx.code_info.code[value.id]
@@ -1223,6 +1224,7 @@ function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContex
 end
 
 function _trace_typename_symbol_owner(value, ctx::AbstractCompilationContext)
+    value isa NirNode && (value = nir_operand(value))   # transitional (R29 stage 1): ONE entry, either shape
     value isa Core.SSAValue || return nothing
     1 <= value.id <= length(ctx.code_info.code) || return nothing
     stmt = ctx.code_info.code[value.id]
@@ -2358,7 +2360,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         return append_builder!(b, fb)
     elseif func isa GlobalRef && func.name === :pointerref
         ptr_arg = length(args) >= 1 ? args[1] : nothing
-        str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx.code_info.code) : nothing
+        str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx) : nothing
         if str_info !== nothing
             str_ssa, idx_ssa = str_info
             idx_ssa === nothing && (idx_ssa = length(args) >= 2 ? args[2] : 1)

@@ -1022,7 +1022,7 @@ const LOCKS = [
     "L47_single_memmove_lowering" => ("memmove/memcpy has one array-copy lowering and its one pointer walk recognizes Vector, Memory, String, and Symbol backing identities",
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
+            required = ["st.c_symbol in (:jl_string_ptr, :jl_symbol_name)",
                         "backing_type === String || backing_type === Symbol",
                         ":memmove => _fc_memmove!", ":memcpy => _fc_memmove!"]
             count(p -> !occursin(p, stmt_src), required) +
