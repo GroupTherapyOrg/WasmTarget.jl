@@ -23,7 +23,7 @@
 # Include order: this file loads immediately after codegen/ir.jl (src/WasmTarget.jl), BEFORE
 # codegen/types.jl (WasmValType) and codegen/context.jl (AbstractCompilationContext) exist.
 #
-# Quarantine (Julia-only, no dart Kernel equivalent — dev/MARCH.md §10.1): NirBoundscheck
+# Quarantine tier (Julia-only; no dart Kernel equivalent, so no dart anchor): NirBoundscheck
 # (Julia's bounds-check-elision IR, `Expr(:boundscheck, ...)`), NirThrowUndefIfNot,
 # NirNewvar, NirNoOp (`:gc_preserve_begin`/`:gc_preserve_end`/`:loopinfo` — hints with no
 # runtime effect), and NirUpsilon/NirPhiC (unoptimized-IR exception phis). These carry no
@@ -240,9 +240,9 @@ end
 # resolve_invoke_method / resolve_invoke_mi — the shared MethodInstance/CodeInstance→Method
 # resolution. invoke.jl resolves this same shape at ~4 duplicated sites (e.g. ~line 800-808:
 # `mi_or_ci = expr.args[1]; mi = mi_or_ci isa MethodInstance ? mi_or_ci : mi_or_ci isa
-# CodeInstance ? mi_or_ci.def : nothing`). Phase 5's registry work can adopt these helpers
-# without editing invoke.jl here — this march's file-ownership rule keeps that file
-# untouched by this branch.
+# CodeInstance ? mi_or_ci.def : nothing`). Those sites go when invoke.jl is converted and
+# reads `NirInvoke.mi` instead; dev/formal/NirBuild.tla's claim (3) is exactly the premise
+# that lets them: every duplicate would have resolved the SAME identity.
 # ============================================================================
 
 """`:invoke`'s `args[1]` is a MethodInstance directly, or (two-tier compilation) a
