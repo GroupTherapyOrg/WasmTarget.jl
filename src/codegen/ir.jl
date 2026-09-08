@@ -14,16 +14,21 @@ Returns the CodeInfo object from code_typed.
 # PAIRED CodeInfo — one consistent world, overlays applied, no re-inference.
 const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}}(nothing)
 
-function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true, interp=nothing)
+# ONE inference path. Every typed IR WasmTarget consumes comes from the
+# WasmInterpreter (overlays applied, WT's constant-evaluation rule in force):
+# the closed-world plan and any standalone query see the SAME IR for the same
+# function. (A `nothing` default once ran Julia's native interpreter here, and
+# a standalone dump differed from the plan's IR for the same function — hiding
+# a branch the plan compiled.) `interp` exists to share one instance within a
+# compilation; it is never a different kind of interpreter.
+function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
+                      interp::WasmInterpreter=get_wasm_interpreter())
     cache = TRIM_IR_CACHE[]
     if cache !== nothing
         hit = get(cache, (f, arg_types), nothing)
         hit !== nothing && return hit[1], hit[2]
     end
-    # Get the typed IR using Julia's introspection
-    # When interp is provided (WasmInterpreter), overlay methods are used
-    kwargs = interp !== nothing ? (; optimize=optimize, interp=interp) : (; optimize=optimize)
-    results = Base.code_typed(f, arg_types; kwargs...)
+    results = Base.code_typed(f, arg_types; optimize=optimize, interp=interp)
 
     if isempty(results)
         error("No method found for $f with types $arg_types")

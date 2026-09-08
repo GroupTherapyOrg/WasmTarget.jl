@@ -1545,12 +1545,7 @@ function deserialize_ir_value(d)
             func = Core.eval(Main, Meta.parse(func_name))
             sig = Tuple{typeof(func), arg_types...}
             mi = Base.method_instances(func, arg_types)[1]
-            if tag == "code_instance" && isdefined(Core, :CodeInstance)
-                # For CodeInstance, wrap the MI
-                ci_typed = Base.code_typed(func, arg_types)[1]
-                # Just return the MI — the codegen handles both MI and CI
-                return mi
-            end
+            # a CodeInstance tag deserializes to its MI as well — codegen handles both
             return mi
         catch
             # If we can't reconstruct the MI, return nothing — codegen will handle
@@ -1632,7 +1627,7 @@ Get a template CodeInfo that can be copied and modified for deserialization.
 """
 function _make_template_codeinfo()
     _noop() = nothing
-    ci, _ = Base.code_typed(_noop, (); optimize=true)[1]
+    ci, _ = get_typed_ir(_noop, ())
     return ci
 end
 
