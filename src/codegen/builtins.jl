@@ -966,6 +966,161 @@ function _lower_symbol!(b, fb, ctx, expr, idx, args, callee)
     return append_builder!(b, fb)
 end
 
+# `ifelse(cond, a, b)` — dart lowers a ConditionalExpression through its own
+# operand wraps (intrinsics.dart:607 the same nullable-return funnel); WT emits
+# `select`/`select_t`. Self-contained: compiles all three operands itself, so it
+# never depended on the generic arg-push loop. `Base.ifelse` (the generic
+# function) and `Core.ifelse` (the builtin) are DIFFERENT objects — the retired
+# `is_func(func, :ifelse)` matched either by bare name, so both are keys here.
+# L38_no_known_value_substitutions pins this body's two reject messages.
+function _lower_ifelse!(b, fb, ctx, expr, idx, args, callee)
+    length(args) == 3 || return nothing
+    # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
+    # Julia ifelse(cond, true_val, false_val)
+    # Compile each value separately to check for empty results. Loop C: capture the
+    # pushed type (emission byproduct) for the true/false EMIT pushes (was a re-guess).
+    # The cond keeps infer_value_wasm_type — that's a pure pre-emit type QUERY (drives the
+    # cond_is_ref SELECT-vs-fallback decision below), legitimate dart-style type knowledge,
+    # NOT the redundant re-guess-at-emit the typed channel deletes.
+    local _tv_b = _compile_value_b(args[2], ctx)   # true_val
+    local _fv_b = _compile_value_b(args[3], ctx)   # false_val
+    local _cv_b = _compile_value_b(args[1], ctx)   # cond
+
+    # the condition must push an i32, not a ref.
+    # The old detection BYTE-SCANNED cond_bytes for 0xfb 0x00/0x01 (GC_PREFIX +
+    # STRUCT_NEW) — but LEB128 operands collide with that pattern: `local.get 251`
+    # encodes as [0x20, 0xfb, 0x01], so any condition living in local 251 (or any
+    # constant containing those bytes) was misclassified as a ref and the SELECT
+    # was silently dropped, leaving only the true-branch value. In a gcd loop
+    # phi-update this froze the loop-carried value → infinite loop (gap
+    # 6830e0e173d4/c8566ce342f8 family). Classify by the VALUE'S TYPE instead.
+    cond_wasm_type = static_wasm_type(args[1], ctx)
+    cond_is_ref = cond_wasm_type isa ConcreteRef || cond_wasm_type === StructRef ||
+                  cond_wasm_type === ArrayRef || cond_wasm_type === ExternRef ||
+                  cond_wasm_type === AnyRef || cond_wasm_type === EqRef
+
+    # A non-i32 condition is invalid Julia lowering for `ifelse`; never choose
+    # one arm and fabricate a result.
+    if cond_is_ref
+        record_unsupported!(ctx, :value_stub,
+            "ifelse condition did not lower to i32"; idx=idx, detail=expr,
+            soundness_fatal=true)
+    end
+
+    local _ieb = _ctx_builder(ctx, "compile_call")
+    # Empty value emission is a compiler error, never permission to select an
+    # arbitrary arm or synthesize a zero/null value.
+    if isempty(_tv_b.instrs) || isempty(_fv_b.instrs) || isempty(_cv_b.instrs)
+        record_unsupported!(ctx, :value_stub,
+            "ifelse operand emitted no runtime value"; idx=idx, detail=expr,
+            soundness_fatal=true)
+    end
+
+    # All three values are non-empty, emit proper select — typed merges
+    append_builder!(_ieb, _tv_b)
+    append_builder!(_ieb, _fv_b)
+    append_builder!(_ieb, _cv_b)
+
+    # Determine the type of the values for select
+    val_type = infer_value_type(args[2], ctx)
+
+    # For reference types (like Int128/UInt128 structs), need typed select.
+    # The result-type operand after `0x63` (ref null heaptype) is a
+    # SIGNED LEB128 — heaptype is either a negative abstract-type code
+    # (anyref = -18, etc.) or a non-negative type index, and WASM uses
+    # signed encoding for both so a parser can tell them apart. Using
+    # `encode_leb128_unsigned` for a type index whose low 7 bits have
+    # bit 6 set (e.g. 84) emits a single byte `0x54` that the browser
+    # then interprets as the signed value -44: "Unknown heap type -44".
+    if val_type === Int128 || val_type === UInt128
+        # Use select_t with the struct type
+        type_idx = get_int128_type!(ctx.mod, ctx.type_registry, val_type)
+        # Encode (ref null type_idx) for nullable struct ref
+        select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(type_idx))...])
+    elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
+        # Other reference types need typed select too
+        wasm_type = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry; for_local=true)
+        if wasm_type isa ConcreteRef
+            select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(wasm_type.type_idx))...])
+        else
+            # Fall back to untyped select for value types
+            select!(_ieb)
+        end
+    else
+        # Value types (i32, i64, f32, f64) use untyped select
+        select!(_ieb)
+    end
+    append_builder!(fb, _ieb)
+    return append_builder!(b, fb)
+end
+
+# Core.typeassert(x, T) — dart's CHECKED cast (census F4; emitAsCheck,
+# types.dart:437-481: is-check, throw on mismatch). Statically-proven casts stay
+# pass-through (the common case — inference already narrowed). A runtime check
+# emits when the value is a GC ref and the target has a DFS classId range:
+# typeId ∈ [low, high] or throw TypeError. Values the discriminator can't see
+# (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
+# Self-contained: emits its own operand through `emit_value!`.
+# L57_exact_typeassert_exception pins this body's `_emit_typeerror_throw!` call.
+function _lower_typeassert!(b, fb, ctx, expr, idx, args, callee)
+    if length(args) >= 1
+        local _ta_target = length(args) >= 2 ? (args[2] isa Type ? args[2] :
+            args[2] isa GlobalRef ? Core.eval(args[2].mod, args[2].name) : nothing) : nothing
+        local _ta_static = get_ssa_type(ctx, args[1])
+        if _ta_target isa Type && isconcretetype(_ta_target) &&
+           _ta_static isa Type && isconcretetype(_ta_static)
+            if _ta_static <: _ta_target
+                emit_value!(fb, args[1], ctx,
+                            get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry))
+            else
+                _emit_typeerror_throw!(fb, args[1], _ta_target, idx, ctx)
+            end
+            return append_builder!(b, fb)
+        end
+        local _ta_ty = emit_value!(fb, args[1], ctx)  # R17-floor: dynamic typeassert selects its class-range check from the actual reference representation
+        if _ta_target isa Type && isconcretetype(_ta_target) &&
+           (_ta_ty === AnyRef || _ta_ty isa ConcreteRef || _ta_ty === StructRef) &&
+           ctx.type_registry.base_struct_idx !== nothing
+            local _ta_range = get_type_range(ctx.type_registry, _ta_target)
+            if _ta_range !== nothing
+                local _ta_low, _ta_high = _ta_range
+                local _ta_base = ctx.type_registry.base_struct_idx
+                local _ta_tmp = allocate_local!(ctx, AnyRef)
+                local_tee!(fb, _ta_tmp)
+                ref_test!(fb, Int64(_ta_base), false)
+                if_!(fb)                                   # discriminable ($JlBase struct)
+                local_get!(fb, UInt32(_ta_tmp))
+                emit_typeof!(fb, _ta_base)
+                emit_classid_range_check!(fb, _ta_low, _ta_high)
+                num!(fb, Opcode.I32_EQZ)
+                if_!(fb)                                   # out of range → THROW
+                ensure_exception_tag!(ctx.mod)
+                local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
+                local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
+                _te_def isa StructType || error("TypeError did not register as a Wasm struct")
+                emit_struct_prefix!(fb, ctx.type_registry, TypeError, _te_info)
+                local _te_values = Any[:typeassert, "", _ta_target]
+                for _te_i in 1:3
+                    local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
+                    emit_value!(fb, _te_values[_te_i], ctx, _te_w;
+                                from_julia=fieldtype(TypeError, _te_i))
+                end
+                local_get!(fb, UInt32(_ta_tmp))
+                local _te_got_w = _te_def.fields[wasm_field_idx(_te_info, 4) + 1].valtype
+                coerce_stack_top!(fb, _te_got_w, ctx;
+                                  from_julia=(_ta_static isa Type ? _ta_static : nothing))
+                struct_new!(fb, _te_info.wasm_type_idx)
+                global_set!(fb, ensure_exception_global!(ctx.mod))
+                global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+                end_block!(fb)
+                end_block!(fb)
+                local_get!(fb, UInt32(_ta_tmp))            # the value survives the check
+            end
+        end
+    end
+    return append_builder!(b, fb)
+end
+
 # ---- Registry population ---------------------------------------------------
 # One entry per builtin identity. Aliases (e.g. isvisible/_closed_world_isvisible)
 # map to the SAME lowering function, matching dart's KernelNodes resolving
@@ -1003,3 +1158,6 @@ BUILTIN_LOWERINGS[Core.apply_type] = _lower_apply_type!
 BUILTIN_LOWERINGS[Core.typeof] = _lower_typeof!
 BUILTIN_LOWERINGS[Core.:(===)] = _lower_egal_early!
 BUILTIN_LOWERINGS[Core.:(!==)] = _lower_egal_early!
+BUILTIN_LOWERINGS[Core.ifelse] = _lower_ifelse!
+BUILTIN_LOWERINGS[Base.ifelse] = _lower_ifelse!
+BUILTIN_LOWERINGS[Core.typeassert] = _lower_typeassert!
