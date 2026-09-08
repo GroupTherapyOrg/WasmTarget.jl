@@ -1271,7 +1271,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 elseif def isa NirInvoke
                     compile_invoke!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirNew
-                    compile_new!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                    compile_new!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirForeignCall
                     compile_foreigncall!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
                 end

@@ -465,7 +465,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             stmt_bytes = builder_code(_sf)
         elseif node isa NirNew
             # Struct construction: %new(Type, args...)
-            compile_new!(_sf, stmt, idx, ctx)
+            compile_new!(_sf, node, idx, ctx)
             stmt_bytes = builder_code(_sf)
         elseif node isa NirBoundscheck
             # Compile to the expr's REAL value (true unless @inbounds).
@@ -788,53 +788,26 @@ end
 
 """dart visitConstructorInvocation shape (): emits the struct construction
 INTO the caller's builder and returns it — THE implementation."""
-function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
-
-    # expr.args[1] is the type, rest are field values
-    struct_type_ref = expr.args[1]
-    field_values = expr.args[2:end]
-
-
-
-
-    # Resolve the struct type if it's a GlobalRef, DataType, or SSAValue
-    struct_type = if struct_type_ref isa GlobalRef
-        getfield(struct_type_ref.mod, struct_type_ref.name)
-    elseif struct_type_ref isa DataType
-        struct_type_ref
-    elseif struct_type_ref isa Core.SSAValue
-        # Handle Core.apply_type results (e.g., NamedTuple from keyword args)
-        # ssavaluetypes[ssa.id] gives Type{ConcreteType} — extract the parameter
-        ssa_type = ctx.code_info.ssavaluetypes[struct_type_ref.id]
-        if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
-            ssa_type.parameters[1]
-        else
-            # :new of a struct whose type isn't statically known (dynamic SSAValue type) —
-            # type instability. Loud reject (constructs an object natively).
-            emit_unsupported_stub!(ctx, b, :unsupported_type,
-                "struct construction (:new) with a non-constant type — type instability"; idx=idx,
-                detail=ssa_type)
-            return b
-        end
-    elseif struct_type_ref isa Core.Argument
-        # Constructor bodies reference the constructed type as Core.Argument(1)
-        # (#self# = Type{T}): TickLabel(...)'s IR is `%new(_1, fields...)`.
-        # The :new statement's own inferred SSA type IS the constructed type
-        # (E-003: TickLabel and SubString constructor deps failed here).
-        local new_ssa_type = ctx.code_info.ssavaluetypes[idx]
-        if new_ssa_type isa DataType && isconcretetype(new_ssa_type) && isstructtype(new_ssa_type)
-            new_ssa_type
-        else
-            # :new where the constructed type (Core.Argument #self#) can't be resolved to a
-            # concrete struct — type instability. Loud reject.
-            emit_unsupported_stub!(ctx, b, :unsupported_type,
-                "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
-                detail=new_ssa_type)
-            return b
-        end
-    else
-        error("Unknown struct type reference: $struct_type_ref")
+function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractCompilationContext)
+    # The constructed type was resolved ONCE at the boundary, from whichever operand shape
+    # named it (a type literal, a Core.apply_type result's Type{T}, or the constructor's
+    # own #self# argument). A failed resolution is type instability — a loud reject, never
+    # a guessed layout.
+    field_values = node.args
+    if node.type_kind === :ssa
+        emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "struct construction (:new) with a non-constant type — type instability"; idx=idx,
+            detail=node.type_detail)
+        return b
+    elseif node.type_kind === :argument
+        emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "struct construction (:new) with an unresolvable type — type instability"; idx=idx,
+            detail=node.type_detail)
+        return b
+    elseif node.type_kind === :unknown
+        error("Unknown struct type reference in %new")
     end
+    struct_type = node.T
 
     # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
     # array (same representation contract as Memory) — %new(CodeUnits, s)
@@ -869,15 +842,10 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
         # Check if field0 is a multi-arg memoryrefnew that produces [array_ref, i32_index].
         # Vector only needs the array_ref — drop the extra i32 index.
         is_multi_arg_memref = false
-        if field_values[1] isa Core.SSAValue
-            src_stmt = ctx.code_info.code[field_values[1].id]
-            if src_stmt isa Expr && src_stmt.head === :call
-                src_func = src_stmt.args[1]
-                is_multi_arg_memref = (src_func isa GlobalRef &&
-                                      (src_func.mod === Core || src_func.mod === Base) &&
-                                      src_func.name === :memoryrefnew &&
-                                      length(src_stmt.args) >= 4)
-            end
+        if field_values[1] isa NirSSA
+            local src = ctx.nir[field_values[1].id].node
+            is_multi_arg_memref = src isa NirCall && src.callee === Core.memoryrefnew &&
+                                  length(src.args) >= 3
         end
         # (typed): the LOCAL_GET LEB decode is gone — the tracked type
         # answers "is the source numeric where field 0 needs an array ref".
@@ -892,23 +860,19 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             # Before falling back to ref.null, check if the source SSA is a memoryrefnew
             # or memorynew result — if so, recompile the source to get the actual array ref.
             recompiled = false
-            if field_values[1] isa Core.SSAValue
-                src_stmt_f0 = ctx.code_info.code[field_values[1].id]
-                if src_stmt_f0 isa Expr && src_stmt_f0.head === :call
-                    sf0 = src_stmt_f0.args[1]
-                    is_memref = sf0 isa GlobalRef &&
-                                (sf0.mod === Core || sf0.mod === Base) &&
-                                sf0.name in (:memoryrefnew, :memoryref, :memorynew)
-                    if is_memref
-                        # Recompile the source statement to get the actual array ref
-                        compile_call!(b, src_stmt_f0, field_values[1].id, ctx)   # dart visitor
-                        recompiled = true
-                    end
+            if field_values[1] isa NirSSA
+                local _f0_rec = ctx.nir[field_values[1].id]
+                local src_f0 = _f0_rec.node
+                if src_f0 isa NirCall && (src_f0.callee === Core.memoryrefnew ||
+                                          src_f0.callee === Core.memoryref ||
+                                          src_f0.callee === Core.memorynew)
+                    # Recompile the source statement to get the actual array ref
+                    compile_call!(b, _f0_rec.raw, field_values[1].id, ctx)   # dart visitor
+                    recompiled = true
                 end
                 # Also check if source is a PiNode wrapping a memoryrefnew
-                if !recompiled && src_stmt_f0 isa Core.PiNode
-                    emit_value!(b, src_stmt_f0.val, ctx,
-                                static_wasm_type(src_stmt_f0.val, ctx))
+                if !recompiled && src_f0 isa NirPi
+                    emit_value!(b, src_f0.value, ctx, static_wasm_type(src_f0.value, ctx))
                     recompiled = true
                 end
             end
@@ -1015,20 +979,22 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             inner_type = get_nullable_inner_type(field_type)
 
             # Get the value's actual type
-            val_type = if val isa Core.SSAValue
+            val_type = if val isa NirSSA
                 get(ctx.ssa_types, val.id, Any)
-            elseif val isa GlobalRef
-                actual_val = try getfield(val.mod, val.name) catch; nothing end
-                typeof(actual_val)
+            elseif val isa NirGlobalRef
+                typeof(val.value)
+            elseif val isa NirLiteral
+                typeof(val.value)
             else
-                typeof(val)
+                Any
             end
 
             # Check if this value is nothing - either literally or via an SSA with Nothing type
             # SSA values with Nothing type (e.g., from GlobalRef to nothing) produce no bytecode,
             # so we need to emit ref.null directly instead of trying to load a non-existent value
-            is_literal_nothing = val === nothing || (val isa GlobalRef && val.name === :nothing)
-            is_nothing_type_ssa = val isa Core.SSAValue && val_type === Nothing
+            is_literal_nothing = (val isa NirLiteral && val.value === nothing) ||
+                                 (val isa NirGlobalRef && val.name === :nothing)
+            is_nothing_type_ssa = val isa NirSSA && val_type === Nothing
             should_emit_null = is_literal_nothing || is_nothing_type_ssa
 
             if should_emit_null
@@ -1102,12 +1068,12 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
 
             # Check for nothing values FIRST before compile_value
             # compile_value(nothing) returns i32.const 0, which can't be converted
-            is_nothing_val = val === nothing ||
-                            (val isa GlobalRef && val.name === :nothing) ||
-                            (val isa Core.SSAValue && 1 <= val.id <= length(ctx.code_info.code) && begin
-                                ssa_stmt_check = ctx.code_info.code[val.id]
-                                (ssa_stmt_check isa GlobalRef && ssa_stmt_check.name === :nothing) ||
-                                (ssa_stmt_check isa Core.PiNode && ssa_stmt_check.typ === Nothing)
+            is_nothing_val = (val isa NirLiteral && val.value === nothing) ||
+                            (val isa NirGlobalRef && val.name === :nothing) ||
+                            (val isa NirSSA && 1 <= val.id <= length(ctx.nir) && begin
+                                local def_check = ctx.nir[val.id].node
+                                (def_check isa NirGlobalRef && def_check.name === :nothing) ||
+                                (def_check isa NirPi && def_check.typ === Nothing)
                             end)
             if is_nothing_val
                 if _cn_field_is_anyref
@@ -1121,13 +1087,15 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             if _cn_field_is_anyref
                 # Field is anyref — concrete/struct refs are subtypes of anyref.
                 # No extern.convert_any needed. Numerics need boxing.
-                val_julia_type = if val isa Core.SSAValue
+                val_julia_type = if val isa NirSSA
                     get(ctx.ssa_types, val.id, Any)
-                elseif val isa Core.Argument
+                elseif val isa NirArgument
                     local _arg_i = ctx.is_compiled_closure ? val.n : val.n - 1
                     (_arg_i >= 1 && _arg_i <= length(ctx.arg_types)) ? ctx.arg_types[_arg_i] : Any
+                elseif val isa NirLiteral || val isa NirGlobalRef
+                    typeof(val.value)
                 else
-                    typeof(val)
+                    Any
                 end
                 val_wasm_type = julia_to_wasm_type(val_julia_type)
                 if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
@@ -1197,7 +1165,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                 record_unsupported!(ctx, :value_stub,
                     "struct construction leaves a non-reference Julia field undefined " *
                     "($struct_type: field=$fi, physical=$missing_type)";
-                    idx=idx, detail=expr)
+                    idx=idx, detail=node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
