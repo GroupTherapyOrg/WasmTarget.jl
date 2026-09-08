@@ -13,7 +13,7 @@ wasm struct with a classId header field. `isstructtype` alone over-admits: `Memo
 field) — giving one a dispatch axis produced a wrapper with no struct to cast to (the
 `_la_sub` regression, compile.jl `_collect_reachable_ir_types`). Numeric/primitive
 receivers dispatch as compile-time-resolved overloads, never through the selector table."""
-_classid_dispatchable(@nospecialize(T)) =
+_classid_dispatchable(@nospecialize(T))::Bool =
     T isa DataType && isstructtype(T) && !isprimitivetype(T) && !(T <: Number) &&
     !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
 

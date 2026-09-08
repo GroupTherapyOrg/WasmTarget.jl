@@ -145,7 +145,7 @@ function _f3_capturing_closure_bodies(code, box_id::Int)
     return out
 end
 
-function _f3_collect_capturing_bodies!(out, visited::Set{Any}, code, box_id::Int)
+function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{Any}, Vector{Any}, Any}}, visited::Set{Any}, code, box_id::Int)::Vector{Tuple{Vector{Any}, Vector{Any}, Any}}
     field_captors = _f3_box_captor_fields(code, box_id)
     isempty(field_captors) && return out
     captor_types = Set{Type}(ty for (ty, _) in field_captors)

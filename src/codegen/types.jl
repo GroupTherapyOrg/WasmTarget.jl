@@ -372,7 +372,7 @@ dart initialises those lazily, constants.dart:445-464). `scratch` is the index o
 string ARRAY type the caller declares only when `used[]` comes back true.
 """
 function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                                   s::String, scratch::Integer, used::Base.RefValue{Bool})
+                                   s::String, scratch::Integer, used::Base.RefValue{Bool})::InstrBuilder
     local g = get_string_constant_global!(mod, registry, s)
     if g !== nothing
         global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))

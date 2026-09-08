@@ -652,7 +652,7 @@ function _compile_closed_world_plan(functions::Vector;
             local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
                          WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
             haskey(_cv_bodies, _T) || (push!(_cv_types, _T); _cv_bodies[_T] = ClosureBody[]; _cv_ctx[_T] = _takes_context)
-            push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt, Any[T2 for T2 in _ats]))
+            push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt, Type[T2 for T2 in _ats]))
         end
         for _T in _cv_types
             build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T])

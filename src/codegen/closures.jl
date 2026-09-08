@@ -25,8 +25,8 @@ struct ClosureBody
     body_idx::UInt32
     params::Vector{WasmValType}
     results::Vector{WasmValType}
-    return_type::Any
-    julia_params::Union{Nothing, Vector{Any}}   # the specialization's Julia parameter types (self included for capturing closures)
+    return_type::Type
+    julia_params::Union{Nothing, Vector{Type}}   # the specialization's Julia parameter types (self included for capturing closures)
 end
 ClosureBody(body_idx, params, results, return_type) = ClosureBody(body_idx, params, results, return_type, nothing)
 
@@ -161,7 +161,7 @@ end
 
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`
 # (the same narrowing the single-body trampoline applies).
-function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)
+function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)::InstrBuilder
     local_get!(tb, UInt32(j))
     if pt in (I32, I64, F32, F64)
         emit_classid_unbox!(tb, mod, registry, pt)
@@ -176,7 +176,7 @@ end
 # The re-boxed call of `body` from the trampoline's narrowed arguments, then `return`.
 function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, body::ClosureBody,
                              arity::Int, takes_context::Bool, base_idx::UInt32, captured_info, scratch::UInt32,
-                             has_result::Bool)
+                             has_result::Bool)::InstrBuilder
     if takes_context
         local_get!(tb, UInt32(0))
         ref_cast!(tb, Int64(base_idx), false)
