@@ -303,7 +303,6 @@ const LOCKS = [
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            runtime_src = read(joinpath(SRC, "runtime", "arrayops.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
                          "is_func(func, :resize!)", "assume capacity is sufficient",
@@ -312,7 +311,7 @@ const LOCKS = [
                         "function Base.pop!(v::Vector{T})",
                         "function Base.resize!(v::Vector{T}, n::Integer)",
                         "_wt_vector_mutation_semantics"]
-            all_src = calls_src * interp_src * runtime_src * test_src
+            all_src = calls_src * interp_src * test_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
@@ -1497,6 +1496,22 @@ const LOCKS = [
             retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
                        "string_hash_func_idx", "_wasm_string_fnv1a",
                        "resolve_through_dead_boundscheck"]
+            n = 0
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                src = read(joinpath(dir, f), String)
+                n += count(name -> occursin(name, src), retired)
+            end
+            n
+        end),
+    "L123_wt_only_intrinsic_surface_extinct" => ("the WT-only str_*/arr_* runtime intrinsic surface (src/runtime/{stringops,arrayops,intrinsics}.jl, compile.jl's name-ladder is_intrinsic_function/generate_intrinsic_body, and their invoke.jl standalone builders) is DELETED — dart2wasm has no hand-written-wasm runtime library keyed by function NAME; users reach strings/arrays through Base, which lowers through Base's own overlays and INVOKE_INTRINSICS (Method-keyed, L115) (H(4); locked 2026-09-07)",
+        () -> begin
+            retired = ["is_intrinsic_function", "generate_intrinsic_body",
+                       "str_char", "str_getchar", "str_charlen", "str_setchar!",
+                       "str_new", "str_copy", "str_substr", "str_concat", "str_eq",
+                       "str_hash", "str_find", "str_contains",
+                       "arr_new", "arr_get", "arr_set!", "arr_len", "arr_fill!",
+                       "INTRINSIC_MAPPING", "get_wasm_opcode"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue

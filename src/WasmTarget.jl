@@ -52,10 +52,6 @@ include("codegen/strings.jl")
 include("codegen/sourcemap.jl")
 include("codegen/cache.jl")
 
-# Runtime - Intrinsics and stdlib mapping
-include("runtime/intrinsics.jl")
-include("runtime/stringops.jl")
-include("runtime/arrayops.jl")
 include("bridge.jl")
 
 

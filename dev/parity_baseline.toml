@@ -27,6 +27,7 @@ L11_driver_fronts = 0
 L120_one_inference_path = 0
 L121_retired_names_absent_from_src = 0
 L122_closed_world_numbered_once = 0
+L123_wt_only_intrinsic_surface_extinct = 0
 L12_god_fn_seams_only = 0
 L13_no_byte_bridges = 0
 L14_no_posthoc_module_repair = 0
