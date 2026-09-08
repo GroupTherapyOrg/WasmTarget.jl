@@ -348,6 +348,18 @@ Not in the list, by decision: a rewrite of anything; JuliaLowering (experimental
 pre-inference — revisit when it lands in Base as the source of richer line tables);
 UnifiedIR beyond the harness (#62334 is a draft).
 
+#### Phase 12 progress (2026-09-07/08)
+
+| Item | State | Evidence |
+|---|---|---|
+| A | done | `f4e29a9a` — L120, widened `ad01314e` to every native inference entry (box-capture joins asked the native interpreter, which does not see the overlays) |
+| J | done | `f4e29a9a` — `dev/lanes.sh`; TLC fast/deep split |
+| G | 5 of 5 models in | ClosureLayout (`004b0be7`), Constants (`94ffdae6`), BoxJoin (`eef9c890`), NirBuild (`57dbe41e`), Coercion (`0fb73316`) — 11 models, 44 instances; the harness's SIGPIPE misclassification fixed `de94909a`; nightly deep TLC still open |
+| E | steps 1–3 of the census map done | phi-edge typer/compatibility test collapsed to one definition, dead call-arg re-guess deleted (R5 81→78, `61416def`); lengths/offsets through the funnel (R3 93→79, R7 57→35, R27 54→32, `6486466c` `0ec381fe`); the funnel rejects unlisted numeric pairs (`752ad55e`) and, after Coercion.tla, cross-hierarchy pairs, lands non-null abstract sinks and nullability after bridges (`0fb73316`). Remaining: calls.jl's 32 raw ops and 33 R3 sites, the twin call-argument loops (calls.jl / invoke.jl → one `emit_call_argument!`), R5's declared-type floor consolidation — after B lands |
+| Findings closed from the models | | ClosureLayout ArityDrift → `70dbfd8a` (vtable shape read from the global, mismatch errors); BoxJoin one-hop discovery → in flight (`march/p12-boxjoin-transitive`) |
+| B, C, I, H(4) | in flight | worktrees `march/p12B-numbering`, `march/p12C-foldrule`, `march/p12I-strict`, `march/p12H-runtime` |
+| D, F, H(1-3,5), K | open | D after B (shared files); F needs calls.jl |
+
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
 The three roadmap items the pathway had deferred are in: item 4 (normalized frontend boundary,
