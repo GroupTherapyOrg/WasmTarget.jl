@@ -1125,6 +1125,935 @@ function _lower_typeassert!(b, fb, ctx, expr, idx, args, callee)
     return append_builder!(b, fb)
 end
 
+# ---- getfield / getproperty / setfield! / setproperty! ----------------------
+# parity(intrinsics.dart:685 MemberIntrinsic.generate): dart resolves an
+# instance-member access to ONE intrinsic keyed on the resolved member and
+# runs THAT intrinsic's own shape guards in order. WT's four field-access
+# builtins have several such guards each, and the retired `is_func(func, :sym)`
+# ladder interleaved them with RAW identity checks on the same callee
+# (`func.mod === Core && func.name === :getfield`: the closure self-capture
+# skip and the `:signal` skip) that only `Core.getfield`/`Base.getfield` — one
+# object, measured — ever satisfied, never `Base.getproperty`. Those raw checks
+# are guards of the SAME builtin, so they are folded in here, in their original
+# relative order, and appear only in the `getfield` entry.
+#
+# The two ladder arms that sat BETWEEN these guards (the `func isa
+# Core.SSAValue` signal getter/setter and the `is_runtime_ir_value(func)`
+# dynamic closure call, calls.jl) are unreachable for any of these callees:
+# both require `func` to still be an SSAValue/Argument/SlotNumber/PiNode, and
+# an unresolved SSAValue is not a registry key. So consulting the funnel once,
+# up front, preserves each guard's relative order exactly.
+
+function _lower_getfield_layout!(b, fb, ctx, expr, idx, args)
+    # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
+    # pointer is compile-time host metadata; its loads are folded in
+    # _try_fold_layout_pointerref. Represent the opaque, non-null layout handle
+    # by the registered type id + 1 (zero remains C_NULL), never by a fabricated
+    # universal pointer value.
+    if length(args) >= 2
+        local _gf_dt = args[1] isa QuoteNode ? args[1].value : args[1]
+        local _gf_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+        if _gf_dt isa DataType && _gf_fld === :layout
+            i64_const!(fb, Int64(ensure_type_id!(ctx.type_registry, _gf_dt)) + 1)
+            return append_builder!(b, fb)
+        end
+    end
+    return nothing
+end
+
+
+function _lower_getfield_signal_read!(b, fb, ctx, expr, idx, args)
+    # Special case for signal read: getfield(Signal, :value) -> global.get
+    # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
+    # ONLY applies to actual getfield/getproperty(Signal, :value) calls (WasmGlobal pattern)
+    # For Therapy.jl closures, signal_ssa_getters maps closure field SSAs - handled in compile_invoke
+    is_getfield_value = length(args) >= 2
+    if is_getfield_value && haskey(ctx.signal_ssa_getters, idx)
+        # Check that this is accessing :value field (WasmGlobal pattern)
+        field_ref = args[2]
+        field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if field_name === :value
+            global_idx = ctx.signal_ssa_getters[idx]
+            global_get!(fb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+            return append_builder!(b, fb)
+        end
+    end
+    return nothing
+end
+
+
+function _lower_setfield_signal_write!(b, fb, ctx, expr, idx, args)
+    # Special case for signal write: setfield!(Signal, :value, x) -> global.set
+    # This is detected by analyze_signal_captures! and stored in signal_ssa_setters
+    # ONLY applies to actual setfield!/setproperty! calls (WasmGlobal pattern), NOT closure field access
+    is_setfield_call = length(args) >= 3
+    if is_setfield_call && haskey(ctx.signal_ssa_setters, idx)
+        # The value to write is the 3rd argument (args = [target, field, value])
+        global_idx = ctx.signal_ssa_setters[idx]
+        value_arg = args[3]
+        local _setb = _ctx_builder(ctx, "compile_call")
+        # The signal cell's declared type IS the expected
+        emit_value!(_setb, value_arg, ctx, ctx.mod.globals[Int(global_idx) + 1].valtype)
+        global_set!(_setb, global_idx)
+
+        # Inject DOM update calls for this signal (Therapy.jl reactive updates)
+        if haskey(ctx.dom_bindings, global_idx)
+            # Get global's type for conversion
+            global_type = ctx.mod.globals[global_idx + 1].valtype
+
+            for (import_idx, const_args) in ctx.dom_bindings[global_idx]
+                # Push constant arguments (e.g., hydration key)
+                for arg in const_args
+                    i32_const!(_setb, Int(arg))
+                end
+                # Push the signal value (re-read from global)
+                global_get!(_setb, global_idx, global_type)
+                # Convert to f64 for DOM imports (all DOM imports expect f64)
+                emit_convert_to_f64!(_setb, global_type)
+                # Call the DOM import function
+                call!(_setb, import_idx, WasmValType[], WasmValType[])
+            end
+        end
+
+        # setfield! returns the value written, so re-read it
+        global_get!(_setb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+        append_builder!(fb, _setb)
+        return append_builder!(b, fb)
+    end
+    return nothing
+end
+
+
+function _lower_getfield_closure_capture!(b, fb, ctx, expr, idx, args)
+    # Special case for getfield on closure (_1) accessing captured signal fields
+    # These produce intermediate SSA values (getter/setter functions)
+    # Skip them - the actual read/write happens when the function is invoked
+    if length(args) >= 2
+        target = args[1]
+        field_ref = args[2]
+        # Target can be Core.SlotNumber(1) or Core.Argument(1)
+        is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
+                          (target isa Core.Argument && target.n == 1)
+        if is_closure_self
+            # This is accessing a field of the closure
+            field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_name isa Symbol && haskey(ctx.captured_constant_fields, field_name)
+                local _captured_value = ctx.captured_constant_fields[field_name]
+                # The canonical pre-emission type query owns Julia→Wasm mapping;
+                # root substitutions do not introduce another conversion site.
+                local _captured_wasm = static_wasm_type(_captured_value, ctx)
+                emit_value!(fb, _captured_value, ctx, _captured_wasm;
+                            from_julia=typeof(_captured_value))
+                return append_builder!(b, fb)
+            end
+            if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
+                # Skip - this produces a getter/setter function reference
+                return append_builder!(b, fb)
+            end
+        end
+    end
+    return nothing
+end
+
+
+function _lower_getfield_signal_skip!(b, fb, ctx, expr, idx, args)
+    # Skip getfield(CompilableSignal/Setter, :signal) - intermediate step
+    # We track this in analyze_signal_captures! but don't need to emit anything
+    # IMPORTANT: Only skip for actual CompilableSignal/Setter types, not any struct with a :signal field
+    if length(args) >= 2
+        field_ref = args[2]
+        field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if field_name === :signal
+            # Only skip for CompilableSignal/Setter types (WasmGlobal pattern)
+            target_type = infer_value_type(args[1], ctx)
+            if target_type isa DataType && target_type.name.name in (:CompilableSignal, :CompilableSetter)
+                # Skip - this is getting Signal from CompilableSignal/Setter
+                return append_builder!(b, fb)
+            end
+        end
+    end
+    return nothing
+end
+
+
+function _lower_getfield_general!(b, fb, ctx, expr, idx, args)
+    # Special case for getfield/getproperty - struct/tuple field access
+    # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
+    # rather than Core.getfield(obj, :field)
+    if length(args) >= 2
+        obj_arg = args[1]
+        field_ref = args[2]
+        obj_type = infer_value_type(obj_arg, ctx)   # pre-existing query (the mega-arm relies on it)
+        if is_runtime_vararg_tuple_type(obj_type) && !(field_ref isa QuoteNode)
+            local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, obj_type)
+            local E = vararg_tuple_eltype(obj_type)
+            local arr_idx = get_array_type!(ctx.mod, ctx.type_registry, E)
+            local tb = _ctx_builder(ctx, "compile_call")
+            emit_value!(tb, obj_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
+            struct_get!(tb, info.wasm_type_idx, wasm_field_idx(info, 1),
+                        ConcreteRef(arr_idx, true))
+            emit_value!(tb, field_ref, ctx, I64)
+            i64_const!(tb, 1)
+            num!(tb, Opcode.I64_SUB)
+            narrow_length_to_i32!(tb)
+            local ew = julia_to_wasm_type(E)
+            array_get!(tb, arr_idx, ew; signed=packed_array_signedness(E))
+            return append_builder!(b, tb)
+        end
+        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
+        # (dart Context variable read) through the box's REAL struct type.
+        local _mb_fld = field_ref isa QuoteNode ? field_ref.value : field_ref
+        if obj_type === Core.Box && _mb_fld === :contents
+            local _mb_ib = _ctx_builder(ctx, "compile_call")
+            local _mb_ty = emit_value!(_mb_ib, obj_arg, ctx)  # R17-floor: actual box family selects projection
+            local _mb_idx = _mb_ty isa ConcreteRef ? _mb_ty.type_idx :
+                            UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
+            local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
+            struct_get!(_mb_ib, _mb_idx, UInt32(1), _mb_ft)
+            # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
+            # unbox through the ONE funnel so declared and actual agree at the store.
+            local _mb_jt = get(ctx.ssa_types, idx, Any)
+            local _mb_want = _mb_jt in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) ?
+                             julia_to_wasm_type(_mb_jt) : nothing
+            local _mb_out = _mb_ft
+            if _mb_want !== nothing && _mb_want !== _mb_ft && _wt_is_ref(_mb_ft)
+                coerce_stack_top!(_mb_ib, _mb_want, ctx)
+                _mb_out = _mb_want
+            end
+            # Land in a typed scratch + end with local.get (unambiguous tail for the
+            # store heuristics — same workaround as the het-tuple arm above).
+            local _mb_res = length(ctx.locals) + ctx.n_params
+            push!(ctx.locals, _mb_out)
+            builder_set_local_type!(_mb_ib, _mb_res, _mb_out)
+            local_set!(_mb_ib, _mb_res)
+            local_get!(_mb_ib, _mb_res)
+            append_builder!(fb, _mb_ib)
+            return append_builder!(b, fb)
+        end
+
+        # Handle Memory{T}.instance pattern (Julia 1.11+ Vector allocation)
+        # This pattern appears as Core.getproperty(Memory{T}, :instance)
+        # where Memory{T} is passed directly as a DataType
+        # Memory{T}.instance is a singleton empty Memory (length 0)
+        # We compile it to create an empty WasmGC array
+        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+        # Handle getfield(DataType_constant, :flags) — compile-time constant folding.
+        # Broadcasting IR uses DataType.flags to check type properties (e.g., isprimitivetype).
+        # The DataType is a compile-time constant, so we can emit the flags value directly.
+        if field_sym === :flags && obj_arg isa DataType && isdefined(obj_arg, :flags)
+            flags_val = obj_arg.flags
+            i32_const!(fb, Int64(flags_val))
+            return append_builder!(b, fb)
+        end
+
+        if field_sym === :instance && obj_arg isa DataType && obj_arg <: Memory
+            # Memory{T}.instance - create an empty array (length 0)
+            # Extract element type from Memory{T}
+            elem_type = if obj_arg.name.name === :Memory && length(obj_arg.parameters) >= 1
+                obj_arg.parameters[1]
+            elseif obj_arg.name.name === :GenericMemory && length(obj_arg.parameters) >= 2
+                obj_arg.parameters[2]
+            else
+                Int32  # default
+            end
+
+            # Get or create array type for this element type
+            arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+            # Emit array.new_default with length 0
+            i32_const!(fb, 0)  # length = 0
+            array_new_default!(fb, arr_type_idx)
+            return append_builder!(b, fb)
+        end
+
+        # Handle Task.rngState0..3 field access → Wasm global.get
+        # Julia's rand() accesses task-local Xoshiro state via getfield(task, :rngStateN)
+        if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
+            rng_global = get_rng_global_idx(field_sym)
+            if rng_global !== nothing
+                global_get!(fb, rng_global, ctx.mod.globals[rng_global + 1].valtype)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle WasmGlobal field access (:value -> global.get)
+        if obj_type <: WasmGlobal
+            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_sym === :value
+                # Extract global index from type parameter
+                global_idx = get_wasm_global_idx(obj_arg, ctx)
+                if global_idx !== nothing
+                    global_get!(fb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+                    return append_builder!(b, fb)
+                end
+            end
+        end
+
+        # Handle Array field access (:ref and :size) - works for Vector, Matrix, etc.
+        # Both Vector and Matrix are now structs with (ref, size) fields
+        if obj_type <: AbstractArray
+            field_sym = if field_ref isa QuoteNode
+                field_ref.value
+            else
+                field_ref
+            end
+            # parity(class_info.dart:666 ClassInfoCollector.collect): dart's struct for a
+            # class exists before any field read; WT registers lazily, so the read
+            # itself registers through the one type chain (a constant Vector read only
+            # through .size never reached any other registrar).
+            if obj_type isa DataType && isconcretetype(obj_type) && obj_type <: Array
+                register_reachable_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
+
+            if field_sym === :ref
+                # :ref returns the underlying array reference (field 1 of struct; field 0 = typeId)
+                local _refb = _ctx_builder(ctx, "compile_call")
+                if haskey(ctx.type_registry.structs, obj_type)
+                    info = ctx.type_registry.structs[obj_type]
+                    # Typed arrival when the struct is registered
+                    emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                    struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
+                else
+                    # parity(class_info.dart:666 ClassInfoCollector.collect): an unregistered struct previously emitted an INCOMPLETE
+                    # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
+                    # dart's closed-world fixpoint registers every reachable class's struct
+                    # BEFORE codegen begins, so this situation cannot arise there; WT's
+                    # late/dynamic frontend lacks that guarantee, so it rejects instead.
+                    record_unsupported!(ctx, :unsupported_type, "field access on an unregistered struct type"; idx=idx)
+                    unreachable!(_refb)
+                end
+                append_builder!(fb, _refb)
+                return append_builder!(b, fb)
+            elseif field_sym === :size
+                # :size returns a Tuple containing the dimensions (field 2 of struct; field 0 = typeId)
+                # For Vector: Tuple{Int64}, for Matrix: Tuple{Int64, Int64}, etc.
+                local _szfb = _ctx_builder(ctx, "compile_call")
+                if haskey(ctx.type_registry.structs, obj_type)
+                    info = ctx.type_registry.structs[obj_type]
+                    # Typed arrival when the struct is registered
+                    emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                    struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
+                else
+                    record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
+                    unreachable!(_szfb)
+                end
+                append_builder!(fb, _szfb)
+                return append_builder!(b, fb)
+            end
+
+            # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the
+            # byte array — getfield(cu, :s) is the array itself. Must run BEFORE
+            # the generic struct_get path (CodeUnits is no longer a struct).
+            if obj_type isa DataType && obj_type.name.name === :CodeUnits &&
+               length(obj_type.parameters) >= 1 && obj_type.parameters[1] === UInt8
+                local _cu_field0 = field_ref isa QuoteNode ? field_ref.value : field_ref
+                if _cu_field0 === :s
+                    emit_value!(fb, obj_arg, ctx, static_wasm_type(obj_arg, ctx))
+                    return append_builder!(b, fb)
+                end
+            end
+
+            # AbstractArray subtypes that are pure structs (e.g., UnitRange)
+            # have named fields like :start, :stop — handle via struct_get
+            if isconcretetype(obj_type) && isstructtype(obj_type)
+                if !haskey(ctx.type_registry.structs, obj_type)
+                    register_struct_type!(ctx.mod, ctx.type_registry, obj_type)
+                end
+                if haskey(ctx.type_registry.structs, obj_type)
+                    info = ctx.type_registry.structs[obj_type]
+                    field_idx = findfirst(==(field_sym), info.field_names)
+                    if field_idx !== nothing
+                        local _sfb = _ctx_builder(ctx, "compile_call")
+                        # The object arrives AS the registered struct
+                        emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                        append_builder!(fb, _sfb)
+                        return append_builder!(b, fb)
+                    end
+                end
+            end
+        end
+
+        # Handle MemoryRef field access (:mem, :ptr_or_offset)
+        # In WasmGC, MemoryRef IS the array, so :mem just returns it
+        if obj_type <: MemoryRef
+            field_sym = if field_ref isa QuoteNode
+                field_ref.value
+            else
+                field_ref
+            end
+
+            if field_sym === :mem
+                # A virtual MemoryRef may emit `(memory, offset)`; getfield(:mem)
+                # projects the memory operand and discards only the offset.
+                local _mrb = _compile_value_b(obj_arg, ctx)
+                append_builder!(fb, _mrb)
+                length(_mrb.v.stack) == 2 && drop!(fb)
+                return append_builder!(b, fb)
+            elseif field_sym === :ptr_or_offset
+                # P4-stdlib (SHA update!): the target pointer value is a
+                # storage-relative byte offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
+                # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
+                # pointer arithmetic over indexed refs stays faithful.
+                local _poo_idx = obj_arg isa Core.SSAValue ?
+                    get(ctx.memoryref_offsets, obj_arg.id, nothing) : nothing
+                local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
+                    (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
+                     obj_type.parameters[2] : obj_type.parameters[1]) : nothing
+                local _poob = _ctx_builder(ctx, "compile_call")
+                if _poo_idx !== nothing && _poo_el isa Type
+                    # Julia's element stride: sizeof for an isbits element, 8 (a boxed
+                    # slot, Base.aligned_sizeof(Any)) for a reference element — the same
+                    # rule jl_genericmemory_copyto's lowering divides by
+                    local _poo_sz = memory_element_stride(_poo_el)
+                    local _poo_it = infer_value_type(_poo_idx, ctx)
+                    emit_value!(_poob, _poo_idx, ctx,
+                                (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ? I64 : I32)
+                    (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ||
+                        num!(_poob, Opcode.I64_EXTEND_I32_S)
+                    i64_const!(_poob, Int64(1))
+                    num!(_poob, Opcode.I64_SUB)
+                    if _poo_sz != 1
+                        i64_const!(_poob, Int64(_poo_sz))
+                        num!(_poob, Opcode.I64_MUL)
+                    end
+                else
+                    i64_const!(_poob, 0)
+                end
+                append_builder!(fb, _poob)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle Memory field access (:length, :ptr)
+        # In WasmGC, Memory IS the array
+        if obj_type <: Memory
+            field_sym = if field_ref isa QuoteNode
+                field_ref.value
+            else
+                field_ref
+            end
+
+            if field_sym === :length
+                # Return array length
+                local _mem_arr = get_array_type!(ctx.mod, ctx.type_registry, eltype(obj_type))
+                emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(_mem_arr), true))
+                array_len!(fb)
+                num!(fb, Opcode.I64_EXTEND_I32_S)
+                return append_builder!(b, fb)
+            elseif field_sym === :ptr
+                # Not meaningful in WasmGC - return 0
+                i64_const!(fb, 0)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle closure field access (captured variables)
+        if is_closure_type(obj_type)
+            # Register closure type if not already
+            if !haskey(ctx.type_registry.structs, obj_type)
+                register_closure_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
+
+            if haskey(ctx.type_registry.structs, obj_type)
+                info = ctx.type_registry.structs[obj_type]
+
+                field_sym = if field_ref isa QuoteNode
+                    field_ref.value
+                else
+                    field_ref
+                end
+
+                # Positional getfield(x, i::Integer) — see struct branch
+                field_idx = field_sym isa Integer ?
+                    (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                    findfirst(==(field_sym), info.field_names)
+                if field_idx !== nothing
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                    return append_builder!(b, fb)
+                end
+            end
+        end
+
+        # Handle Type{T} constants for DataType field access.
+        # When a DataType constant (e.g., Vector{Int64}) appears in IR, infer_value_type
+        # returns Type{Vector{Int64}}. Unwrap to DataType for struct field access, since
+        # DataType is registered in the JlType hierarchy with fields like :name, :parameters.
+        effective_obj_type = obj_type
+        if obj_type isa DataType && obj_type <: Type && obj_type !== DataType
+            # Type{X} where X is a DataType — unwrap to DataType
+            if haskey(ctx.type_registry.structs, DataType)
+                effective_obj_type = DataType
+            end
+        end
+
+        # Handle struct field access by name
+        if is_struct_type(effective_obj_type) || haskey(ctx.type_registry.structs, effective_obj_type)
+            # Register the struct type on-demand if not already registered
+            if !haskey(ctx.type_registry.structs, effective_obj_type)
+                register_struct_type!(ctx.mod, ctx.type_registry, effective_obj_type)
+            end
+            info = ctx.type_registry.structs[effective_obj_type]
+
+            field_sym = if field_ref isa QuoteNode
+                field_ref.value
+            else
+                field_ref
+            end
+
+            # getfield(x, i::Integer) — positional access (gap
+            # 8f5c0002bb71). Julia field order == info.field_names order.
+            field_idx = field_sym isa Integer ?
+                (1 <= field_sym <= length(info.field_names) ? Int(field_sym) : nothing) :
+                findfirst(==(field_sym), info.field_names)
+            if field_idx !== nothing
+                local _sfgb = _ctx_builder(ctx, "compile_call")
+                set_context!(_sfgb, first(string(expr), 120))
+                # The typed wrap subsumes the structref-narrow helper
+                emit_value!(_sfgb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                local _sfg_wfi = wasm_field_idx(info, field_idx)
+                local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
+                _sfg_layout isa StructType || error("registered getfield owner has no struct layout")
+                local _sfg_fields = _sfg_layout.fields
+                local _sfg_ft = _sfg_fields[Int(_sfg_wfi) + 1].valtype
+                struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi, _sfg_ft)
+                append_builder!(fb, _sfgb)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle tuple field access by numeric index
+        if obj_type <: Tuple
+            # Register tuple type if needed
+            if !haskey(ctx.type_registry.structs, obj_type)
+                register_tuple_type!(ctx.mod, ctx.type_registry, obj_type)
+            end
+
+            if haskey(ctx.type_registry.structs, obj_type)
+                info = ctx.type_registry.structs[obj_type]
+
+                # Get the field index (1-indexed in Julia)
+                field_idx = if field_ref isa Integer
+                    field_ref
+                elseif field_ref isa Core.SSAValue || field_ref isa Core.Argument
+                    # Dynamic index - will be handled below for homogeneous tuples.
+                    # `Core.Argument`: the index is a bare function parameter, e.g.
+                    # `f(x) = (31,28,…)[x]` → `getfield(tuple, _2, boundscheck)` (gap
+                    # d4409a896f5b — daysinmonth's DAYSINMONTH[m] lookup table). Without
+                    # this the arg-indexed case fell to `nothing` → unreachable stub.
+                    :dynamic
+                else
+                    nothing
+                end
+
+                if field_idx === :dynamic
+                    # Dynamic tuple indexing - only supported for homogeneous tuples (NTuple)
+                    # Check if all elements have the same type
+                    # Guard against types without definite field count (e.g., Vararg tuples)
+                    elem_types = obj_type isa DataType && isconcretetype(obj_type) ?
+                        fieldtypes(obj_type) : ()
+                    if length(elem_types) > 0 && all(t -> t === elem_types[1], elem_types)
+                        # Homogeneous tuple - we can treat it as an array
+                        elem_type = elem_types[1]
+
+                        # For constant tuple (GlobalRef), create a WasmGC array and access it
+                        # The tuple value needs to be compiled as an array first
+
+                        # Get or create array type for this element type.
+                        # The array element type MUST equal the tuple's actual field
+                        # wasm type (what the struct.get below yields), else
+                        # array.new_fixed mismatches. For String, get_string_ref_array_type!'s
+                        # arrays[Vector{String}] cache can be polluted (array-of-Vector{String}-
+                        # struct) by other registrations → build an array of the REAL field
+                        # valtype instead. (Surfaced by Markdown plain over String tuples and
+                        # STRESS string-transform funcs once dynamic-dispatch discovery compiles
+                        # those specializations.)
+                        array_type_idx = if elem_type === String
+                            local _tst = ctx.mod.types[Int(info.wasm_type_idx) + 1]
+                            local _fvt = _tst.fields[Int(info.field_offset) + 1].valtype
+                            add_array_type!(ctx.mod, _fvt, true)
+                        else
+                            get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+                        end
+
+                        # Compile the tuple as an array
+                        # First compile the tuple value
+                        local _htb = _ctx_builder(ctx, "compile_call")
+                        emit_value!(_htb, obj_arg, ctx,
+                                    ConcreteRef(UInt32(info.wasm_type_idx), true))
+
+                        # The struct is on the stack, we need to convert struct fields to array
+                        # Store in local, then create array from fields
+                        tuple_local = length(ctx.locals) + ctx.n_params
+                        push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                        local_set!(_htb, tuple_local)
+
+                        # Push all fields onto stack (account for typeId at field 0)
+                        for i in 0:(length(elem_types)-1)
+                            local_get!(_htb, tuple_local)
+                            struct_get!(_htb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)  # skip typeId
+                        end
+
+                        # Create array from fields
+                        array_new_fixed!(_htb, array_type_idx, length(elem_types), AnyRef)
+
+                        # Store array in local - use concrete ref to specific array type
+                        array_local = length(ctx.locals) + ctx.n_params
+                        push!(ctx.locals, ConcreteRef(array_type_idx, true))
+                        local_set!(_htb, array_local)
+
+                        # Now compile the index and access the array
+                        # Julia uses 1-based indexing, Wasm uses 0-based
+                        emit_value!(_htb, field_ref, ctx, I64)
+
+                        # Subtract 1 for 0-based indexing
+                        i64_const!(_htb, 1)
+                        num!(_htb, Opcode.I64_SUB)
+                        # Wrap to i32 for array index
+                        num!(_htb, Opcode.I32_WRAP_I64)
+
+                        # Store index in local
+                        idx_local = length(ctx.locals) + ctx.n_params
+                        push!(ctx.locals, I32)
+                        local_set!(_htb, idx_local)
+
+                        # Access array: array.get (use ARRAY_GET_U for packed i8 arrays)
+                        local_get!(_htb, array_local)
+                        local_get!(_htb, idx_local)
+                        array_get!(_htb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
+
+                        # If array element type is ExternRef (e.g., elem_type=Any),
+                        # array_get returns externref. Downstream code may ref_cast to a struct
+                        # type, which requires anyref input. Add any_convert_extern.
+                        wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
+                        if wasm_elem_type === ExternRef
+                            any_convert_extern!(_htb)
+                        end
+
+                        append_builder!(fb, _htb)
+                        return append_builder!(b, fb)
+                    end
+                    # Heterogeneous tuple + dynamic index → produce a tagged-union
+                    # value `Union{fieldtypes...}` via a runtime switch on the index.
+                    # `getfield(::Tuple{A,B,...}, i::Int)` infers to exactly this union,
+                    # and the consumers (`isa`, π-narrowing, memoryrefset!) already
+                    # speak the tagged-union ABI — so wrapping each field into the union
+                    # makes them work unchanged. Surfaced by `Any[a,"x",a]` /
+                    # `md"...$x...$y..."` interpolation (Pluto featured corpus): these
+                    # lower to `Base.getindex(T, vals...)` which loops `vals[i]` over a
+                    # heterogeneous tuple — previously emitted `unreachable`.
+                    if length(elem_types) >= 2
+                        U = Union{elem_types...}
+                        if U isa Union
+                            # Produce the value in the CANONICAL representation of the
+                            # getfield's INFERRED SSA result type — that is exactly what
+                            # the SSA local was allocated as (get_concrete_wasm_type),
+                            # so the if-block result matches the local and there's no store
+                            # mismatch. (Anchoring on Union{fieldtypes…} instead diverges
+                            # from inference — e.g. Dates date-format parsing, where the
+                            # inferred result is a tagged union but fieldtypes look
+                            # all-struct.) For a tagged-union rep, tag-wrap each field; for
+                            # StructRef (all-struct union, e.g. Union{Dog,Cat}) push the raw
+                            # struct ref (subtype of structref) — tag-wrapping it would make
+                            # the consumer's isa/π cast trap "illegal cast".
+                            _ssa_t = get(ctx.ssa_types, idx, nothing)
+                            local Ueff
+                            if _ssa_t isa Type && _ssa_t !== Union{}
+                                union_wasm = get_concrete_wasm_type(_ssa_t, ctx.mod, ctx.type_registry; for_local=true)
+                                Ueff = _ssa_t isa Union ? _ssa_t : U
+                            else
+                                union_wasm = get_concrete_wasm_type(U, ctx.mod, ctx.type_registry)
+                                Ueff = U
+                            end
+                            # B4/U2: the tagged-union wrapper is retired — a het-tuple field's
+                            # union value is an AnyRef classId box (the `else` branch below), never
+                            # the {typeId,tag,value} wrapper.
+
+                            local _hetb = _ctx_builder(ctx, "compile_call")
+                            # tuple value → tuple_local
+                            emit_value!(_hetb, obj_arg, ctx,
+                                        ConcreteRef(UInt32(info.wasm_type_idx), true))
+                            tuple_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                            local_set!(_hetb, tuple_local)
+
+                            # index (1-based i64) → 0-based i32 → idx_local
+                            emit_value!(_hetb, field_ref, ctx, I64)
+                            i64_const!(_hetb, 1)
+                            num!(_hetb, Opcode.I64_SUB)
+                            num!(_hetb, Opcode.I32_WRAP_I64)
+                            idx_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, I32)
+                            local_set!(_hetb, idx_local)
+
+                            n_fields = length(elem_types)
+                            emit_field_wrap = i -> begin
+                                local_get!(_hetb, tuple_local)
+                                struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
+                                # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
+                                # Coerce the raw field value to U's canonical wasm rep.
+                                fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
+                                if union_wasm === AnyRef
+                                    if fw === I64 || fw === I32 || fw === F32 || fw === F64
+                                        # THE single-source box producer with the field's REAL classId
+                                        # (same-wasm-rep members Bool/Int8/Int32 stay isa-distinguishable).
+                                        emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
+                                    elseif fw === ExternRef
+                                        any_convert_extern!(_hetb)
+                                    end
+                                    # ConcreteRef/StructRef field is already anyref-compatible
+                                end
+                                # union_wasm === StructRef / numeric: push as-is.
+                            end
+                            # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
+                            for i in 0:(n_fields - 2)
+                                local_get!(_hetb, idx_local)
+                                i32_const!(_hetb, Int64(i))
+                                num!(_hetb, Opcode.I32_EQ)
+                                if_!(_hetb, union_wasm; results=WasmValType[union_wasm])
+                                emit_field_wrap(i)
+                                else_!(_hetb)
+                            end
+                            emit_field_wrap(n_fields - 1)  # last field = else-default
+                            for _ in 1:(n_fields - 1)
+                                end_block!(_hetb)
+                            end
+                            # Land the union result in a scratch local and end with a
+                            # clean `local.get`. The if/else block ends in END, which the
+                            # statement-assignment heuristics (which peek at the tail
+                            # instruction to infer the produced type) mis-parse — they'd
+                            # drop the value and substitute ref.null. A trailing local.get
+                            # of the correctly-typed scratch is unambiguous.
+                            result_local = length(ctx.locals) + ctx.n_params
+                            push!(ctx.locals, union_wasm)
+                            local_set!(_hetb, result_local)
+                            local_get!(_hetb, result_local)
+                            append_builder!(fb, _hetb)
+                            return append_builder!(b, fb)
+                        end
+                    end
+                elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
+                    emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                    return append_builder!(b, fb)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+
+function _lower_setfield_general!(b, fb, ctx, expr, idx, args)
+    # Special case for setfield!/setproperty! - mutable struct field assignment
+    # Also handles WasmGlobal (:value -> global.set)
+    # In newer Julia, obj.field = val compiles to Base.setproperty!(obj, :field, val)
+    if length(args) >= 3
+        obj_arg = args[1]
+        field_ref = args[2]
+        value_arg = args[3]
+        obj_type = infer_value_type(obj_arg, ctx)
+
+        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+        # Handle Task.rngState0..3 field assignment → Wasm global.set
+        if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
+            rng_global = get_rng_global_idx(field_sym)
+            if rng_global !== nothing
+                emit_value!(fb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)
+                global_set!(fb, rng_global)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle WasmGlobal field assignment (:value -> global.set)
+        if obj_type <: WasmGlobal
+            if field_sym === :value
+                # Extract global index from type parameter
+                global_idx = get_wasm_global_idx(obj_arg, ctx)
+                if global_idx !== nothing
+                    local _wgsb = _ctx_builder(ctx, "compile_call")
+                    local _wg_expected = ctx.mod.globals[Int(global_idx) + 1].valtype
+                    # Push the value to set
+                    emit_value!(_wgsb, value_arg, ctx, _wg_expected)
+                    # Emit global.set
+                    global_set!(_wgsb, global_idx)
+                    # setfield! returns the value, so push it again
+                    emit_value!(_wgsb, value_arg, ctx, _wg_expected)
+                    append_builder!(fb, _wgsb)
+                    return append_builder!(b, fb)
+                end
+            end
+        end
+
+        # Handle Vector/Array field assignment (:ref and :size are mutable)
+        # Vector{T} is now a struct with (ref, size) where both fields are mutable
+        if obj_type <: AbstractArray
+            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
+                # setfield!(vector, :ref, new_memref) — update data array
+                # :ref is field index 1 in the Vector struct (field 0 = typeId)
+                # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
+                value_has_local = false
+                if value_arg isa Core.SSAValue && haskey(ctx.ssa_locals, value_arg.id)
+                    value_has_local = true
+                elseif value_arg isa Core.Argument
+                    value_has_local = true
+                end
+                if value_has_local
+                    info = ctx.type_registry.structs[obj_type]
+                    value_type = infer_value_type(value_arg, ctx)
+                    local _vr_def = ctx.mod.types[info.wasm_type_idx + 1]
+                    local _vr_expected = _vr_def.fields[wasm_field_idx(info, 1) + 1].valtype
+                    temp_local = allocate_local!(ctx, _vr_expected)
+                    local _vrb = _ctx_builder(ctx, "compile_call")
+                    emit_value!(_vrb, value_arg, ctx, _vr_expected;
+                                from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
+                    local_set!(_vrb, temp_local)
+                    emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
+                                        emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
+                    local_get!(_vrb, temp_local)
+                    struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
+                    local_get!(_vrb, temp_local)
+                    append_builder!(fb, _vrb)
+                    return append_builder!(b, fb)
+                end
+                # Fall through to generic handling for multi-arg memoryrefnew values
+            elseif field_sym === :size && haskey(ctx.type_registry.structs, obj_type)
+                info = ctx.type_registry.structs[obj_type]
+                # :size is field index 2 (0=typeId, 1=ref, 2=size)
+                # struct.set expects: [ref, value]
+
+                # IMPORTANT: The value_arg might be an SSA that was just computed and
+                # is on top of the stack. If we compile obj_arg first, we'd push it
+                # AFTER the value, giving wrong order [value, ref] instead of [ref, value].
+                # Solution: compile value first, store in temp local, then compile ref.
+                value_type = infer_value_type(value_arg, ctx)
+                local _vs_def = ctx.mod.types[info.wasm_type_idx + 1]
+                local _vs_expected = _vs_def.fields[wasm_field_idx(info, 2) + 1].valtype
+                temp_local = allocate_local!(ctx, _vs_expected)
+                local _vsb = _ctx_builder(ctx, "compile_call")
+
+                # Compile value and store in local (value may already be on stack from prev stmt)
+                emit_value!(_vsb, value_arg, ctx, _vs_expected;
+                            from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
+                local_set!(_vsb, temp_local)
+
+                # Now compile obj (struct ref)
+                emit_value!(_vsb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+                # If obj_arg's local is structref, insert ref.cast null before struct_set
+                                emit_ref_cast_if_structref!(_vsb, obj_arg, info.wasm_type_idx, ctx)
+
+                # Load value from local
+                local_get!(_vsb, temp_local)
+
+                # struct.set
+                struct_set!(_vsb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
+
+                # setfield! returns the value, so push it again
+                local_get!(_vsb, temp_local)
+                append_builder!(fb, _vsb)
+                return append_builder!(b, fb)
+            end
+        end
+
+        # Handle mutable struct field assignment
+        if is_struct_type(obj_type) && ismutabletype(obj_type)
+            if haskey(ctx.type_registry.structs, obj_type)
+                info = ctx.type_registry.structs[obj_type]
+                field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+
+                field_idx = findfirst(==(field_sym), info.field_names)
+                if field_idx !== nothing
+                    # Check if field is Any type (maps to externref in Wasm)
+                    field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
+
+                    # struct.set expects: [ref, value]
+                    local _sfsb = _ctx_builder(ctx, "compile_call")
+                    emit_value!(_sfsb, obj_arg, ctx,
+                                ConcreteRef(UInt32(info.wasm_type_idx), true))
+                    # If obj_arg's local is structref, insert ref.cast null before struct_set
+                                        emit_ref_cast_if_structref!(_sfsb, obj_arg, info.wasm_type_idx, ctx)
+
+                    # Use the registered physical field type as the sole sink
+                    # contract. Type objects are real interned DataType globals;
+                    # they are never replaced by null.
+                    local _sf_wasm_fi = wasm_field_idx(info, field_idx)
+                    local _sf_ct = ctx.mod.types[info.wasm_type_idx + 1]
+                    local _sf_expected = (_sf_ct isa StructType &&
+                        _sf_wasm_fi + 1 <= length(_sf_ct.fields)) ?
+                        _sf_ct.fields[_sf_wasm_fi + 1].valtype : nothing
+                    _sf_expected === nothing && error("setfield! target has no physical Wasm field type")
+                    # Route the value through the ONE coercion funnel (emit_value!'s own
+                    # val===nothing early exit, values.jl:905-912) instead of hand-rolling
+                    # scalar-vs-ref / nothing-vs-not branches here. `is_nothing_value`
+                    # recognizes GlobalRef aliases (e.g. `Mod.nothing`) and SSA/PiNode-proven
+                    # null edges that a bare `val === nothing` check misses; substituting the
+                    # literal lets emit_value! null a ref-typed field with its EXACT physical
+                    # type (ConcreteRef → typed `ref.null $T`) instead of falling through to a
+                    # numeric zero that then gets classId-boxed and ref.cast into the field's
+                    # unrelated concrete struct type — invalid at runtime. (Previously this site
+                    # used `ref_null_none!`, whose bottom-type null is tracked as AnyRef — sound
+                    # only when the field's physical type IS exactly AnyRef; a narrower
+                    # ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
+                    # `single_variable::Union{Nothing,VariableIndex}`, then rejected it.)
+                    local _sf_val = is_nothing_value(value_arg, ctx) ? nothing : value_arg
+                    local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
+                    struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
+                    # setfield! returns the value — use compile_value to match SSA return type
+                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
+                    append_builder!(fb, _sfsb)
+                    return append_builder!(b, fb)
+                end
+            end
+        end
+
+        # Handle setfield! on Base.RefValue (used for optimization sinks)
+        # These are no-ops in Wasm since we don't need the sink pattern
+        if obj_type <: Base.RefValue
+            # Just push the value (setfield! returns the value)
+            emit_value!(fb, value_arg, ctx, static_wasm_type(value_arg, ctx))
+            return append_builder!(b, fb)
+        end
+        # Fall through for other struct types - will hit error
+    end
+    return nothing
+end
+
+
+"""Run `guards` in order on one callee, dart's nullable-return funnel one level
+down: the first guard that returns a builder owns the call; `nothing` from all
+of them falls through to `compile_call!`'s remaining ladder."""
+function _run_guards!(guards, b, fb, ctx, expr, idx, args)::Union{InstrBuilder,Nothing}
+    for g in guards
+        r = g(b, fb, ctx, expr, idx, args)
+        r === nothing || return r
+    end
+    return nothing
+end
+
+# `Core.getfield` (=== `Base.getfield`, measured): the two raw-identity guards
+# are its own, so they run here and nowhere else.
+_lower_getfield!(b, fb, ctx, expr, idx, args, callee) =
+    _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
+                  _lower_getfield_closure_capture!, _lower_getfield_signal_skip!,
+                  _lower_getfield_general!), b, fb, ctx, expr, idx, args)
+
+# `Base.getproperty` / `Core.getproperty` (DIFFERENT objects, measured): the
+# raw-identity guards never matched `getproperty`, so they are absent here.
+_lower_getproperty!(b, fb, ctx, expr, idx, args, callee) =
+    _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
+                  _lower_getfield_general!), b, fb, ctx, expr, idx, args)
+
+_lower_setfield!(b, fb, ctx, expr, idx, args, callee) =
+    _run_guards!((_lower_setfield_signal_write!, _lower_setfield_general!),
+                 b, fb, ctx, expr, idx, args)
+
 # ---- Registry population ---------------------------------------------------
 # One entry per builtin identity. Aliases (e.g. isvisible/_closed_world_isvisible)
 # map to the SAME lowering function, matching dart's KernelNodes resolving
@@ -1165,3 +2094,9 @@ BUILTIN_LOWERINGS[Core.:(!==)] = _lower_egal_early!
 BUILTIN_LOWERINGS[Core.ifelse] = _lower_ifelse!
 BUILTIN_LOWERINGS[Base.ifelse] = _lower_ifelse!
 BUILTIN_LOWERINGS[Core.typeassert] = _lower_typeassert!
+BUILTIN_LOWERINGS[Core.getfield] = _lower_getfield!        # === Base.getfield
+BUILTIN_LOWERINGS[Base.getproperty] = _lower_getproperty!
+BUILTIN_LOWERINGS[Core.getproperty] = _lower_getproperty!
+BUILTIN_LOWERINGS[Core.setfield!] = _lower_setfield!       # === Base.setfield!
+BUILTIN_LOWERINGS[Base.setproperty!] = _lower_setfield!
+BUILTIN_LOWERINGS[Core.setproperty!] = _lower_setfield!

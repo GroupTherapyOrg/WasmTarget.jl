@@ -342,20 +342,6 @@ end
 # julia_numeric_tier.jl's CHECKED_OPS/FMA_OPS and builtins.jl's
 # BUILTIN_LOWERINGS for where they live now.
 const L116_ALLOWLIST = Dict{String,Int}(
-    # getfield/getproperty interleave with raw (func.mod===Core/Base &&
-    # func.name===:getfield) identity checks (closure self-capture skip,
-    # :signal skip, the P3 layout-pointer fold) whose CURRENT relative order
-    # must hold — see the block comment above builtins.jl's BUILTIN_LOWERINGS
-    # constant for why folding them into one dict entry is unsafe. THREE
-    # `is_func(func, :getfield) || is_func(func, :getproperty)` sites: the P3
-    # layout-pointer fold, the signal-read detector, and the general
-    # concrete-struct getfield/getproperty arm.
-    ":getfield" => 3,
-    ":getproperty" => 3,
-    # setfield!/setproperty! interleave with the signal-write raw identity
-    # check and the Core.Box capture-write arm the same way.
-    ":setfield!" => 2,
-    ":setproperty!" => 2,
     # `_compile_call_egaleq` and the raw `!==` arm read `fb.v.stack` directly
     # ("the two operands are already on fb") — not self-contained, so they
     # cannot be dispatched from THE identity-keyed builtin funnel, which runs
@@ -577,7 +563,11 @@ const LOCKS = [
         end),
     "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
         () -> begin
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The field-access lowerings are BUILTIN_LOWERINGS entries in
+            # builtins.jl since Phase 12F; the structural tests they carry are
+            # the same text, read from both halves of `compile_call!`'s chain.
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             forbidden = ["try getfield(func.mod, func.name) catch", "try infer_value_type",
                          "try fieldtypes(obj_type) catch", "return try Base.padding",
                          "try getfield(target_type_ref.mod", "try getfield(args[1].value"]
@@ -763,7 +753,8 @@ const LOCKS = [
     "L91_framework_roots_are_declarative" => ("framework closure globals, exact constants, and root-to-root calls are declarative inputs to the one closed-world compilation route",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
             required = ["captured_constants::Dict{Symbol,Any}",
@@ -1366,7 +1357,8 @@ const LOCKS = [
     "L25_flat_runtime_composition" => ("runtime-length composition is typed before optimization as a valid-Julia flat callable and allocated through normal struct codegen",
         () -> begin
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            call_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            call_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                       read(joinpath(CODEGEN, "builtins.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["struct _RuntimeComposition", "function CC.abstract_apply(interp::WasmInterpreter",
