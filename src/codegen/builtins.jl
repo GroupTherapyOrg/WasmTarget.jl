@@ -159,8 +159,7 @@ function _lower_sizeof!(b, fb, ctx, expr, idx, args, callee)
         # ONE 4-arg wrap replaces the sniff+cast ladder
         emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         array_len!(_szb)
-        # array.len returns i32, extend to i64 for Julia's Int
-        num!(_szb, Opcode.I64_EXTEND_I32_S)
+        widen_length_to_i64!(_szb)
         append_builder!(fb, _szb)
         return append_builder!(b, fb)
     end
@@ -179,8 +178,7 @@ function _lower_ncodeunits!(b, fb, ctx, expr, idx, args, callee)
         # ONE 4-arg wrap replaces the sniff+cast ladder
         emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         array_len!(_ncb)
-        # Return as Int (i64) to match Julia's ncodeunits return type
-        num!(_ncb, Opcode.I64_EXTEND_I32_S)
+        widen_length_to_i64!(_ncb)
         append_builder!(fb, _ncb)
         return append_builder!(b, fb)
     end
@@ -200,8 +198,7 @@ function _lower_length!(b, fb, ctx, expr, idx, args, callee)
         # ssa-local externref sniff; the funnel's string arm lands the DATA array
         emit_value!(_lnb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         array_len!(_lnb)
-        # array.len returns i32, extend to i64 for Julia's Int
-        num!(_lnb, Opcode.I64_EXTEND_I32_S)
+        widen_length_to_i64!(_lnb)
         append_builder!(fb, _lnb)
         return append_builder!(b, fb)
     elseif arg_type <: Array
