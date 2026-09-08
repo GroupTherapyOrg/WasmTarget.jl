@@ -14,6 +14,7 @@ NEVER to describe a value that has already been emitted; the emission's own retu
 test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
 """
 function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
+    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     # Handle nothing specially - compile_value(nothing) produces i32_const 0
     if val === nothing
         return I32
@@ -1030,7 +1031,7 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     # A literal `nothing` has an exact null representation at a reference sink.
     # This is deliberately literal-only; SSA/Union shape guesses once swallowed
     # live values here. Dynamic Nothing is handled by its typed producer.
-    if val === nothing && _wt_is_ref(expected)
+    if _is_nothing_literal(val) && _wt_is_ref(expected)
         if expected isa ConcreteRef
             ref_null!(b, Int64(expected.type_idx), expected)
         else
@@ -1102,7 +1103,18 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
     return b
 end
 
-function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
+"""True for the literal `nothing` operand, in either shape — the raw constant a
+not-yet-converted consumer holds, or the `NirLiteral` the boundary resolved it to."""
+_is_nothing_literal(x)::Bool = x === nothing || (x isa NirLiteral && x.value === nothing)
+
+"""THE value channel's raw entry: a consumer that still holds an `Expr.args` operand
+resolves it at the NIR boundary and hands the node to the one implementation below.
+parity(code_generator.dart:135 getStaticType / :77 typeContext): dart's value visitor is
+handed a Kernel node, never a syntax fragment it has to re-classify."""
+_compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder =
+    _compile_value_b(nir_node(ctx, val), ctx)
+
+function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
     # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
@@ -1124,48 +1136,45 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
-        tracing(:deadval) && println(stderr, "DEADVAL val=", first(repr(val), 60))
+        tracing(:deadval) && println(stderr, "DEADVAL val=", first(repr(node), 60))
         unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
         return b
     end
 
-    # Handle nothing explicitly - it's the Julia singleton
-    if val === nothing
-        # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
-        i32_const!(b, 0)
-        return b
-    end
-
-    if val isa Core.SSAValue
+    if node isa NirSSA
         # Check if this SSA has a local allocated (either regular or phi)
-        if haskey(ctx.ssa_locals, val.id)
-            local_idx = ctx.ssa_locals[val.id]
+        if haskey(ctx.ssa_locals, node.id)
+            local_idx = ctx.ssa_locals[node.id]
             local_get!(b, local_idx)
             # Narrow generic locals (anyref/structref) to concrete type.
             # When SSA type is concrete but local was allocated as generic (due to Union/Any),
             # ref.cast ensures downstream struct_get/array_get see the correct type.
-            _narrow!(local_idx, val.id)
-        elseif haskey(ctx.phi_locals, val.id)
+            _narrow!(local_idx, node.id)
+        elseif haskey(ctx.phi_locals, node.id)
             # Phi node - load from phi local
-            local_idx = ctx.phi_locals[val.id]
+            local_idx = ctx.phi_locals[node.id]
             local_get!(b, local_idx)
         else
-            # No local - check if this is a PiNode
+            # No local — re-emit from the SSA's DEFINITION node.
             # Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
             # that appear as constant literals in IR of compiler functions like construct_ssa!)
-            if val.id < 1 || val.id > length(ctx.code_info.code)
+            if node.id < 1 || node.id > length(ctx.nir)
                 return b  # Dead code - sentinel SSAValue with invalid id
             end
-            stmt = ctx.code_info.code[val.id]
-            if stmt isa Core.PiNode
-                pi_type = get(ctx.ssa_types, val.id, Any)
+            _rec = ctx.nir[node.id]
+            # A slot ASSIGNMENT publishes its value through the slot local, never here;
+            # only a plain definition is re-emitted from its node.
+            def = _rec.slot > 0 ? nothing : _rec.node
+            if def isa NirPi
+                stmt = def
+                pi_type = get(ctx.ssa_types, node.id, Any)
                 if pi_type === Nothing
                     # PiNode narrowed to Nothing - emit appropriate null/zero value
                     # Nothing maps to I32 in Wasm, so emit i32.const 0 as default.
                     # For Union{Nothing, T} where T is a ref type, emit ref.null instead.
                     emitted_nothing = false
-                    if stmt.val isa Core.SSAValue
-                        underlying_type = get(ctx.ssa_types, stmt.val.id, Any)
+                    if def.value isa NirSSA
+                        underlying_type = get(ctx.ssa_types, def.value.id, Any)
                         # For Union{Nothing, T}, emit ref.null $T
                         if underlying_type !== Nothing && underlying_type !== Any
                             wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
@@ -1182,7 +1191,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_value!(b, stmt.val, ctx)  # R17-floor: Pi source representation selects unboxing
+                    emit_value!(b, def.value, ctx)  # R17-floor: Pi source representation selects unboxing
                     # Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
@@ -1195,9 +1204,9 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         # AnyRef locals (an i64 cannot encode `nothing`), so the
                         # guess skipped the unbox and raw anyref reached i64.sub.
                         local _pi_src_wasm = nothing
-                        if stmt.val isa Core.SSAValue
-                            local _pi_li = get(ctx.ssa_locals, stmt.val.id, nothing)
-                            _pi_li === nothing && (_pi_li = get(ctx.phi_locals, stmt.val.id, nothing))
+                        if def.value isa NirSSA
+                            local _pi_li = get(ctx.ssa_locals, def.value.id, nothing)
+                            _pi_li === nothing && (_pi_li = get(ctx.phi_locals, def.value.id, nothing))
                             if _pi_li !== nothing
                                 local _pi_off = _pi_li - ctx.n_params
                                 if _pi_off >= 0 && _pi_off < length(ctx.locals)
@@ -1205,11 +1214,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                                 end
                             end
                             if _pi_src_wasm === nothing
-                                local _pi_src_type = get(ctx.ssa_types, stmt.val.id, Any)
+                                local _pi_src_type = get(ctx.ssa_types, def.value.id, Any)
                                 _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
                             end
-                        elseif stmt.val isa Core.Argument
-                            local _pi_arg_idx = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
+                        elseif def.value isa NirArgument
+                            local _pi_arg_idx = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
                             if _pi_arg_idx >= 1 && _pi_arg_idx <= length(ctx.arg_types)
                                 _pi_src_wasm = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx], ctx.mod, ctx.type_registry)
                             end
@@ -1226,11 +1235,11 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         if _pi_concrete isa ConcreteRef
                             # Check if the source is a generic ref type that needs casting
                             local _pi_src_wasm2 = nothing
-                            if stmt.val isa Core.SSAValue
-                                local _pi_src_type2 = get(ctx.ssa_types, stmt.val.id, Any)
+                            if def.value isa NirSSA
+                                local _pi_src_type2 = get(ctx.ssa_types, def.value.id, Any)
                                 _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
-                            elseif stmt.val isa Core.Argument
-                                local _pi_arg_idx2 = ctx.is_compiled_closure ? stmt.val.n : stmt.val.n - 1
+                            elseif def.value isa NirArgument
+                                local _pi_arg_idx2 = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
                                 if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
                                     _pi_src_wasm2 = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx2], ctx.mod, ctx.type_registry; for_local=true)
                                 end
@@ -1242,50 +1251,47 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
                         end
                     end
                 end
-            elseif stmt isa Core.SSAValue || stmt isa Core.Argument || stmt isa Core.SlotNumber
+            elseif def isa NirSSA || def isa NirArgument || def isa NirSlot
                 # Julia 1.13 may retain a bare alias as an SSA definition (not a
                 # PiNode), notably for captured closure fields on x86. A local-less
                 # alias is not proof that the fragment validator already owns its
                 # operand. Follow the alias to its real producer/slot so value
                 # emission has an explicit, architecture-independent stack effect.
-                emit_value!(b, stmt, ctx, static_wasm_type(val, ctx))
-            else
-                # Non-PiNode SSA without local: re-compile the statement to reproduce its value.
-                if stmt isa Expr && stmt.head === :boundscheck
-                    # real value (true unless @inbounds) — see statements.jl
-                    i32_const!(b, (isempty(stmt.args) || stmt.args[1] !== false) ? 1 : 0)
-                elseif stmt isa Expr && (stmt.head === :call || stmt.head === :invoke || stmt.head === :new || stmt.head === :foreigncall)
-                    # Re-compile the expression to produce its value on the stack.
-                    # Call the specific compiler directly to avoid compile_statement's
-                    # orphan-prevention skip for multi-arg memoryrefnew.
-                    local _ssa_t = WasmValType[static_wasm_type(val, ctx)]
-                    if stmt.head === :call
-                        compile_call!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
-                    elseif stmt.head === :invoke
-                        compile_invoke!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
-                    elseif stmt.head === :new
-                        compile_new!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
-                    elseif stmt.head === :foreigncall
-                        compile_foreigncall!(b, stmt, val.id, ctx)   # dart visitor: emits direct, tracked
-                    end
+                emit_value!(b, def, ctx, static_wasm_type(node, ctx))
+            elseif def isa NirBoundscheck
+                # real value (true unless @inbounds) — see statements.jl
+                i32_const!(b, def.flag === false ? 0 : 1)
+            elseif def isa NirCall || def isa NirInvoke || def isa NirNew || def isa NirForeignCall
+                # Re-compile the definition to produce its value on the stack.
+                # Call the specific compiler directly to avoid compile_statement's
+                # orphan-prevention skip for multi-arg memoryrefnew.
+                local _ssa_t = WasmValType[static_wasm_type(node, ctx)]
+                if def isa NirCall
+                    compile_call!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirInvoke
+                    compile_invoke!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirNew
+                    compile_new!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirForeignCall
+                    compile_foreigncall!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
                 end
             end
             # For non-PiNode SSAs without locals, assume on stack (single-use in sequence)
         end
 
-    elseif val isa Core.Argument
+    elseif node isa NirArgument
         # For closures being compiled, _1 is the closure object (arg_types[1])
         # For regular functions, arguments start at _2 (arg_types[1])
         # Use is_compiled_closure flag (not the type of first arg)
         if ctx.is_compiled_closure
             # Closure: direct mapping (_1 = closure, _2 = first arg)
-            arg_idx = val.n
+            arg_idx = node.n
         else
             # Regular function: skip _1 (function type in IR)
-            arg_idx = val.n - 1
+            arg_idx = node.n - 1
         end
 
-        packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)
+        packed_type = packed_vararg_source_type(ctx, node.n, arg_idx)
 
         # Reconstruct the one source-level vararg tuple from its flattened
         # physical parameter tail. This is the sole source-ABI projection; every
@@ -1324,19 +1330,67 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             local_get!(b, local_idx)
         end
 
-    elseif val isa Core.SlotNumber
+    elseif node isa NirSlot
         # Check slot_locals first (for local variables in unoptimized IR),
         # then fall back to param mapping (slot 2 = param 0, slot 3 = param 1, etc.)
-        if haskey(ctx.slot_locals, val.id)
-            local_get!(b, ctx.slot_locals[val.id])
+        if haskey(ctx.slot_locals, node.id)
+            local_get!(b, ctx.slot_locals[node.id])
         else
-            local_idx = val.id - 2
+            local_idx = node.id - 2
             if local_idx >= 0
                 local_get!(b, local_idx)
             end
         end
 
-    elseif val isa Bool
+    elseif node isa NirGlobalRef
+        # A GlobalRef operand — its binding was resolved ONCE at the NIR boundary.
+        local val = GlobalRef(node.mod, node.name)   # the diagnostic's raw operand
+        node.bound || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(val) is not defined in its source module"; detail=val,
+            soundness_fatal=true)
+        actual_val = node.value
+        if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
+           !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
+            globals = ctx.type_registry.mutable_constant_globals
+            globals === nothing && record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef identity registry is unavailable"; detail=string(val), soundness_fatal=true)
+            if haskey(globals, actual_val)
+                global_idx, type_idx = globals[actual_val]
+                global_get!(b, global_idx, ConcreteRef(type_idx, true))
+                ref_as_non_null!(b)
+            else
+                init_b, init_locals = compile_module_initializer(actual_val, ctx)
+                length(init_b.v.stack) == 1 || throw(StackImbalanceError(
+                    "mutable GlobalRef initializer must produce exactly one value",
+                    copy(init_b.v.stack), 0, "compile_value"))
+                init_type = only(init_b.v.stack)
+                init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
+                null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
+                ref_null!(null_b, Int64(init_type.type_idx),
+                          ConcreteRef(init_type.type_idx, true))
+                global_idx = add_global_ref!(ctx.mod, init_type.type_idx, true,
+                                             builder_code(null_b); nullable=true)
+                global_set!(init_b, global_idx)
+                end_block!(init_b)
+                init_func = add_function!(ctx.mod, WasmValType[], WasmValType[],
+                                          init_locals, builder_code(init_b))
+                push!(ctx.type_registry.module_init_functions, init_func)
+                globals[actual_val] = (global_idx, init_type.type_idx)
+                global_get!(b, global_idx, ConcreteRef(init_type.type_idx, true))
+                ref_as_non_null!(b)
+            end
+        else
+            emit_value!(b, actual_val, ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
+        end
+
+    else
+        # NirLiteral — a constant operand. Everything below is the constant chain.
+        val = node.value
+        if val === nothing
+            # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
+            i32_const!(b, 0)
+            return b
+        end
+        if val isa Bool
         i32_const!(b, val ? 1 : 0)
 
     elseif val isa Char
@@ -1430,44 +1484,6 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
             array_new_data!(b, type_idx, seg_idx)
         end
         emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
-
-    elseif val isa GlobalRef
-        isdefined(val.mod, val.name) || record_unsupported!(ctx, :unsupported_global,
-            "GlobalRef $(val) is not defined in its source module"; detail=val,
-            soundness_fatal=true)
-        actual_val = getfield(val.mod, val.name)
-        if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
-           !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
-            globals = ctx.type_registry.mutable_constant_globals
-            globals === nothing && record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef identity registry is unavailable"; detail=string(val), soundness_fatal=true)
-            if haskey(globals, actual_val)
-                global_idx, type_idx = globals[actual_val]
-                global_get!(b, global_idx, ConcreteRef(type_idx, true))
-                ref_as_non_null!(b)
-            else
-                init_b, init_locals = compile_module_initializer(actual_val, ctx)
-                length(init_b.v.stack) == 1 || throw(StackImbalanceError(
-                    "mutable GlobalRef initializer must produce exactly one value",
-                    copy(init_b.v.stack), 0, "compile_value"))
-                init_type = only(init_b.v.stack)
-                init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
-                null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
-                ref_null!(null_b, Int64(init_type.type_idx),
-                          ConcreteRef(init_type.type_idx, true))
-                global_idx = add_global_ref!(ctx.mod, init_type.type_idx, true,
-                                             builder_code(null_b); nullable=true)
-                global_set!(init_b, global_idx)
-                end_block!(init_b)
-                init_func = add_function!(ctx.mod, WasmValType[], WasmValType[],
-                                          init_locals, builder_code(init_b))
-                push!(ctx.type_registry.module_init_functions, init_func)
-                globals[actual_val] = (global_idx, init_type.type_idx)
-                global_get!(b, global_idx, ConcreteRef(init_type.type_idx, true))
-                ref_as_non_null!(b)
-            end
-        else
-            emit_value!(b, actual_val, ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
-        end
 
     elseif val isa QuoteNode
         # QuoteNode wraps a constant value - unwrap and compile.
@@ -1878,6 +1894,7 @@ function _compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder
         finally
             pop!(_VALUE_COMPILE_STACK)
         end
+        end   # the NirLiteral constant chain
     end
 
     return b
