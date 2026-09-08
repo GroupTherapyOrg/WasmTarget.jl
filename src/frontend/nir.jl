@@ -280,7 +280,15 @@ end
 """Per-statement source lines for one CodeInfo, in ONE forward pass: a statement whose own
 DebugInfo entry is ≤ 0 (a synthesized one) inherits the nearest earlier statement that
 carries a concrete line — the same rule diagnostics.jl's per-query `_stmt_line` walks
-backward for, computed once here so a consumer reads `ctx.nir[idx].line`."""
+backward for, computed once here so a consumer reads `ctx.nir[idx].line`.
+
+MEASURED (2026-09-08): every line is 0 for the IR WT actually compiles, because
+`get_typed_ir` calls `Base.code_typed` with the DEFAULT `debuginfo=:none`, whose CodeInfo
+carries an empty `Core.DebugInfo` (no codelocs, no linetable, no edges). The same input
+starves diagnostics.jl's `_stmt_line`/`stmt_frames`, so a located diagnostic falls back to
+the method's definition line and its inline chain is empty. Asking for `debuginfo=:source`
+in ir.jl restores both (verified: 7/7 statements lined, a real 3-frame chain) — a change to
+the one inference path, not to this decode."""
 function _nir_lines(code_info, n::Int)::Vector{Int32}
     out = zeros(Int32, n)
     di = try; code_info.debuginfo; catch; nothing; end
