@@ -1,8 +1,8 @@
 -------------------------------- MODULE NirBuild --------------------------------
 (***************************************************************************)
 (* A TLA+ model of `build_nir`/`_nir_classify`, WasmTarget's NIR boundary     *)
-(* between Julia's typed CodeInfo and codegen (src/frontend/nir.jl:519-542,   *)
-(* :444-511). dart2wasm's AstCodeGenerator consumes ~81 finite Kernel node    *)
+(* between Julia's typed CodeInfo and codegen (src/frontend/nir.jl:529-553,   *)
+(* :455-520). dart2wasm's AstCodeGenerator consumes ~81 finite Kernel node    *)
 (* kinds and reads every node's type through ONE StaticTypeContext, never     *)
 (* re-derived per visitor (code_generator.dart:77 typeContext, :135           *)
 (* getStaticType — cited verbatim in nir.jl:3-10). WT's ground truth is       *)
@@ -39,11 +39,11 @@
 (* each Broken instance isolates exactly one violated invariant:              *)
 (*   (1) TOTALITY       -- NoVanishing / CensusDropBug. Every statement        *)
 (*       Julia's typed IR can contain classifies to exactly "Known" or        *)
-(*       "Unsupported" — `_nir_classify` (nir.jl:444-511) has NO branch that   *)
-(*       returns anything else: the outer dispatch's final `else` at :510      *)
+(*       "Unsupported" — `_nir_classify` (nir.jl:455-520) has NO branch that   *)
+(*       returns anything else: the outer dispatch's final `else` at :517      *)
 (*       wraps any non-Expr/non-IR-node shape as a value via `resolve_operand`*)
-(*       (itself total, its own final `else` at :334-335 wraps ANYTHING as     *)
-(*       NirLiteral), and the Expr-head dispatch's final `else` at :507-508    *)
+(*       (itself total, its own final `else` at :344-345 wraps ANYTHING as     *)
+(*       NirLiteral), and the Expr-head dispatch's final `else` at :514-515    *)
 (*       wraps any unrecognized head as NirUnsupported. No head is ever        *)
 (*       silently dropped INSIDE `_nir_classify` — the historical p53 bug      *)
 (*       class (an early `elseif head === :dropped ... # no-op` arm            *)
@@ -57,7 +57,7 @@
 (*       regression).                                                          *)
 (*   (2) ALIGNMENT      -- Aligned / AlignmentBug. `build_nir`'s loop is        *)
 (*       `for i in 1:n; out[i] = NirStmt(_nir_classify(code[i], …), …) end` *)
-(*       (nir.jl:536-539): position never shifts, INCLUDING for a statement     *)
+(*       (nir.jl:546-549): position never shifts, INCLUDING for a statement     *)
 (*       the builder cannot classify (it still gets `out[i]`, just with a       *)
 (*       NirUnsupported node — see (1)). AlignmentBug models the OTHER          *)
 (*       plausible bug shape: a builder that used `push!`/`continue` instead    *)
@@ -72,7 +72,7 @@
 (*   (3) IDENTITY-ONCE  -- IdentityOnce / DivergentResolveBug. `:invoke`'s      *)
 (*       operand is resolved to a Method/MethodInstance identity EXACTLY        *)
 (*       ONCE, in `build_nir`, via `resolve_invoke_mi`/`resolve_invoke_method` *)
-(*       (nir.jl:247-257): a bare MethodInstance, or (two-tier compilation) a   *)
+(*       (nir.jl:252-262): a bare MethodInstance, or (two-tier compilation) a   *)
 (*       CodeInstance whose `.def` is unwrapped. This is the R29 migration's    *)
 (*       premise: invoke.jl still has ~4 DUPLICATED ad hoc sites doing the      *)
 (*       identical resolution from the raw operand (e.g. invoke.jl:1469-1473,   *)
@@ -85,11 +85,11 @@
 (*       exact shape a partial copy-paste of invoke.jl:1470-1472 could miss).    *)
 (*   (4) NO-RE-DERIVATION -- NoReDerivation / TypeRederiveBug. `NirSSA.         *)
 (*       julia_type` and `NirStmt.julia_type` both come from ONE widening of    *)
-(*       Julia INFERENCE's own answer, `_widened_ssa_types` (nir.jl:297-307):   *)
+(*       Julia INFERENCE's own answer, `_widened_ssa_types` (nir.jl:310-320):   *)
 (*       `widenconst(code_info.ssavaluetypes[i])`, `Any` where inference had     *)
 (*       nothing. `build_nir` takes no context and runs BEFORE the analysis      *)
 (*       passes (which are themselves NIR consumers), so there is no second      *)
-(*       type source it could consult; the docstrings at nir.jl:53-56/:513-518   *)
+(*       type source it could consult; the docstrings at nir.jl:53-56/:522-527   *)
 (*       name this explicitly as an R3/R5 ratchet ("0 new get_concrete_wasm_     *)
 (*       type/infer_value_type call sites"). AnalyzerType models that one         *)
 (*       widened inference answer, the single source of truth; RederivedType     *)
@@ -160,7 +160,7 @@ CONSTANTS
     ConsumerSwallowsUnsupported   \* BOOLEAN -- inject a migrated consumer that treats NirUnsupported as a no-op
 
 ----------------------------------------------------------------------------
-(* The census, read directly from nir.jl:444-511 -- fixed facts about the      *)
+(* The census, read directly from nir.jl:455-520 -- fixed facts about the      *)
 (* algorithm, not per-instance data (see header). *)
 
 Kinds == {
@@ -174,11 +174,11 @@ Kinds == {
 
 (* RealClass(k): `_nir_classify`'s actual, as-read outcome for kind k.          *)
 (* "Known" = an explicit arm returns a non-NirUnsupported node. "Unsupported" = *)
-(* the kind reaches the Expr `else` (nir.jl:507-508) and is wrapped as          *)
+(* the kind reaches the Expr `else` (nir.jl:514-515) and is wrapped as          *)
 (* NirUnsupported. Since the FINDING was closed, exactly ONE modeled kind does: *)
 (* every construct with a real lowering is classified, quarantine tier included *)
-(* (PhiCNode -> NirPhiC nir.jl:474, UpsilonNode -> NirUpsilon :476,             *)
-(* gc_preserve_begin/end + loopinfo -> NirNoOp :505-506). *)
+(* (PhiCNode -> NirPhiC nir.jl:477, UpsilonNode -> NirUpsilon :479,             *)
+(* gc_preserve_begin/end + loopinfo -> NirNoOp :512-513). *)
 RealClass(k) ==
     CASE k = "ExprSplatnew" -> "Unsupported"  \* no arm, no lowering anywhere -- the p53 class
       [] OTHER              -> "Known"
@@ -212,7 +212,7 @@ ClassifyOf(s) ==
     THEN "SilentNoOpAtBuild"
     ELSE RealClass(Kind[s])
 
-(* `resolve_invoke_mi` (nir.jl:247-251): a bare MethodInstance stands as-is; a   *)
+(* `resolve_invoke_mi` (nir.jl:252-256): a bare MethodInstance stands as-is; a   *)
 (* CodeInstance is unwrapped via `.def`. Never buggy -- this IS the canonical,   *)
 (* single implementation nir.jl centralizes; the bug lives only in a DUPLICATE  *)
 (* (see DuplicatedResolve). *)
@@ -235,11 +235,11 @@ DuplicatedResolve(shape) ==
 
 ConsumerResolveOf(s) == IF Kind[s] = "ExprInvoke" THEN DuplicatedResolve(OperandShape[s]) ELSE "NotApplicable"
 
-(* `_widened_ssa_types` (nir.jl:297-307): inference's own answer, widened once,  *)
+(* `_widened_ssa_types` (nir.jl:310-320): inference's own answer, widened once,  *)
 (* never re-derived -- corrupted by TypeRederiveBug for its chosen targets. *)
 TypeOf(s) == IF TypeRederiveBug /\ s \in RederiveStmts THEN RederivedType[s] ELSE AnalyzerType[s]
 
-(* `out[i] = ...` (nir.jl:536-539): position s always describes position s.     *)
+(* `out[i] = ...` (nir.jl:546-549): position s always describes position s.     *)
 (* AlignmentBug shifts every position in ShiftedStmts to describe its successor  *)
 (* instead, mirroring a builder that skipped one statement instead of writing    *)
 (* it at its own index; `Succ` already yields "Missing" for the true last         *)
@@ -280,7 +280,7 @@ Init ==
     /\ ledger = {}
 
 ----------------------------------------------------------------------------
-(* `build_nir`'s per-statement write (the for-loop body at nir.jl:526-540)      *)
+(* `build_nir`'s per-statement write (the for-loop body at nir.jl:536-550)      *)
 (* immediately followed by a fully NIR-migrated consumer's handling (the R29    *)
 (* end state -- header claim (5)): a "Known" node is emitted directly; an       *)
 (* "Unsupported" node is routed to record_unsupported! UNLESS                   *)
