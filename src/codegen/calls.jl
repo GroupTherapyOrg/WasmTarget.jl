@@ -2223,29 +2223,6 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     func = expr.args[1]
     args = expr.args[2:end]
 
-    # THE identity-keyed Core/Base builtin funnel (builtins.jl) — covers
-    # invoke_in_world/isdefinedglobal/isvisible/check_world_bounded here,
-    # BEFORE the SSAValue→GlobalRef callee resolution just below, exactly
-    # matching their historical position (an SSA-indirect call to one of
-    # these has never been recognized here and still isn't).
-    let _bl = _try_builtin_lowering!(b, fb, ctx, expr, idx, args, func)
-        _bl === nothing || return _bl
-    end
-
-    if is_func(func, :getglobal) && length(args) >= 2
-        module_owner = _trace_field_owner(args[1], :module, ctx)
-        name_owner = _trace_field_owner(args[2], :singletonname, ctx)
-        if module_owner !== nothing && isequal(module_owner, name_owner)
-            tn_idx = ctx.type_registry.jl_typename_idx
-            jl_type_idx = ctx.type_registry.jl_type_idx
-            ib = _ctx_builder(ctx, "compile_call.getglobal_typename")
-            emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-            struct_get!(ib, tn_idx, UInt32(4), ConcreteRef(UInt32(jl_type_idx), true))
-            append_builder!(b, ib)
-            return b
-        end
-    end
-
     # Resolve indirect calls through SSAValue callees.
     # Unoptimized IR (may_optimize=false) produces patterns like:
     #   %1 = Base.add_int   (GlobalRef, type=Core.Const(Core.Intrinsics.add_int))
@@ -2269,10 +2246,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
     end
 
-    # THE identity-keyed Core/Base builtin funnel (builtins.jl) again, now on
-    # the SSAValue-resolved callee — covers every remaining self-contained
-    # arm that compiles its own operands and independently returns (dart's
-    # nullable-return entry-funnel shape). `getfield`/`getproperty` and
+    # THE identity-keyed Core/Base builtin funnel (builtins.jl), consulted ONCE
+    # on the ONE resolved callee — dart resolves a call's target a single time
+    # (`KernelNodes._lookup`, intrinsics.dart:401) and dispatches from that one
+    # identity; the historical double consult (raw callee, then resolved) only
+    # existed because the `getglobal` TypeName fragment sat between the two.
+    # Every self-contained arm that compiles its own operands and independently
+    # returns lives behind this funnel (dart's nullable-return entry-funnel
+    # shape; formal(dev/formal/ConsultChain.tla)). `getfield`/`getproperty` and
     # `setfield!`/`setproperty!` stay OUT of the registry: each has more than
     # one call-site fragment below interleaved with non-`is_func` raw identity
     # checks (closure self-capture skip, `:signal` skip, the Core.Box capture

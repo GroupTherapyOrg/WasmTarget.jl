@@ -36,11 +36,10 @@ _resolve_builtin_callee(func) =
 """THE funnel: resolve `func`'s callee identity once and, if it names a
 registered Core/Base builtin, run its lowering. Returns the handled
 `InstrBuilder` or `nothing` (generic/dynamic-call path continues) — dart's
-nullable-return entry-funnel shape. Called twice from `compile_call!`: once on
-the raw callee (the handful of arms that must run before the SSAValue→GlobalRef
-callee-resolution step, matching their historical position exactly) and once
-after (everything else). Disjoint keys make the double call a no-op for any
-one `func`."""
+nullable-return entry-funnel shape. Called ONCE from `compile_call!`, directly
+after its ONE SSAValue→GlobalRef callee-resolution step, mirroring dart's
+resolve-the-target-once dispatch (`KernelNodes._lookup`, intrinsics.dart:401).
+formal(dev/formal/ConsultChain.tla)."""
 function _try_builtin_lowering!(b::InstrBuilder, fb::InstrBuilder, ctx::AbstractCompilationContext,
                                  expr::Expr, idx::Int, args, func)::Union{InstrBuilder,Nothing}
     callee = _resolve_builtin_callee(func)
@@ -49,7 +48,7 @@ function _try_builtin_lowering!(b::InstrBuilder, fb::InstrBuilder, ctx::Abstract
     return lowering(b, fb, ctx, expr, idx, args, callee)::Union{InstrBuilder,Nothing}
 end
 
-# ---- Early arms (run before the SSAValue→GlobalRef callee resolution) ------
+# ---- The entries -----------------------------------------------------------
 
 # `Core.invoke_in_world(world, f, args...)` selects a method in Julia's
 # mutable world-age model. A WT module is already one immutable collected
@@ -111,19 +110,19 @@ function _lower_check_world_bounded!(b, fb, ctx, expr, idx, args, callee)
     return b
 end
 
-# ---- Late arms (run after the SSAValue→GlobalRef callee resolution) -------
-
 # P3 gap 450889a9cb7e: `getglobal(mod, :name)` builtin (how typed IR reads
 # const module globals like Base.Ryu.DIGIT_TABLE16) had NO handler and fell
 # through to the unknown-call stub → every Ryu string(::Float64) trapped.
 # With constant module + symbol args, resolve at compile time and compile
 # the VALUE — compile_value materializes vector/struct/scalar constants.
 #
-# This is `getglobal`'s SECOND historical fragment only — the closed-world
-# TypeName-tracing fragment (`compile_call!`'s `getglobal_typename` arm) runs
-# BEFORE the SSAValue→GlobalRef resolution step and stays there unmigrated;
-# folding it in here would let it start matching SSA-indirect `getglobal`
-# calls it historically never saw.
+# `getglobal` has TWO guards, tried in their historical order: the const-fold
+# above, then the closed-world TypeName trace below (formerly `compile_call!`'s
+# `is_func(func, :getglobal)` arm, which sat immediately after this entry and
+# could only run because this entry had declined). They are independently
+# discriminating and disjoint, so one entry holding both is dart's shape: ONE
+# identity, its own guards in order (intrinsics.dart's per-intrinsic shape
+# tests). formal(dev/formal/ConsultChain.tla).
 function _lower_getglobal_constfold!(b, fb, ctx, expr, idx, args, callee)
     length(args) >= 2 || return nothing
     _gg_mod = args[1] isa QuoteNode ? args[1].value :
@@ -137,14 +136,19 @@ function _lower_getglobal_constfold!(b, fb, ctx, expr, idx, args, callee)
         emit_value!(fb, _gg_val, ctx, static_wasm_type(_gg_val, ctx))
         return append_builder!(b, fb)
     end
+    module_owner = _trace_field_owner(args[1], :module, ctx)
+    name_owner = _trace_field_owner(args[2], :singletonname, ctx)
+    if module_owner !== nothing && isequal(module_owner, name_owner)
+        tn_idx = ctx.type_registry.jl_typename_idx
+        jl_type_idx = ctx.type_registry.jl_type_idx
+        ib = _ctx_builder(ctx, "compile_call.getglobal_typename")
+        emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
+        struct_get!(ib, tn_idx, UInt32(4), ConcreteRef(UInt32(jl_type_idx), true))
+        append_builder!(b, ib)
+        return b
+    end
     return nothing
 end
-
-# `ifelse` is NOT registered here: its two `record_unsupported!` message
-# strings ("ifelse condition did not lower to i32" / "ifelse operand emitted
-# no runtime value") are pinned VERBATIM in `calls.jl` by ratchet lock
-# L38_no_known_value_substitutions, which reads `calls.jl`'s own text — not
-# this file's. It stays as an ordinary in-place arm in `compile_call!`.
 
 # Special case for Core.sizeof - returns byte size
 # For strings/arrays, this is the array length
