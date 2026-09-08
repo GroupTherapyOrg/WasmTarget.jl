@@ -314,3 +314,185 @@ function ir_reads_host_layout(ci::Core.CodeInstance, depth::Int=0)::Bool
     _IR_LAYOUT_READ_MEMO[key] = found
     return found
 end
+
+"""
+    ir_reads_overlaid_method(ci::Core.CodeInstance) -> Bool
+
+Whether the specialization's inferred source — transitively through its invokes — actually
+RESOLVES to a Method registered in `WASM_METHOD_TABLE` (an `@overlay` definition): the one
+case the constant-evaluation rule's overlay-safety guard (interpreter.jl) exists to catch.
+Companion to `ir_reads_host_layout`, same shape, different question: that one asks whether a
+fold would read the HOST's memory layout; this one asks whether a fold would silently bypass
+an overlay (`Core._call_in_world_total`, which `concrete_eval_call` uses, runs ordinary
+runtime dispatch — overlay method tables are an INFERENCE-time redirection with no runtime
+counterpart, so folding a call that WOULD have dispatched to an overlaid method during
+compilation would bake in the wrong, non-overlaid value).
+
+An `:invoke` is exact — the target Method is the one that runs, no dispatch ambiguity — so
+checking its own `external_mt` is definitive proof, not an inference guess (unlike
+`nonoverlayed`, which merges conservatively across an entire mutually-recursive call graph
+and taints on inference's OWN uncertainty about an active overlay table, not on an actual
+overlaid callee — see the constant-evaluation rule's comment for the reproduced case). A
+plain unresolved `:call` (dynamic dispatch) is treated as a hit only when its callee is
+itself SOMETHING WASM_METHOD_TABLE has an entry for at all (`_wt_overlaid_callables`) — a
+builtin/intrinsic call (`isa`, `<:`, `getfield`, …) can never be overlaid (overlay tables
+redirect generic-function method lookup; builtins have none) and must not trip this.
+
+An `:invoke`'s target can be a bare `MethodInstance` rather than a `CodeInstance` — REPRODUCED
+2026-09-08: exactly for a specialization still mid-inference as part of an active cycle
+(`_compute_eltype`'s own self- and mutual recursion through `typejoin`/`tailjoin`), where the
+CodeInstance this very query is asking about has no retained source YET because the cycle it
+belongs to has not finished converging. Its own `Method` is still checked directly (exact,
+independent of any retained source); to recurse further, `_wt_overlaid_codeinfo` falls back to
+another cached CodeInstance for the SAME MethodInstance (`.cache` / `.next` chain — commonly a
+sysimage/precompiled entry for a Base function this ubiquitous) before giving up — the callee's
+BODY is the same regardless of which CodeInstance names it. Memoized per specialization
+(keyed by `specTypes`, shared with the MethodInstance-only path so a resolved sibling call
+short-circuits the recursion); a chain deeper than six invokes, or no retained source at all
+(the direct edge or any fallback), counts as a hit — never fold blind.
+"""
+const _IR_OVERLAY_READ_MEMO = IdDict{Any, Bool}()
+
+# Any retained CodeInfo for the given CodeInstance, or — when its own `.inferred` is
+# unavailable (mid-cycle) — for another cached CodeInstance of the SAME MethodInstance.
+function _wt_overlaid_codeinfo(ci::Core.CodeInstance)::Union{Core.CodeInfo, Nothing}
+    local _dbg = ci.def isa Core.MethodInstance && ci.def.def isa Method && ci.def.def.name === :_compute_eltype
+    local src = isdefined(ci, :inferred) ? ci.inferred : nothing
+    _dbg && Core.println(Core.stderr, "H1DBG3 direct ci.inferred defined=", isdefined(ci,:inferred),
+                 " kind=", src === nothing ? "nothing" : typeof(src))
+    src isa String && (src = try Base._uncompressed_ir(ci, src) catch e; _dbg && Core.println(Core.stderr, "H1DBG3 decompress err ", e); nothing end)
+    src isa Core.CodeInfo && return src
+    local mi = ci.def
+    mi isa Core.MethodInstance || return nothing
+    _dbg && Core.println(Core.stderr, "H1DBG3 mi.cache defined=", isdefined(mi,:cache))
+    local c = isdefined(mi, :cache) ? mi.cache : nothing
+    local nseen = 0
+    while c isa Core.CodeInstance
+        nseen += 1
+        if c !== ci
+            local s2 = isdefined(c, :inferred) ? c.inferred : nothing
+            _dbg && Core.println(Core.stderr, "H1DBG3 sibling #", nseen, " inferred=", s2===nothing ? "nothing" : typeof(s2),
+                         " min_world=", c.min_world, " max_world=", c.max_world)
+            s2 isa String && (s2 = try Base._uncompressed_ir(c, s2) catch; nothing end)
+            s2 isa Core.CodeInfo && return s2
+        end
+        c = isdefined(c, :next) ? c.next : nothing
+    end
+    return nothing
+end
+
+function ir_reads_overlaid_method(ci::Core.CodeInstance, depth::Int=0)::Bool
+    if depth > 6
+        Core.println(Core.stderr, "H1DBG2 depth>6 at ", ci.def)
+        return true
+    end
+    local mi = ci.def
+    local key = mi isa Core.MethodInstance ? mi.specTypes : ci
+    haskey(_IR_OVERLAY_READ_MEMO, key) && return _IR_OVERLAY_READ_MEMO[key]
+    _IR_OVERLAY_READ_MEMO[key] = false           # cycle guard
+    local src = _wt_overlaid_codeinfo(ci)
+    local found = src === nothing
+    found && Core.println(Core.stderr, "H1DBG2 no-src at ", ci.def)
+    if !found
+        for st in src.code
+            st isa Expr || continue
+            if st.head === :invoke
+                local tgt = st.args[1]
+                local tmi = tgt isa Core.CodeInstance ? tgt.def :
+                            tgt isa Core.MethodInstance ? tgt : nothing
+                local tm = tmi isa Core.MethodInstance ? tmi.def : nothing
+                if tm isa Method && isdefined(tm, :external_mt) && tm.external_mt === WASM_METHOD_TABLE
+                    Core.println(Core.stderr, "H1DBG2 HIT invoke overlay ", tm, " from ", ci.def)
+                    found = true; break
+                elseif tgt isa Core.CodeInstance
+                    ir_reads_overlaid_method(tgt, depth + 1) && (found = true; break)
+                elseif tmi isa Core.MethodInstance
+                    local c = isdefined(tmi, :cache) ? tmi.cache : nothing
+                    if c isa Core.CodeInstance
+                        ir_reads_overlaid_method(c, depth + 1) && (found = true; break)
+                    else
+                        Core.println(Core.stderr, "H1DBG2 no cached CI for MI target ", tmi, " from ", ci.def)
+                        found = true; break      # no cached CodeInstance at all: unknown
+                    end
+                else
+                    Core.println(Core.stderr, "H1DBG2 invoke neither at ", ci.def, " stmt=", st)
+                    found = true; break          # an invoke with neither: unknown
+                end
+            elseif st.head === :call && length(st.args) >= 1
+                local callee = st.args[1]
+                local calleev = callee isa GlobalRef ?
+                    (isdefined(callee.mod, callee.name) ? getfield(callee.mod, callee.name) : nothing) :
+                    callee
+                if _wt_is_overlaid_callable(calleev)
+                    Core.println(Core.stderr, "H1DBG2 HIT call ", calleev, " from ", ci.def)
+                    found = true; break
+                end
+            end
+        end
+    end
+    _IR_OVERLAY_READ_MEMO[key] = found
+    return found
+end
+
+"""
+    _wt_overlaid_callables() -> Set{Any}
+
+Every callable KEY that has at least one method registered in `WASM_METHOD_TABLE` — an
+`@overlay WASM_METHOD_TABLE` definition's own function value for an ordinary function
+overlay (`typeof(solve)`'s singleton instance), or its `Core.TypeName` for a `Type{X}(...)`
+constructor overlay (dart's own class-identity key: `Dict{Int,String}` and the template
+`Dict{K,V}` a constructor overlay is written against share one `TypeName`, so a concrete
+call site matches a parametric overlay definition). Read from the table itself — never a
+name list: a new overlay adds itself here automatically. Feeds `ir_reads_overlaid_method`
+and `_wt_is_overlaid_callable`.
+
+Package extensions (`ext/WasmTarget*Ext.jl`) register their own `@overlay WMT` methods
+lazily, on `using` — AFTER WasmTarget's own module init — so this cannot cache past the
+first call: it re-scans whenever the table's own method count has grown since the last
+scan (cheap — `Base.MethodList` iteration, not a fold), never once at some arbitrary
+earlier point that would silently miss a later extension's overlays.
+"""
+const _WT_OVERLAID_CALLABLES = Ref{Set{Any}}(Set{Any}())
+const _WT_OVERLAID_CALLABLES_COUNT = Ref{Int}(-1)
+function _wt_overlaid_callables()::Set{Any}
+    ms = collect(Base.MethodList(WASM_METHOD_TABLE))
+    length(ms) == _WT_OVERLAID_CALLABLES_COUNT[] && return _WT_OVERLAID_CALLABLES[]
+    out = Set{Any}()
+    for m in ms
+        sig = Base.unwrap_unionall(m.sig)
+        sig isa DataType && !isempty(sig.parameters) || continue
+        ft = sig.parameters[1]
+        ft isa DataType || continue
+        if ft <: Type && length(ft.parameters) == 1
+            # a `Type{X}(...)` constructor overlay: key by X's TypeName, concrete or not
+            local tval = ft.parameters[1]
+            local tn = tval isa DataType ? tval.name :
+                       tval isa UnionAll ? Base.unwrap_unionall(tval).name : nothing
+            tn !== nothing && push!(out, tn)
+        elseif isdefined(ft, :instance)
+            push!(out, ft.instance)
+        end
+    end
+    _WT_OVERLAID_CALLABLES[] = out
+    _WT_OVERLAID_CALLABLES_COUNT[] = length(ms)
+    return out
+end
+
+"""
+    _wt_is_overlaid_callable(@nospecialize(v)) -> Bool
+
+Whether a raw IR operand `v`, used as a `:call`'s callee, might dispatch into
+`WASM_METHOD_TABLE`: either `v` itself is a function/type WT has overlaid, or (for a `Type`
+value used as a constructor callee) its `TypeName` is. A builtin/intrinsic value (`isa`,
+`<:`, `getfield`, …) matches neither and returns `false`.
+"""
+function _wt_is_overlaid_callable(@nospecialize(v))::Bool
+    v === nothing && return false
+    local cs = _wt_overlaid_callables()
+    v in cs && return true
+    if v isa Type
+        local tn = v isa DataType ? v.name : v isa UnionAll ? Base.unwrap_unionall(v).name : nothing
+        return tn !== nothing && tn in cs
+    end
+    return false
+end

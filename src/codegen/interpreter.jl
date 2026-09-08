@@ -2800,10 +2800,10 @@ end
 # producing a module meant to outlive this process needs on top of Julia's own
 # answer:
 #
-#  1. NEVER `:semi_concrete_eval`, unconditionally. Native eligibility gates
-#     `:concrete_eval` on overlay-safety but does NOT gate `:semi_concrete_eval`
-#     on it at all (`Compiler/src/abstractinterpretation.jl`), so an
-#     overlay-tainted-but-otherwise-foldable call silently falls through to
+#  1. NEVER Julia's own `:semi_concrete_eval` MECHANISM, unconditionally. Native
+#     eligibility gates `:concrete_eval` on overlay-safety but does NOT gate
+#     `:semi_concrete_eval` on it at all (`Compiler/src/abstractinterpretation.jl`),
+#     so an overlay-tainted-but-otherwise-foldable call silently falls through to
 #     it. Unlike `:concrete_eval` — which executes the call exactly once via
 #     `Core._call_in_world_total` and keeps only the returned VALUE —
 #     `:semi_concrete_eval` partially interprets the callee's own optimized
@@ -2818,10 +2818,32 @@ end
 #     `copy(::Memory{UInt8})` — take this path and left
 #     `pointerref($(QuoteNode(Ptr{DataTypeLayout}(0x0000000128c43628))), 1, 1)`
 #     — a live host address baked as a literal IR operand — in the typed IR
-#     (`WasmTarget.get_typed_ir`). Refusing `:semi_concrete_eval` outright
-#     (independent of the eligibility predicate that reached it) closes this;
-#     `:concrete_eval` alone never has the failure mode because it never
-#     exposes intermediate pointer arithmetic, only the callee's final value.
+#     (`WasmTarget.get_typed_ir`). `:concrete_eval` alone never has this failure
+#     mode because it never exposes intermediate pointer arithmetic, only the
+#     callee's final value — so `concrete_eval_eligible` below NEVER returns
+#     `:semi_concrete_eval` to its caller (which would run that mechanism) and
+#     never calls `semi_concrete_eval_call` itself. A native `:semi_concrete_eval`
+#     LABEL is not automatically `:none`, though (2026-09-08, Phase 12 H(1)):
+#     `is_nonoverlayed(interp)` is unconditionally false for every WasmInterpreter
+#     (it always runs under WASM_METHOD_TABLE), so native reaches this label for
+#     ANY call whose merged effects carry so much as one non-`ALWAYS_TRUE`
+#     `nonoverlayed` bit — including pure, mutually-recursive Base type machinery
+#     (`typejoin`/`tailjoin`/`typejoin_union_tuple`) that taints this way under
+#     ANY overlay table, overlay-irrelevant or not (confirmed against a plain
+#     `NativeInterpreter`, where the identical specialization shows
+#     `nonoverlayed=ALWAYS_TRUE` — native only clears the disjunction there
+#     because `is_nonoverlayed(interp)` alone already does, masking the same
+#     conservatism). That blocked `_compute_eltype(::Type{<:Tuple})` — reached
+#     from `Base.pairs(::NamedTuple)` in DiffEqBase's kwcall glue compiling
+#     `SimpleATsit5` — leaving `Core.apply_type` unresolved with an argument
+#     vanilla Julia (no overlay) folds to `Const`. So a `:semi_concrete_eval`
+#     label is re-derived, mechanically (`_wt_reads_overlaid_method`, ir.jl):
+#     only promoted to `:concrete_eval` — still executed via the same
+#     one-full-call path, still subject to every guard below — when the
+#     callee's own retained IR, transitively, resolves no `:invoke` to an
+#     actually-overlaid Method and no unresolved `:call` to a callable
+#     WASM_METHOD_TABLE has an entry for at all; otherwise `:none`, same as
+#     `:semi_concrete_eval` always was.
 #  2. Never a `Ptr`-typed result, never a `Ptr`-valued constant argument, and
 #     never `objectid`/`hash`. A folded call's result must be a PROGRAM value.
 #     `Ptr` is a host memory address, never portable. `Base.objectid` (the generic `hash` fallbacks that call it, and the
@@ -2896,17 +2918,65 @@ function CC.concrete_eval_eligible(interp::WasmInterpreter,
         sv::Union{CC.InferenceState, CC.IRInterpretationState})
     eligibility = @invoke CC.concrete_eval_eligible(interp::CC.AbstractInterpreter,
                                                      f, result, arginfo, sv)
+    _H1DBG = f === Base._compute_eltype
+    _H1DBG && println(stderr, "H1DBG eligible(native)=", eligibility)
     if _wt_forced_concrete_eval(f)
         return eligibility === :none ? :none : :concrete_eval
+    elseif eligibility === :semi_concrete_eval
+        _H1DBG && println(stderr, "H1DBG semi branch: all_const=", CC.is_all_const_arg(arginfo, 2),
+                           " overlaid=", _wt_reads_overlaid_method(result.edge))
+        # Native's own overlay-safety disjunction — `is_nonoverlayed(interp) ||
+        # is_nonoverlayed(effects) || is_consistent_overlay(effects)` (Compiler's
+        # `concrete_eval_eligible`) — already failed to reach `:concrete_eval` here.
+        # `is_nonoverlayed(interp)` is unconditionally false for ANY WasmInterpreter (it
+        # always runs with WASM_METHOD_TABLE active), so this branch fires whenever the
+        # callee's OWN merged effects carry even one non-`ALWAYS_TRUE` `nonoverlayed` bit
+        # — REGARDLESS of whether WASM_METHOD_TABLE is actually reachable from this call.
+        # REPRODUCED 2026-09-08: `Base.typejoin`'s mutual recursion with `tailjoin`/
+        # `typejoin_union_tuple` taints this way on EVERY interpreter that runs under ANY
+        # overlay table — confirmed against a plain `NativeInterpreter` with NO overlay
+        # (`Base.infer_effects(Base.typejoin, ...)`), where the identical specialization
+        # shows `nonoverlayed=ALWAYS_TRUE`; native only ever sees `:concrete_eval` for it
+        # because `is_nonoverlayed(interp)` alone (true for a non-overlaid interpreter)
+        # already satisfies the disjunction, masking the effects-level conservatism. That
+        # conservatism is inference's own uncertainty about an ACTIVE overlay table, not
+        # evidence this SPECIFIC call reaches WASM_METHOD_TABLE. This is what blocked
+        # `_compute_eltype(::Type{<:Tuple})` — reached from `Base.pairs(::NamedTuple)` in
+        # DiffEqBase's kwcall glue (`SimpleATsit5`, Phase 12 H(1)) — leaving `Core.apply_type`
+        # unresolved with a widened `Type` argument that vanilla Julia (no overlay) folds
+        # to `Const`.
+        #
+        # Re-derive the real answer mechanically instead of trusting that coarse signal,
+        # exactly as `_wt_reads_host_layout` re-derives host-layout-safety: walk the
+        # callee's own retained IR, transitively, for an `:invoke` actually RESOLVED to a
+        # Method registered in WASM_METHOD_TABLE (never a plain `:call` — invoke is exact,
+        # so a resolved non-overlay target is real proof, not an inference guess). Unlike
+        # `:concrete_eval`, `:semi_concrete_eval` does NOT guarantee `is_all_const_arg`
+        # (it can be reached with a non-`Const` argument); `concrete_eval_call` unwraps
+        # every argument unconditionally, so that must be re-checked here too, or a
+        # non-const arg crashes `collect_const_args` outright instead of falling back.
+        (CC.is_all_const_arg(arginfo, #=start=#2) &&
+         !_wt_reads_overlaid_method(result.edge)) || return :none
+        # Falls through to the same result-level guards as :concrete_eval below. This
+        # never invokes Julia's OWN `:semi_concrete_eval` mechanism (partial IR
+        # interpretation of the callee's optimized body, where a `getfield` of an
+        # opaque/pointer-typed field can fold to a live pointer — the reason it stays
+        # banned outright); the caller always executes the upgraded case through
+        # `:concrete_eval`'s path (`Core._call_in_world_total`, one full call, VALUE only).
     elseif eligibility !== :concrete_eval
-        return :none   # never :semi_concrete_eval
-    elseif _wt_host_identity_fold(f)
-        return :none
-    elseif !_wt_type_level_call(arginfo.argtypes, result.rt)
-        return :none
-    elseif _wt_reads_host_layout(result.edge)
         return :none
     end
+    if _wt_host_identity_fold(f)
+        _H1DBG && println(stderr, "H1DBG -> :none (host_identity)")
+        return :none
+    elseif !_wt_type_level_call(arginfo.argtypes, result.rt)
+        _H1DBG && println(stderr, "H1DBG -> :none (not type_level) argtypes=", arginfo.argtypes, " rt=", result.rt)
+        return :none
+    elseif _wt_reads_host_layout(result.edge)
+        _H1DBG && println(stderr, "H1DBG -> :none (reads_host_layout)")
+        return :none
+    end
+    _H1DBG && println(stderr, "H1DBG -> :concrete_eval FINAL")
     return :concrete_eval
 end
 
@@ -2922,6 +2992,15 @@ end
 function _wt_reads_host_layout(@nospecialize(edge))::Bool
     edge isa Core.CodeInstance || return true    # no edge to inspect: never fold blind
     return ir_reads_host_layout(edge)
+end
+
+# The overlay-safety re-derivation the `:semi_concrete_eval` branch above needs: does this
+# specialization actually reach a Method registered in WASM_METHOD_TABLE, transitively?
+# See `ir_reads_overlaid_method`'s docstring for the mechanism and why native's own
+# `nonoverlayed` effect bit is not trustworthy here.
+function _wt_reads_overlaid_method(@nospecialize(edge))::Bool
+    edge isa Core.CodeInstance || return true    # no edge to inspect: never fold blind
+    return ir_reads_overlaid_method(edge)
 end
 
 # WT folds TYPE-LEVEL calls only — a call with a Type among its constant arguments, or
