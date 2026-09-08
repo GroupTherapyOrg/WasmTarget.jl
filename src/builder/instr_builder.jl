@@ -489,7 +489,7 @@ end
 # throw_ref: pop the exnref operand, then unreachable (dart2wasm throw_ref).
 throw_ref!(b::InstrBuilder) = (b.v.reachable && validate_pop_any!(b.v); b.v.reachable = false; _emit!(b, InstrIR.ThrowRef()))
 # rethrow label: no stack change, then unreachable (dart2wasm rethrow_).
-rethrow_!(b::InstrBuilder, target::ControlLabel) =
+rethrow_!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(_label_depth(b, target)))))
 
 # ── Reference ───────────────────────────────────────────────────────────────────

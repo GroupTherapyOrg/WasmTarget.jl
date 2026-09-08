@@ -548,7 +548,7 @@ means no closure object can flow, so the plain cast keeps Base-internal closure 
 emission unchanged.
 """
 function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
-                      to::WasmValType, from_julia::Union{Type,Nothing})
+                      to::WasmValType, from_julia::Union{Type,Nothing})::InstrBuilder
     local _mod = ctx.mod
     if wasm_subtype(from, to, _mod)
         # Upcast is free — emit nothing.
@@ -993,7 +993,7 @@ extend_identity_hash_to_u64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
 # representation conversions beside the central value/conversion machinery so
 # collection lowerers do not grow independent coercion ladders.
 narrow_length_to_i32!(b::InstrBuilder) = num!(b, Opcode.I32_WRAP_I64)
-widen_length_to_i64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
+widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
 
 """
     _ctx_builder(ctx, name) -> InstrBuilder

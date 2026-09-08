@@ -22,7 +22,7 @@ const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
 # a branch the plan compiled.) `interp` exists to share one instance within a
 # compilation; it is never a different kind of interpreter.
 function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
-                      interp::WasmInterpreter=get_wasm_interpreter())
+                      interp::WasmInterpreter=get_wasm_interpreter())::Tuple{Core.CodeInfo, Any}
     cache = TRIM_IR_CACHE[]
     if cache !== nothing
         hit = get(cache, (f, arg_types), nothing)
@@ -47,7 +47,7 @@ through an `invoke`'s `MethodInstance.specTypes` is: every match, inferred by th
 WasmInterpreter.
 """
 function get_typed_ir(sig::Type{<:Tuple}; optimize::Bool=true,
-                      interp::WasmInterpreter=get_wasm_interpreter())
+                      interp::WasmInterpreter=get_wasm_interpreter())::Vector
     return Base.code_typed_by_type(sig; optimize=optimize, interp=interp)
 end
 
@@ -58,7 +58,7 @@ The return type of `f(::argtypes...)` under the one inference path (overlays app
 question a box-capture join asks about a write's value. `Any` when inference fails.
 """
 function infer_return_type(@nospecialize(f), argtypes::Tuple;
-                           interp::WasmInterpreter=get_wasm_interpreter())
+                           interp::WasmInterpreter=get_wasm_interpreter())::Type
     return try
         Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
     catch
