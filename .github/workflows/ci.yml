@@ -13,10 +13,12 @@ concurrency:
 jobs:
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Direct Windows slices historically finish well below 45 minutes. Keep a
-    # tighter bound there so an external optimizer regression cannot consume a
-    # second blind multi-hour certification run.
-    timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 45 || 75 }}
+    # Bounds re-measured 2026-09-08: the full `all` slice runs 60-76 min on the
+    # macOS runners and the Windows fuzz slice 45 min (the SimpleDiffEq
+    # differential suite alone is 12-27 min); the previous 75/45 bounds were
+    # hit by one minute on green runs. A hang still self-kills well inside the
+    # 6-hour default.
+    timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 70 || 110 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
     strategy:

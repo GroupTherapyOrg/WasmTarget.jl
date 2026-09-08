@@ -364,6 +364,7 @@ UnifiedIR beyond the harness (#62334 is a draft).
 | Findings closed from the models | | ClosureLayout ArityDrift → `70dbfd8a` + `b3a84f9e` (one vtable per closure type, per-arity trampolines, dart's vtable struct chain, a classId-dispatching entry for same-arity specializations — first-wins used to compute with the wrong body); BoxJoin one-hop discovery → `d8b8f8d0` (transitive) |
 | D | in flight | `march/p12D1-nir` — stage 1 of 3: NIR built first and ctx-free, `emit_value!(NirNode)`, statements.jl on nodes (R29a 425 → statements.jl's 179 first); stage 2 context/box_capture/trimcollect analyses over NIR; stage 3 calls/invoke/compile + delete `nir_operand`/`_ctx_ir`/`NirStmt.raw`/the `code_info` field |
 | K | open | |
+| Post-march finding (not in A–K) | measured 2026-09-08 | module bytes grew 15–35% across the march (pinv 53.5K→63.0K, dict-grow 25.6K→34.5K, strings 30.6K→36.1K; compile time unchanged): the closed-world numbering materialises a `$JlDataType` object global + a populated hierarchy row for EVERY numbered type, and `_populate_jl_hierarchy!` is the largest function in a trivial module. dart2wasm creates class info per class but reifies a runtime `_Type` object only where a type is used as a value (constants.dart); the type objects should be constants materialised on demand. Structural-parity work for the next march, recorded here so it is not mistaken for K. |
 
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
