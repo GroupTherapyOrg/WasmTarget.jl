@@ -987,7 +987,7 @@ function compile_new!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             emit_value!(b, field_values[1], ctx,
                         static_wasm_type(field_values[1], ctx))
             array_len!(b)
-            num!(b, Opcode.I64_EXTEND_I32_S)
+            widen_length_to_i64!(b)
             struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
         end
 
@@ -1746,7 +1746,7 @@ function _fc_memchr!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompila
             #     array_index = current - 1 (base=1, so ptr=1 means index=0)
             local_get!(b, str_local)
             local_get!(b, current_local)
-            num!(b, Opcode.I32_WRAP_I64)
+            narrow_length_to_i32!(b)
             i32_const!(b, 1)
             num!(b, Opcode.I32_SUB)  # 0-based index
             array_get!(b, str_arr_type, I32; signed=false)
@@ -2037,7 +2037,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
                         i64_const!(b, 1)
                         num!(b, Opcode.I64_SUB)
                     end
-                    num!(b, Opcode.I32_WRAP_I64)
+                    narrow_length_to_i32!(b)
                     i32_const!(b, Int64(_mmv_sh))
                     num!(b, Opcode.I32_SHR_U)
                 end
@@ -2123,11 +2123,7 @@ function _fc_memmove!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompil
             if src_offset_ssa === nothing
                 i32_const!(b, 0)
             else
-                src_offset_type = infer_value_type(src_offset_ssa, ctx)
-                emit_value!(b, src_offset_ssa, ctx, (src_offset_type === Int64 || src_offset_type === Int) ? I64 : I32)   # step4
-                if src_offset_type === Int64 || src_offset_type === Int
-                    num!(b, Opcode.I32_WRAP_I64)
-                end
+                emit_value!(b, src_offset_ssa, ctx, I32)   # a Julia Int offset narrows through the funnel
                 i32_const!(b, 1)
                 num!(b, Opcode.I32_SUB)
             end
