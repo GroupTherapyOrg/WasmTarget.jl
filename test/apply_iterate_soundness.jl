@@ -40,6 +40,58 @@ function _wt_empty_splat_methoderror_payload(a::Vector{Int64}, b::Vector{Int64})
     end
 end
 
+# --- Phase 12 H: `f(t...)` with `t` a RUNTIME-LENGTH Vararg tuple -----------
+# The callee's own trailing `Vararg{E}` parameter IS `t`'s {Object, data, size}
+# representation, so this is a direct call, not an iteration
+# (parity(quarantine: Julia varargs) — dart has no runtime-length parameter list).
+@noinline _wt_va_sum(xs::Int64...)::Int64 = (s = 0; for x in xs; s += x; end; s)
+@noinline _wt_va_maxf(xs::Float64...)::Float64 = (m = -Inf; for x in xs; x > m && (m = x); end; m)
+# the three spellings of the same splat target — the arm resolves the callee OBJECT,
+# so `Core.tuple` (the builtin value) and `tuple` (a Main GlobalRef) lower like `Tuple`
+@noinline _wt_va_mk_value(v::Vector{Int64}) = Core.tuple(v...)
+@noinline _wt_va_mk_globalref(v::Vector{Int64}) = tuple(v...)
+@noinline _wt_va_mk_ctor(v::Vector{Int64}) = Tuple(v)
+@noinline _wt_va_mkf(v::Vector{Float64}) = tuple(v...)
+# a non-empty narrowing Tuple{T, Vararg{T}} — the same canonical layout
+@noinline _wt_va_mk_nonempty(v::Vector{Int64}) = (t = Core.tuple(v...); isempty(t) ? (0,) : t)
+# NO vararg specialization: two arity-specific methods, so the open-ended signature
+# has no single static target and the splat must stay a loud reject
+@noinline _wt_va_two_arity(a::Int64)::Int64 = a
+@noinline _wt_va_two_arity(a::Int64, b::Int64)::Int64 = a + b
+
+_wt_va_splat_value(v::Vector{Int64})::Int64 = _wt_va_sum(_wt_va_mk_value(v)...)
+_wt_va_splat_globalref(v::Vector{Int64})::Int64 = _wt_va_sum(_wt_va_mk_globalref(v)...)
+_wt_va_splat_ctor(v::Vector{Int64})::Int64 = _wt_va_sum(_wt_va_mk_ctor(v)...)
+_wt_va_splat_nonempty(v::Vector{Int64})::Int64 = _wt_va_sum(_wt_va_mk_nonempty(v)...)
+_wt_va_splat_float(v::Vector{Float64})::Float64 = _wt_va_maxf(_wt_va_mkf(v)...)
+_wt_va_splat_no_vararg(v::Vector{Int64})::Int64 = _wt_va_two_arity(_wt_va_mk_value(v)...)
+
+@testset "_apply_iterate over a runtime Vararg tuple" begin
+    for f in (_wt_va_splat_value, _wt_va_splat_globalref, _wt_va_splat_ctor)
+        @test compare_julia_wasm_vec(f, Int64[]).pass
+        @test compare_julia_wasm_vec(f, Int64[7]).pass
+        @test compare_julia_wasm_vec(f, Int64[1, 2, 3, 4]).pass
+    end
+    @test compare_julia_wasm_vec(_wt_va_splat_nonempty, Int64[1, 2, 3]).pass
+    @test compare_julia_wasm_vec(_wt_va_splat_float, Float64[1.5, -2.0, 9.25]).pass
+
+    # the callee IS in the plan, with the packed {Object, data, size} parameter —
+    # ONE physical parameter, not a flattened tail
+    plan, _ = WasmTarget.trim_compile_plan(
+        Any[(_wt_va_splat_value, (Vector{Int64},), "f")])
+    @test any(e -> e[1] === _wt_va_sum && e[2] == (Tuple{Vararg{Int64}},), plan)
+
+    # correct or loud: no single static target ⇒ reject, never a guessed arity
+    err = try
+        WasmTarget.compile(_wt_va_splat_no_vararg, (Vector{Int64},))
+        nothing
+    catch caught
+        caught
+    end
+    @test err isa WasmTarget.WasmCompileError
+    @test occursin("runtime Vararg tuple", sprint(showerror, err))
+end
+
 @testset "_apply_iterate runtime Vararg tuple" begin
     @test WasmTarget.is_runtime_vararg_tuple_type(Tuple{Vararg{Int64}})
     @test !WasmTarget.is_runtime_vararg_tuple_type(Tuple)
