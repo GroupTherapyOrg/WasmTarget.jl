@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_raw_code, nir_value_raw, nir_node, nir_new,
+       build_nir, nir_raw_code, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -134,26 +134,44 @@ end
 """`mi`/`method` are `Union{_,Nothing}` — resolve_invoke_mi/resolve_invoke_method are
 deliberately total (never throw) because build_nir must not crash mid-compile on an
 exotic `:invoke` shape; invoke.jl's own existing ~4 duplicated resolution sites are
-equally defensive (see resolve_invoke_method's docstring)."""
+equally defensive (see resolve_invoke_method's docstring).
+
+`callee` is the statement's OWN callee operand (`args[2]`), resolved exactly like
+NirCall's — a function object when statically known, a NirNode when the invoked value is
+an SSA/argument (a closure VALUE invoked through its known MethodInstance), `nothing` when
+the statement carried none. It is NOT recoverable from `mi.specTypes.parameters[1]`: that
+names the closure's TYPE for a value callee, so a consumer gating on "is the callee a
+function object" answers differently — the closed-world collector's re-specialization gate
+(trimcollect.jl) does exactly that, and would flip from decline to accept."""
 struct NirInvoke <: NirNode
     mi::Union{Core.MethodInstance,Nothing}
     method::Union{Core.Method,Nothing}
+    callee::Any
     operands::Vector{NirNode}
 end
 
-"""`%new(T, fields...)`, with `T` resolved ONCE here from whichever operand shape named it:
-a type literal/GlobalRef (`:literal`), a `Core.apply_type` result whose SSA type is
-`Type{T}` (`:ssa`), or the constructor's own `#self#` argument, whose `T` is the `:new`
-statement's own inferred type (`:argument`). `type_kind` records which; when resolution
-FAILED it is `:ssa`/`:argument`/`:unknown` with `T === Any`, and `type_detail` carries the
-widened inferred type the attempt consulted (the reject's detail). `field_types` is
-`fieldtype.(T, 1:fieldcount(T))` when `T` is concrete, else empty — never throws on an
-exotic `T`."""
+"""`%new(T, fields...)`, with `T` resolved ONCE here from whichever operand shape named it.
+
+`type_kind` is HOW the type was named and nothing else — `:literal` (a type literal or
+GlobalRef), `:ssa` (a `Core.apply_type` result, read through the SSA's own `Type{T}`),
+`:argument` (the constructor's own `#self#`, read through the `:new` statement's own
+inferred type), `:unknown` (no recognized shape). It is never overwritten by the outcome:
+`type_resolved` is the separate fact of whether resolution SUCCEEDED. Keeping them apart
+matters — a consumer that wants "was this type written down literally" (the closed-world
+collector's runtime-class observation and the F3 captor-field walk both do, because the
+raw code they replace saw nothing for the SSA-named case) cannot get it from a `type_kind`
+that reports `:literal` for every success.
+
+When `type_resolved` is false, `T === Any` and `type_detail` carries the widened inferred
+type the attempt consulted (the reject's detail); `type_detail` is `Any` otherwise.
+`field_types` is `fieldtype.(T, 1:fieldcount(T))` when `T` is concrete, else empty — never
+throws on an exotic `T`."""
 struct NirNew <: NirNode
     T::Type
     field_types::Vector{Type}
     operands::Vector{NirNode}
     type_kind::Symbol
+    type_resolved::Bool
     type_detail::Type
 end
 
@@ -415,14 +433,15 @@ _nir_field_types(T)::Vector{Type} =
 calls.jl uses when it SYNTHESIZES a field-wise constructor (there is no `Expr(:new, ...)`
 in the IR to classify, so the node is built directly instead of a raw Expr being faked)."""
 nir_new(T::Type, args, ctx)::NirNew =
-    NirNew(T, _nir_field_types(T), NirNode[nir_node(ctx, a) for a in args], :literal, Any)
+    NirNew(T, _nir_field_types(T), NirNode[nir_node(ctx, a) for a in args], :literal, true, Any)
 
-"""`%new`'s type operand. A literal/GlobalRef names `T` outright. A `Core.apply_type`
-result names it through the SSA's OWN inferred type, which must be a `Type{T}` — read from
-the RAW lattice element, exactly as compile_new! read `ssavaluetypes[id]` before this
-boundary existed, so the accept/reject frontier is unchanged. A constructor body's
-`#self#` (`Core.Argument`) names it through the `:new` statement's own inferred type."""
-function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbol,Type}
+"""`%new`'s type operand → `(T, naming shape, resolved?, detail)`. A literal/GlobalRef names
+`T` outright. A `Core.apply_type` result names it through the SSA's OWN inferred type, which
+must be a `Type{T}` — read from the RAW lattice element, exactly as compile_new! read
+`ssavaluetypes[id]` before this boundary existed, so the accept/reject frontier is
+unchanged. A constructor body's `#self#` (`Core.Argument`) names it through the `:new`
+statement's own inferred type. The shape is reported whether or not resolution succeeded."""
+function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbol,Bool,Type}
     _raw_ssa(i) = begin
         ssatypes = code_info.ssavaluetypes
         (ssatypes isa Vector && 1 <= i <= length(ssatypes)) ? ssatypes[i] : Any
@@ -430,23 +449,25 @@ function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbo
     _widen(t) = (t isa Type ? t : (try; Core.Compiler.widenconst(t); catch; Any; end))
     if type_ref isa GlobalRef || type_ref isa DataType || type_ref isa Type ||
        (type_ref isa QuoteNode && type_ref.value isa Type)
-        T = _resolve_type_operand(type_ref)
-        return (T, :literal, Any)
+        # A literal that does not name a Type resolves to `Any` and still counts as
+        # resolved — exactly as before this boundary existed, the value was handed on and
+        # failed downstream rather than taking one of the two type-instability rejects.
+        return (_resolve_type_operand(type_ref), :literal, true, Any)
     elseif type_ref isa Core.SSAValue
         ssa_type = _raw_ssa(type_ref.id)
         if ssa_type isa DataType && ssa_type <: Type && length(ssa_type.parameters) >= 1
             P = ssa_type.parameters[1]
-            P isa Type && return (P, :literal, Any)
+            P isa Type && return (P, :ssa, true, Any)
         end
-        return (Any, :ssa, _widen(ssa_type))
+        return (Any, :ssa, false, _widen(ssa_type))
     elseif type_ref isa Core.Argument
         new_ssa_type = _raw_ssa(stmt_idx)
         if new_ssa_type isa DataType && isconcretetype(new_ssa_type) && isstructtype(new_ssa_type)
-            return (new_ssa_type, :literal, Any)
+            return (new_ssa_type, :argument, true, Any)
         end
-        return (Any, :argument, _widen(new_ssa_type))
+        return (Any, :argument, false, _widen(new_ssa_type))
     end
-    return (Any, :unknown, Any)
+    return (Any, :unknown, false, Any)
 end
 
 """Classify one raw CodeInfo statement into a NirNode. Total (never throws) — any Expr
@@ -486,12 +507,14 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
             return NirCall(callee, cargs)
         elseif head === :invoke && !isempty(args)
             mi_or_ci = args[1]
+            callee = length(args) >= 2 ? resolve_call_callee(args[2], types) : nothing
             cargs = length(args) >= 3 ? NirNode[resolve_operand(a, types) for a in @view args[3:end]] : NirNode[]
-            return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci), cargs)
+            return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci),
+                             callee, cargs)
         elseif head === :new && !isempty(args)
-            T, kind, detail = _resolve_new_type(args[1], i, code_info)
+            T, kind, resolved, detail = _resolve_new_type(args[1], i, code_info)
             cargs = length(args) >= 2 ? NirNode[resolve_operand(a, types) for a in @view args[2:end]] : NirNode[]
-            return NirNew(T, _nir_field_types(T), cargs, kind, detail)
+            return NirNew(T, _nir_field_types(T), cargs, kind, resolved, detail)
         elseif head === :foreigncall
             c_symbol = !isempty(args) ? extract_foreigncall_name(args[1]) : nothing
             ret_t = length(args) >= 2 ? args[2] : Any
@@ -618,6 +641,23 @@ nir_value_raw(s::NirStmt)::Any = s.slot > 0 ? s.raw.args[2] : s.raw
 """Resolve a RAW IR operand a not-yet-converted consumer still holds into its NirNode, with
 the SSA types the boundary already computed. The bridge INTO the node world."""
 nir_node(ctx, x)::NirNode = x isa NirNode ? x : resolve_operand(x, ctx.nir)
+
+"""Re-target statement `i`'s `:invoke` at `mi` — the ONE write into an invoke's target
+operand. The closed-world collector (trimcollect.jl) rebuilds an explicit invoke's
+MethodInstance from the concrete call-site types when Julia left it abstract, and the
+collected IR must keep agreeing with the edge it hands to inference, so BOTH the raw
+statement and the record's NirInvoke are rewritten here rather than a consumer splicing
+`Expr.args` behind the boundary's back. Loud on a statement that is not an `:invoke`."""
+function nir_retarget_invoke!(nir::Vector{NirStmt}, i::Int, mi::Core.MethodInstance)::Nothing
+    s = nir[i]
+    node = s.node
+    node isa NirInvoke || error(
+        "nir_retarget_invoke!: statement $i is a $(nameof(typeof(node))), not an :invoke")
+    nir_value_raw(s).args[1] = mi
+    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), node.callee, node.operands),
+                     s.julia_type, s.line, s.slot, s.raw)
+    return nothing
+end
 
 """The inverse: a node back to the raw operand `Expr.args` carried. Transitional — it exists
 only until the value channel itself takes a NirNode, and is deleted then. A Symbol literal is
