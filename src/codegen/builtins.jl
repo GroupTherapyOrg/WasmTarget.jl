@@ -30,6 +30,21 @@
 
 const BUILTIN_LOWERINGS = IdDict{Any,Function}()
 
+"""Register one lowering under a callee's IDENTITY. Two names can be one object:
+`Core.getproperty` IS `Core.getfield` and `Core.setproperty!` IS `Core.setfield!`
+(measured), so a by-NAME reading of the retired ladder — which treated them as
+four builtins — silently clobbers two entries when transcribed into an IdDict.
+Registering the same object twice under DIFFERENT lowerings is that bug and is
+rejected here at load time; aliases that map to the SAME lowering (Base./Core.
+`sizeof`, `isvisible`/`_closed_world_isvisible`) are fine."""
+function _register_builtin!(callee, lowering::Function)::Function
+    prev = get(BUILTIN_LOWERINGS, callee, nothing)
+    prev === nothing || prev === lowering ||
+        error("BUILTIN_LOWERINGS already maps $(callee) to $(prev) — $(lowering) would clobber it")
+    BUILTIN_LOWERINGS[callee] = lowering
+    return lowering
+end
+
 """Resolve a call callee to the concrete Core/Base function OBJECT it names,
 mirroring dart's `KernelNodes` lookup — the registry is keyed on that object's
 identity, never on the bare name Symbol. A `GlobalRef` to an undefined binding
@@ -2290,48 +2305,50 @@ end
 # map to the SAME lowering function, matching dart's KernelNodes resolving
 # multiple call shapes to one intrinsic.
 
-BUILTIN_LOWERINGS[Core.invoke_in_world] = _lower_invoke_in_world!
-BUILTIN_LOWERINGS[Base.isdefinedglobal] = _lower_isdefinedglobal!
-BUILTIN_LOWERINGS[Base.isvisible] = _lower_isvisible!
-BUILTIN_LOWERINGS[_closed_world_isvisible] = _lower_isvisible!
-BUILTIN_LOWERINGS[Base.check_world_bounded] = _lower_check_world_bounded!
-BUILTIN_LOWERINGS[_closed_world_type_bounds] = _lower_check_world_bounded!
+_register_builtin!(Core.invoke_in_world, _lower_invoke_in_world!)
+_register_builtin!(Base.isdefinedglobal, _lower_isdefinedglobal!)
+_register_builtin!(Base.isvisible, _lower_isvisible!)
+_register_builtin!(_closed_world_isvisible, _lower_isvisible!)
+_register_builtin!(Base.check_world_bounded, _lower_check_world_bounded!)
+_register_builtin!(_closed_world_type_bounds, _lower_check_world_bounded!)
 
-BUILTIN_LOWERINGS[Core.getglobal] = _lower_getglobal!
+_register_builtin!(Core.getglobal, _lower_getglobal!)
 # `Core.sizeof` (the builtin `code_typed` actually resolves calls to) and
 # `Base.sizeof` (the generic function) are DIFFERENT objects — `is_func`
 # matched either by bare name, so both keys route to the same lowering.
-BUILTIN_LOWERINGS[Core.sizeof] = _lower_sizeof!
-BUILTIN_LOWERINGS[Base.sizeof] = _lower_sizeof!
-BUILTIN_LOWERINGS[Base.ncodeunits] = _lower_ncodeunits!
-BUILTIN_LOWERINGS[Base.length] = _lower_length!
-BUILTIN_LOWERINGS[Core.nfields] = _lower_nfields!
-BUILTIN_LOWERINGS[Core.memoryref_isassigned] = _lower_memoryref_isassigned!
-BUILTIN_LOWERINGS[Core.memoryrefget] = _lower_memoryrefget!
-BUILTIN_LOWERINGS[Core.memoryrefoffset] = _lower_memoryrefoffset!
-BUILTIN_LOWERINGS[Core.memoryrefset!] = _lower_memoryrefset!
-BUILTIN_LOWERINGS[Core.memorynew] = _lower_memorynew!
-BUILTIN_LOWERINGS[Core.memoryref] = _lower_memoryref!
-BUILTIN_LOWERINGS[Core.memoryrefnew] = _lower_memoryrefnew!
-BUILTIN_LOWERINGS[Core.tuple] = _lower_tuple!
-BUILTIN_LOWERINGS[Core._expr] = _lower_expr!
-BUILTIN_LOWERINGS[Symbol] = _lower_symbol!
-BUILTIN_LOWERINGS[Core.donotdelete] = _lower_donotdelete!
-BUILTIN_LOWERINGS[Core.compilerbarrier] = _lower_compilerbarrier!
-BUILTIN_LOWERINGS[Core.apply_type] = _lower_apply_type!
-BUILTIN_LOWERINGS[Core.typeof] = _lower_typeof!
-BUILTIN_LOWERINGS[Core.:(===)] = _lower_egal!
-BUILTIN_LOWERINGS[Core.:(!==)] = _lower_egal!
-BUILTIN_LOWERINGS[Core.isa] = _lower_isa!                  # === Base.isa
-BUILTIN_LOWERINGS[+] = _lower_operator!
-BUILTIN_LOWERINGS[-] = _lower_operator!
-BUILTIN_LOWERINGS[*] = _lower_operator!
-BUILTIN_LOWERINGS[Core.ifelse] = _lower_ifelse!
-BUILTIN_LOWERINGS[Base.ifelse] = _lower_ifelse!
-BUILTIN_LOWERINGS[Core.typeassert] = _lower_typeassert!
-BUILTIN_LOWERINGS[Core.getfield] = _lower_getfield!        # === Base.getfield
-BUILTIN_LOWERINGS[Base.getproperty] = _lower_getproperty!
-BUILTIN_LOWERINGS[Core.getproperty] = _lower_getproperty!
-BUILTIN_LOWERINGS[Core.setfield!] = _lower_setfield!       # === Base.setfield!
-BUILTIN_LOWERINGS[Base.setproperty!] = _lower_setfield!
-BUILTIN_LOWERINGS[Core.setproperty!] = _lower_setfield!
+_register_builtin!(Core.sizeof, _lower_sizeof!)
+_register_builtin!(Base.sizeof, _lower_sizeof!)
+_register_builtin!(Base.ncodeunits, _lower_ncodeunits!)
+_register_builtin!(Base.length, _lower_length!)
+_register_builtin!(Core.nfields, _lower_nfields!)
+_register_builtin!(Core.memoryref_isassigned, _lower_memoryref_isassigned!)
+_register_builtin!(Core.memoryrefget, _lower_memoryrefget!)
+_register_builtin!(Core.memoryrefoffset, _lower_memoryrefoffset!)
+_register_builtin!(Core.memoryrefset!, _lower_memoryrefset!)
+_register_builtin!(Core.memorynew, _lower_memorynew!)
+_register_builtin!(Core.memoryref, _lower_memoryref!)
+_register_builtin!(Core.memoryrefnew, _lower_memoryrefnew!)
+_register_builtin!(Core.tuple, _lower_tuple!)
+_register_builtin!(Core._expr, _lower_expr!)
+_register_builtin!(Symbol, _lower_symbol!)
+_register_builtin!(Core.donotdelete, _lower_donotdelete!)
+_register_builtin!(Core.compilerbarrier, _lower_compilerbarrier!)
+_register_builtin!(Core.apply_type, _lower_apply_type!)
+_register_builtin!(Core.typeof, _lower_typeof!)
+_register_builtin!(Core.:(===), _lower_egal!)
+_register_builtin!(Core.:(!==), _lower_egal!)
+_register_builtin!(Core.isa, _lower_isa!)                  # === Base.isa
+_register_builtin!(+, _lower_operator!)
+_register_builtin!(-, _lower_operator!)
+_register_builtin!(*, _lower_operator!)
+_register_builtin!(Core.ifelse, _lower_ifelse!)
+_register_builtin!(Base.ifelse, _lower_ifelse!)
+_register_builtin!(Core.typeassert, _lower_typeassert!)
+_register_builtin!(Core.getfield, _lower_getfield!)        # === Base.getfield
+# `Core.getproperty` is NOT a key: it IS `Core.getfield` (measured), and
+# registering it would clobber that entry's two raw-identity guards. Same for
+# `Core.setproperty!` === `Core.setfield!`. `Base.getproperty` /
+# `Base.setproperty!` are genuinely distinct objects.
+_register_builtin!(Base.getproperty, _lower_getproperty!)
+_register_builtin!(Core.setfield!, _lower_setfield!)       # === Base.setfield!
+_register_builtin!(Base.setproperty!, _lower_setfield!)
