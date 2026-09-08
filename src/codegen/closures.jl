@@ -37,13 +37,21 @@ function ensure_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     cache = registry.closure_vtable_globals
     cache === nothing && error("closure layouter unavailable on a minimal registry")
     key = closure_type   # T-keyed: the wrap looks up by type alone
+    arity = length(body_params) - (takes_context ? 1 : 0)
     if haskey(cache, key)
+        # The global's declared type IS the shape frozen at creation (dart keys its
+        # representation cache by the shape itself, closures.dart:1101-1114); a second
+        # arrival with another arity is a layouter defect, never a silent re-derivation
+        # (Coercion-style: ClosureLayout.tla ArityDrift).
         cached = cache[key]
-        local cached_arity = length(body_params) - (takes_context ? 1 : 0)
-        return (cached, get_closure_vtable_struct!(mod, registry, cached_arity))
+        local vt_decl = mod.globals[Int(cached) + 1].valtype
+        vt_decl isa ConcreteRef || error("closure vtable global $cached has no struct type")
+        local vt_fields = length(mod.types[Int(vt_decl.type_idx) + 1].fields)
+        vt_fields == arity + 1 || error(
+            "closure $closure_type reached the layouter with arity $arity; its vtable was created for arity $(vt_fields - 1)")
+        return (cached, vt_decl.type_idx)
     end
 
-    arity = length(body_params) - (takes_context ? 1 : 0)
     base_idx = get_closure_base_struct!(mod, registry)
     vt_struct = get_closure_vtable_struct!(mod, registry, arity)
     captured_info = takes_context ? get(registry.structs, closure_type, nothing) : nothing
@@ -150,8 +158,7 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, closure_type)))
     i32_const!(b, 0)
     local_get!(b, UInt32(ctx_scratch))
-    local arity = length(body_params) - (takes_context ? 1 : 0)
-    global_get!(b, g, ConcreteRef(get_closure_vtable_struct!(ctx.mod, ctx.type_registry, arity), false))
+    global_get!(b, g, ctx.mod.globals[Int(g) + 1].valtype)   # the vtable's declared type, not a re-derivation
     local type_globals = ctx.type_registry.type_constant_globals
     (type_globals !== nothing && haskey(type_globals, closure_type)) ||
         error("closed-world type object missing for closure $closure_type")
