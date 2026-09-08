@@ -79,7 +79,7 @@ function _f3_write_result_type(code, sst, spectypes, rhs, T)
                 (op isa Function ? op : nothing)
             f === nothing && return Any
             argtypes = Any[_f3_operand_type(a, sst, T, spectypes, code) for a in s.args[2:end]]
-            return try _F3_CC.return_type(f, Tuple{argtypes...}) catch; Any end
+            return infer_return_type(f, Tuple(argtypes))
         end
         return (1 <= rhs.id <= length(sst)) ? _F3_CC.widenconst(sst[rhs.id]) : Any
     end
@@ -117,7 +117,7 @@ function _f3_capturing_closure_bodies(code, box_id::Int)
         st = mi.specTypes
         st isa DataType && st <: Tuple && length(st.parameters) >= 1 || continue
         (st.parameters[1] in captors) || continue
-        irs = try Base.code_typed_by_type(st; optimize=true) catch; nothing end
+        irs = try get_typed_ir(st) catch; nothing end
         irs === nothing && continue
         for pair in irs
             b = pair.first
@@ -216,7 +216,7 @@ function _f3_call_result_type(stmt, code, out::Dict{Int,Type}, boxT::Dict{Int,Ty
         end
     end
     uses_box || return nothing
-    return try _F3_CC.return_type(f, Tuple{argtypes...}) catch; nothing end
+    return infer_return_type(f, Tuple(argtypes))
 end
 
 """
@@ -336,7 +336,7 @@ function propagate_numeric_value_types(code, ssa_types;
                 f === nothing && continue
                 ats = Any[_opT(a) for a in _cargs[2:end]]
                 all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
-                rt = try _F3_CC.return_type(f, Tuple{ats...}) catch; Any end
+                rt = infer_return_type(f, Tuple(ats))
                 if _f3_is_numeric_jl(rt)
                     out[i] = rt; changed = true
                 end

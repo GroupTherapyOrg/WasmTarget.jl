@@ -1505,9 +1505,10 @@ const LOCKS = [
             end
             n
         end),
-    "L120_one_inference_path" => ("every typed IR WasmTarget consumes comes from the WasmInterpreter through get_typed_ir — Base.code_typed is called with an argument list only inside get_typed_ir, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; locked 2026-09-07)",
+    "L120_one_inference_path" => ("every typed IR and every inferred return type WasmTarget consumes comes from the WasmInterpreter through ir.jl (get_typed_ir / infer_return_type) — Base.code_typed, code_typed_by_type, Core.Compiler.return_type / _return_type and Base.infer_return_type are called only inside ir.jl, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; box-capture joins once asked the native interpreter, which does not see the overlays; locked 2026-09-07)",
         () -> begin
-            n = count_sites(r"Base\.code_typed\(\w"; roots=[SRC], exclude_files=["codegen/ir.jl"])
+            n = count_sites(r"Base\.code_typed\(\w|code_typed_by_type\(|(?<![\w.])_?return_type\(\s*[^)]|Base\.infer_return_type\(|Compiler\.return_type\(|CC\.return_type\(";
+                            roots=[SRC], exclude_files=["codegen/ir.jl"])
             ir = read(joinpath(CODEGEN, "ir.jl"), String)
             occursin("interp::WasmInterpreter=get_wasm_interpreter()", ir) || (n += 1)
             occursin("interp=nothing", ir) && (n += 1)
