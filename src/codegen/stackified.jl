@@ -33,6 +33,7 @@ If `val` is a non-nothing numeric value, compiles + boxes it.
 # or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
 # decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 function _value_julia_type(val, ctx::AbstractCompilationContext)
+    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     if val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, nothing)
     elseif val isa Core.Argument

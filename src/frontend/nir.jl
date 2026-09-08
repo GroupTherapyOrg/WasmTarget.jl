@@ -63,15 +63,20 @@ struct NirArgument <: NirNode
     n::Int
 end
 
+"""A `Core.SlotNumber` use — unoptimized IR's variable slot. `id` is its slot number,
+named as Julia names it (slot 1 = self, 2.. = the parameters, then the locals)."""
 struct NirSlot <: NirNode
-    n::Int
+    id::Int
 end
 
-"""`value` is the resolved global's current value, or `nothing` if unbound/unresolved."""
+"""A `GlobalRef` operand, its binding resolved ONCE here. `bound` says the binding
+existed (an unbound GlobalRef is a soundness reject at the consumer, and `value === nothing`
+alone cannot distinguish that from a global whose value IS `nothing`)."""
 struct NirGlobalRef <: NirNode
     mod::Module
     name::Symbol
     value::Any
+    bound::Bool
 end
 
 """A constant operand — literal numbers/strings/symbols/chars/types/QuoteNode payloads,
@@ -321,14 +326,11 @@ function resolve_operand(x, types)::NirNode
     elseif x isa Core.Argument
         return NirArgument(x.n)
     elseif x isa Core.SlotNumber
-        return NirSlot(x.n)
+        return NirSlot(x.id)
     elseif x isa GlobalRef
-        val = try
-            isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : nothing
-        catch
-            nothing
-        end
-        return NirGlobalRef(x.mod, x.name, val)
+        bound = try; isdefined(x.mod, x.name); catch; false; end
+        val = bound ? (try; getfield(x.mod, x.name); catch; nothing; end) : nothing
+        return NirGlobalRef(x.mod, x.name, val, bound)
     elseif x isa QuoteNode
         return NirLiteral(x.value)
     else
@@ -562,8 +564,12 @@ re-quoted, as `Expr.args` carried it, so the channel does not mistake it for a b
 function nir_operand(node::NirNode)
     node isa NirSSA && return Core.SSAValue(node.id)
     node isa NirArgument && return Core.Argument(node.n)
-    node isa NirSlot && return Core.SlotNumber(node.n)
+    node isa NirSlot && return Core.SlotNumber(node.id)
     node isa NirGlobalRef && return GlobalRef(node.mod, node.name)
-    node isa NirLiteral && return node.value isa Symbol ? QuoteNode(node.value) : node.value
+    # A Symbol or an IR-reference VALUE is re-quoted, exactly as `Expr.args` carried it, so
+    # the raw-shaped consumer does not mistake a literal for a binding or an SSA reference.
+    node isa NirLiteral && return (node.value isa Symbol || node.value isa Core.SSAValue ||
+                                   node.value isa Core.Argument || node.value isa Core.SlotNumber) ?
+        QuoteNode(node.value) : node.value
     error("nir_operand: $(nameof(typeof(node))) is not a value operand")
 end

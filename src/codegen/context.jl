@@ -1704,6 +1704,7 @@ function packed_vararg_source_type(ctx::AbstractCompilationContext,
 end
 
 function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
+    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     if val isa Core.SSAValue
         return get(ctx.ssa_types, val.id, Any)
     elseif val isa Core.Argument
@@ -1945,6 +1946,7 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
 end
 
 function infer_value_type(val, ctx::AbstractCompilationContext)
+    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     if val isa Core.Argument
         # Source IR semantics are authoritative. The physical signature can be
         # flattened (notably a vararg tuple), so indexing ctx.arg_types first

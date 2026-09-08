@@ -67,6 +67,7 @@ end
 Check if a value represents `nothing` (literal or GlobalRef to nothing).
 """
 function is_nothing_value(val, ctx)::Bool
+    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     # Literal nothing
     if val === nothing
         return true
