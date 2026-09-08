@@ -148,6 +148,190 @@ function _is_func_site_tally()::Dict{String,Int}
     return tally
 end
 
+# ---- R30/R31 (Phase 12.I): parser-based, not regex-based ---------------------
+# Both walk Meta.parseall's AST rather than grep patterns: a return-type
+# annotation or a field's declared type can span lines, hide behind a `where`
+# clause, or sit inside a macrocall — none of which a line-oriented regex sees
+# reliably. Shared by R30 and R31 below.
+
+"""`where T` clauses wrap the real call/`::` signature; strip them to get at it."""
+function _strip_where(sig)
+    while sig isa Expr && sig.head === :where
+        sig = sig.args[1]
+    end
+    return sig
+end
+
+"""The name expr in call position of a (`where`-stripped) signature, or `nothing`
+if `sig` isn't a `::`-annotated or bare call signature at all (e.g. an anonymous
+`function (x) … end`, whose sig is a bare tuple/arg list)."""
+function _sig_call_name(sig)
+    core = _strip_where(sig)
+    if core isa Expr && core.head === :(::) && length(core.args) == 2
+        core = core.args[1]
+    end
+    (core isa Expr && core.head === :call) || return nothing
+    return core.args[1]
+end
+
+"""A named call signature: `f(...)`, `Mod.f(...)`, or `Foo{T}(...)` — as opposed
+to a functor/anonymous signature (`(c::Closure)(x)`, `function (x) … end`)."""
+function _is_named_call_sig(sig)::Bool
+    name = _sig_call_name(sig)
+    return name isa Symbol || (name isa Expr && (name.head === :(.) || name.head === :curly))
+end
+
+"""Does the (`where`-stripped) signature carry a `::T` return-type annotation?"""
+_has_return_annotation(sig) = sig isa Expr && sig.head === :(::) && length(sig.args) == 2
+
+"""
+Count `function f(...)`/`f(...) = ...` definitions under `roots` with no `::T`
+return-type annotation. Walks Meta.parseall's AST rather than lines, so a
+signature split across lines or wrapped in `where`/a macrocall (`@inline`) is
+still seen correctly. Excluded, structurally (not by name-list):
+  - a definition nested inside another counted definition's body — a closure,
+    whose return type isn't part of any public signature;
+  - an anonymous/functor signature (`function (x) … end`, `(c::Closure)(x)`)
+    — there is no name to attach an annotation to;
+  - a qualified extension of another module's method (`Base.show`, dart's
+    `CC.abstract_apply`, …) — the return type is the interface's contract,
+    not WasmTarget's to annotate (still recursed into, to exclude any
+    closures defined inside it).
+"""
+function count_untyped_returns(roots::Vector{String})::Int
+    n = 0
+    for root in roots
+        isdir(root) || continue
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            path = joinpath(dir, f)
+            local ex
+            try
+                ex = Meta.parseall(read(path, String); filename=path)
+            catch
+                continue
+            end
+            n += _count_untyped_returns_in(ex, false)
+        end
+    end
+    return n
+end
+
+function _count_untyped_returns_in(ex, in_fn::Bool)::Int
+    ex isa Expr || return 0
+    is_def = ex.head === :function ||
+             (ex.head === :(=) && length(ex.args) == 2 && ex.args[1] isa Expr &&
+              (ex.args[1].head === :call || ex.args[1].head === :where ||
+               (ex.args[1].head === :(::) && ex.args[1].args[1] isa Expr &&
+                (ex.args[1].args[1].head === :call || ex.args[1].args[1].head === :where))))
+    if is_def
+        in_fn && return 0   # nested definition = closure — excluded, don't recurse further
+        sig = ex.args[1]
+        _is_named_call_sig(sig) || return 0   # anonymous/functor — excluded
+        body = length(ex.args) >= 2 ? ex.args[2] : nothing
+        name = _sig_call_name(sig)
+        if name isa Expr && name.head === :(.)   # qualified extension — interface's contract
+            return body === nothing ? 0 : _count_untyped_returns_in(body, true)
+        end
+        below = body === nothing ? 0 : _count_untyped_returns_in(body, true)
+        return (_has_return_annotation(_strip_where(sig)) ? 0 : 1) + below
+    end
+    return sum(a -> _count_untyped_returns_in(a, in_fn), ex.args; init=0)
+end
+
+"""Does the field-type expr `t` contain the symbol `Any` — as itself, or nested
+inside a parametric type (`Dict{Any,V}`, `Vector{Any}`, `Union{Nothing,Any}`)?
+A `Dict{Any,V}` seam is exactly as open as a literal `::Any` field: there is no
+fixed key type either way."""
+function _type_mentions_any(t)::Bool
+    t === :Any && return true
+    t isa Expr || return false
+    t.head === :curly && return any(_type_mentions_any, t.args)
+    t.head === :where && return _type_mentions_any(t.args[1])
+    return false
+end
+
+"""Extract `(fieldname::Symbol, type_expr_or_nothing)` from one element of a
+struct body, or `nothing` if `el` isn't a field decl at all (an inner
+constructor, a macro call, a docstring). `nothing` for the type means bare
+`field` — untyped, implicitly `Any`. Unwraps `Base.@kwdef`'s `field::T =
+default` down to `field::T`."""
+function _field_decl(el)
+    el isa Symbol && return (el, nothing)
+    el isa Expr || return nothing
+    if el.head === :(::) && length(el.args) == 2 && el.args[1] isa Symbol
+        return (el.args[1], el.args[2])
+    end
+    el.head === :(=) && length(el.args) == 2 && return _field_decl(el.args[1])
+    return nothing
+end
+
+# R31's allowlist: named heterogeneous seams where the field genuinely cannot
+# carry a fixed type, each with a one-line reason. (struct, field) => skip.
+const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
+    (:WasmDiagnostic, :detail),         # the raw Expr/MethodInstance/Type a diagnostic points at — open by construction
+    (:NirLiteral, :value),              # a Julia literal's runtime value — literals are open
+    (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
+    (:NirStmt, :raw),                   # transitional: the raw CodeInfo statement, pending the NIR migration (Phase 12.D)
+    (:NirStmt, :static_type),           # transitional: its pre-NIR inferred type, ditto
+    (:FunctionInfo, :func_ref),         # the registries' Function values — holds a Function, Type, or Builtin (anything callable)
+    (:FunctionRegistry, :by_ref),       # keyed by the same open func_ref
+    (:DispatchTable, :func_ref),        # DispatchTableRegistry's func_ref keys — same "anything callable" seam
+    (:DispatchTableRegistry, :tables),
+    (:DispatchTableRegistry, :selector_axis),
+    (:DispatchTableRegistry, :selector_offset),
+    (:DispatchTableRegistry, :selector_positions),
+    (:DispatchTableRegistry, :selector_cascades),
+    (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
+])
+
+"""
+Count `struct`/`mutable struct` fields anywhere in `src` that are `::Any`,
+untyped, or `Any`-parametric (`Dict{Any,V}`), minus R31_ALLOWLIST's named
+seams. Parser-based (Meta.parseall): a field's type can span lines or sit
+behind `Base.@kwdef`'s `= default`, which a regex would misread as a value
+assignment rather than a field declaration.
+"""
+function count_any_typed_fields()::Int
+    n = 0
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        path = joinpath(dir, f)
+        local ex
+        try
+            ex = Meta.parseall(read(path, String); filename=path)
+        catch
+            continue
+        end
+        n += _count_any_fields_in(ex)
+    end
+    return n
+end
+
+function _count_any_fields_in(ex)::Int
+    ex isa Expr || return 0
+    n = 0
+    if ex.head === :struct
+        name_expr = ex.args[2]
+        sname = Symbol(name_expr isa Expr ? name_expr.args[1] : name_expr)
+        block = ex.args[3]
+        if block isa Expr && block.head === :block
+            for el in block.args
+                decl = _field_decl(el)
+                decl === nothing && continue
+                fname, ftype = decl
+                (ftype === nothing || _type_mentions_any(ftype)) || continue
+                (sname, fname) in R31_ALLOWLIST && continue
+                n += 1
+            end
+        end
+    end
+    for a in ex.args
+        n += _count_any_fields_in(a)
+    end
+    return n
+end
+
 # The R19 floor (march p57): every symbol legitimately left name-keyed in
 # calls.jl's `is_func(func, :sym)` ladder, with the one-line reason it cannot
 # route through a table/registry/BUILTIN_LOWERINGS entry instead, and the
@@ -246,6 +430,12 @@ const METRICS = [
         () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
     "R29b_code_info_identifier" => ("the `code_info` identifier reachable in codegen/ outside ir.jl — structural exit is 0 (CompilationContext no longer carries CodeInfo); flow.jl done: 2026-09-02",
         () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
+    # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
+    # regard" made machine-checked for API types, not just codegen structure.
+    "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
+        () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
+    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee, NirStmt.raw/static_type, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
+        () -> count_any_typed_fields()),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------

@@ -39,9 +39,9 @@ positions land on `dt_registry`; elements are filled after wrapper emission by
 M8.3 CASCADE (composed single-axis hops through the SAME table; FNV is deleted).
 """
 const _ST_BASE_IDX = Base.RefValue{UInt32}(0)
-_st_base_idx(_) = _ST_BASE_IDX[]
+_st_base_idx(_)::UInt32 = _ST_BASE_IDX[]
 
-function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)
+function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::Nothing
     isempty(dt_registry.tables) && return
     type_registry.base_struct_idx !== nothing && (_ST_BASE_IDX[] = type_registry.base_struct_idx)
     # collect single-axis selectors: (func_ref, rows::Vector{(classId, entry_i)}, weight)
@@ -188,7 +188,7 @@ cell): with the receiver's classId on the stack, keep it in local `sc`, trap unl
 `lo <= classId <= hi` (THE single range discriminator, dart's unsigned window), and leave
 the classId back on the stack for the offset add.
 """
-function emit_classid_span_guard!(b::InstrBuilder, sc::Integer, lo::Integer, hi::Integer)
+function emit_classid_span_guard!(b::InstrBuilder, sc::Integer, lo::Integer, hi::Integer)::InstrBuilder
     builder_set_local_type!(b, Int(sc), I32)
     local_tee!(b, UInt32(sc))
     emit_classid_range_check!(b, lo, hi)
@@ -207,7 +207,7 @@ After wrapper emission (dispatch.jl): write the packed positions' wrapper indice
 into the ONE table as element segments (contiguous runs, dart output(),
 dispatch_table.dart:461-470).
 """
-function fill_selector_table_elements!(mod::WasmModule, dt_registry)
+function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
     dt_registry.selector_table_idx === nothing && return
     entries = Tuple{Int,UInt32}[]   # (position, wrapper_idx)
     for (func_ref, positions) in ordered_pairs(dt_registry.selector_positions, r -> selector_order_key(dt_registry, r))
@@ -273,7 +273,8 @@ A classId with no row hits a null funcref → trap: the honest MethodError analo
 """
 function generate_selector_caller_body(dt::DispatchTable, dt_registry,
                                        n_params::Int, base_struct_idx::UInt32;
-                                       caller_return_type::Type=Any, mod=nothing, type_registry=nothing)
+                                       caller_return_type::Type=Any, mod=nothing,
+                                       type_registry=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
     arity = Int(dt.arity)

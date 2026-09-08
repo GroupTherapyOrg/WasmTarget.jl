@@ -41,7 +41,7 @@ struct WasmDiagnostic
     frames::Vector{String}
 end
 WasmDiagnostic(kind::Symbol, func_name::AbstractString, construct::AbstractString,
-               julia_loc::Union{Nothing,AbstractString}, detail) =
+               julia_loc::Union{Nothing,AbstractString}, detail)::WasmDiagnostic =
     WasmDiagnostic(kind, String(func_name), String(construct),
                    julia_loc === nothing ? nothing : String(julia_loc), detail, 0, "", String[])
 
@@ -52,7 +52,7 @@ function Base.show(io::IO, d::WasmDiagnostic)
 end
 
 """Print the inline chain, innermost first, indented under a diagnostic."""
-function _show_frames(io::IO, d::WasmDiagnostic)
+function _show_frames(io::IO, d::WasmDiagnostic)::Nothing
     isempty(d.frames) && return
     print(io, "\n  statement %", d.stmt_idx, ": ", d.stmt)
     for (i, f) in enumerate(d.frames)
@@ -89,7 +89,7 @@ function Base.showerror(io::IO, e::WasmInternalError)
     showerror(io, e.cause)
 end
 
-_kind_phrase(k::Symbol) =
+_kind_phrase(k::Symbol)::String =
     k === :unsupported_method    ? "method" :
     k === :unsupported_intrinsic ? "intrinsic" :
     k === :unsupported_type      ? "type" :
@@ -106,7 +106,7 @@ struct WasmCompileError <: Exception
     diag::WasmDiagnostic
     all::Vector{WasmDiagnostic}   # every diagnostic recorded before the fatal one (the full ledger)
 end
-WasmCompileError(diag::WasmDiagnostic) = WasmCompileError(diag, WasmDiagnostic[diag])
+WasmCompileError(diag::WasmDiagnostic)::WasmCompileError = WasmCompileError(diag, WasmDiagnostic[diag])
 
 function Base.showerror(io::IO, e::WasmCompileError)
     d = e.diag
@@ -130,9 +130,9 @@ struct WasmValidationError <: Exception
     details::String
     bytes::Vector{UInt8}
 end
-WasmValidationError(msg::AbstractString, details::AbstractString) =
+WasmValidationError(msg::AbstractString, details::AbstractString)::WasmValidationError =
     WasmValidationError(String(msg), String(details), UInt8[])
-WasmValidationError(msg::AbstractString) = WasmValidationError(String(msg), "", UInt8[])
+WasmValidationError(msg::AbstractString)::WasmValidationError = WasmValidationError(String(msg), "", UInt8[])
 Base.showerror(io::IO, e::WasmValidationError) =
     print(io, "WasmValidationError: ", e.msg, isempty(e.details) ? "" : "\n" * e.details,
           isempty(e.bytes) ? "" : "\n($(length(e.bytes)) bytes of rejected module in `.bytes`)")
@@ -144,7 +144,7 @@ Base.showerror(io::IO, e::WasmValidationError) =
 # Per-statement line from the CodeInfo's DebugInfo (Julia 1.12: Core.DebugInfo).
 # getdebugidx returns (line, file, edge); line ≤ 0 means "inherited/none", so we
 # walk backward to the nearest statement that carries a concrete line.
-function _stmt_line(ci, idx::Int)
+function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
     try
         di = ci.debuginfo
         i = idx
@@ -160,7 +160,7 @@ function _stmt_line(ci, idx::Int)
 end
 
 # Method definition "(file, line)" — the always-available anchor.
-function _method_loc(ci)
+function _method_loc(ci)::Union{Nothing,Tuple{String,Int}}
     try
         mi = ci.debuginfo.def
         if mi isa Core.MethodInstance && mi.def isa Method
@@ -211,7 +211,7 @@ end
 inlined from, when it was); the method's own definition line when the statement has
 no location.
 """
-function julia_loc(ctx, idx::Int)
+function julia_loc(ctx, idx::Int)::Union{Nothing,String}
     ci = ctx.code_info
     frames = stmt_frames(ci, idx)
     if !isempty(frames)
@@ -246,7 +246,7 @@ function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
                              ci === nothing ? String[] : stmt_frames(ci, idx), cause)
 end
 
-function _ctx_func_name(ctx)
+function _ctx_func_name(ctx)::String
     try
         ctx.func_ref !== nothing && return string(nameof(ctx.func_ref))
     catch
@@ -297,7 +297,7 @@ source attribution. Pass `soundness_fatal=true` to force rejection.
 # formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of the caller's soundness_fatal hint and CFG-proven reachability, classified here before any emission is attempted (parity: target.dart:719 two-tier diagnostics).
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
-                             soundness_fatal::Union{Nothing,Bool}=nothing)
+                             soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
     idx > 0 || (idx = try; ctx.current_stmt_idx; catch; 0; end)   # helpers without an idx
     local _ci = _ctx_ir(ctx)
     local _stmt = idx > 0 ? (try; first(string(_ci.code[idx]), 160); catch; ""; end) : ""
@@ -337,7 +337,7 @@ Builder-native form (first method): emits its unreachable straight on `b`.
 """
 function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
-                                soundness_fatal::Bool=true)
+                                soundness_fatal::Bool=true)::Nothing
     local _code2 = try ctx.code_info.code catch; nothing end
     local _dead2 = stmt_is_proven_unreachable(_code2, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
@@ -349,7 +349,7 @@ end
 
 function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
-                                soundness_fatal::Bool=true)
+                                soundness_fatal::Bool=true)::Nothing
     # A trap is retained only for a block the Julia CFG proves unreachable.
     local _code = try ctx.code_info.code catch; nothing end
     local _dead = stmt_is_proven_unreachable(_code, idx)

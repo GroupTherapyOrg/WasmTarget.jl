@@ -261,7 +261,7 @@ end
 
 # The declared supertype index of a ConcreteRef's type, or `nothing`. Only
 # StructType carries the supertype chosen at registration; arrays never declare one.
-function _wt_concrete_supertype_idx(idx::Integer, mod)
+function _wt_concrete_supertype_idx(idx::Integer, mod)::Union{Nothing,UInt32}
     mod === nothing && return nothing
     i = Int(idx) + 1
     (i >= 1 && i <= length(mod.types)) || return nothing
@@ -411,7 +411,8 @@ Returns `b`.
 """
 # formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
-                       ctx::AbstractCompilationContext; from_julia::Union{Type,Nothing}=nothing)
+                       ctx::AbstractCompilationContext;
+                       from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
     if !_wt_is_ref(from) && _wt_is_ref(to)
         # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
@@ -616,8 +617,8 @@ end
 # Unknown source/target type (e.g. get_phi_edge_wasm_type returned `nothing`): the
 # inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
 # branch matches), so a no-op preserves byte-identity.
-convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext) = b
-convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext) = b
+convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext)::InstrBuilder = b
+convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext)::InstrBuilder = b
 
 # ============================================================================
 # Single-source classId box/unbox/discriminate (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
@@ -641,7 +642,7 @@ There is no width-based fallback because distinct Julia types share Wasm represe
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
 """
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                           wasm_type::WasmValType, julia_type::Type)
+                           wasm_type::WasmValType, julia_type::Type)::UInt32
     isconcretetype(julia_type) || error(
         "numeric boxing requires a concrete Julia source type, got $julia_type")
     box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
@@ -667,13 +668,13 @@ guard; `true` permits null (the permissive external/dynamic call boundary). An e
 (`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
 """
 function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
-                             nullable::Bool=false)
+                             nullable::Bool=false)::InstrBuilder
     return emit_classid_unbox!(b, ctx.mod, ctx.type_registry, to_wasm; nullable=nullable)
 end
 # Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
 # codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
 function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                             to_wasm::WasmValType; nullable::Bool=false)
+                             to_wasm::WasmValType; nullable::Bool=false)::InstrBuilder
     box_idx = get_numeric_box_type!(mod, registry, to_wasm)
     ref_cast!(b, Int64(box_idx), nullable)
     struct_get!(b, UInt32(box_idx), UInt32(1), to_wasm)
@@ -688,7 +689,7 @@ byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The 
 place a string value is born; every string producer routes here.
 """
 function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                           scratch::Integer; syntax_flags::Integer=-1)
+                           scratch::Integer; syntax_flags::Integer=-1)::InstrBuilder
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
@@ -704,7 +705,7 @@ end
 
 """ctx convenience: allocates the scratch local itself."""
 function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
-                           syntax_flags::Integer=-1)
+                           syntax_flags::Integer=-1)::InstrBuilder
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     sc = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, ConcreteRef(arr_idx, true))
@@ -721,7 +722,7 @@ i32.eq`; a dense DFS range lowers to the 3-instruction unsigned window
 `i32.const low; i32.sub; i32.const (high-low); i32.le_u` (an id below `low` wraps to a huge
 unsigned value, so one comparison covers both bounds — no temp local, no i32.and).
 """
-function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)
+function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)::InstrBuilder
     if low == high
         i32_const!(b, Int64(low))
         num!(b, Opcode.I32_EQ)
@@ -737,7 +738,7 @@ end
 """isa's classId test for a non-concrete type over the closed world: the exact id set
 (concrete_class_ids), emitted as dart's range window when it is contiguous and as an
 OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32."""
-function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
+function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
     isempty(ids) && return emit_classid_ranges!(b, ctx, ids)
     if ids[end] - ids[1] + 1 == length(ids)
         return emit_classid_range_check!(b, ids[1], ids[end])
@@ -749,7 +750,7 @@ end
 single dart-style range window, so each id gets its own equality test. typeId is on the
 stack; result i32. An empty set is constant false (no concrete class of the closed
 world is a subtype)."""
-function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
     if isempty(ids)
         drop!(b)
         i32_const!(b, 0)
@@ -775,7 +776,7 @@ classId (field 0) == `check_type`'s DFS id? Guarded by `ref.test` so a non-box v
 the struct — is what distinguishes Bool/Int8/Int16/Int32/Char. THE single discriminator.
 """
 function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                           box_idx::Integer, check_type::Type)
+                           box_idx::Integer, check_type::Type)::InstrBuilder
     tid = ensure_type_id!(ctx.type_registry, check_type)
     tmp = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, AnyRef)
@@ -803,7 +804,7 @@ ref.null / extern-box. Else if the value type cannot satisfy the return type →
 (trap). Else compile the value + the numeric-widening / extern-convert coercion ladder, then
 `return`. Byte-identical to the inlined blocks it replaces.
 """
-function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)
+function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::InstrBuilder
     # Framework roots may deliberately erase a Julia result (`void_return=true`).
     # The typed IR still contains `return %value`; evaluate that value for its
     # side effects, discard its physical result when present, and return void.
@@ -860,7 +861,7 @@ ref.cast + struct.get when needed.
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
 """THE condition visitor (): emit the i32 condition directly into the target builder."""
-function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)
+function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)::InstrBuilder
     if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
@@ -923,7 +924,7 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Uni
     return ty
 end
 
-function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)
+function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)::Tuple{InstrBuilder,Vector{WasmValType}}
     saved_n_params = ctx.n_params
     saved_locals = ctx.locals
     saved_scratch = ctx.scratch_locals
@@ -1017,7 +1018,7 @@ instead of the AnyRef unknown-local fallback. This makes the typed channel's ret
 to DRIVE `convert_type!` coercions from (dart: `local.type` is authoritative because dart's
 builder always knows its locals).
 """
-function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
+function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
     for i in 1:ctx.n_params
         i <= length(ctx.arg_types) || break
         builder_set_local_type!(b, i - 1,
