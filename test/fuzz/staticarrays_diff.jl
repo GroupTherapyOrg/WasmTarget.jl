@@ -44,6 +44,13 @@ _sa_c_n3(x::Float64)  = (v = SVector{3,Float64}(x, 2x, 3x);  v[1] + v[2] + v[3])
 _sa_c_n4(x::Float64)  = (v = SVector{4,Float64}(x, 2x, 3x, 4x); v[1] + v[4])
 _sa_c_tuple(x::Float64) = (v = SVector{3,Float64}((x, 2x, 3x));  v[1] + v[2] + v[3])    # single-Tuple ctor
 _sa_c_convert(x::Float64) = (v = SVector{3,Float64}(1, 2, 3);    v[1] + v[2] + v[3] + x) # Int args → convert
+_sa_c_inferred(x::Float64) = (v = SVector{2}(x, 2x); v[1] + v[2])
+_sa_c_promoted(x::Float64) = (v = SVector{2}(1, x); v[1] + v[2])
+_sa_c_matrix(x::Float64) = (v = SMatrix{2,2}(x, 2x, 3x, 4x); v[1,2] + v[2,1])
+function _sa_c_fieldlookup(x::Float64)
+    v = SVector{2}(x, 2x)
+    hasfield(typeof(v), :data) && !hasfield(typeof(v), :missing) ? v[2] : -x
+end
 
 # ----- reductions over an SVector ---------------------------------------------
 _sa_r_sum(x::Float64)  = sum(SVector{4,Float64}(x, 2x, 3x, 4x))
@@ -89,6 +96,10 @@ function run_staticarrays_tests(; reps::Int = 40)
         @test _sa_diff(_sa_c_n4,      (Float64,), sc(), Float64)
         @test _sa_diff(_sa_c_tuple,   (Float64,), sc(), Float64)
         @test _sa_diff(_sa_c_convert, (Float64,), sc(), Float64)
+        @test _sa_diff(_sa_c_inferred, (Float64,), sc(), Float64)
+        @test _sa_diff(_sa_c_promoted, (Float64,), sc(), Float64)
+        @test _sa_diff(_sa_c_matrix,   (Float64,), sc(), Float64)
+        @test _sa_diff(_sa_c_fieldlookup, (Float64,), sc(), Float64)
     end
     @testset "reductions (sum/prod/maximum/minimum)" begin
         @test _sa_diff(_sa_r_sum,  (Float64,), sc(), Float64)
