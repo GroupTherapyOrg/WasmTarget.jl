@@ -2592,6 +2592,13 @@ function _is_typelevel_foldable(@nospecialize(f))::Bool
     (isdefined(Core, :_typevar)         && f === Core._typevar)         && return true
     f === Base.nonmissingtype && return true
     f === Base.promote_type   && return true
+    # Static array constructors intersect partially specified array types with
+    # their inferred shape/element type. Both arguments are compile-time types;
+    # leaving this operation at runtime loses the concrete constructor result.
+    f === Base.typeintersect  && return true
+    # hasfield/getproperty compatibility branches inspect a known type and a
+    # constant field name; no runtime Julia type metadata exists in wasm.
+    f === Base._fieldindex_nothrow && return true
     (isdefined(Base, :typesplit) && f === Base.typesplit) && return true
     f === Base.eltype && return true
     (isdefined(Base, :_compute_eltype) && f === Base._compute_eltype) && return true

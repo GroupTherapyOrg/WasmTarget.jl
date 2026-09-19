@@ -35,6 +35,11 @@ using Base.Experimental: @overlay
 
 const WMT = WasmTarget.WASM_METHOD_TABLE
 
+# StaticArrays wraps Base.typeintersect in its own pure helper. Permit the
+# interpreter to evaluate that type-only operation too, so constructors such as
+# SVector{N}(...) retain the inferred element type (including ForwardDiff Dual).
+WasmTarget._is_typelevel_foldable(::typeof(StaticArrays.typeintersect)) = true
+
 function __init__()
     # SVector/SMatrix are <:AbstractArray but real NTuple-backed structs.
     push!(WasmTarget._ARRAY_STRUCT_CARVEOUT, :SArray)
