@@ -158,6 +158,9 @@ _wt_shard0() && include("f31_union_value_backfills.jl")
 # Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
 # a single i64 op on a 128-bit value was invalid wasm). See dev/HISTORY.md#parity-method.
 _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
+# `@fastmath` float intrinsics (add/sub/mul/div/neg/cmp _fast) lower to the plain ops; the
+# SimpleATsit5 step-size controller's `@fastmath q11 / qold^beta2` was an unresolved call.
+_wt_shard0() && include("fastmath_intrinsics.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
 _wt_shard0() && include("sort_comparator_backfills.jl")

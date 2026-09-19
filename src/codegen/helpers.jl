@@ -51,6 +51,7 @@ function is_comparison(func)::Bool
         name = func.name
         return name in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
                         :lt_float, :le_float, :eq_float, :ne_float,
+                        :lt_float_fast, :le_float_fast, :eq_float_fast, :ne_float_fast,
                         :(===), :(!==))
     end
     return false

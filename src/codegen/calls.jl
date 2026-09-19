@@ -5234,20 +5234,22 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         append_builder!(fb, _bswb)
 
-    # Float operations
-    elseif is_func(func, :add_float)
+    # Float operations. The `_fast` forms are what `@fastmath` emits
+    # (Base.FastMath.add_float_fast etc. alias the Core intrinsics); wasm has
+    # no fast-math flags, so they lower to the same ops as the strict forms.
+    elseif is_func(func, :add_float) || is_func(func, :add_float_fast)
         _op1!(arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
 
-    elseif is_func(func, :sub_float)
+    elseif is_func(func, :sub_float) || is_func(func, :sub_float_fast)
         _op1!(arg_type === Float32 ? Opcode.F32_SUB : Opcode.F64_SUB)
 
-    elseif is_func(func, :mul_float)
+    elseif is_func(func, :mul_float) || is_func(func, :mul_float_fast)
         _op1!(arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
 
-    elseif is_func(func, :div_float)
+    elseif is_func(func, :div_float) || is_func(func, :div_float_fast)
         _op1!(arg_type === Float32 ? Opcode.F32_DIV : Opcode.F64_DIV)
 
-    elseif is_func(func, :neg_float)
+    elseif is_func(func, :neg_float) || is_func(func, :neg_float_fast)
         _op1!(arg_type === Float32 ? Opcode.F32_NEG : Opcode.F64_NEG)
 
     # Fused multiply-add: muladd_float(a, b, c) = a*b + c
