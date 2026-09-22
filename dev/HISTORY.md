@@ -1,13 +1,9 @@
-# WasmTarget parity history
+# WasmTarget history
 
-This is the single archive for completed WasmTarget parity campaigns. It is not a
-roadmap. Current status and next work live in [`PARITY_MASTER.md`](PARITY_MASTER.md);
-machine truth lives in [`test/parity_ratchet.jl`](../test/parity_ratchet.jl) and
-[`parity_baseline.toml`](parity_baseline.toml).
-
-The original plans, detailed ledgers, intermediate counts, branch names, commands, and
-resume points remain available in Git history before the 2026-07-22 documentation
-consolidation. They are intentionally not reproduced as actionable checklists here.
+The archive of completed work, one short entry per campaign. It is not a plan: what counts
+as done is `dev/CHARTER.md`, the open work is `dev/MARCH.md`, and the measured state is the
+output of `test/parity_ratchet.jl`. Plans, ledgers, intermediate counts and resume notes
+live in Git history, never here.
 
 ## Typed builder and cleanup campaigns
 
@@ -70,6 +66,28 @@ oracle. A result type is a byproduct of typed emission, never something guessed 
 Passing differential tests alone never establishes structural correspondence, while
 structural similarity never overrides Julia semantics. Old phase order, parity percentages,
 and census counts are obsolete; current locks and reproductions decide current work.
+
+## The finishing march, phases 1–12 (PR #122, 2026-09-01 … 2026-09-22)
+
+From 102 locks at `7897b316` to 127 locks plus the charter. Phase 1 built the inner loop
+(smoke, probes, lanes). Phase 2 deleted dead definitions, 278 narration tags and 454 patch
+markers, and gathered 17 scattered debug reads into one options struct. Phases 3–5 moved
+numeric ops, invoke targets, foreigncalls and builtins onto identity-keyed registries with no
+name-keyed arms (R19, R20, R21 → 0) and deleted the bespoke string builders. Phase 6 added
+two-tier located diagnostics. Phases 7–9 hardened the public surface and the host boundary.
+Phase 10 introduced the NIR boundary and the sidecar prototype. Phase 11 added the TLA+ layer,
+which grew to 11 models and 42 instances in CI. Phase 12 established:
+- one inference path;
+- one closed-world numbering;
+- constant evaluation by rule instead of by list;
+- NIR stages 1–2 (R29a 425 → 161);
+- the first steps of the typed value channel (R3 93 → 75, R7 57 → 32, R27 54 → 29);
+- dart's closure layout with per-arity vtables;
+- runtime-Vararg splats as direct calls.
+
+An audit on 2026-09-22 found the march drifting from its intent. The plan had become judged
+by its own exit checks; targets had been relabeled "floors"; dart parity was assumed where
+it was never measured. That audit produced `dev/CHARTER.md`, the definition of done since.
 
 ## Why the archive was consolidated
 

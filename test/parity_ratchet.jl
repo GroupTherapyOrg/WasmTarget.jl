@@ -1859,6 +1859,25 @@ const LOCKS = [
         end),
     "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
         () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
+        () -> begin
+            v = String[]
+            plan = readlines(joinpath(ROOT, "dev", "MARCH.md"))
+            length(plan) <= 60 || push!(v, "dev/MARCH.md has $(length(plan)) lines (cap 60)")
+            for (i, l) in enumerate(plan)
+                (occursin(r"\|\s*done\s*\|"i, l) || occursin(r"^#+ .*\bresults?\b"i, l)) &&
+                    push!(v, "dev/MARCH.md:$i holds finished work: $(first(l, 60))")
+            end
+            hist = readlines(joinpath(ROOT, "dev", "HISTORY.md"))
+            length(hist) <= 160 || push!(v, "dev/HISTORY.md has $(length(hist)) lines (cap 160)")
+            starts = [i for (i, l) in enumerate(hist) if startswith(l, "## ")]
+            for (k, i) in enumerate(starts)
+                n = (k < length(starts) ? starts[k + 1] : length(hist) + 1) - i
+                n <= 25 || push!(v, "dev/HISTORY.md entry at line $i is $n lines (cap 25)")
+            end
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
 ]
@@ -1915,7 +1934,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
             haskey(current_l, k) && current_l[k] != get(bl, k, 0) && push!(open_, "$i BROKEN")
         end
         occursin("Planned:", body) && push!(open_, "planned check")
-        println(rpad(cid, 4), rpad(title, 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
+        println(rpad(cid, 4), rpad(first(title, 42), 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
     end
     if update
         if !ok

@@ -75,9 +75,13 @@ with the per-clause status. A clause is never closed by argument.
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant.
   Checks: `L111`. Planned: the list of algorithmic components, each mapped to its model.
-- **C9 · Nothing stale, nothing re-derived.** No dead definition, fossil comment, retired
-  name, campaign narration, or second computation of a fact the first already produced.
-  Checks: `L4` `L106` `L107` `L108` `L109` `L121` `R3` `R5` `R7` `R14` `R15` `R27`.
+- **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.**
+  No dead definition, fossil comment, retired name, campaign narration, or second
+  computation of a fact the first already produced; the plan holds only open work and the
+  history only short entries. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `R3`
+  `R5` `R7` `R14` `R15` `R27`. Planned: every tracked file outside `src/` is consumed — by
+  the build, a test, a lane, CI or the docs site, by path or by the loader that walks its
+  directory — and none records finished work (fixed-gap ledgers, completed-campaign plans).
 - **C10 · Fast, precise feedback.** `bash dev/lanes.sh` gives one verdict in minutes; the
   full CI matrix runs on every march branch and is the landing gate (`dev/land.sh merge`);
   a failure names its site.
