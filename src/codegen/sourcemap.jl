@@ -7,6 +7,8 @@
     SourceMapping
 
 A single mapping from a Wasm byte offset to a Julia source location.
+
+parity(pkg/wasm_builder/lib/source_map.dart:7 SourceMapping)
 """
 struct SourceMapping
     wasm_offset::UInt32   # Byte offset in the Wasm code section
@@ -19,6 +21,8 @@ end
     SourceMapInfo
 
 Collected source location info for all compiled functions.
+
+parity(pkg/wasm_builder/lib/source_map.dart:78 SourceMapSerializer)
 """
 mutable struct SourceMapInfo
     sources::Vector{String}       # Source file paths
@@ -33,6 +37,8 @@ SourceMapInfo() = SourceMapInfo(String[], String[], SourceMapping[], Dict{String
     add_source!(smi::SourceMapInfo, filepath::String) -> UInt32
 
 Register a source file and return its index (0-based).
+
+parity(pkg/wasm_builder/lib/source_map.dart:97 _sourceMapToJson)
 """
 function add_source!(smi::SourceMapInfo, filepath::String)
     get!(smi.source_index, filepath) do
@@ -81,17 +87,24 @@ end
 # VLQ Encoding (Source Map V3 format)
 # ============================================================================
 
+# parity(pkg/wasm_builder/lib/source_map.dart:211 _vlqBaseShift)
 const VLQ_BASE_SHIFT = 5
+# parity(pkg/wasm_builder/lib/source_map.dart:212 _vlqBaseMask)
 const VLQ_BASE = 1 << VLQ_BASE_SHIFT  # 32
+# parity(pkg/wasm_builder/lib/source_map.dart:212 _vlqBaseMask)
 const VLQ_BASE_MASK = VLQ_BASE - 1     # 0x1F
+# parity(pkg/wasm_builder/lib/source_map.dart:213 _vlqContinuationBit)
 const VLQ_CONTINUATION_BIT = VLQ_BASE  # 0x20
 
+# parity(pkg/wasm_builder/lib/source_map.dart:214 _base64Digits)
 const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 """
     vlq_encode(value::Int) -> String
 
 Encode an integer as a VLQ base64 string for Source Map V3.
+
+parity(pkg/wasm_builder/lib/source_map.dart:192 _encodeVLQ)
 """
 function vlq_encode(value::Int)
     result = Char[]
@@ -120,6 +133,8 @@ end
     generate_source_map(smi::SourceMapInfo; file::String="module.wasm") -> String
 
 Generate a Source Map V3 JSON string from collected source info.
+
+parity(pkg/wasm_builder/lib/source_map.dart:97 _sourceMapToJson)
 """
 function generate_source_map(smi::SourceMapInfo; file::String="module.wasm")
     # Sort mappings by wasm_offset
@@ -196,6 +211,8 @@ end
 
 Append a `sourceMappingURL` custom section to the Wasm binary.
 This tells browser DevTools where to find the source map.
+
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
 """
 function append_source_mapping_url!(wasm_bytes::Vector{UInt8}, url::String)
     w = WasmWriter()
