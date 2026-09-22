@@ -52,16 +52,13 @@ function is_builtin_func(func, name::Symbol)::Bool
 end
 
 """
-Check if a function is a comparison operation.
+Check if a resolved callee is a comparison operation: a comparison intrinsic, `===`, or `!==`.
 """
 function is_comparison(func)::Bool
-    if func isa GlobalRef
-        name = func.name
-        return name in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
-                        :lt_float, :le_float, :eq_float, :ne_float,
-                        :(===), :(!==))
-    end
-    return false
+    (func === (===) || func === (!==)) && return true
+    return func isa Core.IntrinsicFunction &&
+           nameof(func) in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
+                            :lt_float, :le_float, :eq_float, :ne_float)
 end
 
 """
@@ -72,9 +69,9 @@ function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
     if val isa Core.SSAValue
         # Check if the SSA value is from a comparison
         # Guard against out-of-bounds SSAValue IDs
-        (val.id < 1 || val.id > length(ctx.code_info.code)) && return false
-        stmt = ctx.code_info.code[val.id]
-        if stmt isa Expr && stmt.head === :call && is_comparison(stmt.args[1])
+        (val.id < 1 || val.id > length(ctx.nir)) && return false
+        rec = ctx.nir[val.id]
+        if rec.slot == 0 && rec.node isa NirCall && is_comparison(rec.node.callee)
             return true
         end
         # Check if SSA has Bool inferred type (e.g., phi node results, getfield of Bool fields)

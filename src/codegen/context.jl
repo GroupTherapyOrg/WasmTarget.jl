@@ -81,6 +81,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # than its prerequisites. code_info stays alongside it — not every consumer is
     # NIR-converted yet (R29 tracks the migration per file).
     nir::Vector{NirStmt}
+    # Julia inference's type for every IR slot, widened once at the boundary
+    # (frontend/nir.jl's nir_slot_types) — what an Argument/SlotNumber operand is typed by.
+    slot_types::Vector{Type}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -132,7 +135,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}(),       # exn_region_locals
-        build_nir(code_info)    # NIR boundary — a pure function of the CodeInfo, built first
+        build_nir(code_info),   # NIR boundary — a pure function of the CodeInfo, built first
+        nir_slot_types(code_info)
     )
     # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
@@ -164,7 +168,20 @@ For CompilableSignal/CompilableSetter pattern:
 function analyze_signal_captures!(ctx::AbstractCompilationContext)
     isempty(ctx.captured_signal_fields) && return
 
-    code = ctx.code_info.code
+    nir = ctx.nir
+    # `getfield(target, field)` / `setfield!(target, field, value)` statements — the
+    # target operand and the field literal (or its operand when it is not a literal)
+    _field_access(rec, f, nops) = begin
+        local node = rec.node
+        if rec.slot == 0 && node isa NirCall && node.callee === f && length(node.operands) >= nops
+            local fld = node.operands[2]
+            (node.operands[1], fld isa NirLiteral ? fld.value : fld)
+        else
+            nothing
+        end
+    end
+    # getfield(_1, :fieldname) — a captured closure field (slot 1 or argument 1)
+    _is_closure_self(t) = (t isa NirSlot && t.id == 1) || (t isa NirArgument && t.n == 1)
 
     # For Therapy.jl: captured signal fields are getter/setter FUNCTIONS (closures)
     # When we see getfield(_1, :count) where :count is a getter, the resulting SSA
@@ -173,34 +190,19 @@ function analyze_signal_captures!(ctx::AbstractCompilationContext)
     # sees invoke(%ssa), it knows to emit global.get/global.set.
 
     # First pass: find closure field accesses to signal getter/setter functions
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            # Handle both Core.getfield and Base.getfield
-            is_getfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :getfield) ||
-                           (func.mod === Base && func.name === :getfield)))
-            if is_getfield && length(stmt.args) >= 3
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                # Check if this is getfield(_1, :fieldname) - getting captured closure field
-                # Target can be Core.SlotNumber(1) or Core.Argument(1)
-                is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
-                                  (target isa Core.Argument && target.n == 1)
-                if is_closure_self
-                    if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
-                        is_getter, global_idx = ctx.captured_signal_fields[field_name]
-                        # Directly map the SSA to signal getter/setter
-                        # When this SSA is invoked, it becomes a signal read or write
-                        if is_getter
-                            ctx.signal_ssa_getters[i] = global_idx
-                        else
-                            ctx.signal_ssa_setters[i] = global_idx
-                        end
-                    end
-                end
+    for (i, rec) in enumerate(nir)
+        access = _field_access(rec, Core.getfield, 2)
+        access === nothing && continue
+        target, field_name = access
+        if _is_closure_self(target) && field_name isa Symbol &&
+           haskey(ctx.captured_signal_fields, field_name)
+            is_getter, global_idx = ctx.captured_signal_fields[field_name]
+            # Directly map the SSA to signal getter/setter
+            # When this SSA is invoked, it becomes a signal read or write
+            if is_getter
+                ctx.signal_ssa_getters[i] = global_idx
+            else
+                ctx.signal_ssa_setters[i] = global_idx
             end
         end
     end
@@ -213,91 +215,42 @@ function analyze_signal_captures!(ctx::AbstractCompilationContext)
     signal_ssas = Dict{Int, UInt32}()  # ssa -> global_idx
 
     # Find getfield(_1, :fieldname) that might be WasmGlobal-style
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            # Handle both Core.getfield and Base.getfield
-            is_getfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :getfield) ||
-                           (func.mod === Base && func.name === :getfield)))
-            if is_getfield && length(stmt.args) >= 3
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                is_closure_self = (target isa Core.SlotNumber && target.id == 1) ||
-                                  (target isa Core.Argument && target.n == 1)
-                if is_closure_self
-                    if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
-                        is_getter, global_idx = ctx.captured_signal_fields[field_name]
-                        compilable_ssas[i] = (is_getter, global_idx)
-                    end
-                end
-            end
+    for (i, rec) in enumerate(nir)
+        access = _field_access(rec, Core.getfield, 2)
+        access === nothing && continue
+        target, field_name = access
+        if _is_closure_self(target) && field_name isa Symbol &&
+           haskey(ctx.captured_signal_fields, field_name)
+            compilable_ssas[i] = ctx.captured_signal_fields[field_name]
         end
     end
 
     # Find getfield(CompilableSignal/Setter, :signal) -> Signal
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            is_getfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :getfield) ||
-                           (func.mod === Base && func.name === :getfield)))
-            if is_getfield && length(stmt.args) >= 3
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                if target isa Core.SSAValue && field_name === :signal
-                    if haskey(compilable_ssas, target.id)
-                        _, global_idx = compilable_ssas[target.id]
-                        signal_ssas[i] = global_idx
-                    end
-                end
-            end
+    for (i, rec) in enumerate(nir)
+        access = _field_access(rec, Core.getfield, 2)
+        access === nothing && continue
+        target, field_name = access
+        if target isa NirSSA && field_name === :signal && haskey(compilable_ssas, target.id)
+            _, global_idx = compilable_ssas[target.id]
+            signal_ssas[i] = global_idx
         end
     end
 
     # Mark getfield(Signal, :value) as signal reads
     # and setfield!(Signal, :value, x) as signal writes
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-
-            # Handle getfield(Signal, :value) -> signal read
-            is_getfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :getfield) ||
-                           (func.mod === Base && func.name === :getfield)))
-            if is_getfield && length(stmt.args) >= 3
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                if target isa Core.SSAValue && field_name === :value
-                    if haskey(signal_ssas, target.id)
-                        global_idx = signal_ssas[target.id]
-                        ctx.signal_ssa_getters[i] = global_idx
-                    end
-                end
+    for (i, rec) in enumerate(nir)
+        read = _field_access(rec, Core.getfield, 2)
+        if read !== nothing
+            target, field_name = read
+            if target isa NirSSA && field_name === :value && haskey(signal_ssas, target.id)
+                ctx.signal_ssa_getters[i] = signal_ssas[target.id]
             end
-
-            # Handle setfield!(Signal, :value, x) -> signal write
-            is_setfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :setfield!) ||
-                           (func.mod === Base && func.name === :setfield!)))
-            if is_setfield && length(stmt.args) >= 4
-                target = stmt.args[2]
-                field_ref = stmt.args[3]
-                new_value = stmt.args[4]
-                field_name = field_ref isa QuoteNode ? field_ref.value : field_ref
-
-                if target isa Core.SSAValue && field_name === :value
-                    if haskey(signal_ssas, target.id)
-                        global_idx = signal_ssas[target.id]
-                        ctx.signal_ssa_setters[i] = global_idx
-                    end
-                end
+        end
+        write = _field_access(rec, Core.setfield!, 3)
+        if write !== nothing
+            target, field_name = write
+            if target isa NirSSA && field_name === :value && haskey(signal_ssas, target.id)
+                ctx.signal_ssa_setters[i] = signal_ssas[target.id]
             end
         end
     end
@@ -450,21 +403,23 @@ end
 # then types as T, so the store and every load agree (the escaping-closure
 # i64-into-anyref invalid store). A genuinely-dynamic cast stays a loud reject
 # (correct-or-loud) until dart's emitAsCheck analog lands.
-function refine_checked_cast_types!(ctx::AbstractCompilationContext, code)
-    _cres(a) = a isa GlobalRef ? (isdefined(a.mod, a.name) ? getglobal(a.mod, a.name) : nothing) : a
-    for (_ck, _cstmt) in enumerate(code)
-        _cstmt isa Expr || continue
-        local _cargs = _cstmt.head === :call ? _cstmt.args :
-                       _cstmt.head === :invoke ? _cstmt.args[2:end] : nothing
-        (_cargs === nothing || length(_cargs) != 3) && continue
-        local _cf = try _cres(_cargs[1]) catch; nothing end
+function refine_checked_cast_types!(ctx::AbstractCompilationContext)
+    # a constant operand's value: a bound global's, or the literal's
+    _cres(a) = a isa NirGlobalRef ? (a.bound ? a.value : nothing) :
+               a isa NirLiteral ? a.value : a
+    for (_ck, _rec) in enumerate(ctx.nir)
+        local _cnode = _rec.node
+        (_rec.slot == 0 && (_cnode isa NirCall || _cnode isa NirInvoke)) || continue
+        local _cargs = _cnode.operands
+        length(_cargs) == 2 || continue
+        local _cf = _nir_callee_object(_cnode.callee)
         local _isconv = _cf === Base.convert
         local _ista = _cf === Core.typeassert
         (_isconv || _ista) || continue
-        local _cT = try _cres(_cargs[_isconv ? 2 : 3]) catch; nothing end
+        local _cT = _cres(_cargs[_isconv ? 1 : 2])
         _cT isa DataType || continue
-        local _cx = _cargs[_isconv ? 3 : 2]
-        _cx isa Core.SSAValue || continue
+        local _cx = _cargs[_isconv ? 2 : 1]
+        _cx isa NirSSA || continue
         local _corig = get(ctx.ssa_types, _ck, Any)
         (_corig === Any || _corig isa Union) || continue
         get(ctx.ssa_types, _cx.id, Any) === _cT || continue
@@ -473,28 +428,43 @@ function refine_checked_cast_types!(ctx::AbstractCompilationContext, code)
     return nothing
 end
 
+# The intrinsics whose operands a local's Wasm type must match numerically — a phi or an
+# SSA local that inference typed as a reference but that feeds one of these is typed by the
+# operand the intrinsic takes (boolean ops: i32; comparisons/arithmetic: the value's width).
+# parity(quarantine: Julia's Core.Intrinsics — Kernel has no intrinsic-function operands.)
+const _BOOL_OP_INTRINSICS = (:not_int, :and_int, :or_int, :xor_int)
+# parity(quarantine: Julia's Core.Intrinsics comparison family.)
+const _CMP_OP_INTRINSICS = (:eq_int, :ne_int, :slt_int, :sle_int, :ult_int, :ule_int)
+# parity(quarantine: Julia's Core.Intrinsics arithmetic/conversion family.)
+const _NUMERIC_OP_INTRINSICS = (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
+                                :srem_int, :urem_int, :neg_int,
+                                :add_float, :sub_float, :mul_float, :div_float,
+                                :neg_float, :abs_float, :sqrt_llvm,
+                                :shl_int, :lshr_int, :ashr_int,
+                                :checked_sadd_int, :checked_ssub_int, :checked_smul_int,
+                                :checked_uadd_int, :checked_usub_int, :checked_umul_int,
+                                :sitofp, :uitofp, :fptosi, :fptoui,
+                                :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
+                                :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
+                                :flipsign_int, :copysign_float,
+                                :eq_float, :ne_float, :lt_float, :le_float)
+
+# A field read: `getfield` itself, or a `getproperty` (Base's, or the Compiler's own), which
+# Julia lowers a field read through.
+# parity(quarantine: Julia's getproperty → getfield lowering — Kernel's InstanceGet is one node.)
+_is_getfield_callee(@nospecialize(f))::Bool =
+    f === Core.getfield || f === Base.getproperty || f === Core.Compiler.getproperty
+
 """
 Analyze control flow to find loops and handle phi nodes.
 """
 function analyze_control_flow!(ctx::AbstractCompilationContext)
-    code = ctx.code_info.code
+    nir = ctx.nir
 
-    # Find loop headers (targets of backward jumps)
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode
-            target = stmt.label
-            if target < i  # Backward jump = loop
-                ctx.loop_headers[target] = true
-            end
-        elseif stmt isa Core.GotoIfNot
-            # GotoIfNot jumps forward (to exit), but check anyway
-        end
-    end
-
-    # Find goto statements that jump backward (unconditional loop back)
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode && stmt.label < i
-            ctx.loop_headers[stmt.label] = true
+    # Find loop headers (targets of backward jumps — an unconditional goto back)
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirGoto && rec.node.target < i
+            ctx.loop_headers[rec.node.target] = true
         end
     end
 
@@ -516,7 +486,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
         _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
         if _sbT isa DataType && isstructtype(_sbT)
-            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _sst = ctx.nir   # Julia inference's own SSA types (the NIR boundary's widened answer)
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
                 argtypes=ctx.arg_types, self_shift=1))
@@ -553,23 +523,15 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Allocate locals for phi nodes (they need to persist across iterations)
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PhiNode
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirPhi
             # Preserve missing type evidence as Any; never guess a numeric phi.
             # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
-            # must map to ExternRef, not I64. Fall back to ssavaluetypes[i] first.
-            phi_julia_type = get(ctx.ssa_types, i, nothing)
-            if phi_julia_type === nothing
-                ssatypes = ctx.code_info.ssavaluetypes
-                if ssatypes isa Vector && i <= length(ssatypes)
-                    phi_julia_type = ssatypes[i]
-                else
-                    phi_julia_type = Any
-                end
-            end
+            # must map to ExternRef, not I64. Fall back to inference's own type first.
+            phi_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
             phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
 
@@ -617,14 +579,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
 
             if is_func_ret_numeric && is_phi_ref
                 # Check if this phi is used in a ReturnNode
-                phi_used_in_return = false
-                for other_stmt in code
-                    if other_stmt isa Core.ReturnNode && isdefined(other_stmt, :val)
-                        if other_stmt.val isa Core.SSAValue && other_stmt.val.id == i
-                            phi_used_in_return = true
-                            break
-                        end
-                    end
+                phi_used_in_return = any(nir) do other
+                    other.node isa NirReturn && other.node.value isa NirSSA &&
+                        other.node.value.id == i
                 end
                 if phi_used_in_return
                     # Override phi type to match function return type
@@ -644,37 +601,25 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
                              phi_wasm_type === ExternRef || phi_wasm_type === EqRef
             is_wasm_struct_numeric = phi_julia_type in (Int128, UInt128)
             if is_phi_any_ref && !is_wasm_struct_numeric
-                phi_ssa_val = Core.SSAValue(i)
-                for use_stmt in code
+                for use_rec in nir
+                    use_node = use_rec.node
                     # Check if used as GotoIfNot condition
-                    if use_stmt isa Core.GotoIfNot && use_stmt.cond === phi_ssa_val
+                    if use_node isa NirGotoIfNot && use_node.cond isa NirSSA && use_node.cond.id == i
                         phi_wasm_type = I32
                         break
                     end
                     # Check if used as argument to boolean/comparison/arithmetic intrinsics
-                    if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
-                        func = use_stmt.args[1]
-                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
-                            fname = func.name
-                            is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
-                            is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
-                                                   :ult_int, :ule_int)
+                    if use_rec.slot == 0 && use_node isa NirCall && !isempty(use_node.operands)
+                        func = use_node.callee
+                        if func isa Core.IntrinsicFunction
+                            fname = nameof(func)
+                            is_bool_op = fname in _BOOL_OP_INTRINSICS
+                            is_cmp_op = fname in _CMP_OP_INTRINSICS
                             # Arithmetic intrinsics that require numeric operands
-                            is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
-                                                    :srem_int, :urem_int, :neg_int,
-                                                    :add_float, :sub_float, :mul_float, :div_float,
-                                                    :neg_float, :abs_float, :sqrt_llvm,
-                                                    :shl_int, :lshr_int, :ashr_int,
-                                                    :checked_sadd_int, :checked_ssub_int, :checked_smul_int,
-                                                    :checked_uadd_int, :checked_usub_int, :checked_umul_int,
-                                                    :sitofp, :uitofp, :fptosi, :fptoui,
-                                                    :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
-                                                    :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
-                                                    :flipsign_int, :copysign_float,
-                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                            is_arith_op = fname in _NUMERIC_OP_INTRINSICS
                             if is_bool_op || is_cmp_op || is_arith_op
-                                for arg in use_stmt.args[2:end]
-                                    if arg === phi_ssa_val
+                                for arg in use_node.operands
+                                    if arg isa NirSSA && arg.id == i
                                         if is_arith_op || is_cmp_op
                                             # Arithmetic/comparison ops need I64 (Julia's default int width)
                                             inferred = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
@@ -699,7 +644,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             local_idx = ctx.n_params + length(ctx.locals)
             # Trace externref phi allocations
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
-                n_stmts = length(ctx.code_info.code)
+                n_stmts = length(nir)
                 @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
             # normalize AnyRef → ExternRef for phi locals
@@ -716,17 +661,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     # Allocate locals for PhiCNode values (exception handler value capture).
     # PhiCNode is the dual of UpsilonNode: UpsilonNode stores, PhiCNode reads.
     # Each PhiCNode gets a local so UpsilonNode can local.set and PhiCNode can local.get.
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PhiCNode
-            phic_julia_type = get(ctx.ssa_types, i, nothing)
-            if phic_julia_type === nothing
-                ssatypes = ctx.code_info.ssavaluetypes
-                if ssatypes isa Vector && i <= length(ssatypes)
-                    phic_julia_type = ssatypes[i]
-                else
-                    phic_julia_type = Any
-                end
-            end
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirPhiC
+            phic_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             phic_wasm_type = get_concrete_wasm_type(phic_julia_type, ctx.mod, ctx.type_registry; for_local=true)
             local_idx = ctx.n_params + length(ctx.locals)
             # normalize AnyRef → ExternRef unless JlType hierarchy active
@@ -749,7 +686,7 @@ We need locals when:
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext)
-    code = ctx.code_info.code
+    nir = ctx.nir
     # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
     _numeric_joins = try
         # Parent side: record %new(Core.Box) contents types per capturing closure type
@@ -763,7 +700,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
         _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
         if _sbT isa DataType && isstructtype(_sbT)
-            _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
+            _sst = ctx.nir   # Julia inference's own SSA types (the NIR boundary's widened answer)
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
             merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
                 argtypes=ctx.arg_types, self_shift=1))
@@ -800,29 +737,29 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         # type — their truth lives in the join-typed LOCAL, and rewriting them
         # desynced String-carrying phis in print_to_string (a String local receiving
         # a join-typed i32 edge).
-        local _jstmt = _jk >= 1 && _jk <= length(code) ? code[_jk] : nothing
-        if (_orig === Any || _orig isa Union) &&
-           _jstmt isa Expr && (_jstmt.head === :call || _jstmt.head === :invoke)
+        local _jrec = _jk >= 1 && _jk <= length(nir) ? nir[_jk] : nothing
+        if (_orig === Any || _orig isa Union) && _jrec !== nothing && _jrec.slot == 0 &&
+           (_jrec.node isa NirCall || _jrec.node isa NirInvoke)
             ctx.ssa_types[_jk] = _jv
         end
     end
-    refine_checked_cast_types!(ctx, code)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
+    refine_checked_cast_types!(ctx)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Count uses of each SSA value
     ssa_uses = Dict{Int, Int}()
-    for stmt in code
-        count_ssa_uses!(stmt, ssa_uses)
+    for rec in nir
+        count_ssa_uses!(rec, ssa_uses)
     end
 
     # Find loop bounds (header to backward goto)
     loop_bounds = Dict{Int, Int}()  # header => back_edge_idx
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode && stmt.label < i
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirGoto && rec.node.target < i
             # This is a backward jump
-            header = stmt.label
-            loop_bounds[header] = i
+            loop_bounds[rec.node.target] = i
         end
     end
+    _is_jump(k) = nir[k].node isa NirGoto || nir[k].node isa NirGotoIfNot
 
     # First pass: allocate locals for SSAs used more than once or with intervening ops
     needs_local_set = Set{Int}()
@@ -830,12 +767,12 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # Find SSAs defined inside a loop but used outside
     # These need locals because stack values don't persist across Wasm block boundaries
     for (header, back_edge) in loop_bounds
-        for (i, stmt) in enumerate(code)
+        for i in eachindex(nir)
             # Check if SSA i is defined inside this loop
             if i >= header && i <= back_edge
                 # Check if it's used after the loop (in return or other statements)
-                for (j, other) in enumerate(code)
-                    if j > back_edge && references_ssa(other, i)
+                for (j, other) in enumerate(nir)
+                    if j > back_edge && nir_refs_ssa(other.node, i)
                         # SSA i is defined inside loop but used outside - needs local
                         push!(needs_local_set, i)
                         break
@@ -848,15 +785,12 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # Find non-phi SSA values that are referenced by phi nodes
     # These MUST have locals because phi values are set at the jump site,
     # not where the SSA was computed (the value is no longer on the stack)
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PhiNode
-            for j in 1:length(stmt.values)
-                if isassigned(stmt.values, j)
-                    val = stmt.values[j]
-                    if val isa Core.SSAValue && 1 <= val.id <= length(code) && !(code[val.id] isa Core.PhiNode)
-                        # This is a non-phi SSA referenced by a phi - needs local
-                        push!(needs_local_set, val.id)
-                    end
+    for rec in nir
+        if rec.node isa NirPhi
+            for val in rec.node.values
+                if val isa NirSSA && 1 <= val.id <= length(nir) && !(nir[val.id].node isa NirPhi)
+                    # This is a non-phi SSA referenced by a phi - needs local
+                    push!(needs_local_set, val.id)
                 end
             end
         end
@@ -864,18 +798,11 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
 
     # Find SSA values referenced by PiNodes that have control flow between definition and use
     # PiNodes narrow types after branch conditions, but the original value must be preserved
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.PiNode && stmt.val isa Core.SSAValue
-            val_id = stmt.val.id
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirPi && rec.node.value isa NirSSA
+            val_id = rec.node.value.id
             # Check if there's control flow between the definition and this PiNode
-            has_control_flow = false
-            for j in (val_id + 1):(i - 1)
-                if code[j] isa Core.GotoNode || code[j] isa Core.GotoIfNot
-                    has_control_flow = true
-                    break
-                end
-            end
-            if has_control_flow
+            if any(_is_jump, (val_id + 1):(i - 1))
                 push!(needs_local_set, val_id)
             end
         end
@@ -884,32 +811,24 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # Find SSAs that produce values and are followed by control flow
     # In Wasm, stack values don't persist across block boundaries
     # So any value produced before a GotoNode/GotoIfNot/PhiNode must be stored
-    for (i, stmt) in enumerate(code)
-        if produces_stack_value(stmt) && i < length(code)
-            next_stmt = code[i + 1]
+    for (i, rec) in enumerate(nir)
+        if produces_stack_value(rec) && i < length(nir)
             # If the NEXT statement is control flow (not intermediate), this SSA needs a local
             # This handles cases where we create a value and immediately enter control flow
-            if next_stmt isa Core.GotoNode || next_stmt isa Core.GotoIfNot
+            if _is_jump(i + 1)
                 push!(needs_local_set, i)
             end
         end
         # PiNodes used across control flow boundaries need locals.
         # Without a local, compile_value assumes the value is on the stack,
         # but in branching code the stack value may be in a different block.
-        if stmt isa Core.PiNode && !haskey(ctx.phi_locals, i)
+        if rec.node isa NirPi && !haskey(ctx.phi_locals, i)
             # Check if there's any control flow between this PiNode and its uses
-            for j in (i+1):length(code)
-                use_stmt = code[j]
-                if references_ssa(use_stmt, i) && !(use_stmt isa Core.PhiNode)
+            for j in (i+1):length(nir)
+                use_node = nir[j].node
+                if nir_refs_ssa(use_node, i) && !(use_node isa NirPhi)
                     # Found a non-phi use. If there's control flow between PiNode and use, need a local.
-                    has_cf_between = false
-                    for k in (i+1):(j-1)
-                        if code[k] isa Core.GotoNode || code[k] isa Core.GotoIfNot
-                            has_cf_between = true
-                            break
-                        end
-                    end
-                    if has_cf_between
+                    if any(_is_jump, (i+1):(j-1))
                         push!(needs_local_set, i)
                         break
                     end
@@ -921,22 +840,13 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # Find SSA values used across control flow boundaries.
     # In Wasm, stack values don't persist across block/branch boundaries.
     # Any SSA defined before a GotoNode/GotoIfNot and used after it needs a local.
-    for (i, stmt) in enumerate(code)
-        if produces_stack_value(stmt)
+    for (i, rec) in enumerate(nir)
+        if produces_stack_value(rec)
             # Check all uses of this SSA
-            found_use = false
-            for (j, use_stmt) in enumerate(code)
-                if j > i && references_ssa(use_stmt, i)
-                    found_use = true
+            for j in (i+1):length(nir)
+                if nir_refs_ssa(nir[j].node, i)
                     # Check if there's any control flow between definition and use
-                    has_cf = false
-                    for k in (i+1):(j-1)
-                        if code[k] isa Core.GotoNode || code[k] isa Core.GotoIfNot
-                            has_cf = true
-                            break
-                        end
-                    end
-                    if has_cf
+                    if any(_is_jump, (i+1):(j-1))
                         push!(needs_local_set, i)
                         break
                     end
@@ -957,27 +867,29 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # Second pass: ALL SSA args in calls/invokes/new/return/GotoIfNot need locals.
     # In Wasm, we can't rely on stack values being available because the stackified
     # flow generator may insert block boundaries between the SSA definition and its use.
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr
-            # All SSA values referenced in ANY expression need locals
-            for arg in stmt.args
-                if arg isa Core.SSAValue
-                    push!(needs_local_set, arg.id)
-                end
+    for rec in nir
+        node = rec.node
+        if rec.slot > 0
+            # An assignment into a slot reads its right-hand side directly
+            node isa NirSSA && push!(needs_local_set, node.id)
+        elseif _nir_from_expr(node)
+            # All SSA values an expression reads directly need locals
+            for arg in nir_expr_operands(node)
+                arg isa NirSSA && push!(needs_local_set, arg.id)
             end
-        elseif stmt isa Core.ReturnNode && isdefined(stmt, :val) && stmt.val isa Core.SSAValue
-            push!(needs_local_set, stmt.val.id)
-        elseif stmt isa Core.GotoIfNot && stmt.cond isa Core.SSAValue
-            push!(needs_local_set, stmt.cond.id)
-        elseif stmt isa Core.PiNode && stmt.val isa Core.SSAValue
-            push!(needs_local_set, stmt.val.id)
+        elseif node isa NirReturn && node.value isa NirSSA
+            push!(needs_local_set, node.value.id)
+        elseif node isa NirGotoIfNot && node.cond isa NirSSA
+            push!(needs_local_set, node.cond.id)
+        elseif node isa NirPi && node.value isa NirSSA
+            push!(needs_local_set, node.value.id)
         end
+        rec.slot == 0 || continue
 
         # Also handle :new expressions - struct fields need correct ordering
-        if stmt isa Expr && stmt.head === :new
-            # args[1] is the type, args[2:end] are field values
-            field_values = stmt.args[2:end]
-            ssa_args = [arg.id for arg in field_values if arg isa Core.SSAValue]
+        if node isa NirNew
+            field_values = node.operands
+            ssa_args = [arg.id for arg in field_values if arg isa NirSSA]
 
             # If there are multiple field values and any is an SSA, all SSA args need locals
             # This ensures we can push values in the correct field order
@@ -988,19 +900,16 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             end
         end
 
+        node isa NirCall || continue
+        args = node.operands
+
         # Handle setfield! - the value arg needs a local if it's an SSA
         # because struct.set expects [ref, value] order, but if value is a single-use
         # SSA from a previous statement, it's already on the stack before we push ref
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            is_setfield = (func isa GlobalRef &&
-                          ((func.mod === Core && func.name === :setfield!) ||
-                           (func.mod === Base && func.name === :setfield!)))
-            if is_setfield && length(stmt.args) >= 4
-                value_arg = stmt.args[4]  # args = [func, obj, field, value]
-                if value_arg isa Core.SSAValue
-                    push!(needs_local_set, value_arg.id)
-                end
+        if node.callee === Core.setfield! && length(args) >= 3
+            value_arg = args[3]  # operands = [obj, field, value]
+            if value_arg isa NirSSA
+                push!(needs_local_set, value_arg.id)
             end
         end
 
@@ -1009,39 +918,31 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         # is already on the stack, but we need to push the non-SSA first.
         # Example: slt_int(0, %1) - need to push 0, then %1, but %1 is already on stack
         # ONLY applies to numeric SSA values (struct refs have different handling)
-        if stmt isa Expr && stmt.head === :call
-            args = stmt.args[2:end]  # Skip function ref
-            seen_non_ssa = false
-            for arg in args
-                if !(arg isa Core.SSAValue)
-                    seen_non_ssa = true
-                elseif seen_non_ssa
-                    # This SSA comes after a non-SSA arg - needs a local
-                    ssa_type = get(ctx.ssa_types, arg.id, Any)
-                    is_numeric = ssa_type in (Int32, UInt32, Int64, UInt64, Int, Float32, Float64, Bool)
-                    if is_numeric
-                        push!(needs_local_set, arg.id)
-                    end
+        seen_non_ssa = false
+        for arg in args
+            if !(arg isa NirSSA)
+                seen_non_ssa = true
+            elseif seen_non_ssa
+                # This SSA comes after a non-SSA arg - needs a local
+                ssa_type = get(ctx.ssa_types, arg.id, Any)
+                is_numeric = ssa_type in (Int32, UInt32, Int64, UInt64, Int, Float32, Float64, Bool)
+                if is_numeric
+                    push!(needs_local_set, arg.id)
                 end
             end
         end
 
         # Handle Core.tuple calls - same as :new, need locals for SSA args
         # when there are multiple elements to ensure correct struct.new field ordering
-        if stmt isa Expr && stmt.head === :call
-            func = stmt.args[1]
-            is_tuple = func isa GlobalRef && func.mod === Core && func.name === :tuple
-            if is_tuple
-                args = stmt.args[2:end]
-                ssa_args = [arg.id for arg in args if arg isa Core.SSAValue]
-                # If there are multiple SSA args, all of them need locals to ensure
-                # correct ordering (even if there are no non-SSA args)
-                # Also need locals if there are non-SSA args mixed with SSA args
-                has_non_ssa_args = any(!(arg isa Core.SSAValue) for arg in args)
-                if (has_non_ssa_args && !isempty(ssa_args)) || length(ssa_args) > 1
-                    for id in ssa_args
-                        push!(needs_local_set, id)
-                    end
+        if node.callee === Core.tuple
+            ssa_args = [arg.id for arg in args if arg isa NirSSA]
+            # If there are multiple SSA args, all of them need locals to ensure
+            # correct ordering (even if there are no non-SSA args)
+            # Also need locals if there are non-SSA args mixed with SSA args
+            has_non_ssa_args = any(!(arg isa NirSSA) for arg in args)
+            if (has_non_ssa_args && !isempty(ssa_args)) || length(ssa_args) > 1
+                for id in ssa_args
+                    push!(needs_local_set, id)
                 end
             end
         end
@@ -1055,40 +956,28 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
 
             # Skip Task SSAs (from jl_get_current_task foreigncall)
             # Task values are phantom — rngState fields map to Wasm globals
-            stmt = ctx.code_info.code[ssa_id]
-            if stmt isa Expr && stmt.head === :foreigncall
-                fc_name_sym = extract_foreigncall_name(stmt.args[1])
-                if fc_name_sym === :jl_get_current_task
-                    continue
-                end
+            rec = nir[ssa_id]
+            node = rec.node
+            # the call this SSA is the result of (a statement, not a slot assignment)
+            call = (rec.slot == 0 && node isa NirCall) ? node : nothing
+            if rec.slot == 0 && node isa NirForeignCall && node.c_symbol === :jl_get_current_task
+                continue
             end
 
             # Skip multi-arg memoryrefnew results - they leave [array_ref, i32_index] on stack
             # and can't be stored in a single local. They must be used immediately.
-            if stmt isa Expr && stmt.head === :call
-                func = stmt.args[1]
-                is_memrefnew = (func isa GlobalRef &&
-                                (func.mod === Core || func.mod === Base) &&
-                                func.name === :memoryrefnew) ||
-                               (func === :(Core.memoryrefnew)) ||
-                               (func === :(Base.memoryrefnew))
-                if is_memrefnew && length(stmt.args) >= 4  # func + 3 args = 4 total
-                    # Multi-arg memoryrefnew - don't allocate a local
-                    continue
-                end
+            if call !== nothing && call.callee === Core.memoryrefnew && length(call.operands) >= 3
+                # Multi-arg memoryrefnew - don't allocate a local
+                continue
             end
 
             # _svec_ref results — Julia infers return type as SimpleVector,
             # but the actual WasmGC type is (ref null $JlType) (element of SVec array).
             # Override to AnyRef so the local matches what array.get actually produces.
-            if stmt isa Expr && stmt.head === :call && ssa_type === Core.SimpleVector
-                func = stmt.args[1]
-                is_svec_ref = (func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) ||
-                              (isdefined(Core, :_svec_ref) && func === Core._svec_ref)
-                if is_svec_ref
-                    ssa_type = Any
-                    ctx.ssa_types[ssa_id] = Any
-                end
+            if call !== nothing && ssa_type === Core.SimpleVector &&
+               isdefined(Core, :_svec_ref) && _nir_callee_object(call.callee) === Core._svec_ref
+                ssa_type = Any
+                ctx.ssa_types[ssa_id] = Any
             end
 
             # compilerbarrier(:type, value)::Any — use inner value's type
@@ -1097,47 +986,35 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # but the actual value is the inner arg's type (e.g., Int32 → I32).
             # If we allocate ExternRef, the safety check replaces the i32 with ref.null.
             # Also update ctx.ssa_types so compile_statement safety check uses the real type.
-            if stmt isa Expr && stmt.head === :call
-                func = stmt.args[1]
-                is_compilerbarrier = (func isa GlobalRef &&
-                    (func.mod === Core || func.mod === Base) &&
-                    func.name === :compilerbarrier)
-                if is_compilerbarrier && length(stmt.args) >= 3
-                    inner_val = stmt.args[3]  # args = [func, kind, value]
-                    inner_type = nothing
-                    if inner_val isa Core.SSAValue
-                        inner_type = get(ctx.ssa_types, inner_val.id, nothing)
-                    elseif inner_val isa Core.Argument
-                        arg_idx = inner_val.n
-                        if arg_idx <= length(ctx.arg_types)
-                            inner_type = ctx.arg_types[arg_idx]
-                        end
-                    else
-                        # Literal value — infer type from the value itself
-                        inner_type = typeof(inner_val)
+            if call !== nothing && call.callee === Core.compilerbarrier && length(call.operands) >= 2
+                inner_val = call.operands[2]  # operands = [kind, value]
+                inner_type = nothing
+                if inner_val isa NirSSA
+                    inner_type = get(ctx.ssa_types, inner_val.id, nothing)
+                elseif inner_val isa NirArgument
+                    arg_idx = inner_val.n
+                    if arg_idx <= length(ctx.arg_types)
+                        inner_type = ctx.arg_types[arg_idx]
                     end
-                    if inner_type !== nothing && inner_type !== Any && inner_type !== Union{}
-                        ssa_type = inner_type
-                        ctx.ssa_types[ssa_id] = inner_type  # Update for safety check
-                    end
+                elseif inner_val isa NirLiteral
+                    # Literal value — infer type from the value itself
+                    inner_type = typeof(inner_val.value)
+                end
+                if inner_type !== nothing && inner_type !== Any && inner_type !== Union{}
+                    ssa_type = inner_type
+                    ctx.ssa_types[ssa_id] = inner_type  # Update for safety check
                 end
             end
 
             # typeof(x) always returns the canonical DataType representation.
             # The lookup table is created before any function body is emitted.
-            if stmt isa Expr && stmt.head === :call
-                func = stmt.args[1]
-                _is_typeof_call = (func isa GlobalRef &&
-                    (func.name === :typeof)) ||
-                    (func isa Function && func === typeof)
-                if _is_typeof_call
-                    ctx.type_registry.type_lookup_global === nothing &&
-                        error("typeof lowering requires the canonical type lookup table")
-                    haskey(ctx.type_registry.structs, DataType) ||
-                        error("typeof lowering requires the canonical DataType representation")
-                    ssa_type = DataType
-                    ctx.ssa_types[ssa_id] = DataType
-                end
+            if call !== nothing && _nir_callee_object(call.callee) === Core.typeof
+                ctx.type_registry.type_lookup_global === nothing &&
+                    error("typeof lowering requires the canonical type lookup table")
+                haskey(ctx.type_registry.structs, DataType) ||
+                    error("typeof lowering requires the canonical DataType representation")
+                ssa_type = DataType
+                ctx.ssa_types[ssa_id] = DataType
             end
 
             # :the_exception produces anyref from global.get $current_exn.
@@ -1146,7 +1023,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # For concrete exception types (ErrorException etc.), keep the original
             # type so getfield can resolve struct fields — the :the_exception handler
             # in statements.jl will emit ref.cast from anyref to the concrete type.
-            if stmt isa Expr && stmt.head === :the_exception
+            if rec.slot == 0 && node isa NirTheException
                 if ssa_type isa Union || !isconcretetype(ssa_type) || !isstructtype(ssa_type)
                     ssa_type = Any
                     ctx.ssa_types[ssa_id] = Any
@@ -1164,25 +1041,25 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 continue
             end
 
-            # For PiNodes: the local type must match what compile_value(stmt.val)
+            # For PiNodes: the local type must match what compile_value(node.value)
             # will actually push on the stack. If the source value has a local,
             # that local's type is what will be on the stack (via local.get).
             effective_type = ssa_type
             # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric SSAs take their JOIN type (see above).
             haskey(_numeric_joins, ssa_id) && (effective_type = _numeric_joins[ssa_id])
-            if stmt isa Core.PiNode
+            if node isa NirPi
                 narrowed_wasm = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
                 # Check if the source value has a local with a different type
                 src_wasm_type = nothing
-                if stmt.val isa Core.SSAValue
-                    if haskey(ctx.ssa_locals, stmt.val.id)
-                        src_local_idx = ctx.ssa_locals[stmt.val.id]
+                if node.value isa NirSSA
+                    if haskey(ctx.ssa_locals, node.value.id)
+                        src_local_idx = ctx.ssa_locals[node.value.id]
                         src_array_idx = src_local_idx - ctx.n_params + 1
                         if src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
                             src_wasm_type = ctx.locals[src_array_idx]
                         end
-                    elseif haskey(ctx.phi_locals, stmt.val.id)
-                        src_local_idx = ctx.phi_locals[stmt.val.id]
+                    elseif haskey(ctx.phi_locals, node.value.id)
+                        src_local_idx = ctx.phi_locals[node.value.id]
                         src_array_idx = src_local_idx - ctx.n_params + 1
                         if src_array_idx >= 1 && src_array_idx <= length(ctx.locals)
                             src_wasm_type = ctx.locals[src_array_idx]
@@ -1204,32 +1081,32 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                     # For PiNode from anyref Union params, keep narrowed type
                     # (don't widen to source's Union type). For non-Union sources, use source type.
                     local _pi_src_is_anyref = false
-                    if stmt.val isa Core.Argument
-                        arg_idx = stmt.val.n
-                        if arg_idx <= length(ctx.code_info.slottypes)
-                            local _slot_type = ctx.code_info.slottypes[arg_idx]
+                    if node.value isa NirArgument
+                        arg_idx = node.value.n
+                        if arg_idx <= length(ctx.slot_types)
+                            local _slot_type = ctx.slot_types[arg_idx]
                             if _slot_type isa Union && needs_anyref_boxing(_slot_type)
                                 _pi_src_is_anyref = true
                                 # Keep effective_type = ssa_type (the narrowed target)
                             end
                         end
-                    elseif stmt.val isa Core.SSAValue
-                        val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                    elseif node.value isa NirSSA
+                        val_type = get(ctx.ssa_types, node.value.id, nothing)
                         if val_type !== nothing && val_type isa Union && needs_anyref_boxing(val_type)
                             _pi_src_is_anyref = true
                         end
                     end
                     if !_pi_src_is_anyref
                         # Non-Union source: use source type for compatible locals
-                        if stmt.val isa Core.SSAValue
-                            val_type = get(ctx.ssa_types, stmt.val.id, nothing)
+                        if node.value isa NirSSA
+                            val_type = get(ctx.ssa_types, node.value.id, nothing)
                             if val_type !== nothing
                                 effective_type = val_type
                             end
-                        elseif stmt.val isa Core.Argument
-                            arg_idx = stmt.val.n
-                            if arg_idx <= length(ctx.code_info.slottypes)
-                                effective_type = ctx.code_info.slottypes[arg_idx]
+                        elseif node.value isa NirArgument
+                            arg_idx = node.value.n
+                            if arg_idx <= length(ctx.slot_types)
+                                effective_type = ctx.slot_types[arg_idx]
                             end
                         end
                     end
@@ -1243,16 +1120,16 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # For ref types, DON'T widen — the compile_statement safety check handles
             # the store mismatch by emitting ref.null of the target type. Widening ref
             # types breaks downstream struct.get/array.get operations.
-            if stmt isa Core.PiNode && stmt.val isa Core.SSAValue
+            if node isa NirPi && node.value isa NirSSA
                 src_local_wasm = nothing
-                if haskey(ctx.ssa_locals, stmt.val.id)
-                    src_li = ctx.ssa_locals[stmt.val.id]
+                if haskey(ctx.ssa_locals, node.value.id)
+                    src_li = ctx.ssa_locals[node.value.id]
                     src_ai = src_li - ctx.n_params + 1
                     if src_ai >= 1 && src_ai <= length(ctx.locals)
                         src_local_wasm = ctx.locals[src_ai]
                     end
-                elseif haskey(ctx.phi_locals, stmt.val.id)
-                    src_li = ctx.phi_locals[stmt.val.id]
+                elseif haskey(ctx.phi_locals, node.value.id)
+                    src_li = ctx.phi_locals[node.value.id]
                     src_ai = src_li - ctx.n_params + 1
                     if src_ai >= 1 && src_ai <= length(ctx.locals)
                         src_local_wasm = ctx.locals[src_ai]
@@ -1289,17 +1166,14 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # the Wasm struct.get returns externref. The local MUST be externref to match,
             # regardless of what Julia's type inference says the narrowed type is.
             # Similarly for memoryrefget on arrays with Any elements.
-            if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
-                sfunc = stmt.args[1]
-                # Match any module for getfield/getproperty
-                is_gf = (sfunc isa GlobalRef &&
-                         sfunc.name in (:getfield, :getproperty))
-                if is_gf
-                    obj_arg = stmt.args[2]
-                    field_ref = stmt.args[3]
+            if call !== nothing && length(call.operands) >= 2
+                sfunc = call.callee
+                if _is_getfield_callee(sfunc)
+                    obj_arg = call.operands[1]
+                    field_ref = call.operands[2]
                     obj_type = infer_value_type(obj_arg, ctx)
                     if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type)
-                        field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+                        field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
                         if field_sym isa Symbol && hasfield(obj_type, field_sym)
                             jft = fieldtype(obj_type, field_sym)
                             if jft === Any
@@ -1310,8 +1184,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                     end
                 end
                 # Also check memoryrefget on Any-element arrays
-                if sfunc isa GlobalRef && sfunc.name === :memoryrefget
-                    ref_arg = stmt.args[2]
+                if sfunc === Core.memoryrefget
+                    ref_arg = call.operands[1]
                     ref_type = infer_value_type(ref_arg, ctx)
                     if ref_type isa DataType
                         elt = nothing
@@ -1332,40 +1206,28 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             # type the local based on the Julia type inference to match the expected operand type.
             # This handles dead code after UNREACHABLE and Any-typed struct fields used in comparisons.
             if wasm_type === ExternRef
-                ssa_val = Core.SSAValue(ssa_id)
-                for (j, use_stmt) in enumerate(code)
+                for use_rec in nir
+                    use_node = use_rec.node
                     # Check if used as GotoIfNot condition
-                    if use_stmt isa Core.GotoIfNot && use_stmt.cond === ssa_val
+                    if use_node isa NirGotoIfNot && use_node.cond isa NirSSA && use_node.cond.id == ssa_id
                         wasm_type = I32
                         break
                     end
                     # Check if used as argument to comparison/boolean intrinsics
-                    if use_stmt isa Expr && use_stmt.head === :call && length(use_stmt.args) >= 2
-                        func = use_stmt.args[1]
-                        if func isa GlobalRef && func.mod in (Core, Base, Core.Intrinsics)
-                            fname = func.name
+                    if use_rec.slot == 0 && use_node isa NirCall && !isempty(use_node.operands)
+                        func = use_node.callee
+                        if func isa Core.IntrinsicFunction
+                            fname = nameof(func)
                             # Boolean ops that take boolean/i32 operands
-                            is_bool_op = fname in (:not_int, :and_int, :or_int, :xor_int)
+                            is_bool_op = fname in _BOOL_OP_INTRINSICS
                             # Comparison ops that can take i32 or i64 operands
-                            is_cmp_op = fname in (:eq_int, :ne_int, :slt_int, :sle_int,
-                                                  :ult_int, :ule_int)
+                            is_cmp_op = fname in _CMP_OP_INTRINSICS
                             # Arithmetic and other numeric intrinsics that require
                             # numeric operands — fixes externref/i64 mismatch in builtin_effects
-                            is_arith_op = fname in (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_int,
-                                                    :srem_int, :urem_int, :neg_int,
-                                                    :add_float, :sub_float, :mul_float, :div_float,
-                                                    :neg_float, :abs_float, :sqrt_llvm,
-                                                    :shl_int, :lshr_int, :ashr_int,
-                                                    :checked_sadd_int, :checked_ssub_int, :checked_smul_int,
-                                                    :checked_uadd_int, :checked_usub_int, :checked_umul_int,
-                                                    :sitofp, :uitofp, :fptosi, :fptoui,
-                                                    :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
-                                                    :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
-                                                    :flipsign_int, :copysign_float,
-                                                    :eq_float, :ne_float, :lt_float, :le_float)
+                            is_arith_op = fname in _NUMERIC_OP_INTRINSICS
                             if is_bool_op || is_cmp_op || is_arith_op
-                                for arg in use_stmt.args[2:end]
-                                    if arg === ssa_val
+                                for arg in use_node.operands
+                                    if arg isa NirSSA && arg.id == ssa_id
                                         # Use Julia type to determine correct Wasm operand type
                                         # Compute what Wasm type the Julia type would normally map to
                                         inferred_wasm = get_concrete_wasm_type(effective_type, ctx.mod, ctx.type_registry; for_local=true)
@@ -1397,7 +1259,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             local_idx = ctx.n_params + length(ctx.locals)
             # Trace externref allocations for diagnostics
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
-                n_stmts = length(ctx.code_info.code)
+                n_stmts = length(nir)
                 @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
             # normalize AnyRef → ExternRef for SSA locals
@@ -1420,34 +1282,29 @@ In unoptimized IR, local variables are represented as SlotNumber assignments:
   code[i] = Expr(:(=), SlotNumber(n), rhs_expr)
   code[j] = SlotNumber(n)  # reads the assigned value
 
+The NIR records such an assignment as `nir[i].slot = n`, its `node` classifying the rhs.
 Slots 1..n_params+1 are the function self + arguments (mapped to WASM params).
 Slots > n_params+1 are local variables that need dedicated WASM locals.
 
-This function scans for slot assignments, determines their types from ssavaluetypes,
+This function scans for slot assignments, determines their types from the SSA types,
 and allocates WASM locals. The slot_locals dict maps SlotNumber.id → WASM local index.
 """
 function allocate_slot_locals!(ctx::AbstractCompilationContext)
-    code = ctx.code_info.code
     n_arg_slots = length(ctx.arg_types) + 1  # slot 1 = self, slot 2..n+1 = args
 
-    for (i, stmt) in enumerate(code)
-        if stmt isa Expr && stmt.head === :(=) && length(stmt.args) >= 2
-            lhs = stmt.args[1]
-            if lhs isa Core.SlotNumber && lhs.id > n_arg_slots
-                slot_id = lhs.id
-                if !haskey(ctx.slot_locals, slot_id)
-                    # Determine type from ssavaluetypes for this statement
-                    ssa_type = get(ctx.ssa_types, i, Any)
-                    wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
-                    # Normalize AnyRef → ExternRef unless JlType hierarchy active
-                    if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                        wasm_type = ExternRef
-                    end
-                    local_idx = ctx.n_params + length(ctx.locals)
-                    push!(ctx.locals, wasm_type)
-                    ctx.slot_locals[slot_id] = local_idx
-                end
+    for (i, rec) in enumerate(ctx.nir)
+        slot_id = rec.slot
+        if slot_id > n_arg_slots && !haskey(ctx.slot_locals, slot_id)
+            # Determine type from the SSA type of this statement
+            ssa_type = get(ctx.ssa_types, i, Any)
+            wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
+            # Normalize AnyRef → ExternRef unless JlType hierarchy active
+            if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
+                wasm_type = ExternRef
             end
+            local_idx = ctx.n_params + length(ctx.locals)
+            push!(ctx.locals, wasm_type)
+            ctx.slot_locals[slot_id] = local_idx
         end
     end
 end
@@ -1456,16 +1313,10 @@ end
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
 """
 function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
-    code = ctx.code_info.code
+    nir = ctx.nir
 
     # Find where this SSA is used
-    use_idx = nothing
-    for (i, stmt) in enumerate(code)
-        if i != ssa_id && references_ssa(stmt, ssa_id)
-            use_idx = i
-            break
-        end
-    end
+    use_idx = findfirst(i -> i != ssa_id && nir_refs_ssa(nir[i].node, ssa_id), eachindex(nir))
 
     if use_idx === nothing
         return false  # Never used
@@ -1478,26 +1329,18 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
     visited = Set{Int}()
     while actual_use_idx ∉ visited
         push!(visited, actual_use_idx)
-        use_stmt = code[actual_use_idx]
+        use_rec = nir[actual_use_idx]
+        use_node = use_rec.node
         # Check if this is a single-arg memoryrefnew passthrough
-        if use_stmt isa Expr && use_stmt.head === :call
-            func = use_stmt.args[1]
-            is_memrefnew = (func isa GlobalRef &&
-                            (func.mod === Core || func.mod === Base) &&
-                            (func.name === :memoryrefnew || func.name === :memoryref))
-            if is_memrefnew && length(use_stmt.args) == 2  # func + 1 arg = single-arg passthrough
-                # Find where this passthrough result is used
-                next_use = nothing
-                for (j, s) in enumerate(code)
-                    if j != actual_use_idx && references_ssa(s, actual_use_idx)
-                        next_use = j
-                        break
-                    end
-                end
-                if next_use !== nothing
-                    actual_use_idx = next_use
-                    continue
-                end
+        if use_rec.slot == 0 && use_node isa NirCall &&
+           (use_node.callee === Core.memoryrefnew || use_node.callee === Core.memoryref) &&
+           length(use_node.operands) == 1  # single-arg passthrough
+            # Find where this passthrough result is used
+            next_use = findfirst(j -> j != actual_use_idx && nir_refs_ssa(nir[j].node, actual_use_idx),
+                                 eachindex(nir))
+            if next_use !== nothing
+                actual_use_idx = next_use
+                continue
             end
         end
         break
@@ -1506,16 +1349,14 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
     # If there are any statements between definition and use that produce values,
     # we need a local because those values will mess up the stack
     for i in (ssa_id + 1):(actual_use_idx - 1)
-        stmt = code[i]
-        if produces_stack_value(stmt)
+        if produces_stack_value(nir[i])
             return true
         end
     end
 
     # Also need local if there's control flow between definition and use
     for i in (ssa_id + 1):(actual_use_idx - 1)
-        stmt = code[i]
-        if stmt isa Core.GotoIfNot || stmt isa Core.GotoNode
+        if nir[i].node isa NirGotoIfNot || nir[i].node isa NirGoto
             return true
         end
     end
@@ -1525,18 +1366,12 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
     for header in 1:length(ctx.loop_headers)
         ctx.loop_headers[header] || continue
         # Find corresponding back-edge
-        back_edge = nothing
-        for (i, stmt) in enumerate(code)
-            if stmt isa Core.GotoNode && stmt.label == header
-                back_edge = i
-                break
-            end
-        end
+        back_edge = findfirst(rec -> rec.node isa NirGoto && rec.node.target == header, nir)
         if back_edge !== nothing && ssa_id >= header && ssa_id <= back_edge
             # SSA is defined inside this loop
             # Check if there are any conditionals in the loop
             for i in header:back_edge
-                if code[i] isa Core.GotoIfNot
+                if nir[i].node isa NirGotoIfNot
                     # Loop has a conditional (not the exit condition if it's at the start)
                     if i != header && i != header + 1
                         return true
@@ -1550,24 +1385,18 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
 end
 
 """
-Check if a statement produces a value on the stack.
+Check if a statement produces a value on the stack: a call, invoke, `%new`, boundscheck,
+exception read, phi or pi, or a statement that is itself a value. An assignment into a
+slot stores its value instead.
 """
-function produces_stack_value(stmt)
-    # Most expressions produce values
-    if stmt isa Expr
-        return stmt.head in (:call, :invoke, :new, :boundscheck, :tuple, :the_exception)
-    end
-    if stmt isa Core.PhiNode
-        return true
-    end
-    if stmt isa Core.PiNode
-        return true
-    end
-    # Literals and SSA refs also produce values (but shouldn't appear as statements)
-    if stmt isa Number || stmt isa Core.SSAValue
-        return true
-    end
-    return false
+function produces_stack_value(rec::NirStmt)::Bool
+    rec.slot > 0 && return false
+    node = rec.node
+    return node isa NirCall || node isa NirInvoke || node isa NirNew ||
+           node isa NirBoundscheck || node isa NirTheException ||
+           node isa NirPhi || node isa NirPi ||
+           # Literals and SSA refs also produce values (but shouldn't appear as statements)
+           node isa NirSSA || (node isa NirLiteral && node.value isa Number)
 end
 
 """
@@ -1578,41 +1407,22 @@ Examples:
 - Core.memoryref(memory) via :invoke - also a passthrough
 Note: Vector{T} is NO LONGER a passthrough - it's now a struct with (ref, size) fields.
 """
-function is_passthrough_statement(stmt, ctx::AbstractCompilationContext)
-    if !(stmt isa Expr)
-        return false
-    end
-
+function is_passthrough_statement(node::NirNode, ctx::AbstractCompilationContext)::Bool
     # Check for memoryrefnew with single arg (passthrough pattern) via :call
-    if stmt.head === :call
-        func = stmt.args[1]
-        is_memrefnew = (func isa GlobalRef && func.mod === Core && func.name === :memoryrefnew) ||
-                       (func === :(Core.memoryrefnew))
-        if is_memrefnew && length(stmt.args) == 2
-            # Single arg memoryrefnew is a passthrough
-            return true
-        end
+    if node isa NirCall && node.callee === Core.memoryrefnew && length(node.operands) == 1
+        # Single arg memoryrefnew is a passthrough
+        return true
     end
 
     # Check for Core.memoryref via :invoke - this is also a passthrough
     # Julia uses :invoke for Core.memoryref(memory::Memory{T}) -> MemoryRef{T}
     # In WasmGC, this is a no-op since Memory and MemoryRef are both the array
-    if stmt.head === :invoke && length(stmt.args) >= 3
-        # args[1] is MethodInstance, args[2] is function ref, args[3:end] are actual args
-        func_ref = stmt.args[2]
-        args = stmt.args[3:end]
-
-        # Check if it's Core.memoryref with single arg
-        is_memoryref = func_ref === :(Core.memoryref) ||
-                       (func_ref isa GlobalRef && func_ref.mod === Core && func_ref.name === :memoryref)
-
-        if is_memoryref && length(args) == 1
-            arg = args[1]
-            # It's a passthrough if the single arg is an SSA that doesn't have a local
-            # (meaning its value is still on the stack from the previous statement)
-            if arg isa Core.SSAValue && !haskey(ctx.ssa_locals, arg.id)
-                return true
-            end
+    if node isa NirInvoke && node.callee === Core.memoryref && length(node.operands) == 1
+        arg = node.operands[1]
+        # It's a passthrough if the single arg is an SSA that doesn't have a local
+        # (meaning its value is still on the stack from the previous statement)
+        if arg isa NirSSA && !haskey(ctx.ssa_locals, arg.id)
+            return true
         end
     end
 
@@ -1623,7 +1433,33 @@ function is_passthrough_statement(stmt, ctx::AbstractCompilationContext)
 end
 
 """
-Count SSA uses in a statement.
+Count the SSA uses one statement makes: every SSA operand an expression reads (its dynamic
+callee included), a return's value, a branch condition, a phi's incoming values and a pi's
+source. A statement that is itself an SSA value (or a slot assigned from one) is a use.
+"""
+function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})
+    _count(x) = (x isa NirSSA && (uses[x.id] = get(uses, x.id, 0) + 1); nothing)
+    node = rec.node
+    if node isa NirPhi
+        foreach(v -> v === nothing || _count(v), node.values)
+    elseif node isa NirPi
+        # PiNode references a source value — count it so phi nodes
+        # that are only referenced by PiNodes get their ssa_locals mapping
+        _count(node.value)
+    elseif node isa NirReturn
+        node.value === nothing || _count(node.value)
+    elseif node isa NirGotoIfNot
+        _count(node.cond)
+    elseif node isa NirSSA
+        _count(node)
+    else
+        foreach(_count, nir_expr_operands(node))
+    end
+    return nothing
+end
+
+"""
+Count SSA uses in a raw statement.
 """
 function count_ssa_uses!(stmt, uses::Dict{Int, Int})
     if stmt isa Core.SSAValue
@@ -1650,32 +1486,12 @@ function count_ssa_uses!(stmt, uses::Dict{Int, Int})
 end
 
 """
-Check if a statement references an SSA value.
-"""
-function references_ssa(stmt, ssa_id::Int)::Bool
-    if stmt isa Core.SSAValue
-        return stmt.id == ssa_id
-    elseif stmt isa Expr
-        return any(references_ssa(arg, ssa_id) for arg in stmt.args)
-    elseif stmt isa Core.ReturnNode && isdefined(stmt, :val)
-        return references_ssa(stmt.val, ssa_id)
-    elseif stmt isa Core.GotoIfNot
-        return references_ssa(stmt.cond, ssa_id)
-    end
-    return false
-end
-
-"""
-Get the Julia type of an SSA value or other value reference.
-Used for type checking (e.g., in isa() calls).
+The inferred source type of IR slot `slot` (slot 1 = `#self#`, then the parameters, then the
+locals), as the NIR boundary widened it — `nothing` when the IR carries no slot table.
 """
 function source_slot_type(ctx::AbstractCompilationContext, slot::Integer)::Union{Type, Nothing}
-    slottypes = ctx.code_info.slottypes
-    slottypes isa Vector || return nothing
-    1 <= slot <= length(slottypes) || return nothing
-    slot_type = slottypes[slot]
-    widened = slot_type isa Type ? slot_type : Core.Compiler.widenconst(slot_type)
-    return widened isa Type ? widened : nothing
+    1 <= slot <= length(ctx.slot_types) || return nothing
+    return ctx.slot_types[slot]
 end
 
 """Return the source tuple type when one IR argument is a flattened vararg pack.
@@ -1737,48 +1553,37 @@ end
 
 """
 Analyze the IR to determine types of SSA values.
-Uses CodeInfo.ssavaluetypes for accurate type information.
+Uses Julia inference's own SSA types (the NIR boundary's widened answer).
 """
 function analyze_ssa_types!(ctx::AbstractCompilationContext)
-    # Use Julia's type inference results when available
-    ssatypes = ctx.code_info.ssavaluetypes
-    if ssatypes isa Vector
-        for (i, T) in enumerate(ssatypes)
-            # Store all concrete types including Nothing (needed for function dispatch)
-            # Only skip Any as it provides no useful information
-            if T !== Any
-                # Widen inference lattice elements to concrete Julia types.
-                # Unoptimized IR (may_optimize=false) retains Core.Const, Core.PartialStruct,
-                # etc. in ssavaluetypes. Downstream code (get_concrete_wasm_type,
-                # allocate_ssa_locals!) expects plain Julia types, not lattice elements.
-                actual_T = T isa Type ? T : Core.Compiler.widenconst(T)
-                ctx.ssa_types[i] = actual_T
-            end
-        end
+    # Use Julia's type inference results when available. Store all concrete types
+    # including Nothing (needed for function dispatch); only skip Any as it provides no
+    # useful information. The boundary already widened inference lattice elements
+    # (unoptimized IR's Core.Const/PartialStruct) to plain Julia types.
+    for (i, rec) in enumerate(ctx.nir)
+        rec.julia_type !== Any && (ctx.ssa_types[i] = rec.julia_type)
     end
 
     # Override: if an SSA is a getfield/getproperty on a struct field typed as Any,
     # or a memoryrefget on an array with Any elements, force the SSA type to Any.
     # This ensures the local is allocated as externref (matching what struct.get/array.get
     # actually produces), preventing type mismatches with local.set.
-    for (i, stmt) in enumerate(ctx.code_info.code)
-        if stmt isa Expr && stmt.head === :foreigncall &&
-           extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall
+    for (i, rec) in enumerate(ctx.nir)
+        rec.slot == 0 || continue
+        node = rec.node
+        if node isa NirForeignCall && node.c_symbol === :jl_type_unionall
             # Julia 1.13 can erase the SSA annotation for its UnionAll
             # predicate even though the C ABI and Julia operation both return
             # Bool. Keep allocation and the nominal ref.test emitter aligned.
             ctx.ssa_types[i] = Bool
         end
-        if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3
-            func = stmt.args[1]
+        if node isa NirCall && length(node.operands) >= 2
+            func = node.callee
             # Check getfield/getproperty on Any-typed struct field
-            # Match any module — getproperty/getfield may appear as
-            # Compiler.getproperty, Base.getfield, etc. depending on the caller's module
-            is_gf = (func isa GlobalRef &&
-                     func.name in (:getfield, :getproperty))
-            if is_gf
-                obj_arg = stmt.args[2]
-                field_ref = stmt.args[3]
+            # (Base's getproperty and the Compiler's own both lower to getfield)
+            if _is_getfield_callee(func)
+                obj_arg = node.operands[1]
+                field_ref = node.operands[2]
                 obj_type = infer_value_type(obj_arg, ctx)
                 # Check the Julia field type directly (no registry lookup needed)
                 # Also allow non-concrete Tuple types (e.g., Tuple{Any, Int64})
@@ -1786,7 +1591,7 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
                 # fieldtype/fieldcount still work correctly on Tuple DataTypes.
                 is_concrete_enough = isconcretetype(obj_type) || (obj_type <: Tuple && obj_type isa DataType)
                 if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type) && is_concrete_enough
-                    field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+                    field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
                     julia_field_type = nothing
                     if field_sym isa Symbol && hasfield(obj_type, field_sym)
                         julia_field_type = fieldtype(obj_type, field_sym)
@@ -1802,8 +1607,8 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
                 end
             end
             # Check memoryrefget on Any-element array
-            if func isa GlobalRef && func.name === :memoryrefget
-                ref_arg = stmt.args[2]
+            if func === Core.memoryrefget
+                ref_arg = node.operands[1]
                 ref_type = infer_value_type(ref_arg, ctx)
                 elem_type = nothing  # unknown
                 if ref_type isa DataType
@@ -1821,54 +1626,46 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
     end
 
     # Fallback: infer from calls for any missing types
-    for (i, stmt) in enumerate(ctx.code_info.code)
-        if !haskey(ctx.ssa_types, i)
-            if stmt isa Expr && stmt.head === :call
-                # Skip memoryrefset! — its return type is the stored element (Any),
-                # NOT the MemoryRef first argument. infer_call_type would incorrectly infer
-                # MemoryRef{T}, causing the SSA local to be allocated as ConcreteRef (array type)
-                # instead of ExternRef. This leads to illegal ref.cast at runtime.
-                _func_arg = stmt.args[1]
-                if _func_arg isa GlobalRef && _func_arg.name === :memoryrefset!
-                    continue
-                end
-                ctx.ssa_types[i] = infer_call_type(stmt, ctx)
-            elseif stmt isa Expr && stmt.head === :invoke
-                # For invoke expressions with Any type, get the actual method return type
-                mi_or_ci = stmt.args[1]
-                mi = if mi_or_ci isa Core.MethodInstance
-                    mi_or_ci
-                elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
-                    mi_or_ci.def
-                else
-                    nothing
-                end
-                if mi isa Core.MethodInstance
-                    meth = mi.def
-                    if meth isa Method
-                        # Get the function reference from the invoke expression
-                        func_ref = stmt.args[2]
-                        if func_ref isa GlobalRef
-                            func = try getfield(func_ref.mod, func_ref.name) catch; nothing end
-                            if func !== nothing && ctx.func_registry !== nothing && has_func_ref(ctx.func_registry, func)
-                                # Look up in registry by function reference
-                                infos = get_func_ref_infos(ctx.func_registry, func)
-                                if !isempty(infos)
-                                    # Use the first matching function's return type
-                                    ctx.ssa_types[i] = infos[1].return_type
-                                end
-                            end
-                        end
-                    end
+    for (i, rec) in enumerate(ctx.nir)
+        haskey(ctx.ssa_types, i) && continue
+        rec.slot == 0 || continue
+        node = rec.node
+        if node isa NirCall
+            # Skip memoryrefset! — its return type is the stored element (Any),
+            # NOT the MemoryRef first argument. infer_call_type would incorrectly infer
+            # MemoryRef{T}, causing the SSA local to be allocated as ConcreteRef (array type)
+            # instead of ExternRef. This leads to illegal ref.cast at runtime.
+            node.callee === Core.memoryrefset! && continue
+            ctx.ssa_types[i] = infer_call_type(node, ctx)
+        elseif node isa NirInvoke && node.method isa Method
+            # For invoke expressions with Any type, get the actual method return type:
+            # look the invoked function up in the registry by its function object
+            func = node.callee
+            (func isa NirNode || func isa GlobalRef || func === nothing) && continue
+            if ctx.func_registry !== nothing && has_func_ref(ctx.func_registry, func)
+                infos = get_func_ref_infos(ctx.func_registry, func)
+                if !isempty(infos)
+                    # Use the first matching function's return type
+                    ctx.ssa_types[i] = infos[1].return_type
                 end
             end
         end
     end
 end
 
-function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
-    func = expr.args[1]
-    args = expr.args[2:end]
+# The callees whose result is not their first argument's type — a mutation returning its
+# collection's element or the collection, an IO write, a display call, a compiler barrier.
+# parity(quarantine: a fallback result type for a call Julia inference left erased — dart
+# reads every expression's static type from the CFE and has no such fallback.)
+const _NON_IDENTITY_RESULT_CALLEES = Tuple(unique(Any[getfield(M, n)
+    for M in (Base, Core.Compiler)
+    for n in (:push!, :pushfirst!, :pop!, :popfirst!, :setindex!, :insert!, :deleteat!,
+              :write, :print, :println, :show, :compilerbarrier)
+    if isdefined(M, n)]))
+
+function infer_call_type(node::NirCall, ctx::AbstractCompilationContext)
+    func = node.callee
+    args = node.operands
 
     # Comparison operations return Bool
     if is_comparison(func)
@@ -1879,13 +1676,7 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
     # Julia inference may erase a dynamic call to Any/abstract; recover the same
     # closed-world fact from the already-complete function registry.
     if ctx.func_registry !== nothing
-        called = if func isa GlobalRef && isdefined(func.mod, func.name)
-            getfield(func.mod, func.name)
-        elseif func isa Function
-            func
-        else
-            nothing
-        end
+        called = _nir_callee_object(func)
         if called !== nothing && has_func_ref(ctx.func_registry, called)
             call_types = Any[get_ssa_type(ctx, arg) for arg in args]
             returns = Type[]
@@ -1906,11 +1697,11 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
     end
 
     # getfield returns the field type, not the object type
-    if func isa GlobalRef && func.name in (:getfield, :getproperty) && length(args) >= 2
+    if _is_getfield_callee(func) && length(args) >= 2
         obj_type = infer_value_type(args[1], ctx)
         field_ref = args[2]
         if obj_type isa DataType && isstructtype(obj_type) && !isabstracttype(obj_type)
-            field_sym = field_ref isa QuoteNode ? field_ref.value : field_ref
+            field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
             try
                 if field_sym isa Symbol && hasfield(obj_type, field_sym)
                     return fieldtype(obj_type, field_sym)
@@ -1933,10 +1724,7 @@ function infer_call_type(expr::Expr, ctx::AbstractCompilationContext)
             return Any  # Safe default for constructors
         end
         # Known functions where return type != first arg type
-        if func isa GlobalRef && func.name in (:push!, :pushfirst!, :pop!, :popfirst!,
-                                                 :setindex!, :insert!, :deleteat!,
-                                                 :write, :print, :println, :show,
-                                                 :compilerbarrier)
+        if any(f -> f === func, _NON_IDENTITY_RESULT_CALLEES)
             return Any
         end
         return arg1_type

@@ -1012,7 +1012,7 @@ const LOCKS = [
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             forbidden = ["jl_type_unionall` (no lowering)",
                          "get_concrete_wasm_type(Union{}"]
-            required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
+            required = ["node isa NirForeignCall && node.c_symbol === :jl_type_unionall",
                         ":jl_type_unionall => _fc_jl_type_unionall!",
                         "ref_test!(b, Int64(unionall_idx), false)",
                         "A bottom producer has no runtime value to classify or coerce",

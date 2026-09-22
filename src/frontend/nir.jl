@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_raw_code, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
+       build_nir, nir_slot_types, nir_expr_operands, nir_raw_code, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -115,13 +115,19 @@ struct NirEnter <: NirNode
     catch_target::Int
 end
 
-"""`Expr(:leave, refs...)` — `n` is the count of exception scopes being left."""
+"""`Expr(:leave, refs...)` — `enters` are the operands naming the `Core.EnterNode`
+statements whose scopes are left (a `nothing` operand stays a `NirLiteral(nothing)`)."""
 struct NirLeave <: NirNode
-    n::Int
+    enters::Vector{NirNode}
 end
 
 struct NirTheException <: NirNode end
-struct NirPopException <: NirNode end
+
+"""`Expr(:pop_exception, ref)` — `enter` names the `Core.EnterNode` whose exception is
+popped, `nothing` when the statement carried no operand."""
+struct NirPopException <: NirNode
+    enter::Union{NirNode,Nothing}
+end
 
 """`callee` is the RESOLVED function object / Core.IntrinsicFunction when statically known
 (GlobalRef/QuoteNode operand), or a NirNode (NirSSA/NirArgument/...) for a dynamic callee
@@ -165,10 +171,12 @@ that reports `:literal` for every success.
 When `type_resolved` is false, `T === Any` and `type_detail` carries the widened inferred
 type the attempt consulted (the reject's detail); `type_detail` is `Any` otherwise.
 `field_types` is `fieldtype.(T, 1:fieldcount(T))` when `T` is concrete, else empty — never
-throws on an exotic `T`."""
+throws on an exotic `T`. `type_operand` is the operand that named the type (an SSA use when
+`type_kind === :ssa`), resolved like any other operand."""
 struct NirNew <: NirNode
     T::Type
     field_types::Vector{Type}
+    type_operand::NirNode
     operands::Vector{NirNode}
     type_kind::Symbol
     type_resolved::Bool
@@ -213,10 +221,12 @@ end
 
 """Julia-only, quarantine tier: an IR head that is a HINT with no runtime effect —
 `:gc_preserve_begin`/`:gc_preserve_end` (WasmGC's host collector owns liveness) and
-`:loopinfo` (`@simd`). Classified for the same reason as NirNewvar.
+`:loopinfo` (`@simd`). Classified for the same reason as NirNewvar. `operands` are the
+values the hint names (the preserved objects; the `:gc_preserve_begin` token an end closes).
 parity(quarantine: GC-liveness and loop hints — Kernel has no gc_preserve or @simd node.)"""
 struct NirNoOp <: NirNode
-    head::Symbol
+    kind::Symbol
+    operands::Vector{NirNode}
 end
 
 """Julia-only, quarantine tier: `Core.UpsilonNode`, the store half of unoptimized IR's
@@ -235,10 +245,13 @@ struct NirPhiC <: NirNode
 end
 
 """Any head outside the census above. A consumer MUST route this to `record_unsupported!`
-(never silently) — never reinterpreted as a no-op. `raw` is the original statement, for the
-diagnostic's detail."""
+(never silently) — never reinterpreted as a no-op. `operands` are every value operand the
+statement contains, nested expressions included, so a use query never mistakes an
+unrecognized consumer for a non-consumer; `raw` is the original statement, for the
+diagnostic's detail only."""
 struct NirUnsupported <: NirNode
-    head::Symbol
+    kind::Symbol
+    operands::Vector{NirNode}
     raw::Any
 end
 
@@ -342,6 +355,24 @@ function _widened_ssa_types(code_info, n::Int)::Vector{Type}
     ssatypes isa Vector || return out
     for i in 1:min(n, length(ssatypes))
         T = ssatypes[i]
+        wT = T isa Type ? T : Core.Compiler.widenconst(T)
+        wT isa Type && (out[i] = wT)
+    end
+    return out
+end
+
+"""Julia inference's type for every slot of one CodeInfo (slot 1 = `#self#`, then the
+parameters, then the locals), widened once here exactly as `_widened_ssa_types` widens the
+SSA types; `Any` wherever inference had nothing, empty when the CodeInfo carries no slot
+table — the source contract an `Argument`/`SlotNumber` operand is typed by.
+parity(code_generator.dart:135 getStaticType): a variable's type read once through one context."""
+function nir_slot_types(code_info::Core.CodeInfo)::Vector{Type}
+    slottypes = code_info.slottypes
+    slottypes isa Vector || return Type[]
+    out = Vector{Type}(undef, length(slottypes))
+    fill!(out, Any)
+    for i in eachindex(slottypes)
+        T = slottypes[i]
         wT = T isa Type ? T : Core.Compiler.widenconst(T)
         wT isa Type && (out[i] = wT)
     end
@@ -463,7 +494,8 @@ in the IR to classify, so the node is built directly instead of a raw Expr being
 parity(code_generator.dart:1637 visitConstructorInvocation): a synthesized field-wise constructor
 is the same node kind as a literal `%new`."""
 nir_new(T::Type, args, ctx)::NirNew =
-    NirNew(T, _nir_field_types(T), NirNode[nir_node(ctx, a) for a in args], :literal, true, Any)
+    NirNew(T, _nir_field_types(T), NirLiteral(T), NirNode[nir_node(ctx, a) for a in args],
+           :literal, true, Any)
 
 """`%new`'s type operand → `(T, naming shape, resolved?, detail)`. A literal/GlobalRef names
 `T` outright. A `Core.apply_type` result names it through the SSA's OWN inferred type, which
@@ -500,6 +532,17 @@ function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbo
         return (Any, :argument, false, _widen(new_ssa_type))
     end
     return (Any, :unknown, false, Any)
+end
+
+"""Every value operand inside an unrecognized expression, nested expressions flattened in
+order — what a use query needs from a statement no arm classified.
+parity(quarantine: the operand census of a Julia Expr head with no Kernel counterpart.)"""
+function _nir_nested_operands(ex::Expr, types)::Vector{NirNode}
+    out = NirNode[]
+    for a in ex.args
+        a isa Expr ? append!(out, _nir_nested_operands(a, types)) : push!(out, resolve_operand(a, types))
+    end
+    return out
 end
 
 """Classify one raw CodeInfo statement into a NirNode. Total (never throws) — any Expr
@@ -546,7 +589,8 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
         elseif head === :new && !isempty(args)
             T, kind, resolved, detail = _resolve_new_type(args[1], i, code_info)
             cargs = length(args) >= 2 ? NirNode[resolve_operand(a, types) for a in @view args[2:end]] : NirNode[]
-            return NirNew(T, _nir_field_types(T), cargs, kind, resolved, detail)
+            return NirNew(T, _nir_field_types(T), resolve_operand(args[1], types), cargs,
+                          kind, resolved, detail)
         elseif head === :foreigncall
             c_symbol = !isempty(args) ? extract_foreigncall_name(args[1]) : nothing
             ret_t = length(args) >= 2 ? args[2] : Any
@@ -559,15 +603,15 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
         elseif head === :throw_undef_if_not && length(args) == 2 && args[1] isa Symbol
             return NirThrowUndefIfNot(args[1], resolve_operand(args[2], types))
         elseif head === :leave
-            return NirLeave(length(args))
+            return NirLeave(NirNode[resolve_operand(a, types) for a in args])
         elseif head === :pop_exception
-            return NirPopException()
+            return NirPopException(isempty(args) ? nothing : resolve_operand(args[1], types))
         elseif head === :the_exception
             return NirTheException()
         elseif head === :gc_preserve_begin || head === :gc_preserve_end || head === :loopinfo
-            return NirNoOp(head)
+            return NirNoOp(head, NirNode[resolve_operand(a, types) for a in args])
         else
-            return NirUnsupported(head, stmt)
+            return NirUnsupported(head, _nir_nested_operands(stmt, types), stmt)
         end
     else
         return resolve_operand(stmt, types)
@@ -612,7 +656,7 @@ end
 ONE reference test covering every node kind. An `Expr`-shaped walk has to be written per
 consumer, and the two that existed disagreed: `references_ssa` (context.jl) silently
 misses PhiNode/PiNode operands, which the storage-relative pointer-escape proof depends
-on seeing. A NirUnsupported node has no resolved operands, so its raw statement is walked:
+on seeing. A NirUnsupported node carries every operand it contains, nested ones included:
 an unrecognized consumer must never look like a non-consumer.
 parity(quarantine: SSA use query — Kernel is a tree whose values are variables read by
 VariableGet (pkg/kernel/lib/src/ast/expressions.dart:203); Julia IR names values by SSA id.)"""
@@ -629,26 +673,36 @@ function nir_uses(node::NirNode, subject::NirNode)::Bool
     node isa NirUpsilon && return _r(node.value)
     node isa NirThrowUndefIfNot && return _r(node.cond)
     node isa NirCall && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.operands)
-    node isa NirInvoke && return any(_r, node.operands)
-    node isa NirNew && return any(_r, node.operands)
+    node isa NirInvoke && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.operands)
+    node isa NirNew && return _r(node.type_operand) || any(_r, node.operands)
     node isa NirForeignCall && return any(_r, node.operands)
-    node isa NirUnsupported && return _raw_uses(node.raw, subject)
+    node isa NirLeave && return any(_r, node.enters)
+    node isa NirPopException && return _r(node.enter)
+    node isa NirNoOp && return any(_r, node.operands)
+    node isa NirUnsupported && return any(_r, node.operands)
     return false
 end
 
 # parity(quarantine: SSA use query by id, the NirSSA case of nir_uses.)
 nir_refs_ssa(node::NirNode, id::Int)::Bool = nir_uses(node, NirSSA(id, Any))
 
-function _raw_uses(x, subject::NirNode)::Bool
-    subject isa NirSSA && x isa Core.SSAValue && return x.id == subject.id
-    subject isa NirArgument && x isa Core.Argument && return x.n == subject.n
-    x isa Expr && return any(a -> _raw_uses(a, subject), x.args)
-    x isa Core.PiNode && return _raw_uses(x.val, subject)
-    x isa Core.PhiNode && return any(i -> isassigned(x.values, i) && _raw_uses(x.values[i], subject),
-                                     eachindex(x.values))
-    (x isa Core.ReturnNode && isdefined(x, :val)) && return _raw_uses(x.val, subject)
-    x isa Core.GotoIfNot && return _raw_uses(x.cond, subject)
-    return false
+"""The value operands an expression-kind node reads, in `Expr.args` order: the dynamic callee
+of a call/invoke first, the type operand of a `%new`, then the arguments. Empty for the IR
+node kinds (return/goto/phi/pi/…), whose operands are their own fields.
+parity(quarantine: the operand list of a Julia Expr statement, the SSA-use census Kernel's
+tree shape makes unnecessary.)"""
+function nir_expr_operands(node::NirNode)::Vector{NirNode}
+    if node isa NirCall || node isa NirInvoke
+        return node.callee isa NirNode ? NirNode[node.callee; node.operands] : node.operands
+    end
+    node isa NirNew && return NirNode[node.type_operand; node.operands]
+    node isa NirForeignCall && return node.operands
+    node isa NirLeave && return node.enters
+    node isa NirPopException && return node.enter === nothing ? NirNode[] : NirNode[node.enter]
+    node isa NirNoOp && return node.operands
+    node isa NirThrowUndefIfNot && return NirNode[node.cond]
+    node isa NirUnsupported && return node.operands
+    return NirNode[]
 end
 
 """True for the node kinds an `Expr` statement classifies to. compile_statement! emits

@@ -588,7 +588,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                                        _sf.instrs[end-1] isa InstrIR.Drop) ||
                                       _stmt_ends_unreachable  # catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
-            should_store = (!isempty(stmt_bytes) || is_passthrough_statement(stmt, ctx)) && !is_unreachable
+            should_store = (!isempty(stmt_bytes) || is_passthrough_statement(node, ctx)) && !is_unreachable
             if should_store
                 local_idx = ctx.ssa_locals[idx]
                 local_array_idx = local_idx - ctx.n_params + 1
