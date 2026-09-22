@@ -1,10 +1,13 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # FIRST-CLASS CLOSURES — trampolines + vtable globals
-# (dart ClosureLayouter/ClosureRepresentation, closures.dart:41-118;
+# (dart ClosureLayouter closures.dart:209 / ClosureRepresentation :65;
 #  the closure object = {classId, identityHash, context, vtable, functionType})
 # ═══════════════════════════════════════════════════════════════════════════
 
-"""True when an erased value or every runtime inhabitant of `T` is callable."""
+"""True when an erased value or every runtime inhabitant of `T` is callable.
+parity(quarantine: Julia's type lattice has no function type — a callable is any `<: Function`
+type (each closure and generic function its own singleton type) or a Union of them, where dart
+asks `type is FunctionType`)"""
 function is_callable_julia_type(@nospecialize(T))::Bool
     T === Any && return true
     T isa Type || return false
@@ -20,6 +23,7 @@ end
 One compiled specialization of a callable type, as the layouter sees it: the body's
 function index, its physical signature, and its inferred Julia return type (the
 trampoline re-boxes a numeric result with that type's classId).
+parity(closures.dart:31 ClosureImplementation.functions)
 """
 struct ClosureBody
     body_idx::UInt32
@@ -35,7 +39,8 @@ ClosureBody(body_idx, params, results, return_type) = ClosureBody(body_idx, para
         -> (vtable_global_idx, vtable_struct_idx)
 
 ONE immutable vtable GLOBAL per closure TYPE (dart ClosureLayouter: one representation
-per function shape, closures.dart:41-118, memoized by the shape itself :1101-1114). The
+per function shape, closures.dart:65 ClosureRepresentation, memoized by the shape itself
+:1101 _representationsForCounts). The
 vtable struct has an entry for every positional arity 0..max; entry[arity] is a
 TRAMPOLINE for the body of that arity — (closureBase-as-anyref, args...) → cast base →
 context → cast captured struct → call body — and the other entries are null. Every
@@ -50,6 +55,7 @@ For capturing closures, `params` includes the captured-struct self at slot 0 and
 `takes_context=false`; both use the same closure object and vtable ABI.
 """
 # formal(dev/formal/ClosureLayout.tla): captured fields keep declaration order and the vtable global's shape is the one frozen at creation
+# parity(translator.dart:1360 Translator.getClosure)
 function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                closure_type::Type, bodies::Vector{ClosureBody};
                                takes_context::Bool=is_closure_type(closure_type))::Tuple{UInt32, UInt32}
@@ -106,6 +112,7 @@ end
 # body's REAL signature and re-boxes the result). The builder declares its params +
 # scratch local so the tracker reads truth (params anyref^(1+arity) → anyref; scratch =
 # the body width).
+# parity(translator.dart:2767 _ClosureTrampolineGenerator)
 function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, body::ClosureBody,
                               arity::Int, takes_context::Bool, base_idx::UInt32, captured_info)::UInt32
     tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity],
@@ -161,6 +168,7 @@ end
 
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`
 # (the same narrowing the single-body trampoline applies).
+# parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)::InstrBuilder
     local_get!(tb, UInt32(j))
     if pt in (I32, I64, F32, F64)
@@ -174,6 +182,7 @@ function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeR
 end
 
 # The re-boxed call of `body` from the trampoline's narrowed arguments, then `return`.
+# parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, body::ClosureBody,
                              arity::Int, takes_context::Bool, base_idx::UInt32, captured_info, scratch::UInt32,
                              has_result::Bool)::InstrBuilder
@@ -217,6 +226,10 @@ argument must carry the classId the candidate's Julia parameter type has (a clas
 is a `\$JlTop` subtype whose field 0 is its classId; a box, a string, a struct alike) —
 and the first match is narrowed, called and re-boxed exactly as a single-body entry.
 No match traps: Julia would throw MethodError for the same call.
+parity(quarantine: a Julia generic function used as a value carries every reachable
+specialization of one arity (`string` as a value), chosen by the erased arguments' runtime
+classes; a dart closure has exactly one body per FunctionNode, so one vtable entry per arity
+calls it directly)
 """
 function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                                        cands::Vector{ClosureBody}, arity::Int, takes_context::Bool,
@@ -294,6 +307,7 @@ The vtable the pre-pass built for `closure_type`, read back from the global's de
 type — never re-derived from the call at hand — and checked to hold an entry for
 `arity` (ClosureLayout.tla ArityDrift: a shape the creation did not freeze is a layouter
 defect, not a silent re-derivation).
+parity(closures.dart:40 ClosureImplementation.vtable)
 """
 function closure_vtable(mod::WasmModule, registry::TypeRegistry, closure_type::Type, arity::Int)::Tuple{UInt32, UInt32}
     cache = registry.closure_vtable_globals
@@ -314,6 +328,7 @@ end
 The captured struct is ON THE STACK; wraps it into the closure OBJECT
 {classId, identityHash, context, vtable, functionType} (dart's implicit function-value creation at the
 erasure seam — convertType when a closure meets a top type).
+parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
 """
 function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
                             body_params::Vector{WasmValType}, body_results::Vector{WasmValType};
@@ -402,6 +417,10 @@ The ERASURE seam (dart convertType: a callable meeting a top type becomes the
 closure OBJECT). A captured-context struct or named-function singleton is on the
 stack; when its body was enrolled in the closed world, wrap it. Returns whether
 it wrapped.
+parity(quarantine: a Julia closure is an ordinary struct of its captures whose type carries
+the call method, called directly while its type is statically known; it becomes a closure
+object only where it meets a top type. A dart function expression builds the closure object
+where it is created, code_generator.dart:2544 _instantiateClosure)
 """
 function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     # The Julia static type can remain the captured callable after an earlier
@@ -430,6 +449,7 @@ The DYNAMIC function-value call (dart: vtable entry at
 vtableBaseIndex+argCount → call_ref). The callee value is the closure OBJECT
 (wrapped at the erasure seam); args ride the UNIFORM dynamic signature
 (everything anyref). Returns false when the shape doesn't apply.
+parity(code_generator.dart:2673 AstCodeGenerator._generateClosureInvocation)
 """
 function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int)::Bool
     base_idx = ctx.type_registry.closure_base_idx
