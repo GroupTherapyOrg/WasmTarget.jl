@@ -33,6 +33,15 @@ jobs:
           bad=$(git log --format='%H %s%n%b' origin/main..HEAD | grep -nE "$pat" || true)
           if [ -n "$bad" ]; then echo "forbidden text in commit messages:"; echo "$bad"; exit 1; fi
           if printf '%s' "$PR_BODY" | grep -qE "$pat"; then echo "forbidden text in the PR body"; exit 1; fi
+          # dev/CHARTER.md rule 3: every commit from the charter's adoption on names its clause(s)
+          c=$(git log --diff-filter=A --format=%H -- dev/CHARTER.md | tail -1)
+          if [ -n "$c" ]; then
+            miss=""
+            for h in $(git rev-list --no-merges "$c^..HEAD"); do
+              git log -1 --format=%B "$h" | grep -qE '^Charter: C[0-9]+' || miss="$miss $(git log -1 --format='%h %s' "$h")"$'\n'
+            done
+            if [ -n "$miss" ]; then echo "commits without a 'Charter: C<n>' trailer:"; printf '%s' "$miss"; exit 1; fi
+          fi
           echo "clean: $(git rev-list --count origin/main..HEAD) commits"
 
   test:

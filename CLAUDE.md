@@ -2,6 +2,26 @@
 
 A Julia → WebAssembly (WasmGC) compiler. Read this before changing `src/`.
 
+## The charter comes first — `dev/CHARTER.md`
+
+The goal is the most strict, clean and verified foundation possible: dart2wasm 1:1 through
+and through, Julia as ground truth, and wrong choices rejected fast and loud at the edit site
+(the Rust analogy). `dev/CHARTER.md` states it as clauses C0–C10, each tied to machine
+checks; it is the definition of done and outranks every plan, brief and task list.
+
+- Before starting: `julia --project=. test/parity_ratchet.jl` — the last block is the
+  per-clause status. Choose work that closes an OPEN clause.
+- Never soften a target: a ratchet ends at 0; a site you believe legitimate moves into an
+  exact per-site allowlist with its dart anchor or quarantine reason. Never write "floor",
+  "legitimate", "good enough", "post-march" or "next march" about a charter gap (L126, rule 5).
+- Every commit carries `Charter: C<n> …` (the hook refuses one without it). No transcript
+  links, tool footers or agent-directed text in commits or PR bodies — ever.
+- A new definition in `src/` carries its `parity(<file>.dart:<line> <Symbol>)` or
+  `parity(quarantine: <reason>)` anchor when it is written (R32 never rises).
+- A new lowering-registry entry arrives with a smoke or probe case (R33, the coverage lane).
+- Report evidence (the command and its output), never a claim. Changing `dev/CHARTER.md`
+  is Dale's decision; propose, don't edit.
+
 ## Three oracles, none substitutable
 
 1. **dart2wasm is the structural oracle** — dart-lang/sdk at the pinned commit

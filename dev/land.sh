@@ -31,9 +31,17 @@ prepare)
     cd "$W"
     [ -z "$(git status --porcelain)" ] || { echo "worktree $W is dirty — refusing"; exit 1; }
     if [ -n "${3:-}" ]; then git rebase --onto "$tip" "$3" "$br"; else git rebase "$tip"; fi
-    FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter \
-        'f=$(mktemp); cat > "$f"; sh "'"$MAIN"'/dev/hooks/commit-msg" "$f"; cat "$f"; rm -f "$f"' \
+    # strip transcript links; add the dev/CHARTER.md trailer where an agent omitted it
+    # (CHARTER="C1 C9" dev/land.sh prepare … — the lander states what the branch closes)
+    FILTER_BRANCH_SQUELCH_WARNING=1 WT_HOOK_FILTER=1 CHARTER="${CHARTER:-}" git filter-branch -f --msg-filter \
+        'f=$(mktemp); cat > "$f"; sh "'"$MAIN"'/dev/hooks/commit-msg" "$f"
+         if ! grep -qE "^Charter: C[0-9]+" "$f" && [ -n "$CHARTER" ]; then printf "\nCharter: %s\n" "$CHARTER" >> "$f"; fi
+         cat "$f"; rm -f "$f"' \
         "$tip..$br" >/dev/null
+    for h in $(git rev-list --no-merges "$tip..$br"); do
+        git log -1 --format=%B "$h" | grep -qE '^Charter: C[0-9]+' ||
+            { echo "$(git log -1 --format='%h %s' "$h") has no Charter: trailer — rerun with CHARTER=\"C<n> …\""; exit 1; }
+    done
     git log --oneline "$tip..$br" | cat
     bash dev/lanes.sh --fast
     git push -q --force-with-lease origin "$br"

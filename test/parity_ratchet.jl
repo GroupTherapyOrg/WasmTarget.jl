@@ -312,24 +312,86 @@ function _count_any_fields_in(ex)::Int
     return n
 end
 
+# ---- dev/CHARTER.md support --------------------------------------------------
+const CHARTER_PATH = joinpath(ROOT, "dev", "CHARTER.md")
+
+# A top-level definition at column 0: long/short function forms, struct, abstract/primitive
+# type, macro, const. Counted per (file, name): one anchor covers a method family.
+const _TOPLEVEL_DEF = r"^(?:(?:@inline|@noinline|@generated|Base\.@\w+)\s+)?(?:function\s+([A-Za-z_][\w!.]*|\(\w+::[^)]*\))|(?:mutable\s+)?struct\s+(\w+)|abstract\s+type\s+(\w+)|primitive\s+type\s+(\w+)|macro\s+(\w+)|const\s+([A-Za-z_]\w*)\s*(?:::[^=]+)?=|([A-Za-z_][\w!]*)(?:\{[^}]*\})?\([^=]*\)\s*(?:::\s*[\w{},. ]+)?\s*(?:where\s+.+)?=(?!=))"
+
+"""
+The (file, name) top-level definitions in `src/` with no `parity(` anchor — dev/CHARTER.md C2.
+A definition is anchored when its own line, the comment block directly above it, or the
+docstring directly above it contains `parity(`, or when it sits inside a
+`# parity-region(<anchor>)` … `# end parity-region` block (a family of one-line emitters
+copying one dart method family).
+"""
+function count_unanchored_definitions(root::String=SRC)::Int
+    n = 0
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") || continue
+        lines = readlines(joinpath(dir, f))
+        anchored = Dict{String,Bool}()
+        region = false
+        for (i, l) in enumerate(lines)
+            startswith(l, "# parity-region(") && (region = true)
+            startswith(l, "# end parity-region") && (region = false)
+            m = match(_TOPLEVEL_DEF, l)
+            m === nothing && continue
+            name = something(m.captures...)
+            block = String[l]
+            j = i - 1
+            if j >= 1 && endswith(rstrip(lines[j]), "\"\"\"")
+                push!(block, lines[j]); j -= 1
+                while j >= 1 && !startswith(lstrip(lines[j]), "\"\"\"")
+                    push!(block, lines[j]); j -= 1
+                end
+                j >= 1 && push!(block, lines[j]); j -= 1
+            end
+            while j >= 1 && startswith(lstrip(lines[j]), "#")
+                push!(block, lines[j]); j -= 1
+            end
+            anchored[name] = get(anchored, name, false) || region || any(x -> occursin("parity(", x), block)
+        end
+        n += count(!, values(anchored))
+    end
+    return n
+end
+
+"""The clauses of dev/CHARTER.md: clause id => (text, cited short check ids like "L110"/"R29a")."""
+function charter_clauses()::Vector{Pair{String,Tuple{String,Vector{String}}}}
+    out = Pair{String,Tuple{String,Vector{String}}}[]
+    isfile(CHARTER_PATH) || return out
+    txt = read(CHARTER_PATH, String)
+    sec = match(r"## The clauses\n(.*?)\n## "s, txt)
+    sec === nothing && return out
+    for m in eachmatch(r"^- \*\*(C\d+) ·(.*?)(?=^- \*\*C\d+ ·|\z)"ms, sec.captures[1])
+        body = m.captures[2]
+        push!(out, m.captures[1] => (body, [c.captures[1] for c in eachmatch(r"`([LR]\d+[a-z]?)`", body)]))
+    end
+    return out
+end
+
+_short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
+    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Terminal state 0 (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — the ONE type chain's re-derivation floor (M2 → pre-emit; julia_to_wasm_type_concrete was folded into it in Phase 4.1 and no longer exists)",
+    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
-    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
+    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
                           roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
     # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
     # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
-    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — heap constants built outside the ONE constant funnel (dart ensureConstant, constants.dart). Terminal state 0: per-object-identity kinds move to an exact per-site allowlist with their reason (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
-    "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
+    "R15_constant_data_segments" => ("add_passive_data_segment! outside the builder and the string/type creators — the long-string and Symbol paths that bypass the one constant funnel. Terminal state 0 (dev/CHARTER.md C9)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
-    "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
+    "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType; dart's translateExpression always carries one (code_generator.dart). Terminal state 0 (dev/CHARTER.md C4)",
         () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
     "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
@@ -363,6 +425,11 @@ const METRICS = [
         () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
     "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee, NirStmt.raw/static_type, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
         () -> count_any_typed_fields()),
+    # ── dev/CHARTER.md (2026-09-22) ─────────────────────────────────────────────
+    "R32_unanchored_definitions" => ("top-level (file, name) definitions in src with no parity(<dart file:line>) or parity(quarantine: …) anchor at the definition — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
+        () -> count_unanchored_definitions()),
+    "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
+        () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
@@ -1697,7 +1764,23 @@ const LOCKS = [
             count_sites(r"type_extra_ids") + forbidden_alloc +
                 count(p -> !occursin(p, types_src), required)
         end),
+    # ── dev/CHARTER.md (2026-09-22): the charter and the enforcement stack cite each other ──
+    "L125_charter_is_the_definition_of_done" => ("dev/CHARTER.md exists; every check a clause cites exists here, and every lock and ratchet here is cited by exactly one clause (an uncited check is either obsolete or a clause is missing; a cited check that does not exist is a promise nobody keeps)",
+        () -> begin
+            clauses = charter_clauses()
+            isempty(clauses) && return 1
+            cited = String[]
+            for (_, (_, ids)) in clauses; append!(cited, ids); end
+            have = Set(_short_id(first(p)) for p in vcat(METRICS, LOCKS))
+            missing_ = count(c -> c ∉ have, unique(cited))
+            dup = length(cited) - length(unique(cited))
+            uncited = count(h -> h ∉ Set(cited), have)
+            missing_ + dup + uncited
+        end),
+    "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
+        () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
 ]
+
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     baseline = _read_baseline(BASELINE_PATH)
@@ -1733,6 +1816,25 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
         println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want $want)", "   # ", desc)
     end
 
+
+    # dev/CHARTER.md: the per-clause verdict. A clause is CLOSED only when every check it
+    # cites is a passing lock or a ratchet at 0, and it names no planned check.
+    println("── charter (dev/CHARTER.md) ──")
+    allc = merge(current_m, current_l)
+    byshort = Dict(_short_id(k) => k for k in keys(allc))
+    for (cid, (body, ids)) in charter_clauses()
+        title = strip(first(split(body, "."; limit=2)))
+        title = replace(title, "*" => "")
+        open_ = String[]
+        for i in ids
+            k = get(byshort, i, nothing)
+            k === nothing && (push!(open_, "$i?"); continue)
+            haskey(current_m, k) && current_m[k] > 0 && push!(open_, "$i=$(current_m[k])")
+            haskey(current_l, k) && current_l[k] != get(bl, k, 0) && push!(open_, "$i BROKEN")
+        end
+        occursin("Planned:", body) && push!(open_, "planned check")
+        println(rpad(cid, 4), rpad(title, 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
+    end
     if update
         if !ok
             println("refusing WT_RATCHET_UPDATE: a ratchet/lock is BROKEN (ratchets never loosen).")
