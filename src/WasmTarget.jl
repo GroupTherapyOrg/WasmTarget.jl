@@ -98,6 +98,8 @@ Returns a valid WebAssembly binary that can be instantiated and executed.
 
 Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
+
+parity(compile.dart:216 compile)
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
                  validate::Bool=_wt_default_validate(),
@@ -167,6 +169,8 @@ Framework runtime adapters that must reference compiled roots may use
 `link_roots(mod, root_indices, type_registry)`. It runs once after every root
 has a typed placeholder and before root bodies are emitted; adding late imports
 is rejected because it would invalidate all function indices.
+
+parity(compile.dart:216 compile)
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
@@ -307,6 +311,7 @@ end
 # ============================================================================
 
 # dart2wasm's production flags for WasmGC optimization
+# parity(compile.dart:159 _binaryenFlags)
 const WASM_OPT_GC_FLAGS = [
     "--enable-gc", "--enable-reference-types", "--enable-multivalue",
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
@@ -318,6 +323,7 @@ const WASM_OPT_GC_FLAGS = [
 # those paths — optimized builds returned garbage where native throws
 # (ledger gaps dacbfa51e334, 5cc6c2b2ac64, c77a8f98bb53, …). Dart never relies
 # on traps; Julia-compiled code does.
+# parity(compile.dart:159 _binaryenFlags)
 const WASM_OPT_PRODUCTION_FLAGS = [
     "--closed-world",
     "--type-unfinalizing", "-Os", "--type-ssa", "--gufa", "-Os",
@@ -346,6 +352,8 @@ Optimized `Vector{UInt8}`.
 
 # Throws
 - Error if optimization or validation fails
+
+parity(compile.dart:711 _runOptPhase)
 """
 function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
     # Build flags based on level
@@ -476,6 +484,7 @@ end
 # into the `.ji` cache — the warmup is paid once at `]precompile` and is ~free on
 # every cached run. Compile-only (no Node, no binaryen). Each call is guarded so a
 # value-stub on some path can never break precompilation.
+# parity-region(quarantine: Julia compiles a method instance at its first call, so WasmTarget's own codegen pays JIT latency unless a PrecompileTools workload bakes those instances into the package image; dart2wasm runs as an AOT snapshot)
 struct _PCStruct; a::Int32; b::Float64; end
 _pc_iadd(x::Int64)            = x + Int64(1)
 _pc_imix(x::Int64)           = ((x * Int64(3)) ÷ Int64(2)) % Int64(7) | Int64(1)
@@ -498,6 +507,7 @@ _pc_strlen(x::Int64)         = length(string(x))
 _pc_strup(s::String)         = length(uppercase(s))
 _pc_struct(x::Int32)         = (s = _PCStruct(x, 1.5); s.a + Int32(s.b))
 _pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3])
+# end parity-region
 
 @setup_workload begin
     @compile_workload begin
