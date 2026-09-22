@@ -36,6 +36,8 @@ end
 """
 Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
+
+parity(code_generator.dart:38 CodeGenerator.generate)
 """
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
     code = ctx.code_info.code
@@ -65,6 +67,8 @@ end
 
 """
 Represents a try/catch region in the IR.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode with a catch_dest and a later :leave, where Kernel has a structured TryCatch node; the region's three statement indices are what the stackifier nests into try_table)
 """
 struct TryRegion
     enter_idx::Int      # SSA index of Core.EnterNode
@@ -119,6 +123,8 @@ end
 
 """
 Check if code contains try/catch regions.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode statement, where Kernel has a structured TryCatch node)
 """
 function has_try_catch(code)::Bool
     for stmt in code
@@ -274,9 +280,10 @@ WASM structure:
 """
 # Ensure module has exception tag 0 for Julia exceptions (idempotent)
 # Also ensures the $current_exn global exists for exception value stashing.
+# parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 function ensure_exception_tag!(mod::WasmModule)
-    # THE TYPED TAG — dart's createExceptionTag carries
-    # (exception, stackTrace) as the tag payload (translator.dart:485-491);
+    # THE TYPED TAG — dart's _defineDartExceptionTag carries
+    # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
     # Payload: (anyref exn, externref stackTrace — null until traces wire).
     if isempty(mod.tags)
@@ -306,7 +313,7 @@ end
 # census F7: the dormant stack-trace cluster (ensure_stack_trace_support!/
 # emit_capture_stack!) is DELETED — zero callers since introduction .
 # The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
-# (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
+# (tags.dart:37 ExceptionTags._defineDartExceptionTag) — census queue item D9.1; the dart
 # source is the reference, not dead scaffolding.
 
 """
