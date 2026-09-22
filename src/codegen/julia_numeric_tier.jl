@@ -57,6 +57,9 @@ Returns `nothing` when `op` is not one of this tier's ops — the caller's legac
 On a hit, finishes exactly like the intrinsics table routes: the SSA result gets the
 same rebox check (a numeric result flowing into a ref-typed local boxes through
 `emit_classid_box!`, keyed on the real Julia source type — dart's `convertType`).
+parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
+translator.dart:346 — so Julia's `*_int` intrinsics on a 128-bit operand need their own
+dispatch onto the two-i64 limb-struct emitters of int128.jl.)
 """
 function emit_int128_op!(b::InstrBuilder, ctx, op::Symbol, arg_type, expr::Expr, idx::Int)::Union{WasmValType,Nothing}
     f = get(INT128_OPS, op, nothing)
@@ -83,14 +86,15 @@ end
 # Checked-overflow registry (checked_s{add,sub,mul}_int / checked_u{add,sub,mul}_int)
 # ============================================================================
 #
-# parity(quarantine: no dart equivalent — dart's `int` wraps silently on overflow,
-# translator.dart never traps or returns a flag; the `Tuple{T,Bool}` contract is
-# purely Julia's `Base.Checked` surface). A pure move of the six arms that used to
-# sit at the head of `compile_call!`'s ladder (`_compile_call_checked!` in
-# calls.jl tests the Dict key `op` directly — a data test, R19 — instead of
-# re-deriving identity via `is_func`; all six keys forward to the one dispatcher).
+# A pure move of the six arms that used to sit at the head of `compile_call!`'s
+# ladder (`_compile_call_checked!` in calls.jl tests the Dict key `op` directly — a
+# data test, R19 — instead of re-deriving identity via `is_func`; all six keys forward
+# to the one dispatcher).
 const _checked_dispatch = (fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx) ->
     _compile_call_checked!(fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx)
+# parity(quarantine: no dart equivalent — dart's `int` wraps silently on overflow,
+# translator.dart never traps or returns a flag; the `Tuple{T,Bool}` contract is
+# purely Julia's `Base.Checked` surface of checked_{s,u}{add,sub,mul}_int.)
 const CHECKED_OPS = Dict{Symbol,Function}(
     :checked_sadd_int => _checked_dispatch,
     :checked_uadd_int => _checked_dispatch,
@@ -180,6 +184,10 @@ these op names are in `NUMERIC_INTRINSIC_ARG_OPS` (intrinsics_table.jl), so
 the boxed-operand-unbox flag that link depends on can never be set for them;
 the tail rebox in `compile_call!` was already a no-op for every op this
 dispatch owns.
+parity(quarantine: dispatch over Julia intrinsics dart2wasm has no counterpart for —
+checked_*_int (overflow flag), mixed-width shl/ashr/lshr_int, muladd/fma_float/have_fma,
+bswap_int, flipsign_int; dart's `int` is one i64 with a fixed operator map,
+intrinsics.dart:437.)
 """
 function emit_julia_numeric!(fbref::Base.RefValue{InstrBuilder}, ctx, op::Symbol, args,
                              arg_type, is_128bit::Bool, is_32bit::Bool,
@@ -201,8 +209,12 @@ end
 # ============================================================================
 #
 # parity(quarantine: Julia's Int8/Int16/UInt8/UInt16 are first-class operand types
-# living in i32; dart's `int` is uniformly i64, translator.dart:346, and its only
-# narrow extension is array-storage-driven, intrinsics.dart:3490-3533).
+# living in i32, so a narrow value is re-normalised before an op or a widening reads
+# its register; dart's `int` is uniformly i64, translator.dart:346, and narrows only
+# at an explicit dart:_wasm conversion). The emitted shapes are dart's narrowing arms:
+# `extend8_s` (intrinsics.dart:2037 wasmI32Int8FromInt), `and 0xFF` (:2043
+# wasmI32Uint8FromInt), `extend16_s` (:2050 wasmI32Int16FromInt), `and 0xFFFF` (:2056
+# wasmI32Uint16FromInt).
 """
     normalise_narrow!(b, ctx, julia_type::Type, signed::Bool)
 
@@ -233,9 +245,10 @@ end
 # fpext/fptrunc/bitcast)
 # ============================================================================
 #
-# parity(quarantine: Julia's width/kind conversion intrinsics have no dart map —
-# dart coerces only through convertType, translator.dart:1597, and the dart:_wasm
-# shims, intrinsics.dart:710-929). Mirrors intrinsics_table.jl's BinOpEmit/UnOpEmit
+# dart lowers these conversions as switch arms of generateInstanceIntrinsic /
+# generateStaticIntrinsic (anchored at INTRINSIC_CONVERSIONS below); Julia names them
+# as intrinsics with explicit (source, target) types, so they are keyed here in the
+# shape of dart's _binaryOperatorMap. Mirrors intrinsics_table.jl's BinOpEmit/UnOpEmit
 # shape: a callback (source value already on the stack, at this key's wasm type) +
 # result type, keyed on (source wasm type, target wasm type, julia op symbol) for the
 # CANONICAL-WIDTH cases. Narrow Int8/16/UInt8/16 operands are NOT separate table
@@ -244,12 +257,19 @@ end
 # INTRINSIC_BINOPS narrow-normalise before consulting that table.
 
 """One typed conversion emission: a callback (source value already on the stack) +
-result type."""
+result type.
+parity(intrinsics.dart:17 CodeGenCallback) — the map's value type, as BinOpEmit."""
 struct ConvEmit
     emit!::Function          # (b::InstrBuilder) -> Nothing
     result::WasmValType
 end
 
+# parity(intrinsics.dart:710 wasmTypesBaseClass) — dart's Wasm(I32|I64|F32|F64)
+# conversion arms: toIntSigned :739 (i64.extend_i32_s), toIntUnsigned :742
+# (i64.extend_i32_u), f32 toDouble :882 (f64.promote_f32), truncSatS :894; with
+# wasmI32FromInt :2032 (i32.wrap_i64), _unaryOperatorMap toDouble :485
+# (f64.convert_i64_s), and the bit-reinterpret arms floatToIntBits :1523 …
+# intBitsToDouble :1548. Held as a map in the shape of intrinsics.dart:437.
 const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmit}(
     (I32, I64, :sext_int)  => ConvEmit(b -> num!(b, Opcode.I64_EXTEND_I32_S), I64),
     (I32, I64, :zext_int)  => ConvEmit(b -> num!(b, Opcode.I64_EXTEND_I32_U), I64),
@@ -295,6 +315,8 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
 # directly from `emit_conversion!` rather than through `emit_int128_op!`'s
 # is_128bit-gated route: sext/zext INTO Int128 have a narrow, non-128-bit SOURCE, so
 # that gate (keyed on the call's general operand type) never fires for them.
+# parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
+# translator.dart:346; Julia's sext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_sext!(b::InstrBuilder, ctx,
                        julia_src, target_type::Type)
     source_type = julia_src isa Type ? julia_src : Int64
@@ -318,6 +340,8 @@ function _int128_sext!(b::InstrBuilder, ctx,
     return _int128_structref(ctx, target_type)
 end
 
+# parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
+# translator.dart:346; Julia's zext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_zext!(b::InstrBuilder, ctx,
                        julia_src, target_type::Type)
     source_type = julia_src isa Type ? julia_src : UInt64
@@ -341,6 +365,8 @@ function _int128_zext!(b::InstrBuilder, ctx,
     return _int128_structref(ctx, target_type)
 end
 
+# parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
+# translator.dart:346; Julia's trunc_int from a 128-bit source reads the struct's lo limb.)
 function _int128_trunc_lo!(b::InstrBuilder, ctx, source_type::Type)
     source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
     struct_get!(b, source_type_idx, UInt32(1), I64)  # field 1 = lo (0 = typeId)
@@ -403,6 +429,10 @@ it. `src_already_wide` is `get_phi_edge_wasm_type(args[2], ctx) === I64` — a w
 phi local already occupies the full register, so sext_int/zext_int must not
 re-extend it, and trunc_int must treat it as a 64-bit source even when the Julia
 type looks narrower.
+parity(quarantine: Julia's typed IR carries sext_int/zext_int/trunc_int/sitofp/uitofp/
+fptosi/fptoui/fpext/fptrunc/bitcast as intrinsic calls with an explicit target type and
+narrow Int8/Int16 sources; dart's conversions are per-class methods on one i64 `int`
+(intrinsics.dart:710), so the Julia op/width selection before the table lookup is Julia's.)
 """
 function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
                           julia_src, julia_dst, idx::Int;
