@@ -12,6 +12,8 @@ end
 """
 Get or create the i16 char array type used for `wasm:js-string.fromCharCodeArray`.
 Internal strings stay as i8 UTF-8; this i16 type is only for the JS boundary.
+
+parity(translator.dart:1218 wasmArrayType): the cached mutable i16 array type.
 """
 function get_char_array_type!(mod::WasmModule)::UInt32
     if _CHAR_ARRAY_TYPE_IDX[] !== nothing
@@ -163,6 +165,10 @@ end
 
 """
 IO import indices stored in the module for println/print support.
+
+parity(quarantine: Julia's print/println end in the libuv stream foreigncall jl_uv_write,
+which has no wasm host; the module imports host io.write_* functions in its place, and this
+records their indices.)
 """
 mutable struct IOImports
     write_string_idx::UInt32    # io.write_string(externref) → void
@@ -180,6 +186,9 @@ end
 Add IO bridge imports for println/print support.
 Imports: io.write_string, io.write_int, io.write_float, io.write_bool, io.write_newline
 Also adds wasm:text-decoder import for string conversion.
+
+parity(quarantine: the host imports standing in for Julia's libuv jl_uv_write foreigncall, see
+IOImports.)
 """
 function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
     # String decoder via standardized wasm:js-string builtins
@@ -253,6 +262,9 @@ const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, no
     ensure_perf_now_import!(mod) -> UInt32
 
 Import env.perf_now() → f64 for high-resolution timing. Idempotent.
+
+parity(quarantine: Julia's time_ns() is the jl_hrtime foreigncall into libuv's clock, which
+wasm does not have; the host clock import stands in for it.)
 """
 function ensure_perf_now_import!(mod::WasmModule)::UInt32
     existing = _PERF_NOW_IDX[]
@@ -276,6 +288,10 @@ end
 RNG state stored in 4 mutable i64 Wasm globals.
 Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
 We store these in Wasm globals instead.
+
+parity(quarantine: Julia's rand() reads Xoshiro256++ state from the fields rngState0..3 of
+the Task that the jl_get_current_task foreigncall returns; the module has no Task object, so
+the four state words are module globals.)
 """
 struct RNGGlobals
     rng0_idx::UInt32  # global index for rngState0 (i64)
@@ -304,6 +320,8 @@ end
 
 Create 4 mutable i64 globals for Xoshiro256++ RNG state + JS seed import.
 Idempotent — returns existing globals if already created.
+
+parity(quarantine: the module globals that hold the Task's Xoshiro256++ state, see RNGGlobals.)
 """
 function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
     existing = get_rng_globals()
@@ -339,6 +357,9 @@ end
     get_rng_global_idx(field_name::Symbol) -> Union{UInt32, Nothing}
 
 Map rngState field name to global index. Returns nothing if field is not an RNG field.
+
+parity(quarantine: redirects getfield(current_task(), :rngStateN) to the module global that
+holds that word, see RNGGlobals.)
 """
 function get_rng_global_idx(field_name::Symbol)::Union{UInt32, Nothing}
     rng = get_rng_globals()
