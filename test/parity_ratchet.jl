@@ -382,6 +382,48 @@ function count_silent_catches(root::String=SRC)::Int
     return n
 end
 
+"""
+Why AGENTS.md is not current and lean — dev/CHARTER.md C0. It is the one agent-instructions
+file (a CLAUDE.md beside it is a second, drifting copy); it holds only timeless rules and
+pointers, so it is short, everything it names exists, and it carries no status vocabulary
+(dates, phase names, "currently"/"as of"/"remaining" — status lives in dev/MARCH.md and in
+this harness's output, where it is measured instead of remembered).
+"""
+function agents_md_violations()::Vector{String}
+    v = String[]
+    isfile(joinpath(ROOT, "CLAUDE.md")) && push!(v, "CLAUDE.md exists — AGENTS.md is the one instructions file")
+    path = joinpath(ROOT, "AGENTS.md")
+    isfile(path) || return push!(v, "AGENTS.md is missing")
+    lines = readlines(path)
+    length(lines) <= 90 || push!(v, "AGENTS.md has $(length(lines)) lines (cap 90)")
+    for (i, l) in enumerate(lines)
+        length(l) <= 100 || push!(v, "AGENTS.md:$i is $(length(l)) chars (cap 100)")
+        for m in eachmatch(r"\b20\d\d-\d\d\b|\bPhase \d+|\b(?:currently|as of|remaining|so far|recently|TODO|FIXME)\b"i, l)
+            push!(v, "AGENTS.md:$i status vocabulary: \"$(m.match)\"")
+        end
+    end
+    txt = read(path, String)
+    for m in eachmatch(r"(?<![\w/.])((?:src|test|dev|ext|docs|\.github)/[\w./*-]*[\w/])", txt)
+        p = m.captures[1]
+        occursin('*', p) && continue
+        (isfile(joinpath(ROOT, p)) || isdir(joinpath(ROOT, p))) || push!(v, "AGENTS.md names $p, which does not exist")
+    end
+    ids = Set(_short_id(first(q)) for q in vcat(METRICS, LOCKS))
+    for m in eachmatch(r"\b([LR]\d+[a-z]?)\b", txt)
+        m.captures[1] in ids || push!(v, "AGENTS.md cites $(m.captures[1]), which is no check")
+    end
+    corpus = join((read(joinpath(d, f), String) for root in (SRC, joinpath(ROOT, "test"), joinpath(ROOT, "dev"))
+                   for (d, _, fs) in walkdir(root) for f in fs if endswith(f, ".jl") || endswith(f, ".sh")), "\n")
+    for m in eachmatch(r"\b(WT_[A-Z_]+)\b", txt)
+        occursin(m.captures[1], corpus) || push!(v, "AGENTS.md names $(m.captures[1]), which nothing reads")
+    end
+    pm = match(r"\b([0-9a-f]{40})\b", read(joinpath(ROOT, "dev", "PARITY_MASTER.md"), String))
+    for m in eachmatch(r"\b([0-9a-f]{40})\b", txt)
+        (pm !== nothing && m.captures[1] == pm.captures[1]) || push!(v, "AGENTS.md pins $(m.captures[1][1:8]), dev/PARITY_MASTER.md does not")
+    end
+    return v
+end
+
 """The clauses of dev/CHARTER.md: clause id => (text, cited short check ids like "L110"/"R29a")."""
 function charter_clauses()::Vector{Pair{String,Tuple{String,Vector{String}}}}
     out = Pair{String,Tuple{String,Vector{String}}}[]
@@ -1815,6 +1857,8 @@ const LOCKS = [
             count(l -> !_iscomment(l) && occursin(r"Base\.code_typed(_by_type)?\(", l) &&
                        !occursin("debuginfo=:source", l), ir_lines)
         end),
+    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
+        () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
 ]
