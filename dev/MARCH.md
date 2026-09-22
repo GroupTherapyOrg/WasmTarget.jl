@@ -13,6 +13,9 @@ oracles; none substitutes for another.
 
 ## 0. End state
 
+**Superseded as the definition of done by `dev/CHARTER.md` (2026-09-22), which restates these
+criteria as machine-checked clauses. Phase 13 below is the work derived from its open clauses.**
+
 1. **Zero parallel pathways** — one lowering path per construct, locked.
 2. **Zero stale code or bloat** — no dead definitions, no fossil comments, no half-wired campaigns,
    no scattered environment reads **[rev: dart has a debug surface — `TranslatorOptions` — what it
@@ -366,6 +369,33 @@ UnifiedIR beyond the harness (#62334 is a draft).
 | K | open | |
 | Findings from D1 (open) | measured 2026-09-08 | (a) `get_typed_ir` calls `Base.code_typed` with `debuginfo=:none`, so `NirStmt.line` is 0 and a located diagnostic raised from that path has an empty inline chain (`stmt_frames` → `String[]`); `debuginfo=:source` restores both (7/7 statements lined, a real 3-frame chain). One ir.jl change on the one inference path — make it under a byte-identity check, not inside a restructuring. (b) `jl_type_intersection`, `jl_stored_inline`, `jl_is_operator` have no probe, no smoke case and no family: D1's first full test failed all 19 Random differentials (`Random.hash_seed` → `jl_type_intersection (no lowering)`) while probes stayed 225/0 and smoke 81/81 — add a seeded-Xoshiro smoke case BEFORE D3, and treat `lanes.sh` green as insufficient for any NIR conversion (full test required). |
 | Post-march finding (not in A–K) | measured 2026-09-08 | module bytes grew 15–35% across the march (pinv 53.5K→63.0K, dict-grow 25.6K→34.5K, strings 30.6K→36.1K; compile time unchanged): the closed-world numbering materialises a `$JlDataType` object global + a populated hierarchy row for EVERY numbered type, and `_populate_jl_hierarchy!` is the largest function in a trivial module. dart2wasm creates class info per class but reifies a runtime `_Type` object only where a type is used as a value (constants.dart); the type objects should be constants materialised on demand. Structural-parity work for the next march, recorded here so it is not mistaken for K. |
+
+### Phase 13 — Close the charter (2026-09-22; supersedes Phase 12's remaining items)
+
+The plan is derived from `dev/CHARTER.md`'s open clauses and four read-only audits of every
+definition in `src/` against dart2wasm `898a1e4b` (tables kept outside the repo; each row names
+a dart anchor or the reason there is none): 1,237 definitions — DART 367, QUARANTINE 396,
+INVENTION 450, DEAD? 26 (per area: call lowering 190 rows / 55 INVENTION, values+types 239 /
+65, driver+analyses 570 / 281 — 124 of them overlays in interpreter.jl, builder 240 / 49). The
+floor audit classified all 252 sites of R3 R5 R7 R14 R15 R17 R27: 172 DEBT, 78 legitimate,
+2 unsure. Order: soundness first, then one path, then dart structure, then strictness.
+Every item lands on a `march/*` branch with its clause in the `Charter:` trailer.
+
+| # | Clause | Work | Exit (measured) |
+|---|---|---|---|
+| 13.0 | C1 C6 | land the stack: D stage 1 → stage 2 → located chains → D stage 3 (calls/invoke/compile/context onto the NIR; delete `nir_operand`, `_ctx_ir`, `NirStmt.raw`, the context's `code_info`; one callee resolution incl. the singleton-Argument rule now in both calls.jl and trimcollect.jl) | R29a = R29b = 0 → locks |
+| 13.1 | C6 | reproduce every silent-wrong-value suspect the audits found by reading (27 classes: mixed-width and float `===`, String/Symbol identity, per-use rebuilt mutable constants, non-ASCII `length`/`nextind`/`SubString`/`first`, `fill!` with a runtime value, `bswap` of narrow ints, `fma` as two roundings, narrow → Int128 sign extension, `Bool+Bool`, exception payloads of `_throw_argerror`/`throw_boundserror`/`_tuple_error`, `truncate`, `setfield!` on an unregistered `RefValue`, `unalias`, `memoryrefoffset` from an argument); fix each confirmed one at its root with its smoke case first | every confirmed suspect has a smoke case and is green; `test/soundness_suspects.jl` classifies all |
+| 13.2 | C6 | the 52 silent catches: rethrow, reject located, or an exact allowlist for handlers on the diagnostic path itself | R34 = 0 → lock |
+| 13.3 | C5 C3 | cases for the 116 unexercised registry entries; each bespoke `INVOKE_INTRINSICS` / `STANDALONE_INTRINSIC_BODIES` lowering (0 of 36 reached by any case) is deleted when Julia's body compiles, or kept with its reason | R33 = 0 → lock; C3's planned check replaced by a lock |
+| 13.4 | C1 C9 | one mechanism per fact, from the audits: `===`/`!==` → dart's `identical` (three cases, intrinsics.dart:1409) instead of two disagreeing ladders; one representation of `nothing`; one struct-field translation (class_info.dart:539 `_generateFields` → translateStorageType) instead of four copies, and dart's define-then-fill for recursive types instead of placeholder-and-patch; one width classifier; one GlobalRef resolution at the boundary; one numeric-box tail (convertType); one operator table; the callee from the `:invoke`'s MethodInstance instead of fuzzy `get_function` matching; WT's re-inference beside Julia's deleted (`infer_call_type`, `analyze_ssa_types!` overriding inference); one CFG; one export namer | per item a lock; R3 → 0 with `infer_value_type` deleted |
+| 13.5 | C9 | the floor ratchets per the floor audit: R5 → exact allowlist of its 20 declaring sites (locals, signature, array element, box field, is-test targets); R7 and R27 (duplicates) → one exact allowlist of 26 sites; R14's metric restated (`struct_new!` inside the constant path) → 0 via one lazy global per mutable constant (constants.dart:147); R15 → 0 (every long literal pre-registered); R17 → 0 (`emit_memoryref_pair!`) | each ratchet 0 or an exact allowlist lock |
+| 13.6 | C2 | anchors: a lock that every cited dart `file:line` exists at the pinned commit and names its symbol (CI fetches the pinned sources; a missing checkout fails); the anchors the audits judged wrong corrected; every definition anchored from the audit tables — builder first, then files stage 3 does not touch | R32 = 0 → lock; the resolve lock at 0 |
+| 13.7 | C2 C3 | the inventions without a Julia necessity, restructured or deleted: the 124 overlays in interpreter.jl each deleted (Julia's body compiles) or quarantined with its differential proof; `cache.jl` (key omits `optimize`, export names, kwargs); process-global side channels → per-compilation state; bypasses of closed-world collection (compile.jl:810, WasmTarget.jl:224); the name-keyed println/print/show pre-scan (compile.jl ~390); runtime type objects materialised on demand, not one global and hierarchy row per numbered type (dart: types.dart makeType / constants.dart ensureConstant) | INVENTION count in a re-run audit → 0 |
+| 13.8 | C4 | return types on every definition; no `Any` field outside named seams | R30 = R31 = 0 → locks |
+| 13.9 | C8 | the list of algorithmic components, each mapped to its model; a model for any unmapped one | C8's planned check replaced by a lock |
+| 13.10 | — | capability gaps (need a clause decision before they start): H(1) SimpleATsit5 (`march/p12H-atsit5`, ungated), H(3) `:invoke_modify`, H(5) two-position dispatch, erased multi-method callables | per gap a smoke case |
+| 13.11 | all | K: the charter's status block all CLOSED on the head CI tested green; release notes; merge; tag | every clause CLOSED |
+
 
 ### Phase 10 — The first builds, brought into the march (2026-09-02 scope expansion)
 
