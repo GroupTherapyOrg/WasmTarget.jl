@@ -10,7 +10,7 @@ export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        validate_br!, validate_br_if!, validate_if_start!, validate_else!,
        validate_gc_instruction!
 
-"""Symbolic structured-control target, matching dart2wasm's `Label` API."""
+"""Symbolic structured-control target, matching dart2wasm's `Label` API. parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)"""
 mutable struct ControlLabel
     kind::Symbol
     input_types::Vector{WasmValType}
@@ -50,6 +50,7 @@ Tracks the Wasm value stack during bytecode emission and catches type mismatches
 immediately, rather than requiring post-hoc `wasm-tools validate` + WAT analysis.
 
 Modeled on dart2wasm's InstructionsBuilder._stackTypes / _checkStackTypes pattern.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:211 InstructionsBuilder._labelStack/_stackTypes/_reachable)
 """
 mutable struct WasmStackValidator
     stack::Vector{WasmValType}          # Current value stack (types)
@@ -74,24 +75,26 @@ WasmStackValidator(; func_name="", mod=nothing) =
     validate_push!(v, typ)
 
 Push a type onto the validation stack. Mirrors dart2wasm's _stackTypes.addAll(outputs).
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun)
 """
 function validate_push!(v::WasmStackValidator, typ::WasmValType)
     push!(v.stack, typ)
 end
+
+# dart2wasm `_verifyTypes`: an instruction may not pop below the innermost block's
+# baseStackHeight — that would consume values belonging to an enclosing block, which
+# the wasm stack discipline forbids. `_base` returns that floor.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:462 InstructionsBuilder._topOfLabelStack)
+@inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
 
 """
     validate_pop!(v, expected) -> WasmValType
 
 Pop a value from the validation stack, checking that the actual type is assignable
 to `expected`. Returns the actual type found (or `expected` on underflow).
-
 Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
-dart2wasm `_verifyTypes`: an instruction may not pop below the innermost block's
-baseStackHeight — that would consume values belonging to an enclosing block, which
-the wasm stack discipline forbids. `_base` returns that floor.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:474 InstructionsBuilder._checkStackTypes)
 """
-@inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
-
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType
     # wasm spec: post-unreachable code validates POLYMORPHICALLY — pops succeed
     # against the bottom type (the tag-run corpus tail's root: dead-path phi
@@ -131,6 +134,7 @@ end
     stack_height(v) -> Int
 
 Current number of values on the validation stack.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:472 InstructionsBuilder.stack)
 """
 stack_height(v::WasmStackValidator) = length(v.stack)
 
@@ -421,6 +425,7 @@ validate_block_start!(v::WasmStackValidator, kind::Symbol,
                       result_types::Vector{WasmValType}=WasmValType[]) =
     validate_block_start!(v, kind, WasmValType[], result_types)
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:695 InstructionsBuilder._pushLabel)
 function validate_block_start!(v::WasmStackValidator, kind::Symbol,
                                input_types::Vector{WasmValType},
                                result_types::Vector{WasmValType})
@@ -442,6 +447,7 @@ entry_height + result_types. Mirrors dart2wasm's `end()` + `_verifyEndOfBlock`.
 Reachability is restored from the label's `reachable_at_entry` — if the block
 entry was reachable, code after the block is reachable (even if the block body
 ended with an unconditional br).
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:566 InstructionsBuilder._verifyEndOfBlock)
 """
 function validate_block_end!(v::WasmStackValidator)
     if isempty(v.labels)
@@ -485,6 +491,7 @@ Validate an unconditional branch. Checks that:
 2. The stack has the correct types for the target (result_types for block/if, empty for loop)
 
 After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
 """
 function validate_br!(v::WasmStackValidator, label_depth::Int)
     if !v.reachable
@@ -526,6 +533,7 @@ end
 Validate a conditional branch: pop i32 condition, then verify the target
 label like br. Unlike br, code after br_if remains reachable.
 Mirrors dart2wasm's `br_if(label)`.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 """
 function validate_br_if!(v::WasmStackValidator, label_depth::Int)
     if !v.reachable
@@ -567,6 +575,7 @@ validate_if_start!(v::WasmStackValidator,
                    result_types::Vector{WasmValType}=WasmValType[]) =
     validate_if_start!(v, WasmValType[], result_types)
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 function validate_if_start!(v::WasmStackValidator,
                             input_types::Vector{WasmValType},
                             result_types::Vector{WasmValType})
@@ -586,6 +595,7 @@ end
 Validate an else instruction: verify the then-branch stack, reset stack to
 block entry height for the else-branch, restore reachability.
 Mirrors dart2wasm's `else_()`.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:767 InstructionsBuilder.else_)
 """
 function validate_else!(v::WasmStackValidator)
     if isempty(v.labels)
