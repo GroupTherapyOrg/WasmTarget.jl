@@ -26,8 +26,8 @@
 # Quarantine tier (Julia-only; no dart Kernel equivalent, so no dart anchor): NirBoundscheck
 # (Julia's bounds-check-elision IR, `Expr(:boundscheck, ...)`), NirThrowUndefIfNot,
 # NirNewvar, NirNoOp (`:gc_preserve_begin`/`:gc_preserve_end`/`:loopinfo` — hints with no
-# runtime effect), and NirUpsilon/NirPhiC (unoptimized-IR exception phis). These carry no
-# dart anchor by design. They are CLASSIFIED, not `NirUnsupported`: statements.jl lowers
+# runtime effect), and NirUpsilon/NirPhiC (unoptimized-IR exception phis). Each carries a
+# `parity(quarantine: …)` anchor naming why Kernel has no counterpart. They are CLASSIFIED, not `NirUnsupported`: statements.jl lowers
 # every one of them, and dev/formal/NirBuild.tla's claim (5) makes "NirUnsupported ⇒
 # reject" a consumer obligation, so a construct with a real lowering must never arrive
 # as Unsupported.
@@ -204,26 +204,32 @@ end
 """Julia-only, quarantine tier: `Core.NewvarNode` — an unoptimized-IR slot declaration.
 Wasm locals are default-initialized, so this has no lowering; it is classified rather
 than left Unsupported because "no lowering needed" and "no lowering exists" must not
-share a node kind."""
+share a node kind.
+parity(quarantine: Core.NewvarNode — Kernel declares a variable and its initializer in one
+VariableDeclaration (pkg/kernel/lib/src/ast/variables.dart:2437); unoptimized Julia IR splits the declaration out.)"""
 struct NirNewvar <: NirNode
     slot::Int
 end
 
 """Julia-only, quarantine tier: an IR head that is a HINT with no runtime effect —
 `:gc_preserve_begin`/`:gc_preserve_end` (WasmGC's host collector owns liveness) and
-`:loopinfo` (`@simd`). Classified for the same reason as NirNewvar."""
+`:loopinfo` (`@simd`). Classified for the same reason as NirNewvar.
+parity(quarantine: GC-liveness and loop hints — Kernel has no gc_preserve or @simd node.)"""
 struct NirNoOp <: NirNode
     head::Symbol
 end
 
 """Julia-only, quarantine tier: `Core.UpsilonNode`, the store half of unoptimized IR's
-exception phi (its value is written into the associated PhiC's local)."""
+exception phi (its value is written into the associated PhiC's local).
+parity(quarantine: unoptimized-IR exception phi — a catch-visible Dart variable is an ordinary
+Kernel local, so no store/read pair exists.)"""
 struct NirUpsilon <: NirNode
     value::Union{NirNode,Nothing}
 end
 
 """Julia-only, quarantine tier: `Core.PhiCNode`, the read half of unoptimized IR's
-exception phi. `values` are the Upsilon statements that write it."""
+exception phi. `values` are the Upsilon statements that write it.
+parity(quarantine: unoptimized-IR exception phi, the read half of NirUpsilon's store.)"""
 struct NirPhiC <: NirNode
     values::Vector{NirNode}
 end
@@ -286,7 +292,9 @@ end
 # ============================================================================
 
 """Raw per-position DebugInfo line, 0 when that position carries none. Julia 1.12+ replaced
-the flat `codelocs` array with a compressed `Core.DebugInfo`; this is the one decode."""
+the flat `codelocs` array with a compressed `Core.DebugInfo`; this is the one decode.
+parity(code_generator.dart:190 setSourceMapFileOffset): the source position dart reads from
+TreeNode.fileOffset (pkg/kernel/lib/src/ast/misc.dart:71); Julia stores it in Core.DebugInfo."""
 function _debug_line(di, i::Int)::Int
     try
         return Int(Base.IRShow.getdebugidx(di, i)[1])
@@ -306,7 +314,8 @@ carries an empty `Core.DebugInfo` (no codelocs, no linetable, no edges). The sam
 starves diagnostics.jl's `_stmt_line`/`stmt_frames`, so a located diagnostic falls back to
 the method's definition line and its inline chain is empty. Asking for `debuginfo=:source`
 in ir.jl restores both (verified: 7/7 statements lined, a real 3-frame chain) — a change to
-the one inference path, not to this decode."""
+the one inference path, not to this decode.
+parity(code_generator.dart:190 setSourceMapFileOffset): one source line per node, read once."""
 function _nir_lines(code_info, n::Int)::Vector{Int32}
     out = zeros(Int32, n)
     di = try; code_info.debuginfo; catch; nothing; end
@@ -324,7 +333,8 @@ end
 IR (may_optimize=false) keeps `Core.Const`/`Core.PartialStruct` lattice elements in
 `ssavaluetypes`; every consumer downstream expects a plain type, so the widening happens
 once, here. `Any` wherever inference had nothing (including when `ssavaluetypes` is not a
-vector at all — an unanalyzed CodeInfo carries a statement COUNT there instead)."""
+vector at all — an unanalyzed CodeInfo carries a statement COUNT there instead).
+parity(code_generator.dart:135 getStaticType): every node's type read once through one context."""
 function _widened_ssa_types(code_info, n::Int)::Vector{Type}
     out = Vector{Type}(undef, n)
     fill!(out, Any)   # `fill(Any, n)` would infer Vector{DataType} and reject a Union member
@@ -338,6 +348,7 @@ function _widened_ssa_types(code_info, n::Int)::Vector{Type}
     return out
 end
 
+# parity(code_generator.dart:135 getStaticType): an SSA operand's type is its defining node's.
 _nir_ssa_type(types::Vector{Type}, id::Int)::Type = (1 <= id <= length(types)) ? types[id] : Any
 _nir_ssa_type(nir::Vector{NirStmt}, id::Int)::Type = (1 <= id <= length(nir)) ? nir[id].julia_type : Any
 
@@ -405,6 +416,8 @@ The C symbol named by a `:foreigncall`'s first argument — the ONE decode of th
 - Julia 1.13: the name wrapped in a tuple — `Expr(:tuple, QuoteNode(:name))` or
   `QuoteNode((:name,))`
 Also `GlobalRef` (e.g. `Base.memhash`).
+parity(quarantine: the C symbol of a Julia `:foreigncall`, whose operand shape differs
+between 1.12 and 1.13; dart resolves FFI natives in the CFE ffi transformer, before Kernel reaches codegen.)
 """
 function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
     val = if name_arg isa QuoteNode
@@ -425,13 +438,17 @@ function extract_foreigncall_name(name_arg)::Union{Symbol, Nothing}
     return val isa Symbol ? val : nothing
 end
 
+# parity(code_generator.dart:1637 visitConstructorInvocation): the field list a ConstructorInvocation
+# (pkg/kernel/lib/src/ast/expressions.dart:2907) initializes, read from the class once.
 _nir_field_types(T)::Vector{Type} =
     (T isa Type && isconcretetype(T)) ?
         (try; Type[fieldtype(T, k) for k in 1:fieldcount(T)]; catch; Type[]; end) : Type[]
 
 """Build a `NirNew` from an already-known concrete type and raw field operands — the entry
 calls.jl uses when it SYNTHESIZES a field-wise constructor (there is no `Expr(:new, ...)`
-in the IR to classify, so the node is built directly instead of a raw Expr being faked)."""
+in the IR to classify, so the node is built directly instead of a raw Expr being faked).
+parity(code_generator.dart:1637 visitConstructorInvocation): a synthesized field-wise constructor
+is the same node kind as a literal `%new`."""
 nir_new(T::Type, args, ctx)::NirNew =
     NirNew(T, _nir_field_types(T), NirNode[nir_node(ctx, a) for a in args], :literal, true, Any)
 
@@ -440,7 +457,9 @@ nir_new(T::Type, args, ctx)::NirNew =
 must be a `Type{T}` — read from the RAW lattice element, exactly as compile_new! read
 `ssavaluetypes[id]` before this boundary existed, so the accept/reject frontier is
 unchanged. A constructor body's `#self#` (`Core.Argument`) names it through the `:new`
-statement's own inferred type. The shape is reported whether or not resolution succeeded."""
+statement's own inferred type. The shape is reported whether or not resolution succeeded.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2907 ConstructorInvocation): Kernel names the
+constructed class on the node; Julia names it through an operand this resolves once."""
 function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbol,Bool,Type}
     _raw_ssa(i) = begin
         ssatypes = code_info.ssavaluetypes
@@ -580,7 +599,9 @@ ONE reference test covering every node kind. An `Expr`-shaped walk has to be wri
 consumer, and the two that existed disagreed: `references_ssa` (context.jl) silently
 misses PhiNode/PiNode operands, which the storage-relative pointer-escape proof depends
 on seeing. A NirUnsupported node has no resolved operands, so its raw statement is walked:
-an unrecognized consumer must never look like a non-consumer."""
+an unrecognized consumer must never look like a non-consumer.
+parity(quarantine: SSA use query — Kernel is a tree whose values are variables read by
+VariableGet (pkg/kernel/lib/src/ast/expressions.dart:203); Julia IR names values by SSA id.)"""
 function nir_uses(node::NirNode, subject::NirNode)::Bool
     _same(x) = (subject isa NirSSA && x isa NirSSA && x.id == subject.id) ||
                (subject isa NirArgument && x isa NirArgument && x.n == subject.n)
@@ -601,6 +622,7 @@ function nir_uses(node::NirNode, subject::NirNode)::Bool
     return false
 end
 
+# parity(quarantine: SSA use query by id, the NirSSA case of nir_uses.)
 nir_refs_ssa(node::NirNode, id::Int)::Bool = nir_uses(node, NirSSA(id, Any))
 
 function _raw_uses(x, subject::NirNode)::Bool
@@ -620,7 +642,8 @@ those through a per-statement FRAGMENT builder (the value they may leave on the 
 then stored/coerced/dropped by one tail); the IR-node kinds — return/goto/phi/pi/enter/
 upsilon/newvar — emit straight onto the caller's builder. The split is the statement
 visitor's, not the boundary's, so it is stated here once instead of being re-derived as a
-list of `isa` tests at the dispatch."""
+list of `isa` tests at the dispatch.
+parity(code_generator.dart:714 translateStatement, :665 translateExpression): the statement/expression split."""
 _nir_from_expr(node::NirNode)::Bool =
     node isa NirCall || node isa NirInvoke || node isa NirNew || node isa NirForeignCall ||
     node isa NirBoundscheck || node isa NirThrowUndefIfNot || node isa NirLeave ||
@@ -647,7 +670,9 @@ operand. The closed-world collector (trimcollect.jl) rebuilds an explicit invoke
 MethodInstance from the concrete call-site types when Julia left it abstract, and the
 collected IR must keep agreeing with the edge it hands to inference, so BOTH the raw
 statement and the record's NirInvoke are rewritten here rather than a consumer splicing
-`Expr.args` behind the boundary's back. Loud on a statement that is not an `:invoke`."""
+`Expr.args` behind the boundary's back. Loud on a statement that is not an `:invoke`.
+parity(translator.dart:115 directCallMetadata): the whole-program analysis's per-call-site target,
+recorded on the node codegen reads (dart: TFA's DirectCallMetadata, keyed by the Kernel node)."""
 function nir_retarget_invoke!(nir::Vector{NirStmt}, i::Int, mi::Core.MethodInstance)::Nothing
     s = nir[i]
     node = s.node

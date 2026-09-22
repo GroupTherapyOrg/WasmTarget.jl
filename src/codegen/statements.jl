@@ -43,6 +43,7 @@ a fabricated numeric address. Any return, aggregate store, comparison, or unknow
 consumer rejects the compilation.
 """
 # The only consumers that keep a storage-relative pointer inside the algebra.
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 const _STORAGE_RELATIVE_PTR_OPS = (Core.Intrinsics.add_ptr, Core.Intrinsics.sub_ptr,
                                    Core.Intrinsics.bitcast, Core.Intrinsics.pointerref,
                                    Core.Intrinsics.pointerset)
@@ -654,6 +655,8 @@ function _setfield_of_value(node::NirNode, subject::NirNode, T::DataType)::Union
     return findfirst(==(field), fieldnames(T))
 end
 
+# parity(quarantine: a partial `%new` leaves fields undefined until later stores;
+# Dart's definite assignment is a front-end guarantee, so dart2wasm never proves it.)
 function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
                                         subject::NirNode, T::DataType,
                                         missing::Set{Int})::Bool
@@ -2162,12 +2165,14 @@ end
 
 """The compile-time value a constant operand carries — a literal (the boundary already
 unwrapped `QuoteNode`) or a bound global's value; `nothing` for anything with no
-compile-time value (an SSA, an argument, an unbound global)."""
+compile-time value (an SSA, an argument, an unbound global).
+parity(code_generator.dart:2975 visitConstantExpression): the operand's compile-time value."""
 _nir_const_operand(node::NirNode)::Any =
     node isa NirLiteral ? node.value : (node isa NirGlobalRef && node.bound ? node.value : nothing)
 
 """The Symbol/index a `getfield`-style field operand names, or `nothing` when it is not a
-literal (`Expr.args` carried it quoted or bare; the boundary unwrapped both to a literal)."""
+literal (`Expr.args` carried it quoted or bare; the boundary unwrapped both to a literal).
+parity(code_generator.dart:2258 visitInstanceGet): the field a getfield names, read from the node."""
 _nir_field_name(node::NirNode)::Any = node isa NirLiteral ? node.value : nothing
 
 """

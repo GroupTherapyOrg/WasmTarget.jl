@@ -1104,7 +1104,8 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
 end
 
 """True for the literal `nothing` operand, in either shape — the raw constant a
-not-yet-converted consumer holds, or the `NirLiteral` the boundary resolved it to."""
+not-yet-converted consumer holds, or the `NirLiteral` the boundary resolved it to.
+parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
 _is_nothing_literal(x)::Bool = x === nothing || (x isa NirLiteral && x.value === nothing)
 
 """THE value channel's raw entry: a consumer that still holds an `Expr.args` operand
