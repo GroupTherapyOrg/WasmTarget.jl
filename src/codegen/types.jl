@@ -9,6 +9,8 @@ export compile_function, compile_module, FunctionRegistry
 
 """
 Maps Julia struct types to their WasmGC representation.
+
+parity(class_info.dart:199 ClassInfo): a type's struct, its fields and its inherited prefix.
 """
 struct StructInfo
     julia_type::Type  # DataType or UnionAll for parametric types
@@ -24,6 +26,8 @@ end
 
 Convert a Julia 1-based field index to the Wasm 0-based field index,
 accounting for the representation's inherited prefix.
+
+parity(translator.dart:194 fieldIndex): a field's wasm index after the inherited prefix.
 """
 wasm_field_idx(info::StructInfo, julia_field_idx::Int)::UInt32 = UInt32(julia_field_idx - 1 + info.field_offset)
 
@@ -36,19 +40,25 @@ wasm_field_idx(info::StructInfo, julia_field_idx::Int)::UInt32 = UInt32(julia_fi
 # methods the compiling process had defined (probe diffs of +55 between two
 # trees). dart has no world ages; Julia's are projected onto this single value:
 # a binding visible at compile time is visible in the module.
+# parity(quarantine: Julia bindings and code instances carry world-age bounds; dart has no
+# world ages, so the closed module projects every bound onto one age.)
 const WASM_WORLD_AGE = UInt64(1)
+# parity(quarantine: a Julia world-age bound projected onto the module's one age, see WASM_WORLD_AGE.)
 wasm_world_bound(host_bound::Integer, host_world::Integer, lower::Bool)::Int64 =
     lower ? (host_bound <= host_world ? Int64(WASM_WORLD_AGE) : Int64(WASM_WORLD_AGE) + 1) :
             (host_bound >= host_world ? typemax(Int64) : Int64(0))
 
 """
 Registry for struct and array type mappings within a module.
+
+parity(translator.dart:96 Translator): the translator's per-compile type state — classInfo
+(:186), the array type caches (:231), and the constant map (constants.dart:154 constantInfo).
 """
 mutable struct TypeRegistry
     structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
     arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
-    string_struct_idx::Union{Nothing, UInt32} # parity(class_info.dart:18 FieldIndex): the CLASSED string {classId, data} <: $JlBase
+    string_struct_idx::Union{Nothing, UInt32} # parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
     numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
@@ -92,7 +102,7 @@ mutable struct TypeRegistry
     # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
     # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
     box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
-    # THE ensureConstant funnel's registry (dart constants.dart:49 — ONE
+    # THE ensureConstant funnel's registry (dart constants.dart:154 constantInfo — ONE
     # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
     # identity that structural keying would wrongly merge.
@@ -102,22 +112,22 @@ mutable struct TypeRegistry
     # storage is published once by module start, then all reads share the object.
     mutable_constant_globals::Union{Nothing, IdDict{Any, Tuple{UInt32, UInt32}}}
     module_init_functions::Union{Nothing, Vector{UInt32}}
-    # census F3 (dart constants.dart:427-443): interned string-constant globals —
+    # census F3 (dart constants.dart:872 visitStringConstant): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the string value.
     string_constant_globals::Union{Nothing, Dict{String, UInt32}}
-    # LAZY constants (dart constants.dart:445-476/322-339): long strings get an
+    # LAZY constants (dart constants.dart:2108 _createLazyConstant): long strings get an
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
     lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
-    # (dart ClosureLayouter, closures.dart:41-118): the closure-base struct idx
+    # (dart ClosureLayouter, closures.dart:209): the closure-base struct idx
     # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
     closure_base_idx::Union{Nothing, UInt32}
     closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct
     closure_vtable_globals::Union{Nothing, Dict{Any, UInt32}}          # closure body key -> global
-    # step5 THE CLASS-DAG (dart class_info.dart:278-330): synthetic {classId:i32}
+    # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
     abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
@@ -164,6 +174,9 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing                     # step5 class-DAG synthetics
 )
 
+# parity(quarantine: Julia's Base.isoperator / is_syntactic_operator are the foreigncalls
+# jl_is_operator / jl_is_syntactic_operator over a Symbol's name; dart Symbols carry no such
+# flags, so the answer is baked into the string constant.)
 symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
     Int32((Base._isoperator(s) ? 0x01 : 0x00) |
           (Base.is_syntactic_operator(Symbol(s)) ? 0x02 : 0x00))
@@ -171,10 +184,13 @@ symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
 """
     get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
 
-LAZY constants — dart's shape (constants.dart:445-464): an uninitialized
+LAZY constants — dart's shape: an uninitialized
 (ref null \$JlString) global + an init function that builds the string once, stores
 it, and returns it. MUST be called BEFORE function-index assignment (the index-freeze
 constraint) — the literal pre-pass in compile.jl does.
+
+parity(constants.dart:2108 _createLazyConstant): a nullable global plus the init function
+that fills it.
 """
 function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::String)::Tuple{UInt32, UInt32}
     haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
@@ -205,13 +221,14 @@ end
 """
     ensure_constant_global!(mod, registry, val) -> Union{UInt32, Nothing}
 
-— THE ensureConstant funnel (dart constants.dart:49/427-443: ONE constantInfo
+— THE ensureConstant funnel (dart constants.dart:793 ensureConstant, :154: ONE constantInfo
 map deduplicating EVERY constant kind). Returns the interned global for `val`, creating
 it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
 keep the inline path). IMMUTABLE kinds only.
 """
 # formal(dev/formal/Constants.tla): two structurally-equal immutable constants intern to exactly one global and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
+# parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global per constant value.
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     registry.constant_globals === nothing && return nothing
     haskey(registry.constant_globals, val) && return registry.constant_globals[val]
@@ -226,6 +243,7 @@ end
 # Recursively build a CONSTANT-EXPRESSION initializer for `val`; returns the struct
 # type idx, or nothing when val is not eager-internable. Wasm constant exprs allow
 # i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
+# parity(constants.dart:908 ConstantCreator.visitInstanceConstant): header fields, then each field's constant.
 function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
     if T === Int128 || T === UInt128
@@ -319,12 +337,14 @@ end
     get_string_constant_global!(mod, registry, s) -> Union{UInt32, Nothing}
 
 census F3 () — INTERNED string constants, dart's constant→deduplicated-global
-architecture (constants.dart:427-443 ensureConstant; small strings eager via
-array_new_fixed, :512-564). Every use of an equal short literal reads ONE global,
+architecture (constants.dart:793 ensureConstant; a string constant is eager unless
+standalone, :872 visitStringConstant). Every use of an equal short literal reads ONE global,
 matching dart's code-size and `===`-identity semantics. Strings longer than the
 eager threshold return `nothing` (they keep the inline data-segment path — dart
 handles those with LAZY init functions, deferred here because init functions
 cannot be added during body compilation without shifting function indices).
+
+parity(constants.dart:872 ConstantCreator.visitStringConstant): the interned string constant.
 """
 function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s::String)::Union{UInt32, Nothing}
     registry.string_constant_globals === nothing && return nothing
@@ -336,7 +356,10 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     return g
 end
 
-"""Build the canonical classed-string constant expression without adding a global."""
+"""Build the canonical classed-string constant expression without adding a global.
+
+parity(constants.dart:872 ConstantCreator.visitStringConstant): its generator — object header,
+the byte array, struct.new."""
 function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
                                        s::String)::Tuple{UInt32,Vector{UInt8}}
     struct_idx = get_string_struct_type!(mod, registry)
@@ -368,8 +391,10 @@ end
 Push the classed string constant `s` inside an init-function body: the interned global
 when one exists (short strings), else built in place from a passive data segment
 (`array.new_data` is not a constant expression, so long strings have no eager global;
-dart initialises those lazily, constants.dart:445-464). `scratch` is the index of a local of the
+dart initialises those lazily, constants.dart:2108 _createLazyConstant). `scratch` is the index of a local of the
 string ARRAY type the caller declares only when `used[]` comes back true.
+
+parity(constants.dart:1937 _ConstantAccessor._readDefinedConstant): global.get of an eager constant.
 """
 function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                                    s::String, scratch::Integer, used::Base.RefValue{Bool})::InstrBuilder
@@ -432,6 +457,8 @@ so that `isa(x, AbstractType)` becomes an O(1) range check:
   `typeId >= low && typeId <= high`.
 
 IDs start at 1 (0 is reserved for unknown/unassigned).
+
+parity(class_info.dart:864 ClassIdNumbering._number): one DFS numbers the closed world.
 """
 function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{Nothing,Set{DataType}}=nothing)::Union{Nothing,Dict{Type,Tuple{Int32,Int32}}}
     # formal(dev/formal/ClassIdDispatch.tla): sorted-children DFS gives nested, sibling-disjoint ranges and a numbering that is a function of the closed world; only the lazy ensure_type_id! path makes ids history-dependent
@@ -449,7 +476,7 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
 
     # Also include primitive numeric types that may need boxing/dispatch
     # Include Nothing for BoxedNothing typeId
-    # parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): String + Symbol are CLASSED now — they join the hierarchy so
+    # parity(class_info.dart:864 ClassIdNumbering._number): String + Symbol are CLASSED now — they join the hierarchy so
     # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
               Float16, Float32, Float64, Nothing, String, Symbol)
@@ -555,6 +582,8 @@ end
     get_type_id(registry::TypeRegistry, T::Type) -> Int32
 
 Return the DFS type ID for a concrete type, or 0 if not assigned.
+
+parity(translator.dart:186 classInfo): the nullable class lookup; 0 stands for absent.
 """
 function get_type_id(registry::TypeRegistry, T::Type)::Int32
     return get(registry.type_ids, T, Int32(0))
@@ -567,6 +596,9 @@ Julia's byte stride of a `Memory{T}` element, the unit `MemoryRef.ptr_or_offset`
 counted in: `sizeof(T)` for an isbits element, 8 for a boxed reference slot
 (`Base.aligned_sizeof(Any)`). Every lowering that converts between a byte offset and an
 element index uses this one rule.
+
+parity(quarantine: Julia's MemoryRef.ptr_or_offset counts a Memory{T} element in bytes —
+sizeof(T), or 8 for a boxed slot; dart arrays are indexed by element.)
 """
 memory_element_stride(@nospecialize(T))::Int =
     (T isa DataType && isbitstype(T)) ? max(sizeof(T), 1) : 8
@@ -579,7 +611,10 @@ object, whose iteration order varies per process; every consumer that picks
 "the first type at this wasm index" or assigns an id while walking it would
 otherwise emit process-varying bytes (the Dict-constant nondeterminism finding).
 The order is (wasm_type_idx, type name) — dart numbers classes once from the
-hierarchy (class_info.dart:831) and never depends on hash order.
+hierarchy (class_info.dart:864) and never depends on hash order.
+
+parity(quarantine: Julia Dict iteration follows address-based hashes of type objects, which
+vary per process and architecture; dart Maps iterate in insertion order.)
 """
 function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo}}
     registry.structs === nothing && return Pair{Type,StructInfo}[]
@@ -596,16 +631,20 @@ function of the program, never of the process. Type hashes are address-based,
 so a raw walk orders differently per process AND per architecture — the same
 function compiled on x64 and aarch64 interned its type-name strings in a
 different order. dart numbers and emits everything from the program structure
-(class_info.dart:831 ClassIdNumbering; constants.dart's map is walked in
+(class_info.dart:864 ClassIdNumbering._number; constants.dart's map is walked in
 insertion order).
 """
 ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = sort!(collect(dict); by = p -> keyfn(p.first))
 
 """A type's program-determined order key: its printed name, then its defining module
-(two modules may define a `Foo`), then the wrapper's name for UnionAll bodies."""
+(two modules may define a `Foo`), then the wrapper's name for UnionAll bodies.
+
+parity(quarantine: Julia type objects hash by address, so a registry walk needs a
+program-derived key; dart Maps iterate in insertion order.)"""
 type_order_key(@nospecialize(T))::Tuple{String,String} =
     (string(T), T isa DataType ? string(T.name.module) : (T isa UnionAll ? string(Base.unwrap_unionall(T).name.module) : ""))
 
+# parity(quarantine: the program-derived order key for a Core.TypeName, see type_order_key.)
 typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))
 
 """
@@ -632,6 +671,8 @@ Get T's DFS-assigned typeId. Phase 12B: the closed world is numbered exactly ONC
 carry a classId before it runs, so every `T` codegen ever asks for is already numbered.
 A type reaching here unnumbered is a collector bug (a real, IR-reachable kind the
 collector failed to admit), never a reason to allocate a second, order-dependent id.
+
+parity(class_info.dart:205 ClassInfo.classId): the class id, loud when there is none.
 """
 function ensure_type_id!(registry::TypeRegistry, T::Type)::Int32
     existing = get_type_id(registry, T)
@@ -649,6 +690,8 @@ truth, so a parametric abstract (`AbstractVector` = `AbstractArray{T,1}`) is ans
 exactly, where the DFS range keyed by the base `AbstractArray` cannot distinguish it
 from a Matrix. `emit_classid_membership!` compresses a contiguous set back to dart's
 range window (class_info.dart:831 getConcreteClassIdRange).
+
+parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): the concrete ids below T.
 """
 function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
     registry.type_ids === nothing && return Int32[]
@@ -660,6 +703,8 @@ end
     get_type_range(registry::TypeRegistry, T::Type) -> Union{Tuple{Int32, Int32}, Nothing}
 
 Return the DFS [low, high] range for an abstract type, or nothing if not assigned.
+
+parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): one range per type.
 """
 function get_type_range(registry::TypeRegistry, T::Type)::Union{Tuple{Int32, Int32}, Nothing}
     return get(registry.type_ranges, T, nothing)
@@ -720,7 +765,9 @@ end
 
 """builder-native (THE implementation): push the type's DFS id as i32.
 Goes through ensure_type_id! (a pure lookup — Phase 12B: every T here was already
-numbered by assign_type_ids!'s one DFS)."""
+numbered by assign_type_ids!'s one DFS).
+
+parity(code_generator.dart:6070 pushObjectHeaderFields): its i32.const classId."""
 function emit_type_id!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(registry, T)))
     return b
@@ -739,6 +786,8 @@ end
 Get or create the Top struct type `(struct (field classId i32))`.
 Every class representation is a subtype of Top, enabling class-id extraction
 through field 0. Object descendants additionally subtype `get_object_struct_type!`.
+
+parity(class_info.dart:410 ClassInfoCollector._createStructForClassTop): the #Top struct.
 """
 function get_base_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.base_struct_idx !== nothing
@@ -757,6 +806,8 @@ end
 Create dart2wasm's Object layout: immutable classId followed by a mutable i32
 identity-hash slot. Ordinary heap objects subtype this struct; primitive value
 boxes subtype Top directly and use their field 1 for the boxed payload.
+
+parity(class_info.dart:568 objectClass): _generateFields' Object arm, identityHash after classId.
 """
 function get_object_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.object_struct_idx !== nothing && return registry.object_struct_idx
@@ -767,17 +818,23 @@ function get_object_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
     return idx
 end
 
-"""The inherited field prefix of every identity-bearing Julia heap object."""
+"""The inherited field prefix of every identity-bearing Julia heap object.
+
+parity(class_info.dart:568 objectClass): Object's fields, classId then identityHash."""
 object_prefix_fields()::Vector{FieldType} = FieldType[FieldType(I32, false), FieldType(I32, true)]
 
-"""Emit the allocation prefix shared by every identity-bearing heap object."""
+"""Emit the allocation prefix shared by every identity-bearing heap object.
+
+parity(code_generator.dart:6070 pushObjectHeaderFields): classId, then the identity hash."""
 function emit_object_prefix!(b::InstrBuilder, registry::TypeRegistry, @nospecialize(T))::InstrBuilder
     emit_type_id!(b, registry, T)
     i32_const!(b, 0) # identityHash is assigned lazily by `objectid`
     return b
 end
 
-"""Emit exactly the representation prefix declared by `StructInfo`."""
+"""Emit exactly the representation prefix declared by `StructInfo`.
+
+parity(code_generator.dart:6070 pushObjectHeaderFields): the header of the struct being built."""
 function emit_struct_prefix!(b::InstrBuilder, registry::TypeRegistry,
                              @nospecialize(T), info::StructInfo)::InstrBuilder
     if info.field_offset == 2
@@ -790,7 +847,11 @@ function emit_struct_prefix!(b::InstrBuilder, registry::TypeRegistry,
     return b
 end
 
-"""Return the module-local monotonic source for newly assigned object identities."""
+"""Return the module-local monotonic source for newly assigned object identities.
+
+parity(quarantine: Julia's objectid is the jl_object_id foreigncall, an address hash with no
+wasm counterpart; this counter hands out the lazily assigned identity that dart's
+_object_helper library code supplies.)"""
 function get_identity_counter_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.identity_counter_global !== nothing && return registry.identity_counter_global
     # Zero means "unassigned" in every object slot; assigned identities begin at 1.
@@ -799,7 +860,9 @@ function get_identity_counter_global!(mod::WasmModule, registry::TypeRegistry)::
     return idx
 end
 
-"""Extract classId field 0 from a value through the common object base."""
+"""Extract classId field 0 from a value through the common object base.
+
+parity(code_generator.dart:6076 loadClassId): struct.get of Top's classId field."""
 function emit_typeof!(b::InstrBuilder, base_idx::UInt32)::InstrBuilder
     # ref.cast (ref $JlBase) — cast anyref/structref to base struct ref
     ref_cast!(b, Int64(base_idx), false)  # ref.cast non-null
@@ -983,6 +1046,8 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
     )
 end
 
+# parity(quarantine: a Julia Module is a first-class runtime value — parentmodule, nameof,
+# TypeName.module — where a Dart library is never a value.)
 function get_module_constant_global!(mod::WasmModule, registry::TypeRegistry,
                                      module_value::Module)::UInt32
     haskey(registry.constant_globals, module_value) &&
@@ -1012,6 +1077,8 @@ end
 
 """
 Information about a compiled function within a module.
+
+parity(functions.dart:25 FunctionCollector._functions): the compiled function a callee maps to.
 """
 struct FunctionInfo
     name::String
@@ -1029,14 +1096,17 @@ end
 FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type)::FunctionInfo =
     FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, false)
 
-"""Finish the canonical source-vararg tuple projection (a runtime ABI value, not a constant)."""
+"""Finish the canonical source-vararg tuple projection (a runtime ABI value, not a constant).
+
+parity(quarantine: Julia passes a vararg tail, f(xs...), as a tuple built at the call; dart
+calls have a fixed arity.)"""
 packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer) =
     struct_new!(builder, type_idx)
 
 """
 Registry for functions within a module, enabling cross-function calls.
 
-parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+parity(functions.dart:25 FunctionCollector._functions / translator.dart:196
 staticParamInfo): `by_ref` is the dart-shaped core — callee identity (a Julia
 function object, standing in for dart's `Reference`) keyed to its compiled
 `FunctionInfo` (dart's `w.BaseFunction` + param ABI). `functions` (name-keyed)
@@ -1072,6 +1142,8 @@ end
 
 """
 Register a function in the registry.
+
+parity(functions.dart:90 FunctionCollector.getFunction): the callee's entry in _functions.
 """
 function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any; is_candidate::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
@@ -1115,7 +1187,7 @@ Look up a function by name — the sole caller has already lost the func_ref
 a name string is all that remains to key on.
 
 parity(quarantine: name-fallback for cross-module identity loss — dart
-resolves every callee purely by `Reference` identity (functions.dart:26,
+resolves every callee purely by `Reference` identity (functions.dart:25,
 `FunctionCollector._functions`); WT has no identity left to key on once
 `getfield(func.mod, func.name)` cannot recover the Function object, so this
 linear string scan is the only recourse. Never used when a func_ref is in
@@ -1159,7 +1231,7 @@ end
 """
 Look up a function by reference and argument types (for dispatch).
 
-parity(functions.dart:26 FunctionCollector._functions / translator.dart:196
+parity(functions.dart:25 FunctionCollector._functions / translator.dart:196
 staticParamInfo): the func_ref-keyed core — resolves a callee's identity to
 its compiled ABI, same shape as dart's `Reference` → `w.BaseFunction` map.
 The subtype/reverse-subtype passes below are Julia's dynamic-dispatch
@@ -1240,6 +1312,8 @@ Resolve a dispatch-only candidate only when the call site's recovered Julia
 types prove the candidate's complete signature exactly. This is the late
 devirtualization counterpart to `get_function`: candidates remain invisible
 to ordinary/fuzzy cross-call lookup and to abstract sites.
+
+parity(translator.dart:1954 singleTarget): the devirtualized direct target.
 """
 function get_exact_candidate(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                              expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo,Nothing}
@@ -1257,6 +1331,8 @@ end
 
 """
 Check if a function reference is registered (for by_ref linear scan).
+
+parity(functions.dart:25 FunctionCollector._functions): membership by callee identity.
 """
 function has_func_ref(registry::FunctionRegistry, func_ref)::Bool
     for (ref, _) in registry.by_ref
@@ -1267,6 +1343,8 @@ end
 
 """
 Get infos for a function reference (for by_ref linear scan). Returns nothing if not found.
+
+parity(functions.dart:25 FunctionCollector._functions): lookup by callee identity.
 """
 function get_func_ref_infos(registry::FunctionRegistry, func_ref)::Union{Vector{FunctionInfo}, Nothing}
     for (ref, v) in registry.by_ref
@@ -1277,15 +1355,21 @@ end
 
 """
 Get or create an array type for a given element type.
+
+parity(quarantine: Julia's Int8/UInt8/Int16/UInt16 element types have no dart value type;
+their arrays use wasm packed i8/i16 storage, which dart reaches only through WasmI8/WasmI16,
+translator.dart:344 builtinTypes.)
 """
 @inline packed_array_storage(@nospecialize(T))::Union{Nothing,UInt8} =
     T === Int8 || T === UInt8 ? UInt8(0x78) :
     T === Int16 || T === UInt16 ? UInt8(0x77) : nothing
 
+# parity(quarantine: the Julia signedness of a packed i8/i16 element load, see packed_array_storage.)
 @inline packed_array_signedness(@nospecialize(T))::Union{Nothing,Bool} =
     T === Int8 || T === Int16 ? true :
     T === UInt8 || T === UInt16 ? false : nothing
 
+# parity(translator.dart:1205 arrayTypeForDartType): one cached array type per element type.
 function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Type)::UInt32
     if haskey(registry.arrays, elem_type)
         return registry.arrays[elem_type]
@@ -1340,6 +1424,8 @@ end
 """
 Get or create the string array type (array of packed i8 for UTF-8 bytes).
 Mutable to support array.copy for string concatenation.
+
+parity(translator.dart:1218 wasmArrayType): the cached mutable i8 array type.
 """
 function get_string_array_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.string_array_idx === nothing
@@ -1352,7 +1438,7 @@ end
 """
     get_string_struct_type!(mod, registry) -> UInt32
 
-parity(class_info.dart:18 FieldIndex): the CLASSED string — dart: String IS an Object class. A Julia String value is
+parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string — dart: String IS an Object class. A Julia String value is
 `(struct (field i32 classId) (field (mut i32) identityHash)
          (field (ref null \$strbytes) data) (field i32 syntaxFlags))`, SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
@@ -1373,6 +1459,8 @@ function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
     return registry.string_struct_idx
 end
 
+# parity(quarantine: Julia's Unicode predicates are the foreigncalls utf8proc_category,
+# utf8proc_charwidth, jl_id_start_char and jl_id_char; this table bakes their exact answers.)
 const _UTF8PROC_PROPERTY_DATA = let data = Vector{UInt8}(undef, 2 * 0x110000)
     for cp in UInt32(0):UInt32(0x10ffff)
         category = ccall(:utf8proc_category, Cint, (UInt32,), cp)
@@ -1397,6 +1485,9 @@ Bits 0–4 are `utf8proc_category`; bits 5–6 are `utf8proc_charwidth`; bits 7�
 are Julia identifier-start/continuation predicates. The table is
 generated from the exact utf8proc ABI Julia itself uses and serialized into the
 package precompile image; target Wasm performs no FFI.
+
+parity(quarantine: the lazy global and lookup helper over the utf8proc answers, see
+_UTF8PROC_PROPERTY_DATA.)
 """
 function get_or_create_unicode_property_func!(mod::WasmModule,
                                               registry::TypeRegistry)::UInt32
@@ -1434,6 +1525,8 @@ Get or create a box struct type for a numeric Wasm type.
 Used when a function returning ExternRef needs to return a numeric value.
 The box struct has a single field of the numeric type, allowing the value
 to be wrapped as a GC reference and converted to externref.
+
+parity(translator.dart:374 boxedClasses): one box class per value type.
 """
 function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_type::WasmValType)::UInt32
     if haskey(registry.numeric_boxes, wasm_type)
@@ -1441,7 +1534,7 @@ function get_numeric_box_type!(mod::WasmModule, registry::TypeRegistry, wasm_typ
     end
     # Prepend typeId:i32 as field 0 (universal object layout)
     fields = [FieldType(I32, false), FieldType(wasm_type, false)]  # typeId + value
-    # Declare `sub $JlBase` AT CREATION (dart class_info.dart:288 — every class
+    # Declare `sub $JlBase` AT CREATION (dart class_info.dart:420 _createStructForClass — every class
     # struct subtypes its super at definition). This lets the strict builder use
     # the subtype relation DURING emission (a box-typed
     # ref validates where a $JlBase ref is expected — the typed-channel prerequisite).
@@ -1463,6 +1556,10 @@ so the enclosing fn's `%new`, the closure's captured-box field, and setfield!/ge
 type. dart2wasm-aligned (a typed context-struct field, not a boxed `Any`).
 
 The live capture analysis and Core.Box registration share this constructor.
+
+parity(quarantine: Julia lowering allocates an explicit Core.Box cell for each captured
+variable that is reassigned; dart keeps such a variable in its context struct,
+closures.dart:1533.)
 """
 function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_type::WasmValType)::UInt32
     if registry.box_types !== nothing && haskey(registry.box_types, contents_wasm_type)
@@ -1577,6 +1674,9 @@ Each TypeName gets a unique struct allocation so that `t.name === s.name`
 identity comparison works via `ref.eq`.
 
 Fields are populated by `populate_type_constant_globals!` after all globals exist.
+
+parity(quarantine: Core.TypeName is a Julia reflection object compared by identity
+(t.name === s.name) whose fields Base reads; dart has no TypeName.)
 """
 function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, tn::Core.TypeName)::UInt32
     if haskey(registry.typename_constant_globals, tn)
@@ -1647,6 +1747,9 @@ end
 Compose every generated closed-world initializer behind the module's single start
 entry. Mutable constant globals contain only nullable storage before this runs;
 their initializer functions construct exact object snapshots and publish them.
+
+parity(pkg/wasm_builder/lib/src/builder/module.dart:79 ModuleBuilder.startFunction): the one
+start function every eager initializer is appended to (globals.dart:183).
 """
 function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry)::Nothing
     funcs = registry.module_init_functions
@@ -1990,6 +2093,9 @@ Create a WasmGC array that maps typeId (i32 index) → DataType struct ref.
 This enables typeof(x) to return a \$JlDataType struct by looking up the typeId.
 
 Must be called AFTER ensure_all_type_globals!.
+
+parity(quarantine: Julia's `===` on DataTypes is identity, so typeof(x) must return the one
+canonical type object for x's classId; dart compares _Type values structurally.)
 """
 function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,Int32}
     isempty(registry.type_constant_globals) && return
@@ -2036,6 +2142,8 @@ For each type with a DFS ID and a DataType global, emits:
   array.set \$arr_type
 
 Must be called from within populate_type_constant_globals! (appended to the body).
+
+parity(quarantine: the canonical typeof table, see create_type_lookup_table!.)
 """
 function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)::InstrBuilder
     registry.type_lookup_global === nothing && return b
@@ -2066,7 +2174,9 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)::I
     return b
 end
 
-"""Resolve a value's classId through the module's canonical type-object table."""
+"""Resolve a value's classId through the module's canonical type-object table.
+
+parity(quarantine: the canonical typeof table, see create_type_lookup_table!.)"""
 function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
                                          registry::TypeRegistry, temp_local::UInt32)::InstrBuilder
     registry.type_lookup_global === nothing && error("Type lookup table global is unavailable")
@@ -2085,7 +2195,7 @@ end
     _resolve_multivariant_union(T, non_nothing, mod, registry; for_local=false) -> WasmValType
 
 THE single resolver for a multi-variant (2+ non-Nothing) Union value's wasm type — dart2wasm
-parity with `translator.dart:493 translateType` (dart has ONE such resolver, called ~14×; WT once
+parity with `translator.dart:1044 translateType` (dart has ONE such resolver, called ~14×; WT once
 had two drifting copies of the whole type-translation chain — one taking `(mod, registry)`, one
 taking a compilation `ctx` — that the "MUST agree" comments warned would silently null-deref on
 divergence; both are now this one `for_local`-gated function, P4-types fold). Mirrors dart's two
@@ -2096,6 +2206,10 @@ allocator) applies WT's anyref→externref-for-locals wart on the numeric path (
 anyref/externref split dart doesn't have; preserved exactly here, retired when that hierarchy
 unifies). The nullable (Union{Nothing,T}) case stays caller-side — the two `for_local` branches of
 the caller diverge there intentionally (EqRef vs concrete inner ref).
+
+parity(quarantine: a Julia Union{A,B,…} of unrelated types has no dart counterpart — a Dart
+static type is one class or its nullable form — so a multi-variant Union's wasm type is
+chosen here.)
 """
 function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     all_numeric = !isempty(non_nothing) && all(non_nothing) do t
@@ -2151,12 +2265,14 @@ signature would MethodError on them before the Vararg case below ever runs.
 """
     derive_nullability(T) -> Bool
 
-tag-run item 2 (dart translator.dart:517 `type.isPotentiallyNullable`): THE nullability
+tag-run item 2 (dart translator.dart:1068 `type.isPotentiallyNullable`): THE nullability
 derivation — a reference is nullable iff the Julia type admits `nothing`
 (Union{Nothing,…} / Any / unions containing Nothing). The full non-null flip for plain-T
 slots is BLOCKED by struct.new_default (non-defaultable non-null fields) + the type-safe
 ref.null default emitters — recorded as the campaign's floor; this function is the
 single source consumers migrate onto as those rework.
+
+parity(translator.dart:1068 isPotentiallyNullable): the nullability of a translated type.
 """
 derive_nullability(@nospecialize(T))::Bool =
     T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
@@ -2166,7 +2282,7 @@ derive_nullability(@nospecialize(T))::Bool =
 
 The host-boundary type translator: what a Julia type may become on the parameter or
 result of an import/export function signature. `parity(translator.dart:1239
-translateExternalType, :1266 translateExternalStorageType)`: dart restricts the
+translateExternalType, :1273 translateExternalStorageType)`: dart restricts the
 interop boundary to wasm func/extern/array refs, its low-level `WasmArray<T>`
 intrinsic, and non-nullable primitive builtins — everything else (ordinary boxed
 objects included) widens to the `anyref` top type, so Binaryen's `--closed-world`
@@ -2193,6 +2309,7 @@ function translate_external_type(T, mod::WasmModule, registry::TypeRegistry)::Wa
     return AnyRef
 end
 
+# parity(translator.dart:1067 translateStorageType): the one Julia-type to wasm-type translator.
 function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     # Vararg is a type modifier (Core.TypeofVararg), not a proper Julia type — never `<: Type`.
     # Use ExternRef for locals to avoid externref↔anyref mismatches (Any→ExternRef, and
@@ -2218,7 +2335,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         return ConcreteRef(dt_idx, true)
     end
     if T === String || T === Symbol
-        # parity(class_info.dart:18 FieldIndex): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
+        # parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string — {classId, data} <: $JlBase (dart: String IS
         # a class). Symbol shares the rep (its name string).
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
@@ -2428,7 +2545,7 @@ end
 
 
 
-# ═══ THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:41-118) ═══
+# ═══ THE CLOSURE LAYOUTER (dart ClosureLayouter, closures.dart:209) ═══
 
 """
     get_closure_base_struct!(mod, registry) -> UInt32
@@ -2438,6 +2555,8 @@ The closure-base Object prefix and callable payload:
   functionType:(ref JlDataType)}`.
 This copies current dart ClosureLayouter's Object fields and context/vtable order
 including its final runtime function-type field.
+
+parity(closures.dart:365 ClosureLayouter.closureBaseStruct): the #ClosureBase struct.
 """
 function get_closure_base_struct!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.closure_base_idx !== nothing && return registry.closure_base_idx
@@ -2464,6 +2583,8 @@ vt(n) <: vt(n-1) <: … <: vt(0) — exactly dart's `parentVtableStruct` (closur
 573-578): a vtable built for a type's largest arity is then a subtype of the struct a
 dynamic call of any smaller arity casts to, so one vtable serves every arity the
 type is called with.
+
+parity(closures.dart:573 parentVtableStruct): each arity's vtable subtypes the previous one.
 """
 function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max_arity::Int)::UInt32
     d = registry.closure_vtable_struct_idxs
@@ -2479,7 +2600,7 @@ function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max
 end
 
 
-# ═══ step5: THE CLASS-DAG (dart class_info.dart:278-330) ═══
+# ═══ step5: THE CLASS-DAG (dart class_info.dart:420 _createStructForClass) ═══
 
 """
     ensure_abstract_struct!(mod, registry, A) -> UInt32
@@ -2487,6 +2608,8 @@ end
 The synthetic {classId:i32} struct for an ABSTRACT Julia type, `sub` its parent's
 synthetic (recursion roots at \$JlBase = Any). Parents recurse FIRST → their indices
 precede the child's (the wasm ordering rule).
+
+parity(class_info.dart:420 _createStructForClass): supertypes first, then the class's struct.
 """
 function ensure_abstract_struct!(mod::WasmModule, registry::TypeRegistry, A::Type)::Union{Nothing,UInt32}
     (A === Any || !(A isa DataType)) && return registry.base_struct_idx
@@ -2515,6 +2638,8 @@ end
 
 The wasm supertype for a CONCRETE type's struct: its nearest abstract parent's
 synthetic (the class-DAG), falling back to \$JlBase.
+
+parity(class_info.dart:451 superInfo): bool/num sit under Top, every other class under its super.
 """
 function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::Union{UInt32, Nothing}
     registry.base_struct_idx === nothing && return nothing   # bare registries (probes)
