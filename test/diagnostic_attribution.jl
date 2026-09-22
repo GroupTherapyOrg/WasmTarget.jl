@@ -21,6 +21,9 @@ module DiagAttrib
     outer2(x::Float64) = mid(x) - 1.0
     # for the internal-tier test: an Int64 add inside an inlined helper
     @inline bug_helper(x::Int64) = x + 1
+    # dev/CHARTER.md C6: an inlined statement keeps its chain through get_typed_ir
+    @inline c6_mid(x::Int64) = x * 3 + 1
+    c6_outer(x::Int64) = c6_mid(x) - 2
     bug_outer(x::Int64) = bug_helper(x) * 2
 end
 
@@ -29,6 +32,23 @@ _first_diag(f, argtypes) = try
     nothing
 catch e
     e isa WasmTarget.WasmCompileError ? e : rethrow()
+end
+
+# dev/CHARTER.md C6: IR retrieved through the one inference path (get_typed_ir, when the
+# closed-world cache does not already hold it) keeps its DebugInfo, so every NIR statement
+# carries a source line and an inlined statement's chain names its callee and its caller.
+# Before 2026-09-22 get_typed_ir asked code_typed for no debuginfo: every line was 0.
+@testset "the one inference path keeps source lines and inline chains" begin
+    ci, _ = WasmTarget.get_typed_ir(DiagAttrib.c6_outer, (Int64,))
+    nir = WasmTarget.build_nir(ci)
+    @test !isempty(nir) && all(s -> s.line > 0, nir)
+    # the multiply inside c6_mid, inlined into c6_outer: innermost first — Base's `*`, then
+    # c6_mid, then the compiled function c6_outer
+    k = findfirst(i -> any(f -> occursin("c6_mid", f), WasmTarget.stmt_frames(ci, i)), eachindex(ci.code))
+    @test k !== nothing
+    fr = WasmTarget.stmt_frames(ci, something(k, 1))
+    im = findfirst(f -> occursin("c6_mid", f), fr)
+    @test length(fr) >= 3 && im !== nothing && im > 1 && occursin("c6_outer", fr[end])
 end
 
 @testset "diagnostics: a rejection names its statement and inline chain" begin

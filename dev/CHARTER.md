@@ -67,8 +67,7 @@ with the per-clause status. A clause is never closed by argument.
   fabricated result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
-  `L101` `L118` `L119`. Planned: a located diagnostic raised inside an inlined callee
-  carries its frames (today `get_typed_ir` uses `debuginfo=:none` and the chain is empty).
+  `L101` `L118` `L119` `L127` `R34`.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99`.
@@ -112,6 +111,7 @@ with the per-clause status. A clause is never closed by argument.
 | dart 1:1 through and through | 1,099 of 1,134 top-level definitions carried no anchor; L110 checked only an anchor's syntax | C2, `R32` |
 | Targets reached, not settled | R3, R5, R14, R15, R17 relabeled "legitimate floors" in their own descriptions while the plan said 0 | rule 2, `L126` |
 | Fails fast and loud | 116 of 247 lowering-registry entries exercised by no fast-lane case (all 35 bespoke invoke lowerings among them); a broken lowering passed smoke and probes | C5, `R33`, the coverage lane |
-| Every failure located | marked done while every inline chain from `get_typed_ir` was empty | C6 planned check |
+| Correct or loud | 52 catch clauses in `src` swallowed a failure into a default, unmeasured | C6, `R34` |
+| Every failure located | marked done while IR from `get_typed_ir` (outside the closed-world cache) carried no DebugInfo — every NIR line 0 | C6, `L127` |
 | Nothing dart doesn't do | a runtime type object for every numbered type, parked as "post-march" | rule 5, C2 |
 | The goal decides | a task list judged by its own exit checks | rule 1, this file |

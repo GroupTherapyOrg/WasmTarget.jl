@@ -28,7 +28,7 @@ function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
         hit = get(cache, (f, arg_types), nothing)
         hit !== nothing && return hit[1], hit[2]
     end
-    results = Base.code_typed(f, arg_types; optimize=optimize, interp=interp)
+    results = Base.code_typed(f, arg_types; optimize=optimize, interp=interp, debuginfo=:source)
 
     if isempty(results)
         error("No method found for $f with types $arg_types")
@@ -48,7 +48,7 @@ WasmInterpreter.
 """
 function get_typed_ir(sig::Type{<:Tuple}; optimize::Bool=true,
                       interp::WasmInterpreter=get_wasm_interpreter())::Vector
-    return Base.code_typed_by_type(sig; optimize=optimize, interp=interp)
+    return Base.code_typed_by_type(sig; optimize=optimize, interp=interp, debuginfo=:source)
 end
 
 """

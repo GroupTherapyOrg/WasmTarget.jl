@@ -363,6 +363,25 @@ function count_unanchored_definitions(root::String=SRC)::Int
     return n
 end
 
+"""
+Catch clauses in `src` whose handler swallows the failure — it neither rethrows, throws,
+errors, nor records a located diagnostic (record_unsupported!/emit_unsupported_stub!/
+WasmInternalError/WasmCompileError). dev/CHARTER.md C6: a failure is correct or loud, never a
+silent default. Counted on the parsed AST (Expr(:try, body, var, handler)), not by regex.
+"""
+function count_silent_catches(root::String=SRC)::Int
+    loud = r"\brethrow\b|\bthrow\(|\berror\(|record_unsupported!|emit_unsupported_stub!|WasmInternalError|WasmCompileError"
+    n = 0
+    walk(x) = x isa Expr ? (x.head === :try && length(x.args) >= 3 && x.args[3] !== false &&
+                            !occursin(loud, string(x.args[3])) && (n += 1);
+                            foreach(walk, x.args)) : nothing
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") || continue
+        walk(Meta.parseall(read(joinpath(dir, f), String); filename=f))
+    end
+    return n
+end
+
 """The clauses of dev/CHARTER.md: clause id => (text, cited short check ids like "L110"/"R29a")."""
 function charter_clauses()::Vector{Pair{String,Tuple{String,Vector{String}}}}
     out = Pair{String,Tuple{String,Vector{String}}}[]
@@ -435,6 +454,8 @@ const METRICS = [
         () -> count_unanchored_definitions()),
     "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
+    "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
+        () -> count_silent_catches()),
 ]
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
@@ -1787,6 +1808,12 @@ const LOCKS = [
             dup = length(cited) - length(unique(cited))
             uncited = count(h -> h ∉ Set(cited), have)
             missing_ + dup + uncited
+        end),
+    "L127_one_inference_path_keeps_source_lines" => ("dev/CHARTER.md C6: every inference call in ir.jl (the one inference path) asks for debuginfo=:source, so IR it returns carries statement lines and inline chains — code_typed's default dropped them and every NirStmt.line read 0 (behavioral twin: test/diagnostic_attribution.jl 'the one inference path keeps source lines')",
+        () -> begin
+            ir_lines = readlines(joinpath(CODEGEN, "ir.jl"))
+            count(l -> !_iscomment(l) && occursin(r"Base\.code_typed(_by_type)?\(", l) &&
+                       !occursin("debuginfo=:source", l), ir_lines)
         end),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
