@@ -1,0 +1,11 @@
+#!/bin/sh
+# Commit messages describe the change for humans. Transcript links, tool
+# footers and agent-directed text never enter the history of this repo.
+# Install (shared by every worktree): cp dev/hooks/commit-msg "$(git rev-parse --git-common-dir)/hooks/"
+# CI enforces the same rule on the PR range and body (ci.yml, job `message-hygiene`).
+msg="$1"
+tmp="$msg.hygiene"
+grep -v -E '^Claude-Session:|claude\.ai/code/session|Generated with \[?Claude Code' "$msg" > "$tmp"
+# drop trailing blank lines left behind
+awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }' "$tmp" > "$msg"
+rm -f "$tmp"

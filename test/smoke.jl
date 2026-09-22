@@ -340,4 +340,5 @@ function main()
     println("smoke: $npass passed, $nfail wrong, $nerr errored  ($(dt)s)")
     exit((nfail + nerr) == 0 ? 0 : 1)
 end
-main()
+# main() runs when smoke.jl is the program; test/registry_coverage.jl includes it for GROUPS only
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

@@ -1,7 +1,7 @@
 name: Formal models
 on:
   push:
-    branches: [main]
+    branches: [main, 'march/**']
   pull_request:
   schedule:
     - cron: '17 3 * * *'   # nightly: the same harness plus dev/formal/nightly (instances too large for a 20-minute gate)

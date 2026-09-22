@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # march/** = agent branches of the finishing march: each gets the full
+    # matrix on push, so the authoritative gate runs on GitHub, not on a
+    # memory-bound local box (dev/MARCH.md §5).
+    branches: [main, 'march/**']
   pull_request:
 
 # Only the newest push per branch runs; a superseded run is cancelled.
@@ -11,6 +14,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Commit messages and the PR body describe the change for humans:
+  # transcript links, tool footers and agent-directed text never land
+  # (dev/hooks/commit-msg strips them locally; this is the gate).
+  message-hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No transcript links or tool footers in commits or the PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          pat='claude\.ai/code/session|^Claude-Session:|Generated with \[?Claude Code'
+          bad=$(git log --format='%H %s%n%b' origin/main..HEAD | grep -nE "$pat" || true)
+          if [ -n "$bad" ]; then echo "forbidden text in commit messages:"; echo "$bad"; exit 1; fi
+          if printf '%s' "$PR_BODY" | grep -qE "$pat"; then echo "forbidden text in the PR body"; exit 1; fi
+          echo "clean: $(git rev-list --count origin/main..HEAD) commits"
+
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
     # Bounds re-measured 2026-09-08: the full `all` slice runs 60-76 min on the
@@ -78,7 +102,7 @@ jobs:
         run: |
           julia --project=. test/smoke.jl
           julia --project=. test/parity_ratchet.jl
-          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; fi
+          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; julia --project=. test/registry_coverage.jl; fi
 
       - name: Run tests
         env:

@@ -7,7 +7,8 @@
 #   bash dev/lanes.sh --fast     # ratchet + smoke only (~1 min)
 #   bash dev/lanes.sh --all      # also the deep TLC instances (>10^6 states, +2-3 min)
 #
-# Byte identity is skipped on Julia ≥ 1.13 (the baseline records 1.12's typed IR); the
+# Byte identity and registry coverage are skipped on Julia ≥ 1.13 (both baselines record
+# 1.12's typed IR); the
 # formal lane needs Java (TLC is fetched on first use).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -29,6 +30,7 @@ lane smoke    $JULIA --project=. test/smoke.jl
 if [ $fast -eq 0 ]; then
   if $JULIA -e 'exit(VERSION < v"1.13.0-" ? 0 : 1)'; then
     lane probes $JULIA --project=. test/probe_bytes.jl
+    lane coverage $JULIA --project=. test/registry_coverage.jl
   else
     printf '  skip probes         (baseline is 1.12 IR)\n'
   fi
