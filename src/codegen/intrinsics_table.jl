@@ -19,12 +19,15 @@
 # `CodeGenCallback` (intrinsics.dart:437).
 
 """One typed binary-op emission: a callback (both operands already on the stack, at
-this key's wasm types) + result type."""
+this key's wasm types) + result type.
+parity(intrinsics.dart:17 CodeGenCallback) — the map's value type; `result` carries what
+dart computes at the lookup (`isComparison(name) ? i32 : leftType`, intrinsics.dart:997)."""
 struct BinOpEmit
     emit!::Function          # (b::InstrBuilder, ctx, julia_width::Int) -> Nothing
     result::WasmValType
 end
 
+# parity(intrinsics.dart:437 _binaryOperatorMap)
 # (lhs wasm type, rhs wasm type, julia op symbol) → emission.
 # Mirrors dart's _binaryOperatorMap shape; Julia's INTRINSIC names (add_int etc.)
 # are the op keys — the surface operators lower to these in typed IR.
@@ -124,6 +127,7 @@ has no entry (the caller keeps its legacy arm until its family migrates). `ctx` 
 build the DivideError guard, `julia_width` for its overflow check — see the table's
 header comment); every other entry ignores both, so a caller that never reaches a
 div/rem key (e.g. the M11.1 table smoke test) may omit them.
+parity(intrinsics.dart:995 _binaryOperatorMap) — the one lookup in generateInstanceIntrinsic.
 """
 function emit_intrinsic_binop!(b::InstrBuilder, lhs_ty::WasmValType, rhs_ty::WasmValType,
                                op::Symbol, ctx=nothing, julia_width::Int=(lhs_ty === I32 ? 32 : 64))
@@ -134,7 +138,7 @@ function emit_intrinsic_binop!(b::InstrBuilder, lhs_ty::WasmValType, rhs_ty::Was
 end
 
 # ============================================================================
-# parity(intrinsics.dart:474 _unaryOperatorMap, :1007 _inlineUnaryOperatorMap
+# parity(intrinsics.dart:475 _unaryOperatorMap, :1007 _inlineUnaryOperatorMap
 # lookup): THE UNARY INTRINSICS TABLE
 # ============================================================================
 #
@@ -145,12 +149,15 @@ end
 # `_unaryResultMap[op]` when present, else the operand type (intrinsics.dart:
 # 578-583, :1010).
 
-"""One typed unary-op emission: a callback (operand already on the stack) + result type."""
+"""One typed unary-op emission: a callback (operand already on the stack) + result type.
+parity(intrinsics.dart:17 CodeGenCallback) — the map's value type; `result` carries
+dart's `_unaryResultMap[name] ?? operandType` (intrinsics.dart:1010)."""
 struct UnOpEmit
     emit!::Function          # (b::InstrBuilder) -> Nothing
     result::WasmValType
 end
 
+# parity(intrinsics.dart:475 _unaryOperatorMap)
 # (operand wasm type, julia op symbol) → emission.
 const INTRINSIC_UNOPS = Dict{Tuple{WasmValType,Symbol},UnOpEmit}(
     # ── count leading/trailing zeros, population count (i32/i64) ──────────
@@ -193,6 +200,7 @@ THE unary dispatch point (dart's `_inlineUnaryOperatorMap` lookup, intrinsics.da
 Operand is on the stack at `operand_ty`. Returns the result type, or `nothing` when the
 table has no entry — nullable-return fall-through (the caller keeps its legacy arm/ladder
 until the family migrates).
+parity(intrinsics.dart:1007 _inlineUnaryOperatorMap) — the one lookup in generateInstanceIntrinsic.
 """
 function emit_intrinsic_unop!(b::InstrBuilder, operand_ty::WasmValType, op::Symbol)::Union{WasmValType,Nothing}
     e = get(INTRINSIC_UNOPS, (operand_ty, op), nothing)
