@@ -64,7 +64,7 @@ mutable struct DispatchTableRegistry
     selector_table_len::Int
     # parity(quarantine: Julia's multi-axis dispatch cascade composes two single-axis dart-shaped
     # hops through the SAME table; dart selectors vary only on the receiver's classId by
-    # construction (dispatch_table.dart:391-458 SelectorInfo is single-axis), so no dart structure
+    # construction (dispatch_table.dart:30 SelectorInfo is single-axis), so no dart structure
     # composes a second varying axis — looked in dispatch_table.dart and code_generator.dart's
     # _virtualCall/PolymorphicDispatchers, absent): the multi-axis CASCADE — Julia multiple dispatch as composed
     # dart single-axis hops through the SAME table. Per func_ref: level-1 rows that
