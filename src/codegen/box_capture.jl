@@ -1,6 +1,7 @@
 # F3 — dart2wasm-aligned mutable closure capture (`Core.Box`). See dev/HISTORY.md#closures-and-dynamic-dispatch.
 #
-# THE PURE PRINCIPLE (dart2wasm, closures.dart:1102-1115): a captured cell is typed by the
+# THE PURE PRINCIPLE (dart2wasm, closures.dart:1533 _buildContexts, the field typed at :1579
+# translateTypeOfLocalVariable): a captured cell is typed by the
 # VARIABLE'S OWN TYPE (`translateTypeOfLocalVariable`) — `int`→`i64` field, `dynamic`→top type
 # (boxed). Julia erases this by reifying every mutated capture as `Core.Box{contents::Any}`, so the
 # pure equivalent is to RECOMPUTE the variable's inferred type = the JOIN of all its assignments
@@ -43,6 +44,9 @@ end
 parity(code_generator.dart:133 ConstantExpression): a constant's static type is its constant's type."""
 _f3_literal_type(@nospecialize(v))::Type = v isa Type ? Type : typeof(v)
 
+# parity(quarantine: `:contents` is the one field of Julia's `Core.Box`, the untyped cell Julia
+# lowering creates for a reassigned captured variable; dart's captured variable is a typed field
+# of its context struct, closures.dart:1576)
 _f3_is_contents(x)::Bool = x isa NirLiteral && x.value === :contents
 
 """The `(box, value)` operands of a `setfield!(box, :contents, value)` call node (ANY box),
@@ -59,6 +63,8 @@ function _f3_contents_write(node::NirNode)::Union{Nothing,Tuple{NirNode,NirNode}
 end
 
 # Is `a` a `getfield(_, :contents)` read in `nir` (the box's contents, whatever box)?
+# parity(quarantine: a `getfield(_, :contents)` read of a Julia `Core.Box` is inferred `Any`
+# because the field is declared `Any`; these reads are where the erased variable type is restored)
 function _f3_is_box_read(a, nir::Vector{NirStmt})::Bool
     a isa NirSSA || return false
     1 <= a.id <= length(nir) || return false
@@ -70,6 +76,8 @@ function _f3_is_box_read(a, nir::Vector{NirStmt})::Bool
 end
 
 # Does `arg` reference the box created at SSA index `box_id`? Direct `%box_id` or `PiNode(%box_id,…)`.
+# parity(quarantine: Julia's typed IR carries a `Core.Box` forward through PiNode narrowings, so
+# "this box" is an SSA value or a PiNode of it; dart names a captured variable by its Capture)
 function _f3_refers_to_box(arg, box_id::Int, nir::Vector{NirStmt})::Bool
     arg isa NirSSA || return false
     arg.id == box_id && return true
@@ -84,6 +92,9 @@ end
 
 # Concrete Julia type of an IR operand, with box-contents reads typed as `T` and `NirArgument`s
 # resolved through `spectypes` (the method's signature tuple). Non-pinnable → `Any`.
+# parity(quarantine: types the operands of a value written into a Julia `Core.Box`, whose
+# `contents::Any` erases the variable's type — box reads as the join candidate, arguments through
+# the MethodInstance's specTypes)
 function _f3_operand_type(a, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})
     _f3_is_box_read(a, nir) && return T
     if a isa NirSSA
@@ -100,6 +111,9 @@ end
 
 # Result type of a contents-write value `rhs` in `nir`, given box-contents type estimate `T`
 # and the enclosing method's `spectypes`. Calls compute via `return_type` with box-reads typed `T`.
+# parity(quarantine: the inferred type of one value written into a Julia `Core.Box`, recomputed
+# through the one inference path because `contents::Any` erased it; dart reads the variable's
+# inferred type, translator.dart:2100 translateTypeOfLocalVariable)
 function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospecialize(T))
     if rhs isa NirSSA && 1 <= rhs.id <= length(nir)
         local node = nir[rhs.id].node
@@ -120,6 +134,9 @@ end
 # context-field read, closures.dart:1436). Returns ssa_id → the field read. Shared by
 # `f3_closure_box_seeds` (seed the box's known contents type into the closure body) and
 # `_f3_collect_capturing_bodies!` (find where a further-nested closure re-captures the SAME box).
+# parity(quarantine: a Julia closure body reaches its captured `Core.Box` only as
+# `getfield(#self#, field)` on its own struct, found by scanning the IR; dart's Closures pass
+# records every Capture's context field, closures.dart:1411 Capture)
 function _f3_self_field_reads(nir::Vector{NirStmt}, fields::Set{Symbol})::Dict{Int,Symbol}
     out = Dict{Int,Symbol}()
     for (i, s) in enumerate(nir)
@@ -141,6 +158,9 @@ end
 # always has (`%new(clo, …, box, …)` via `_f3_refers_to_box`). The field name is what lets discovery
 # recurse: a captor closure's OWN body reaches the SAME box one hop further in as
 # `getfield(#self#, thatfield)`, not another literal `%new(Core.Box)`.
+# parity(quarantine: a Julia closure is a struct built by `%new(closure_type, captures...)`, so the
+# closures holding a given `Core.Box` are found in the IR; dart records them in its Closures pass,
+# closures.dart:1411 Capture)
 function _f3_box_captor_fields(nir::Vector{NirStmt}, box_id::Int)::Vector{Tuple{Type,Symbol}}
     out = Tuple{Type,Symbol}[]
     for s in nir
@@ -162,6 +182,8 @@ function _f3_box_captor_fields(nir::Vector{NirStmt}, box_id::Int)::Vector{Tuple{
 end
 
 # The set of closure types that capture the box at SSA index `box_id` (from `%new(clo, …, box, …)`).
+# parity(quarantine: the closure types holding a given Julia `Core.Box`, from `%new` in the IR;
+# dart records captures in its Closures pass, closures.dart:1411 Capture)
 _f3_box_captors(nir::Vector{NirStmt}, box_id::Int)::Set{Type} =
     Set{Type}(ty for (ty, _) in _f3_box_captor_fields(nir, box_id))
 
@@ -173,12 +195,18 @@ _f3_box_captors(nir::Vector{NirStmt}, box_id::Int)::Set{Type} =
 # `_f3_refers_to_box` already treat "the box" as any SSA value regardless of how it arrived, so the
 # same one-hop matching recurses unchanged on that SSA id, any depth. `visited` (keyed by specTypes)
 # guards a recursive closure that captures itself. Returns Vector{(nir, spectypes)}.
+# parity(quarantine: every closure body that can write a Julia `Core.Box`, reached through the
+# MethodInstances its captors are invoked with; the join of their writes restores the type
+# `contents::Any` erased, where dart reads the variable's inferred type,
+# translator.dart:2100 translateTypeOfLocalVariable)
 function _f3_capturing_closure_bodies(nir::Vector{NirStmt}, box_id::Int)
     out = Tuple{Vector{NirStmt}, Any}[]
     _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id)
     return out
 end
 
+# parity(quarantine: the transitive walk of _f3_capturing_closure_bodies — a further-nested Julia
+# closure re-captures the same `Core.Box` as `getfield(#self#, field)`, found one hop per body)
 function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}}, visited::Set{Any},
                                        nir::Vector{NirStmt}, box_id::Int)::Vector{Tuple{Vector{NirStmt}, Any}}
     field_captors = _f3_box_captor_fields(nir, box_id)
@@ -229,6 +257,9 @@ field by the variable's own type — reconstructing what Julia erased. F3 L0; no
 # (_f3_capturing_closure_bodies) is TRANSITIVE — it recurses into a discovered closure's own
 # body to find a further-nested captor, any depth — matching MCBoxJoin.cfg's TransitiveDiscovery
 # = TRUE, the shape this model requires for the four claims to hold.
+# parity(quarantine: Julia lowers a reassigned captured variable to `Core.Box`, whose
+# `contents::Any` erases the variable's type; the join of every write restores it. dart types the
+# context field by the variable's inferred type, closures.dart:1579 translateTypeOfLocalVariable)
 function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int)::Union{Type,Nothing}
     # 1) enclosing init write(s)
     init = nothing
@@ -255,6 +286,8 @@ function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int)::Union{
 end
 
 # Find the SSA index of `%new(Core.Box)` statements in a body's NIR (helper for callers/tests).
+# parity(quarantine: locates the `%new(Core.Box)` cells Julia lowering emits for reassigned
+# captured variables; dart's captured variables live in context structs, closures.dart:1533)
 function find_box_news(nir::Vector{NirStmt})::Vector{Int}
     out = Int[]
     for (i, s) in enumerate(nir)
@@ -268,6 +301,9 @@ end
 # Result type of one call node with box-derived operands typed by `out` (propagated) — the engine
 # of f3_box_value_types. A `getfield(box,:contents)` read → the box's contents type; any other call
 # → `return_type` with each SSA operand typed by `out[id]` if propagated, else its inferred type.
+# parity(quarantine: one step of f3_box_value_types — a call over values read from a Julia
+# `Core.Box` is inferred `Any`; recompute it through the one inference path with the restored
+# operand types)
 function _f3_call_result_type(node::NirCall, nir::Vector{NirStmt}, out::Dict{Int,Type},
                               boxT::Dict{Int,Type}, ssa_types, spectypes)
     local operands = node.operands
@@ -312,6 +348,9 @@ type for box-DERIVED values (the getfield result, the `s+i` arithmetic) — thes
 by Julia (the dynamic `+`) but compute at a concrete width, so without this they get anyref locals
 the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
 it to type the chain). Does NOT type the box itself (that is the box-local typing). See dev/HISTORY.md#closures-and-dynamic-dispatch.
+parity(quarantine: values read from a Julia `Core.Box` are inferred `Any` because
+`contents::Any` erased the captured variable's type; this carries the restored type through the
+box-derived SSAs, where dart's visitor returns the ValueType it produced)
 """
 function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                             extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(),
@@ -361,6 +400,9 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
 end
 
 # Is `T` one of WT's concrete numeric wasm-representable scalar types?
+# parity(quarantine: the numeric-accumulator candidate of a Julia `Core.Box` capture whose writes
+# are not visible in the closure body, f3_self_box_joins; the Julia scalar types WT lowers to one
+# wasm number)
 _f3_is_numeric_jl(T) = T isa DataType && isconcretetype(T) &&
     (T <: Integer || T <: AbstractFloat) && T !== Bool && sizeof(T) <= 8 && !(T <: BigInt)
 
@@ -570,6 +612,9 @@ end
 # `boxfield` is a Core.Box field of the closure type `selfT`. Map each such read → the box's contents
 # type (`contents_T`, recovered from the enclosing fn's L2a side-table), so the body's box-derived
 # arithmetic types past Box{Any} erasure exactly like dart reads its typed context field directly.
+# parity(quarantine: in a Julia closure body the `Core.Box` arrives as `getfield(#self#, field)`
+# and is inferred `Any`; seeds those reads with the contents type the enclosing function's join
+# restored, as dart reads its typed context field, closures.dart:1436 Capture.type)
 function f3_closure_box_seeds(nir::Vector{NirStmt}, selfT, contents_T)::Dict{Int,Type}
     out = Dict{Int,Type}()
     (selfT isa DataType && isstructtype(selfT) && contents_T isa Type) || return out
@@ -592,6 +637,9 @@ types the captured-box field as a typed `Box{contents}` instead of anyref. Dynam
 
 The context value-channel proof invokes this before local typing, and closure registration reads
 the side table when choosing its captured-cell field type. See dev/HISTORY.md#closures-and-dynamic-dispatch.
+parity(quarantine: Julia's `Core.Box` is one untyped struct for every captured variable; this
+records, per closure type, the restored contents type so its captured cell becomes a typed Box
+struct, where dart defines the context field with the variable's type, closures.dart:1576)
 """
 function populate_box_field_types!(mod, registry, nir::Vector{NirStmt}, ssa_types)
     registry.box_contents_types === nothing && return registry.box_contents_types
