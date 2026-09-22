@@ -4,6 +4,10 @@
 
 """
 Check if func matches a given intrinsic name.
+
+parity(quarantine: a Julia IR callee arrives in five shapes — GlobalRef, IntrinsicFunction,
+Builtin, generic Function, MethodInstance — where a Kernel invocation carries one resolved
+Member reference; this reads the name out of whichever shape is present.)
 """
 function is_func(func, name::Symbol)::Bool
     if func isa GlobalRef
@@ -27,7 +31,11 @@ function is_func(func, name::Symbol)::Bool
     return false
 end
 
-"""True when a reference resolves to the named Core/Base builtin binding."""
+"""True when a reference resolves to the named Core/Base builtin binding.
+
+parity(quarantine: a Julia IR callee is a GlobalRef naming a module binding, resolved here
+to the Core/Base builtin object it holds; a Kernel invocation already carries its resolved
+target Member.)"""
 function is_builtin_func(func, name::Symbol)::Bool
     resolved = if func isa GlobalRef
         try
@@ -86,5 +94,7 @@ end
 # Julia IR nodes whose value is supplied at runtime rather than embedded as a
 # literal/global constant. Keep this classification centralized so optimized
 # (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
+# parity(quarantine: SSAValue/Argument/SlotNumber/PiNode are Julia IR node kinds with no
+# Kernel counterpart — Kernel is an expression tree whose operands are nodes, not references.)
 is_runtime_ir_value(x) = x isa Core.SSAValue || x isa Core.Argument ||
                          x isa Core.SlotNumber || x isa Core.PiNode
