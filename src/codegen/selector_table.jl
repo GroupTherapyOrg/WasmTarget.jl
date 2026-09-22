@@ -27,20 +27,21 @@
 # M8.2 — route single-axis dispatch through the ONE dart table
 # ============================================================================
 
+const _ST_BASE_IDX = Base.RefValue{UInt32}(0)
+_st_base_idx(_)::UInt32 = _ST_BASE_IDX[]
+
 """
     pack_dispatch_selectors!(mod, dt_registry, type_registry)
 
 At metadata time (entries known, wrappers not yet): detect each DispatchTable's
 dispatch axis; SINGLE-AXIS tables (exactly one varying typeId position — keying
 on that axis alone is provably equivalent to the full-tuple key) get first-fit
-packed into ONE flat funcref table (dart dispatch_table.dart:405-458). Offsets +
+packed into ONE flat funcref table (dart dispatch_table.dart:965 buildRowDisplacementTable). Offsets +
 positions land on `dt_registry`; elements are filled after wrapper emission by
 [`fill_selector_table_elements!`](@ref). Multi-axis tables dispatch via the
 M8.3 CASCADE (composed single-axis hops through the SAME table; FNV is deleted).
+parity(dispatch_table.dart:965 buildRowDisplacementTable)
 """
-const _ST_BASE_IDX = Base.RefValue{UInt32}(0)
-_st_base_idx(_)::UInt32 = _ST_BASE_IDX[]
-
 function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::Nothing
     isempty(dt_registry.tables) && return
     type_registry.base_struct_idx !== nothing && (_ST_BASE_IDX[] = type_registry.base_struct_idx)
@@ -63,8 +64,8 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::
             any(length(g) > 1 for g in values(groups)) && continue   # axis tie
         else
             # parity(quarantine: Julia multiple-dispatch cascade has no dart equivalent — dart selectors vary
-            # only on the receiver's classId by construction (dispatch_table.dart:391-458 SelectorInfo is
-            # single-axis; code_generator.dart:2028 _virtualCall's PolymorphicDispatchers fallback at :3694
+            # only on the receiver's classId by construction (dispatch_table.dart:30 SelectorInfo is
+            # single-axis; code_generator.dart:2028 _virtualCall's translator.dart:3686 PolymorphicDispatchers fallback
             # handles static-dispatch-range gaps within ONE classId axis, not a second varying axis; looked
             # for a composed/second-axis dispatch structure in both files and found none): 2-axis cascade — each tied level-1 group must be
             # cleanly dispatchable on axis2
@@ -87,7 +88,7 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::
     # dart's first-fit packing (sort weight desc; callCount folded into weight when known)
     sort!(packable; by=t -> -t[3])
     # helper: first-fit one row-set into the shared layout, returns its offset.
-    # parity(quarantine: dart packs only the rows themselves, dispatch_table.dart:405-458,
+    # parity(quarantine: dart packs only the rows themselves, dispatch_table.dart:965 buildRowDisplacementTable,
     # because static typing guarantees a virtual call's receiver has the member,
     # code_generator.dart:2028 _virtualCall; a Julia dynamic call can carry a receiver
     # with NO method, which must reach MethodError, never another row): the row set
@@ -162,7 +163,10 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::
     return
 end
 
-"""Level-1 classId span `(lo, hi)` of a packed selector — every row and cascade slot."""
+"""Level-1 classId span `(lo, hi)` of a packed selector — every row and cascade slot.
+parity(quarantine: dart's virtual call indexes the table unguarded, code_generator.dart:2028
+_virtualCall, because static typing guarantees the receiver has the member; a Julia dynamic
+call's receiver may have no method, so the span feeds emit_classid_span_guard!'s MethodError trap)"""
 function _selector_span(dt_registry, func_ref)::Tuple{Int,Int}
     offset = dt_registry.selector_offset[func_ref]
     poss = Int[p for (p, _) in dt_registry.selector_positions[func_ref]]
@@ -172,7 +176,10 @@ function _selector_span(dt_registry, func_ref)::Tuple{Int,Int}
     return (minimum(poss) - offset, maximum(poss) - offset)
 end
 
-"""Level-2 classId span `(lo, hi)` of one cascade group."""
+"""Level-2 classId span `(lo, hi)` of one cascade group.
+parity(quarantine: Julia multiple dispatch varies a second argument's class; dart selectors vary
+only on the receiver's classId, so the level-2 hop of the two-axis cascade and its span guard have
+no dart structure)"""
 function _cascade_span(c)::Tuple{Int,Int}
     poss = Int[p for (p, _) in c.rows2]
     return (minimum(poss) - c.offset2, maximum(poss) - c.offset2)
@@ -205,7 +212,8 @@ end
 
 After wrapper emission (dispatch.jl): write the packed positions' wrapper indices
 into the ONE table as element segments (contiguous runs, dart output(),
-dispatch_table.dart:461-470).
+dispatch_table.dart:800).
+parity(dispatch_table.dart:800 DispatchTable.output)
 """
 function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
     dt_registry.selector_table_idx === nothing && return
@@ -264,7 +272,7 @@ end
 """
     generate_selector_caller_body(dt, dt_registry, n_params, base_struct_idx) -> (body, locals)
 
-dart's virtual call site (code_generator.dart:2110-2122), as the dispatcher body:
+dart's virtual call site (code_generator.dart:2103-2110), as the dispatcher body:
 
     push args · receiver.classId · [+ offset] · call_indirect(sig, THE table)
 
