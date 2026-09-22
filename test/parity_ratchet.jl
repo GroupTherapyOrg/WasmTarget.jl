@@ -333,9 +333,13 @@ function count_unanchored_definitions(root::String=SRC)::Int
         lines = readlines(joinpath(dir, f))
         anchored = Dict{String,Bool}()
         region = false
+        indoc = false
         for (i, l) in enumerate(lines)
             startswith(l, "# parity-region(") && (region = true)
             startswith(l, "# end parity-region") && (region = false)
+            wasdoc = indoc
+            isodd(count("\"\"\"", l)) && (indoc = !indoc)
+            wasdoc && continue   # a docstring's interior is prose, not a definition
             m = match(_TOPLEVEL_DEF, l)
             m === nothing && continue
             name = something(m.captures...)

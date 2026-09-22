@@ -27,6 +27,8 @@ prepare)
         git -C "$MAIN" worktree add -q "$W" "$br" 2>/dev/null ||
             git -C "$MAIN" worktree add -q -b "$br" "$W" "origin/$br"
     fi
+    # Manifest.toml is untracked: a fresh worktree resolves exactly the main tree's environment
+    [ -f "$W/Manifest.toml" ] || cp "$MAIN/Manifest.toml" "$W/Manifest.toml"
     tip=$(git -C "$MAIN" rev-parse "$MARCH")
     cd "$W"
     [ -z "$(git status --porcelain)" ] || { echo "worktree $W is dirty — refusing"; exit 1; }
