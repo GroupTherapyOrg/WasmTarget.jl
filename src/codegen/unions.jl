@@ -7,6 +7,9 @@
 """
 Check if a Union type is a "simple" nullable type (Union{Nothing, T}).
 Returns the inner type T if so, nothing otherwise.
+
+parity(quarantine: Julia spells a nullable type as the Union{Nothing,T}, which must be
+split to recover T; a Dart `T?` carries T and its nullability directly on the DartType.)
 """
 function get_nullable_inner_type(T::Union)::Union{Type, Nothing}
     types = Base.uniontypes(T)
@@ -65,6 +68,10 @@ end
 
 """
 Check if a value represents `nothing` (literal or GlobalRef to nothing).
+
+parity(quarantine: Julia IR spells the null value three ways — the literal `nothing`, a
+GlobalRef to the `nothing` binding, and an SSA/PiNode inferred as Nothing — where Kernel has
+the one NullLiteral node.)
 """
 function is_nothing_value(val, ctx)::Bool
     val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
@@ -97,6 +104,6 @@ end
 # M3 (dart2wasm parity): the tagged-union wrapper family is DELETED — needs_tagged_union
 # (≡ false since U2), emit_wrap_union_value, emit_unwrap_union_value. A Union value is JUST an
 # AnyRef discriminated by classId: numerics ride THE classId box (emit_classid_box!/unbox!,
-# translator.dart:854-870), object refs pass through with their own field-0 classId. All
+# translator.dart:1597 convertType), object refs pass through with their own field-0 classId. All
 # boundary coercion goes through convert_type! (the ONE funnel). This file keeps only the
 # nullable-union helpers + is_nothing_value.
