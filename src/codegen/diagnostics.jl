@@ -26,8 +26,8 @@ A single reason codegen could not fully translate a construct.
                 from the CodeInfo's DebugInfo edges; the last entry is the compiled
                 function itself
 
-parity(target.dart:719-751 DiagnosticReporter): a located, structured report — never a
-bare string. With closed-world inlining a statement can sit hundreds of statements deep
+parity(pkg/_fe_analyzer_shared/lib/src/messages/codes.dart:144 LocatedMessage): a located,
+structured report — never a bare string. With closed-world inlining a statement can sit hundreds of statements deep
 inside a root function; the chain names the Base method it really belongs to.
 """
 struct WasmDiagnostic
@@ -45,13 +45,18 @@ WasmDiagnostic(kind::Symbol, func_name::AbstractString, construct::AbstractStrin
     WasmDiagnostic(kind, String(func_name), String(construct),
                    julia_loc === nothing ? nothing : String(julia_loc), detail, 0, "", String[])
 
+# parity(pkg/front_end/lib/src/api_prototype/terminal_color_support.dart:14 printDiagnosticMessage)
 function Base.show(io::IO, d::WasmDiagnostic)
     loc = d.julia_loc === nothing ? "" : " at $(d.julia_loc)"
     print(io, "[$(d.kind)] in `$(d.func_name)`$loc: $(d.construct)")
     d.stmt_idx > 0 && print(io, " (statement %", d.stmt_idx, ": ", d.stmt, ")")
 end
 
-"""Print the inline chain, innermost first, indented under a diagnostic."""
+"""
+Print the inline chain, innermost first, indented under a diagnostic.
+
+parity(pkg/front_end/lib/src/api_prototype/terminal_color_support.dart:14 printDiagnosticMessage)
+"""
 function _show_frames(io::IO, d::WasmDiagnostic)::Nothing
     isempty(d.frames) && return
     print(io, "\n  statement %", d.stmt_idx, ": ", d.stmt)
@@ -63,11 +68,12 @@ end
 """
     WasmInternalError(func_name, stmt_idx, stmt, frames, cause)
 
-The internal tier (dart's own `throw`, target.dart:719): a codegen bug — a builder
-stack imbalance, an `error(...)`, a MethodError inside the compiler — raised while a
-statement was being compiled. It is NOT a diagnostic about the user's program, so it
+The internal tier: a codegen bug — a builder stack imbalance, an `error(...)`, a
+MethodError inside the compiler — raised while a statement was being compiled. It is NOT a diagnostic about the user's program, so it
 does not enter the ledger; but it is located exactly like one, so a compiler bug names
 the statement and inline chain it surfaced at. `cause` is the original exception.
+
+parity(compile.dart:113 CFECrashError)
 """
 struct WasmInternalError <: Exception
     func_name::String
@@ -77,6 +83,7 @@ struct WasmInternalError <: Exception
     cause::Any
 end
 
+# parity(compile.dart:120 CFECrashError.toString)
 function Base.showerror(io::IO, e::WasmInternalError)
     print(io, "WasmInternalError: codegen bug while compiling `", e.func_name, "`")
     if e.stmt_idx > 0
@@ -89,6 +96,7 @@ function Base.showerror(io::IO, e::WasmInternalError)
     showerror(io, e.cause)
 end
 
+# parity(pkg/_fe_analyzer_shared/lib/src/messages/codes.dart:91 MessageCode)
 _kind_phrase(k::Symbol)::String =
     k === :unsupported_method    ? "method" :
     k === :unsupported_intrinsic ? "intrinsic" :
@@ -101,6 +109,8 @@ _kind_phrase(k::Symbol)::String =
 
 Thrown when codegen cannot translate a construct without fabricating a value.
 Carries the [`WasmDiagnostic`](@ref) so callers can inspect `.diag`.
+
+parity(compile.dart:132 CFECompileTimeErrors)
 """
 struct WasmCompileError <: Exception
     diag::WasmDiagnostic
@@ -108,6 +118,7 @@ struct WasmCompileError <: Exception
 end
 WasmCompileError(diag::WasmDiagnostic)::WasmCompileError = WasmCompileError(diag, WasmDiagnostic[diag])
 
+# parity(pkg/front_end/lib/src/api_prototype/terminal_color_support.dart:14 printDiagnosticMessage)
 function Base.showerror(io::IO, e::WasmCompileError)
     d = e.diag
     loc = d.julia_loc === nothing ? "" : " at $(d.julia_loc)"
@@ -145,6 +156,7 @@ Base.showerror(io::IO, e::WasmValidationError) =
 # frontend/nir.jl's `_nir_lines` applies in one forward pass to fill `NirStmt.line`:
 # a position whose own entry is ≤ 0 ("inherited/none") takes the nearest earlier
 # statement that carries a concrete line. `_debug_line` (nir.jl) is the one decode.
+# parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
     di = try; ci.debuginfo; catch; nothing; end
     di === nothing && return nothing
@@ -156,6 +168,7 @@ function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
 end
 
 # Method definition "(file, line)" — the always-available anchor.
+# parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 function _method_loc(ci)::Union{Nothing,Tuple{String,Int}}
     try
         mi = ci.debuginfo.def
@@ -175,6 +188,8 @@ The inline chain of SSA statement `idx`, innermost first — `"method @ file:lin
 frame — decoded from the CodeInfo's DebugInfo edges (Julia 1.12+: `Core.DebugInfo`).
 A statement with no location of its own (a synthesized one) takes the nearest earlier
 statement's chain. Empty when the IR carries no debug info at all.
+
+parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
 function stmt_frames(ci, idx::Int)::Vector{String}
     frames = String[]
@@ -206,6 +221,8 @@ end
 `"file:line"` of SSA statement `idx`'s innermost source frame (the Base method it was
 inlined from, when it was); the method's own definition line when the statement has
 no location.
+
+parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
 function julia_loc(ctx, idx::Int)::Union{Nothing,String}
     ci = ctx.code_info
@@ -234,6 +251,8 @@ _ctx_ir(ctx) = try; ctx.code_info; catch; nothing; end
 
 Wrap a non-diagnostic exception raised while statement `idx` was being compiled
 with the statement and its inline chain.
+
+parity(compile.dart:345 CFECrashError)
 """
 function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
     ci = _ctx_ir(ctx)
@@ -289,8 +308,13 @@ kind, because it never executes. The kinds classify the diagnostic for the reade
 
 Callers pass the SSA statement `idx` (already in scope at every codegen site) for
 source attribution. Pass `soundness_fatal=true` to force rejection.
+
+formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of
+the caller's soundness_fatal hint and CFG-proven reachability, classified here before any
+emission is attempted.
+
+parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report)
 """
-# formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of the caller's soundness_fatal hint and CFG-proven reachability, classified here before any emission is attempted (parity: target.dart:719 two-tier diagnostics).
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
@@ -330,6 +354,8 @@ helpers) — those stay bare `unreachable` (sound; erroring would reject most of
 `test/fuzz/STRICT_MODE_INVENTORY.md`).
 
 Builder-native form (first method): emits its unreachable straight on `b`.
+
+parity(code_generator.dart:5084 UnreachableCodeGenerator)
 """
 function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
