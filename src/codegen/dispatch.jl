@@ -12,7 +12,10 @@ wasm struct with a classId header field. `isstructtype` alone over-admits: `Memo
 `MemoryRef` are `isstructtype` in Julia but WT lowers them to a wasm ARRAY (no classId
 field) — giving one a dispatch axis produced a wrapper with no struct to cast to (the
 `_la_sub` regression, compile.jl `_collect_reachable_ir_types`). Numeric/primitive
-receivers dispatch as compile-time-resolved overloads, never through the selector table."""
+receivers dispatch as compile-time-resolved overloads, never through the selector table.
+parity(quarantine: Julia's `isstructtype` admits `Memory`/`MemoryRef`, which WT lowers to wasm
+arrays with no classId header, and `Number`/primitive types; every dart receiver is a class
+whose struct carries a classId, so dart needs no admission predicate)"""
 _classid_dispatchable(@nospecialize(T))::Bool =
     T isa DataType && isstructtype(T) && !isprimitivetype(T) && !(T <: Number) &&
     !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
@@ -20,6 +23,7 @@ _classid_dispatchable(@nospecialize(T))::Bool =
 """
 One entry in a dispatch table (compile-time): the typeId tuple of a registered
 specialization and its target/wrapper function indices.
+parity(dispatch_table.dart:333 SelectorTargets.allTargetRanges)
 """
 struct DispatchEntry
     type_ids::Vector{Int32}   # DFS type IDs per argument
@@ -30,6 +34,7 @@ end
 
 """
 A generic function's dispatchable specialization set (the selector's target map).
+parity(dispatch_table.dart:30 SelectorInfo)
 """
 mutable struct DispatchTable
     func_ref::Any              # Julia function being dispatched
@@ -45,6 +50,7 @@ end
 
 """
 Registry of dispatch tables for a module.
+parity(dispatch_table.dart:396 DispatchTable)
 """
 mutable struct DispatchTableRegistry
     tables::Dict{Any, DispatchTable}  # func_ref -> DispatchTable
@@ -72,7 +78,8 @@ DispatchTableRegistry()::DispatchTableRegistry = DispatchTableRegistry(Dict{Any,
     Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
         Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}())
 
-"""Get the dispatch table for a function."""
+"""Get the dispatch table for a function.
+parity(dispatch_table.dart:436 DispatchTable.selectorForTarget)"""
 get_dispatch_table(reg::DispatchTableRegistry, func_ref)::Union{Nothing,DispatchTable} = get(reg.tables, func_ref, nothing)
 
 """A selector's program-determined order key: its first entry's target function index
@@ -108,12 +115,13 @@ function _dispatch_supertype_idx(idx::UInt32, registry)::Union{UInt32, Nothing}
     return registry.base_struct_idx
 end
 
+# parity(dispatch_table.dart:501 DispatchTable.build)
 # formal(dev/formal/ClassIdDispatch.tla): first-fit packing is collision-free, every tuple WITH a specialization resolves to it (one hop or the two-axis cascade), and a receiver tuple WITHOUT one traps (span reservation + classId span guard + wrapper slot check: MissingMethodTraps)
 function build_dispatch_tables(func_registry::FunctionRegistry,
                                 type_registry::TypeRegistry;
                                 threshold::Int=2)::DispatchTableRegistry
     # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
-    # (dispatch_table.dart:401-403 needsDispatch). The 2-8 machinery was proven at
+    # (dispatch_table.dart:919 _isUsedViaDispatchTableCall). The 2-8 machinery was proven at
     dt_registry = DispatchTableRegistry()
 
     for (func_ref, infos) in func_registry.by_ref   # a Vector: registration order
@@ -249,6 +257,7 @@ end
 Phase 1: Emit dispatch metadata (signatures, globals, funcref table placeholder).
 Called BEFORE body compilation so that emit_dispatch_call! can reference global indices.
 Does NOT add wrapper functions — those are deferred to emit_dispatch_wrappers!.
+parity(dispatch_table.dart:118 SelectorInfo._computeSignature)
 """
 function emit_dispatch_metadata!(mod::WasmModule,
                                   type_registry::TypeRegistry,
@@ -269,6 +278,11 @@ end
 Phase 2: Emit wrapper functions and element segments.
 Called AFTER all actual functions are added to the module, so entry.target_idx
 values (set from func_registry during build_dispatch_tables) are correct.
+parity(quarantine: a Julia method specialization is its own compiled function with concrete
+parameter types (Int64 vs Float64 vs a struct at one slot); dart's overriding members are all
+compiled against the selector's shared signature, so dart stores the target itself in the table,
+while each Julia entry needs an adapter from the selector's per-slot upper-bound signature to its
+own parameters — unbox/cast, and a classId check at every non-axis slot)
 """
 function emit_dispatch_wrappers!(mod::WasmModule,
                                   type_registry::TypeRegistry,
