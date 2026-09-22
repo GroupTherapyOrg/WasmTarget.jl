@@ -64,6 +64,9 @@ is_struct_type(::Any) = false
 
 """
 Check if type is a closure (subtype of Function with captured fields).
+
+parity(quarantine: a Julia closure is an ordinary concrete struct subtyping Function whose
+fields are its captures; Kernel closures are FunctionExpression nodes, never classes.)
 """
 function is_closure_type(T::Type)::Bool
     # Union{} is bottom type - not a closure
@@ -83,6 +86,7 @@ is_closure_type(::Any) = false
 Register a closure type as a WasmGC struct.
 """
 # formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
+# parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.
 function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -190,6 +194,7 @@ Register a Julia struct type in the Wasm module.
 # mutable state between concurrent compilation tasks.
 _struct_reg_stack() = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
 
+# parity(class_info.dart:420 _createStructForClass): one wasm struct per class, with its supertype.
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -609,6 +614,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     return info
 end
 
+# parity(class_info.dart:539 _generateFields): the class's field list after the inherited prefix.
 function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Get field information
     field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
@@ -799,7 +805,7 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
 
     # Add struct type to module
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    # synthetic (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
     local _dagp = dag_supertype_idx!(mod, registry, T)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
@@ -817,6 +823,8 @@ Tuples are represented as WasmGC structs with numbered fields.
 """
 # Rewrite Type{X} tuple parameters to DataType so every spelling of
 # a type-object-carrying tuple shares one registry entry / wasm struct type.
+# parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as
+# DataType; a Dart record's field types have one spelling.)
 function _canonical_tuple_type(T::DataType)
     changed = false
     ps = Any[]
@@ -831,6 +839,8 @@ function _canonical_tuple_type(T::DataType)
     return changed ? Tuple{ps...} : T
 end
 
+# parity(quarantine: Julia's Tuple{Vararg{E}} is a tuple type whose length is a runtime value;
+# a Dart record type has a static field count.)
 is_vararg_tuple_type(@nospecialize(T)) =
     T isa DataType && T <: Tuple && any(p -> typeof(p) === Core.TypeofVararg, T.parameters)
 
@@ -839,6 +849,8 @@ True only for the homogeneous runtime tuple layout this backend represents:
 `Tuple{Vararg{E}}` with `E` concrete, or its non-empty narrowing `Tuple{E, …, Vararg{E}}`
 (what a `typeassert`/PiNode leaves after `isempty` is ruled out) — the same runtime-length
 value, so the same layout (`runtime_vararg_canonical`).
+
+parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)
 """
 function is_runtime_vararg_tuple_type(@nospecialize(T))
     (T isa DataType && T <: Tuple && length(T.parameters) >= 1) || return false
@@ -852,13 +864,16 @@ function is_runtime_vararg_tuple_type(@nospecialize(T))
     return true
 end
 
-"""The one layout key for a runtime Vararg tuple type: `Tuple{Vararg{E}}`."""
+"""The one layout key for a runtime Vararg tuple type: `Tuple{Vararg{E}}`.
+
+parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)"""
 function runtime_vararg_canonical(T::DataType)::DataType
     is_runtime_vararg_tuple_type(T) ||
         error("no homogeneous runtime Vararg tuple representation for $T")
     return Tuple{Vararg{T.parameters[end].T}}
 end
 
+# parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)
 function vararg_tuple_eltype(T::DataType)::Type
     is_runtime_vararg_tuple_type(T) ||
         error("no homogeneous runtime Vararg tuple representation for $T")
@@ -866,7 +881,9 @@ function vararg_tuple_eltype(T::DataType)::Type
 end
 
 """Register the runtime-length tuple wrapper `{Object, data, size}` (one struct per element
-type; a non-empty narrowing of the same layout aliases the canonical entry)."""
+type; a non-empty narrowing of the same layout aliases the canonical entry).
+
+parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)"""
 function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     is_runtime_vararg_tuple_type(T) ||
         error("cannot register unsupported runtime Vararg tuple layout $T")
@@ -895,6 +912,7 @@ function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T:
     return info
 end
 
+# parity(class_info.dart:510 _createStructForRecordClass): a Julia tuple is dart's record.
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -1000,7 +1018,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
 
     # Add struct type to module
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    # synthetic (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
     local _dagp = dag_supertype_idx!(mod, registry, T)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
@@ -1020,6 +1038,9 @@ Multi-dim arrays are stored as WasmGC structs with two fields:
 - Field 1: size (tuple of dimensions)
 
 This matches Julia's internal representation where Matrix{T} has :ref and :size fields.
+
+parity(quarantine: Julia's Array{T,N} is a mutable struct {ref::MemoryRef, size::NTuple{N,Int}}
+over a Memory buffer, read and written by field name in Base; the wasm struct copies it.)
 """
 function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
@@ -1057,7 +1078,7 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
 
     # Add struct type to module
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    # synthetic (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
     local _dagp = dag_supertype_idx!(mod, registry, T)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
@@ -1108,6 +1129,9 @@ Vectors are stored as WasmGC structs with two fields:
 
 This matches Julia's internal representation where Vector{T} has :ref and :size fields.
 The size field is mutable to support setfield!(v, :size, (n,)) for push!/resize! operations.
+
+parity(quarantine: Julia's Array{T,1} layout {ref::MemoryRef, size::Tuple{Int}}, see
+register_matrix_type!.)
 """
 function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
@@ -1145,7 +1169,7 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
 
     # Add struct type to module
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    # synthetic (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
     local _dagp = dag_supertype_idx!(mod, registry, T)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
@@ -1168,6 +1192,9 @@ Register a 128-bit integer type (Int128 or UInt128) as a WasmGC struct.
 - Field 1: hi (high 64 bits)
 
 This is the standard representation used by most WASM compilers for 128-bit integers.
+
+parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one 64-bit value — so
+the 128-bit value is a struct of two i64 halves.)
 """
 function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     # Already registered?
@@ -1183,7 +1210,7 @@ function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
 
     # Add struct type to module
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
-    # synthetic (dart class_info.dart:288), created parent-first at registration.
+    # synthetic (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
     local _dagp = dag_supertype_idx!(mod, registry, T)
     type_idx = _dagp === nothing ? add_struct_type!(mod, wasm_fields) :
                UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
@@ -1200,6 +1227,8 @@ end
 
 """
 Get or create the 128-bit integer struct type.
+
+parity(quarantine: Int128/UInt128, see register_int128_type!.)
 """
 function get_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
     if haskey(registry.structs, T)
