@@ -539,7 +539,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             # DiagnosticReporter shape; L8 "no silent traps").
             # formal(dev/formal/NirBuild.tla): claim (5) — a NirUnsupported node is routed
             # to record_unsupported!, never reinterpreted as a no-op.
-            record_unsupported!(ctx, :ir_node, "IR head `:$(node.head)` has no lowering";
+            record_unsupported!(ctx, :ir_node, "IR head `:$(node.kind)` has no lowering";
                                 idx=idx, detail=node.raw)
             unreachable!(_sf)  # structural trap after recorded unsupported
             stmt_bytes = builder_code(_sf)
@@ -674,8 +674,7 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
             return false
         end
 
-        successors = if node isa NirReturn ||
-                        (node isa NirUnsupported && node.head === :unreachable)
+        successors = if node isa NirReturn
             Int[]
         elseif node isa NirGoto
             Int[node.target]
@@ -698,16 +697,12 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
     return true
 end
 
-"""The collected IR of an `:invoke` target, from the trim collector's cache. `raw` is the
-invoke statement: the callee FUNCTION OBJECT is its `args[2]`, which the boundary does not
-carry on NirInvoke (it carries the MethodInstance identity instead) — the one raw read
-left in this file, and it goes when invoke.jl is converted."""
-function _cached_invoke_ir(node::NirInvoke, raw)
+"""The collected IR of an `:invoke` target, from the trim collector's cache, keyed by the
+callee FUNCTION OBJECT the node carries and the MethodInstance's argument types."""
+function _cached_invoke_ir(node::NirInvoke)
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
-    fref = (raw isa Expr && length(raw.args) >= 2) ? raw.args[2] : nothing
-    f = fref isa GlobalRef && isdefined(fref.mod, fref.name) ?
-        getfield(fref.mod, fref.name) : fref
+    f = _nir_callee_object(node.callee)
     f isa Function || return nothing
     sig = mi.specTypes
     sig isa DataType && sig <: Tuple || return nothing
@@ -737,17 +732,17 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
     idx < length(ctx.nir) &&
         _definitely_initializes_in_nir(ctx.nir, idx + 1, subject, T, missing) &&
         return true
-    uses = Tuple{NirInvoke,Any,Int}[]
+    uses = Tuple{NirInvoke,Int}[]
     for rec in ctx.nir
         nir_uses(rec.node, subject) || continue
         rec.node isa NirInvoke || return false
         positions = findall(o -> o isa NirSSA && o.id == idx, rec.node.operands)
         length(positions) == 1 || return false
-        push!(uses, (rec.node, rec.raw, positions[1]))
+        push!(uses, (rec.node, positions[1]))
     end
     length(uses) == 1 || return false
-    use, use_raw, explicit_pos = only(uses)
-    callee_ir = _cached_invoke_ir(use, use_raw)
+    use, explicit_pos = only(uses)
+    callee_ir = _cached_invoke_ir(use)
     callee_ir isa Core.CodeInfo || return false
     arg_n = explicit_pos + 1 # Core.Argument(1) is the callable/self slot
     return _definitely_initializes_in_nir(
