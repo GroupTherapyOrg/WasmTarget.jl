@@ -1,6 +1,7 @@
 """
 Generate code using Wasm's structured control flow.
 For simple if-then-else patterns, we use the `if` instruction.
+parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     b = _ctx_builder(ctx, "generate_structured")
@@ -168,7 +169,9 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
     return true
 end
 
-"""Convert one already-emitted literal phi edge using its proven Julia type."""
+"""Convert one already-emitted literal phi edge using its proven Julia type.
+parity(code_generator.dart:665 AstCodeGenerator.translateExpression)
+"""
 function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                  phi_local_type, src_type, src::InstrBuilder,
                                  src_julia::Type)::Bool
