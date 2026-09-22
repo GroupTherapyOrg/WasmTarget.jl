@@ -5,13 +5,14 @@
 """
     static_wasm_type(val, ctx) -> WasmValType
 
-THE single PRE-EMISSION static-type query (dart2wasm's `translateType(node.getStaticType())`,
-intrinsics.dart:333): what wasm type WOULD `val` push, derived from locals/ssa_types/literals.
+THE single PRE-EMISSION static-type query (dart2wasm's `translateType(dartTypeOf(node))`,
+code_generator.dart:124/:129): what wasm type WOULD `val` push, derived from locals/ssa_types/literals.
 CONTRACT: use ONLY to make decisions BEFORE emitting (opcode/width selection, path choice) —
 NEVER to describe a value that has already been emitted; the emission's own returned type
 (`_compile_value_b`/`emit_value!`) is the truth there. The old name `infer_value_wasm_type`
 (the post-emission re-guess anti-pattern, once ~265 callers) is retired and LOCKED at zero by
 test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
+parity(code_generator.dart:124 translateType) of dartTypeOf (:129).
 """
 function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
     val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
@@ -158,6 +159,7 @@ end
 # Classify the heap-type hierarchy of a ref-ish WasmValType into one of:
 #   :any (the GC hierarchy: any/eq/struct/array/i31/none + concrete struct/array),
 #   :extern, :func, or :other (NonNullAbstractRef whose byte we resolve, ExnRef, …).
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType): `t is RefType` (:237).
 _wt_is_ref(t::WasmValType)::Bool =
     t isa RefType || t isa ConcreteRef || t isa NonNullAbstractRef
 
@@ -170,6 +172,7 @@ _wt_gc_refkind(t::RefType)::Bool =
 # the RefType @enum values are nullable-shorthand (always nullable) and
 # NonNullAbstractRef is the explicit non-null abstract variant. Numerics/packed
 # are not refs (caller gates on _wt_is_ref first).
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:170 nullable)
 _wt_ref_nullable(t::ConcreteRef)::Bool = t.nullable
 _wt_ref_nullable(::NonNullAbstractRef)::Bool = false
 _wt_ref_nullable(::RefType)::Bool = true  # enum refs are nullable shorthand
@@ -177,6 +180,7 @@ _wt_ref_nullable(::RefType)::Bool = true  # enum refs are nullable shorthand
 # dart2wasm RefType.withNullability(false): the non-null variant of a ref type.
 # ConcreteRef flips its bit; a nullable-shorthand RefType becomes the matching
 # NonNullAbstractRef (same heap byte, non-null). Numerics/packed pass through.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:229 withNullability); numerics pass through as ValueType.withNullability (:56).
 _wt_drop_nullable(t::ConcreteRef)::WasmValType = ConcreteRef(t.type_idx, false)
 _wt_drop_nullable(t::RefType)::WasmValType = NonNullAbstractRef(UInt8(t))
 _wt_drop_nullable(t::NonNullAbstractRef)::WasmValType = t
@@ -188,6 +192,7 @@ _wt_drop_nullable(t::WasmValType)::WasmValType = t  # NumType / packed UInt8
 #    :concrete_struct,:concrete_array, :unknown}.
 # NonNullAbstractRef resolves via its heaptype_byte (which equals the RefType enum
 # byte) so it participates by heap type rather than hitting a conservative-false.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:166 heapType): WT's value types carry the heap type as a byte or an index.
 function _wt_heap_kind(t, mod)::Symbol
     if t isa ConcreteRef
         idx = Int(t.type_idx)
@@ -219,6 +224,8 @@ function _wt_heap_kind(t, mod)::Symbol
     end
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:361 HeapType.deserialize): heap-type code → heap type (dart throws on an
+# unknown code; this answers :unknown and does not decode none/noextern/nofunc/noexn).
 function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
     byte == UInt8(AnyRef)    ? :any    :
     byte == UInt8(EqRef)     ? :eq     :
@@ -234,6 +241,7 @@ end
 # hierarchies — `any` (eq/struct/array/i31 + all concrete structs/arrays), `func`,
 # `extern`, `exn` — that share no common supertype. Used by `_wt_same_hierarchy` for
 # `ref.cast` plausibility (P13).
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:348 topType)
 function _wt_hierarchy_top(kind::Symbol)::Symbol
     kind === :func   ? :func   :
     kind === :extern ? :extern :
@@ -254,6 +262,8 @@ is deliberately NOT a subtype check — a within-`any` cast between two unrelate
 structs is VALID wasm (it just always traps at runtime), so `wasm_subtype` either-way
 would wrongly reject it. dart2wasm verifies cast plausibility the same way (one
 hierarchy), leaving always-trapping casts to the runtime.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1961 ref_cast): the cast's input
+must be under the target's topType (:1964).
 """
 function _wt_same_hierarchy(a, b, mod)::Bool
     ta = _wt_hierarchy_top(_wt_heap_kind(a, mod))
@@ -262,6 +272,7 @@ end
 
 # The declared supertype index of a ConcreteRef's type, or `nothing`. Only
 # StructType carries the supertype chosen at registration; arrays never declare one.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:712 superType)
 function _wt_concrete_supertype_idx(idx::Integer, mod)::Union{Nothing,UInt32}
     mod === nothing && return nothing
     i = Int(idx) + 1
@@ -274,6 +285,7 @@ end
 # ConcreteRef `a` and return true iff a concrete `b` (same type_idx) is reached.
 # Pure nominal walk — does NOT consult the abstract super (that's handled by the
 # heap-kind lattice in wasm_subtype). Depth-guarded against malformed cycles.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:733 isSubtypeOf) — DefType.isSubtypeOf; the 256 depth cap is not dart's.
 function _wt_concrete_chain_reaches(a_idx::Integer, b_idx::Integer, mod)::Bool
     a_idx == b_idx && return true
     cur = _wt_concrete_supertype_idx(a_idx, mod)
@@ -294,10 +306,10 @@ which is free / requires no instruction). Mirrors dart2wasm's
 `RefType.isSubtypeOf` + `DefType.isSubtypeOf` + `HeapType.isSubtypeOf` exactly:
 
   * **Nullability (P2):** a nullable ref is NOT a subtype of a non-null target —
-    `nullable(a) && !nullable(b) ⇒ false` (dart2wasm RefType.isSubtypeOf L202).
+    `nullable(a) && !nullable(b) ⇒ false` (dart2wasm RefType.isSubtypeOf, type.dart:238).
   * **Supertype chain (F4):** a concrete `a` walks its DECLARED `supertype_idx`
     chain (StructType) and is `<:` any concrete `b` on that chain
-    (dart2wasm DefType.isSubtypeOf L621-624). When the nominal chain runs out it
+    (dart2wasm DefType.isSubtypeOf, type.dart:733). When the nominal chain runs out it
     falls to the abstract super (struct/array) ⇒ eq ⇒ any.
   * **Abstract lattice:** any > eq > {struct, array, i31}; extern/func own tops;
     exn is its own thing.
@@ -306,6 +318,7 @@ which is free / requires no instruction). Mirrors dart2wasm's
 
 `mod.types[idx+1] isa ArrayType` distinguishes a ConcreteRef's struct-vs-array
 kind. Any numeric/packed involvement (unless `a === b`) ⇒ false.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:236 RefType.isSubtypeOf)
 """
 function wasm_subtype(a::WasmValType, b::WasmValType, mod)::Bool
     a === b && return true
@@ -411,6 +424,7 @@ func/exn sink; a numeric without a concrete Julia source type to stamp the box's
 Returns `b`.
 """
 # formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
+# parity(translator.dart:1597 convertType)
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
@@ -547,6 +561,8 @@ wrapped it): unwrap via `.context` when the runtime value is the object, cast di
 otherwise. The unwrap exists only where wrapping exists — no vtable globals in the module
 means no closure object can flow, so the plain cast keeps Base-internal closure structs'
 emission unchanged.
+parity(translator.dart:1613 convertType): the ref→ref arm — ref.as_non_null when only
+nullability blocks the upcast (:1614-1616), else ref.cast (:1619).
 """
 function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
                       to::WasmValType, from_julia::Union{Type,Nothing})::InstrBuilder
@@ -605,6 +621,8 @@ Adjust the value most recently emitted into `b` to a storage/call boundary type.
 builder's tracked stack is the sole source of the actual type; callers never re-derive it
 from Julia IR. This is the post-emission half of dart's `wrap` chokepoint for producers
 whose emission and sink are structurally separated.
+parity(code_generator.dart:677 convertType): the conversion translateExpression applies to
+the emitted result type.
 """
 function coerce_stack_top!(b::InstrBuilder, expected::WasmValType,
                            ctx::AbstractCompilationContext;
@@ -641,6 +659,8 @@ canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type cl
 `julia_type` is the proven concrete Julia source type; it supplies the exact classId.
 There is no width-based fallback because distinct Julia types share Wasm representations.
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
+parity(translator.dart:1621 convertType): the boxing arm; the classId comes from the Julia
+source type where dart reads `boxedClasses[from]` (:1623).
 """
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
                            wasm_type::WasmValType, julia_type::Type)::UInt32
@@ -667,6 +687,7 @@ value field (field 1). THE single unboxing consumer (dart `convertType` unbox ar
 selects the ref.cast form: `false` (default) traps on a null ref — correct inside an isa/ref.test
 guard; `true` permits null (the permissive external/dynamic call boundary). An extern→any prefix
 (`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
+parity(translator.dart:1645 convertType): the unboxing arm.
 """
 function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
                              nullable::Bool=false)::InstrBuilder
@@ -717,11 +738,13 @@ end
 """
     emit_classid_range_check!(b, low, high)
 
-dart's `emitClassIdRangeCheck` (code_generator.dart:3847-3884), THE single abstract-type
+dart's `emitClassIdRangeCheck` (code_generator.dart:5684), THE single abstract-type
 discriminator: with the classId (i32) on the stack, a single id lowers to `i32.const id;
 i32.eq`; a dense DFS range lowers to the 3-instruction unsigned window
 `i32.const low; i32.sub; i32.const (high-low); i32.le_u` (an id below `low` wraps to a huge
 unsigned value, so one comparison covers both bounds — no temp local, no i32.and).
+parity(code_generator.dart:5684 emitClassIdRangeCheck) — the one-range case; dart compares
+`i32.const length; i32.lt_u` where this compares `i32.const (high-low); i32.le_u`.
 """
 function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)::InstrBuilder
     if low == high
@@ -738,7 +761,9 @@ end
 
 """isa's classId test for a non-concrete type over the closed world: the exact id set
 (concrete_class_ids), emitted as dart's range window when it is contiguous and as an
-OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32."""
+OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32.
+parity(code_generator.dart:5709 classIdSearch) — chooses the search form for the id set;
+the OR-chain form (emit_classid_ranges!) is not dart's, which searches a List<Range>."""
 function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
     isempty(ids) && return emit_classid_ranges!(b, ctx, ids)
     if ids[end] - ids[1] + 1 == length(ids)
@@ -804,6 +829,7 @@ identical copies (cleanup Loop 4). a numeric value into a ref return → synthes
 ref.null / extern-box. Else if the value type cannot satisfy the return type → `unreachable`
 (trap). Else compile the value + the numeric-widening / extern-convert coercion ladder, then
 `return`. Byte-identical to the inlined blocks it replaces.
+parity(code_generator.dart:1372 visitReturnStatement)
 """
 function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::InstrBuilder
     # Framework roots may deliberately erase a Julia result (`void_return=true`).
@@ -898,6 +924,9 @@ end
 Compile a value reference (SSA, Argument, or Literal).
 """
 # object-identity stack for struct-constant compilation (cycle/depth guard)
+# parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep — a
+# mutable struct reachable from itself; dart's CFE constants are acyclic canonical trees,
+# so constants.dart needs no in-progress stack.)
 const _VALUE_COMPILE_STACK = Vector{Any}()
 
 # B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
@@ -914,6 +943,7 @@ emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-gues
 pushes=WasmValType[static_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
 validator's stack type is now the truth instead of a re-derivation).
+parity(code_generator.dart:676 accept1): the emission whose result type is its byproduct.
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
     # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
@@ -932,6 +962,9 @@ True when a call argument is a compile-time TYPE parameter rather than a runtime
 value — `sext_int(Int64, x)`'s first argument, `isa(x, T)`'s second. `===`/`!==`
 are the exception (there a Type IS the runtime value being compared), which is
 why `emit_call_operands!` takes `include_types`.
+parity(quarantine: Julia's typed IR passes compile-time Types as ordinary call arguments —
+`sext_int(Int64, x)`, `isa(x, T)` — where a kernel call carries type arguments apart from
+its positional operands.)
 """
 _is_type_operand(arg)::Bool =
     arg isa Type || (arg isa GlobalRef && isdefined(arg.mod, arg.name) &&
@@ -957,6 +990,7 @@ emit_call_operand!(b::InstrBuilder, ctx::AbstractCompilationContext, arg)::Union
 Every runtime operand of one call, in argument order, through
 `emit_call_operand!`; compile-time Type parameters are skipped unless
 `include_types`.
+parity(intrinsics.dart:998 translateExpression): each operand emitted in argument order.
 """
 function emit_call_operands!(b::InstrBuilder, ctx::AbstractCompilationContext, args;
                              include_types::Bool=false)::InstrBuilder
@@ -974,8 +1008,8 @@ True when `arg` arrives in a physically `AnyRef` local — the erased/boxed
 operand shape a numeric operation must unbox before consuming (P4-stdlib:
 `Any`-returning callees box numerics, and `Union{Nothing,UInt64}`-style SSAs
 live in AnyRef locals). An SSA whose REFINED type is already numeric is NOT
-included: parity(translator.dart:2100 Translator.translateTypeOfLocalVariable)
-the load is THE single unbox source there, and a second unbox double-converted.
+included: as in dart's translator.dart:2099 translateTypeOfLocalVariable, the load
+is THE single unbox source there, and a second unbox double-converted.
 """
 function _is_boxed_numeric_operand(arg, ctx::AbstractCompilationContext)::Bool
     arg isa Core.SSAValue || return false
@@ -989,6 +1023,9 @@ function _is_boxed_numeric_operand(arg, ctx::AbstractCompilationContext)::Bool
     return off >= 0 && off < length(ctx.locals) && ctx.locals[off + 1] === AnyRef
 end
 
+# parity(code_generator.dart:4890 EagerStaticFieldInitializerCodeGenerator): the initializer
+# body of a mutable global constant (generateInternal :4901 — translateExpression, then the
+# caller's global.set), run from the start function as dart's is (globals.dart:179).
 function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)::Tuple{InstrBuilder,Vector{WasmValType}}
     saved_n_params = ctx.n_params
     saved_locals = ctx.locals
@@ -1015,7 +1052,7 @@ end
 """
     emit_value!(b, val, ctx, expected; from_julia=nothing) -> WasmValType
 
-THE wrap chokepoint (dart `CodeGenerator.wrap`, code_generator.dart:879-888): emit `val`, take
+THE wrap chokepoint (dart `translateExpression`, code_generator.dart:665): emit `val`, take
 the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
 `convert_type!` funnel (dart `convertType`), and return `expected`. This is the M2 primitive
 that replaces the `emit_raw!(b, compile_value; pushes=[re-guess])` + hand-rolled
@@ -1025,6 +1062,7 @@ coercion-ladder anti-pattern — the type is never re-derived after emission.
 classId. A `nothing` actual type means the emit produced no single result (dead/unreachable
 path — the `unreachable` is already emitted); `expected` is returned so the declared stack
 shape stays consistent, matching dart's posture that unreachable code still validates.
+parity(code_generator.dart:665 translateExpression)
 """
 function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
                      expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
@@ -1051,13 +1089,16 @@ function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
     return expected
 end
 
-"""Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result."""
+"""Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result.
+parity(intrinsics.dart:1498 getIdentityHashField): struct.get identityHash; i64.extend_i32_u (:1503)."""
 extend_identity_hash_to_u64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
 
 # Physical collection lengths are i32 in WasmGC and Int64 in Julia. Keep these
 # representation conversions beside the central value/conversion machinery so
 # collection lowerers do not grow independent coercion ladders.
+# parity(intrinsics.dart:1223 wasmArrayIndex): an i64 index/length wraps to i32 before the array op (:1232).
 narrow_length_to_i32!(b::InstrBuilder) = num!(b, Opcode.I32_WRAP_I64)
+# parity(intrinsics.dart:626 WasmArrayRef.length): array.len; i64.extend_i32_u (:631).
 widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
 
 """
@@ -1864,7 +1905,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # null is the runtime undefined-reference sentinel consumed by the
             # existing isdefined/throw_undef_if_not lowering—not a fabricated value.
             # parity(quarantine: mutable-identity floor — Core.Box is WT's captured-variable
-            # cell, dart's closures.dart:1102-1115 mutable box field; a closure cell is never
+            # cell, dart's closures.dart:1533 _buildContexts captured-variable field; a closure cell is never
             # a kernel `Constant` AST node, so it never enters constants.dart's canonicalization
             # map on the dart side either. R14 floor, never migratable.)
             emit_struct_prefix!(b, ctx.type_registry, T, info)
