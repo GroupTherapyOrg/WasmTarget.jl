@@ -313,6 +313,11 @@ function _count_any_fields_in(ex)::Int
     return n
 end
 
+# Prose files are read line-ending-agnostic: a Windows checkout may carry CRLF, and a check
+# that silently parses nothing there is a check that silently passes or fails by platform.
+_text(path::String)::String = replace(read(path, String), "\r\n" => "\n")
+_lines(path::String)::Vector{String} = String.(split(chomp(_text(path)), '\n'))
+
 # ---- dev/CHARTER.md support --------------------------------------------------
 const CHARTER_PATH = joinpath(ROOT, "dev", "CHARTER.md")
 
@@ -394,7 +399,7 @@ function agents_md_violations()::Vector{String}
     isfile(joinpath(ROOT, "CLAUDE.md")) && push!(v, "CLAUDE.md exists — AGENTS.md is the one instructions file")
     path = joinpath(ROOT, "AGENTS.md")
     isfile(path) || return push!(v, "AGENTS.md is missing")
-    lines = readlines(path)
+    lines = _lines(path)
     length(lines) <= 90 || push!(v, "AGENTS.md has $(length(lines)) lines (cap 90)")
     for (i, l) in enumerate(lines)
         length(l) <= 100 || push!(v, "AGENTS.md:$i is $(length(l)) chars (cap 100)")
@@ -402,7 +407,7 @@ function agents_md_violations()::Vector{String}
             push!(v, "AGENTS.md:$i status vocabulary: \"$(m.match)\"")
         end
     end
-    txt = read(path, String)
+    txt = _text(path)
     for m in eachmatch(r"(?<![\w/.])((?:src|test|dev|ext|docs|\.github)/[\w./*-]*[\w/])", txt)
         p = m.captures[1]
         occursin('*', p) && continue
@@ -417,7 +422,7 @@ function agents_md_violations()::Vector{String}
     for m in eachmatch(r"\b(WT_[A-Z_]+)\b", txt)
         occursin(m.captures[1], corpus) || push!(v, "AGENTS.md names $(m.captures[1]), which nothing reads")
     end
-    pm = match(r"\b([0-9a-f]{40})\b", read(joinpath(ROOT, "dev", "PARITY_MASTER.md"), String))
+    pm = match(r"\b([0-9a-f]{40})\b", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md")))
     for m in eachmatch(r"\b([0-9a-f]{40})\b", txt)
         (pm !== nothing && m.captures[1] == pm.captures[1]) || push!(v, "AGENTS.md pins $(m.captures[1][1:8]), dev/PARITY_MASTER.md does not")
     end
@@ -428,7 +433,7 @@ end
 function charter_clauses()::Vector{Pair{String,Tuple{String,Vector{String}}}}
     out = Pair{String,Tuple{String,Vector{String}}}[]
     isfile(CHARTER_PATH) || return out
-    txt = read(CHARTER_PATH, String)
+    txt = _text(CHARTER_PATH)
     sec = match(r"## The clauses\n(.*?)\n## "s, txt)
     sec === nothing && return out
     for m in eachmatch(r"^- \*\*(C\d+) ·(.*?)(?=^- \*\*C\d+ ·|\z)"ms, sec.captures[1])
@@ -1862,13 +1867,13 @@ const LOCKS = [
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
         () -> begin
             v = String[]
-            plan = readlines(joinpath(ROOT, "dev", "MARCH.md"))
+            plan = _lines(joinpath(ROOT, "dev", "MARCH.md"))
             length(plan) <= 60 || push!(v, "dev/MARCH.md has $(length(plan)) lines (cap 60)")
             for (i, l) in enumerate(plan)
                 (occursin(r"\|\s*done\s*\|"i, l) || occursin(r"^#+ .*\bresults?\b"i, l)) &&
                     push!(v, "dev/MARCH.md:$i holds finished work: $(first(l, 60))")
             end
-            hist = readlines(joinpath(ROOT, "dev", "HISTORY.md"))
+            hist = _lines(joinpath(ROOT, "dev", "HISTORY.md"))
             length(hist) <= 160 || push!(v, "dev/HISTORY.md has $(length(hist)) lines (cap 160)")
             starts = [i for (i, l) in enumerate(hist) if startswith(l, "## ")]
             for (k, i) in enumerate(starts)
