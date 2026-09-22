@@ -47,6 +47,7 @@ end
 
 A concrete reference type with a type index, e.g., `(ref null \$typeidx)`.
 Used for locals and parameters that hold instances of specific struct/array types.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 """
 struct ConcreteRef
     type_idx::UInt32
@@ -61,12 +62,15 @@ ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
 A non-nullable reference to an abstract heap type, e.g., `(ref extern)` or `(ref func)`.
 RefType values like ExternRef (0x6F) are always nullable shorthand; this type
 expresses the non-null variant needed for some import signatures (e.g., JS String Builtins).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 """
 struct NonNullAbstractRef
     heaptype_byte::UInt8  # Same byte as the RefType enum: 0x6F for extern, 0x70 for func, etc.
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:185 RefType.extern)
 const NonNullExternRef = NonNullAbstractRef(UInt8(ExternRef))  # (ref extern)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:195 RefType.func)
 const NonNullFuncRef = NonNullAbstractRef(UInt8(FuncRef))      # (ref func)
 
 """
@@ -85,6 +89,7 @@ const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UIn
 
 A function type describing the signature of a WebAssembly function.
 Supports both numeric types and reference types (for WasmGC).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:974 FunctionType)
 """
 struct FuncType
     params::Vector{WasmValType}
@@ -104,6 +109,7 @@ FuncType(params::Vector{NumType}, results::Vector{NumType}) =
     FieldType
 
 A field in a WasmGC struct type.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
 """
 struct FieldType
     valtype::WasmValType  # The type of the field
@@ -116,6 +122,7 @@ FieldType(valtype::WasmValType) = FieldType(valtype, true)  # Default to mutable
     StructType
 
 A WasmGC struct type with named fields.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1119 StructType)
 """
 struct StructType
     fields::Vector{FieldType}
@@ -129,6 +136,7 @@ StructType(fields::Vector{FieldType}) = StructType(fields, nothing)
     ArrayType
 
 A WasmGC array type with element type.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1229 ArrayType)
 """
 struct ArrayType
     elem::FieldType  # Element type with mutability
@@ -140,6 +148,7 @@ ArrayType(valtype::WasmValType) = ArrayType(FieldType(valtype, true))
     CompositeType
 
 Union of all composite types in WasmGC.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:708 DefType)
 """
 const CompositeType = Union{FuncType, StructType, ArrayType}
 
@@ -203,6 +212,7 @@ A Julia type representing a JavaScript value held as an externref.
 Used for DOM elements, JS objects, and other JS values.
 
 This is a primitive type to prevent Julia from optimizing it away.
+parity(sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef)
 """
 primitive type JSValue 64 end
 
@@ -255,6 +265,7 @@ flag = Flag(1)
 # Compile to Wasm - global index extracted from type
 wasm_bytes = compile(increment, (Counter,))
 ```
+parity(quarantine: Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 """
 mutable struct WasmGlobal{T, IDX}
     value::T
@@ -264,17 +275,21 @@ end
 WasmGlobal{T, IDX}() where {T, IDX} = WasmGlobal{T, IDX}(zero(T))
 
 # Get the global index from the type
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 global_index(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = IDX
 global_index(g::WasmGlobal{T, IDX}) where {T, IDX} = IDX
 
 # Get the element type
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 global_eltype(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = T
 
 # Accessor methods - work in Julia (for testing) and compile to Wasm global ops
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 function Base.getindex(g::WasmGlobal{T, IDX})::T where {T, IDX}
     return g.value
 end
 
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 function Base.setindex!(g::WasmGlobal{T, IDX}, v::T)::T where {T, IDX}
     g.value = v
     return v
@@ -480,6 +495,7 @@ Check if a Union type needs anyref boxing for runtime dispatch.
 Returns true when the union has members with incompatible Wasm types (e.g., Int32+Float64),
 meaning widening loses type identity and isa() checks can't work.
 Used to override parameter types to anyref in function signatures.
+parity(quarantine: a Julia Union of two or more numeric members has no single wasm value type; dart has no union types (every dart dynamic value is already a boxed object), so whether a Union boxes is Julia's question)
 """
 function needs_anyref_boxing(T::Union)::Bool
     types = Base.uniontypes(T)
