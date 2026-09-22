@@ -16,51 +16,51 @@
 
 module InstrIR
 
-abstract type WasmInstr end
+abstract type WasmInstr end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 
 # ── numeric / const ──────────────────────────────────────────────────────────────
-struct I32Const <: WasmInstr; value::Int64; end
-struct I64Const <: WasmInstr; value::Int64; end
-struct F32Const <: WasmInstr; value::Float32; end
-struct F64Const <: WasmInstr; value::Float64; end
+struct I32Const <: WasmInstr; value::Int64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3053 I32Const)
+struct I64Const <: WasmInstr; value::Int64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3075 I64Const)
+struct F32Const <: WasmInstr; value::Float32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3097 F32Const)
+struct F64Const <: WasmInstr; value::Float64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3119 F64Const)
 struct NumOp    <: WasmInstr; op::UInt8; end   # generic no-immediate numeric/cmp/conv op
 
 # ── parametric ───────────────────────────────────────────────────────────────────
-struct Drop   <: WasmInstr; end
-struct Select <: WasmInstr; end
+struct Drop   <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1291 Drop)
+struct Select <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1300 Select)
 # Typed select (0x1C): carries the on-wire bytes of the single result valtype
 # (dart2wasm SelectWithType writes 0x1C, vec-len 1, then `write(type)`). The caller
 # already has the valtype bytes (e.g. 0x63 + signed-LEB type_idx), so carry them
 # verbatim — keeps this submodule dependency-free of the type-encoding layer.
-struct SelectWithType <: WasmInstr; type_bytes::Vector{UInt8}; end
+struct SelectWithType <: WasmInstr; type_bytes::Vector{UInt8}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1319 SelectWithType)
 
 # ── variable ─────────────────────────────────────────────────────────────────────
-struct LocalGet  <: WasmInstr; idx::UInt32; end
-struct LocalSet  <: WasmInstr; idx::UInt32; end
-struct LocalTee  <: WasmInstr; idx::UInt32; end
-struct GlobalGet <: WasmInstr; idx::UInt32; end
-struct GlobalSet <: WasmInstr; idx::UInt32; end
+struct LocalGet  <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1350 LocalGet)
+struct LocalSet  <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1376 LocalSet)
+struct LocalTee  <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1402 LocalTee)
+struct GlobalGet <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1428 GlobalGet)
+struct GlobalSet <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1457 GlobalSet)
 
 # ── control flow ─────────────────────────────────────────────────────────────────
-struct Unreachable <: WasmInstr; end
-struct Nop         <: WasmInstr; end
-struct Block <: WasmInstr; blocktype::Any; end   # blocktype: 0x40 byte or a WasmValType
-struct Loop  <: WasmInstr; blocktype::Any; end
-struct If    <: WasmInstr; blocktype::Any; end
-struct Else  <: WasmInstr; end
-struct End   <: WasmInstr; end
-struct Br    <: WasmInstr; depth::UInt32; end
-struct BrIf  <: WasmInstr; depth::UInt32; end
+struct Unreachable <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:624 Unreachable)
+struct Nop         <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:633 Nop)
+struct Block <: WasmInstr; blocktype::Any; end   # blocktype: 0x40 byte or a WasmValType; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:642 BeginNoEffectBlock)
+struct Loop  <: WasmInstr; blocktype::Any; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:733 BeginNoEffectLoop)
+struct If    <: WasmInstr; blocktype::Any; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:821 BeginNoEffectIf)
+struct Else  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:899 Else)
+struct End   <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1096 End)
+struct Br    <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1110 Br)
+struct BrIf  <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1134 BrIf)
 struct BrTable <: WasmInstr; targets::Vector{UInt32}; default::UInt32; end
-struct Return  <: WasmInstr; end
-struct Call    <: WasmInstr; idx::UInt32; end
-struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end
+struct Return  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1193 Return)
+struct Call    <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1202 Call)
+struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1228 CallIndirect)
 # call_ref (Wasm GC, 0x14): a typed call through a (ref $type) on the stack.
 # dart2wasm CallRef.serialize writes 0x14 + writeTypeIndex(type) (unsigned LEB type idx).
-struct CallRef <: WasmInstr; type_idx::UInt32; end
+struct CallRef <: WasmInstr; type_idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1262 CallRef)
 # br_on_null (0xD5) / br_on_non_null (0xD6): branch on the nullability of the top ref.
 struct BrOnNull    <: WasmInstr; depth::UInt32; end
-struct BrOnNonNull <: WasmInstr; depth::UInt32; end
+struct BrOnNonNull <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2228 BrOnNonNull)
 
 # ── exception handling (Wasm 3.0) ──────────────────────────────────────────────────
 # A try_table catch clause (dart2wasm TryTableCatch): a kind byte + immediates.
@@ -69,44 +69,45 @@ struct BrOnNonNull <: WasmInstr; depth::UInt32; end
 #   kind 0x02 catch_all      label_idx           (pushes nothing)
 #   kind 0x03 catch_all_ref  label_idx           (pushes exnref)
 # `tag` is unused (and `0xffffffff`) for the *_all kinds.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4930 TryTableCatch)
 struct TryCatch
     kind::UInt8
     tag::UInt32
     label::UInt32
 end
 # try_table: a block opener (blocktype: 0x40 byte or a WasmValType) plus the catch vec.
-struct TryTable <: WasmInstr; blocktype::Any; catches::Vector{TryCatch}; end
-struct Throw    <: WasmInstr; tag::UInt32; end
+struct TryTable <: WasmInstr; blocktype::Any; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
+struct Throw    <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1032 Throw)
 struct ThrowRef <: WasmInstr; end
 struct Rethrow  <: WasmInstr; depth::UInt32; end
 
 # ── reference ────────────────────────────────────────────────────────────────────
 # ref.null with an abstract heaptype: heaptype_byte is the raw on-wire byte (e.g. 0x6E any).
-struct RefNullAbstract <: WasmInstr; heaptype_byte::UInt8; end
+struct RefNullAbstract <: WasmInstr; heaptype_byte::UInt8; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2111 RefNull)
 # ref.null with a concrete type index: encoded as a signed-LEB heaptype.
-struct RefNullConcrete <: WasmInstr; heaptype::Int64; end
+struct RefNullConcrete <: WasmInstr; heaptype::Int64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2111 RefNull)
 struct RefFunc      <: WasmInstr; idx::UInt32; end
-struct RefIsNull    <: WasmInstr; end
-struct RefAsNonNull <: WasmInstr; end
+struct RefIsNull    <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2146 RefIsNull)
+struct RefAsNonNull <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2186 RefAsNonNull)
 
 # ── GC ───────────────────────────────────────────────────────────────────────────
-struct StructNew        <: WasmInstr; idx::UInt32; end
-struct StructNewDefault <: WasmInstr; idx::UInt32; end
-struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET/_S/_U
-struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end
+struct StructNew        <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2393 StructNew)
+struct StructNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2426 StructNewDefault)
+struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET/_S/_U; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
+struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2358 StructSet)
 struct ArrayNew        <: WasmInstr; idx::UInt32; end
-struct ArrayNewDefault <: WasmInstr; idx::UInt32; end
-struct ArrayNewFixed   <: WasmInstr; idx::UInt32; n::UInt32; end
-struct ArrayNewData    <: WasmInstr; idx::UInt32; seg::UInt32; end
-struct ArrayGet <: WasmInstr; idx::UInt32; op::UInt8; end   # op = ARRAY_GET/_S/_U
-struct ArraySet <: WasmInstr; idx::UInt32; end
-struct ArrayLen  <: WasmInstr; end
-struct ArrayCopy <: WasmInstr; dst::UInt32; src::UInt32; end
+struct ArrayNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2666 ArrayNewDefault)
+struct ArrayNewFixed   <: WasmInstr; idx::UInt32; n::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2594 ArrayNewFixed)
+struct ArrayNewData    <: WasmInstr; idx::UInt32; seg::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2699 ArrayNewData)
+struct ArrayGet <: WasmInstr; idx::UInt32; op::UInt8; end   # op = ARRAY_GET/_S/_U; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2459 ArrayGet)
+struct ArraySet <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2549 ArraySet)
+struct ArrayLen  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2579 ArrayLen)
+struct ArrayCopy <: WasmInstr; dst::UInt32; src::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2739 ArrayCopy)
 struct ArrayFill <: WasmInstr; idx::UInt32; end
 # ref.cast to a concrete type index (signed-LEB heaptype) vs an abstract heaptype byte.
-struct RefCastConcrete <: WasmInstr; idx::Int64; nullable::Bool; end
-struct RefCastAbstract <: WasmInstr; heaptype_byte::UInt8; nullable::Bool; end
-struct RefTest <: WasmInstr; idx::Int64; nullable::Bool; end
+struct RefCastConcrete <: WasmInstr; idx::Int64; nullable::Bool; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2883 RefCast)
+struct RefCastAbstract <: WasmInstr; heaptype_byte::UInt8; nullable::Bool; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2883 RefCast)
+struct RefTest <: WasmInstr; idx::Int64; nullable::Bool; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2854 RefTest)
 # br_on_cast (0xFB 0x18) / br_on_cast_fail (0xFB 0x19): a cast that branches on
 # success/failure. dart2wasm BrOnCast(.serialize): GC_PREFIX, op, flags byte
 # (bit0 = src nullable, bit1 = dst nullable), unsigned label, then the SOURCE heaptype
@@ -115,8 +116,8 @@ struct RefTest <: WasmInstr; idx::Int64; nullable::Bool; end
 # has those heaptype bytes (exactly as for ref.cast / ref.null), so carry them verbatim.
 struct BrOnCast     <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
 struct BrOnCastFail <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
-struct AnyConvertExtern <: WasmInstr; end
-struct ExternConvertAny <: WasmInstr; end
+struct AnyConvertExtern <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3013 ExternInternalize)
+struct ExternConvertAny <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3033 ExternExternalize)
 struct RefI31  <: WasmInstr; end
 struct I31GetS <: WasmInstr; end
 struct I31GetU <: WasmInstr; end
@@ -144,7 +145,7 @@ struct ArrayNewElem <: WasmInstr; idx::UInt32; seg::UInt32; end
 
 # ── saturating truncation (0xFC prefix, sub-op 0x00–0x07) ────────────────────────
 # float → int, clamping out-of-range/NaN instead of trapping. `sub_op` is the FC sub-op.
-struct TruncSat <: WasmInstr; sub_op::UInt8; end
+struct TruncSat <: WasmInstr; sub_op::UInt8; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4321 I32TruncSatF32S)
 
 # ── transitional bridge (deleted when every emitter is migrated) ──────────────────
 # Pre-encoded bytes spliced from an un-migrated callee (compile_value, etc.). A real
@@ -168,9 +169,12 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
     MemoryInit, DataDrop, MemoryCopy, MemoryFill, TruncSat, RawBytes
 
 # encode!(code, instr): append this instruction's exact on-wire bytes (dart2wasm `serialize`).
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
 @inline _u!(code, n) = append!(code, encode_leb128_unsigned(n))
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
 @inline _s!(code, n) = append!(code, encode_leb128_signed(n))
 
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::I32Const) = (push!(c, Opcode.I32_CONST); _s!(c, i.value))
 encode!(c::Vector{UInt8}, i::I64Const) = (push!(c, Opcode.I64_CONST); _s!(c, i.value))
 encode!(c::Vector{UInt8}, i::F32Const) = (push!(c, Opcode.F32_CONST); append!(c, reinterpret(UInt8, [i.value])))
@@ -207,6 +211,7 @@ encode!(c::Vector{UInt8}, i::BrOnNull)    = (push!(c, Opcode.BR_ON_NULL);     _u
 encode!(c::Vector{UInt8}, i::BrOnNonNull) = (push!(c, Opcode.BR_ON_NON_NULL); _u!(c, i.depth))
 # try_table: 0x1F, blocktype, vec(catch). Each catch = kind byte + immediates (dart2wasm
 # TryTableCatch.serialize): catch/catch_ref write tag then label; the *_all kinds write only label.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4935 TryTableCatch.serialize)
 function _encode_catch!(c::Vector{UInt8}, k::TryCatch)
     push!(c, k.kind)
     if k.kind == Opcode.CATCH || k.kind == Opcode.CATCH_REF
@@ -271,6 +276,7 @@ encode!(c::Vector{UInt8}, i::RawBytes) = append!(c, i.bytes)
 
 # mnemonic(instr): symbolic WAT-ish text (dart2wasm `printTo`) — for builder_diagnose /
 # WT_BUILDER_TRACE disassembly. Clarity for tracking codegen bugs without a hex round-trip.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::I32Const) = "i32.const $(i.value)"
 mnemonic(i::I64Const) = "i64.const $(i.value)"
 mnemonic(i::F32Const) = "f32.const $(i.value)"
