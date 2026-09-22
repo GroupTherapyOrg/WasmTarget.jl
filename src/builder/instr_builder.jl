@@ -24,6 +24,7 @@ operand stack — the build-time, source-located equivalent of `wasm-tools`'
 statement, the live operand-stack snapshot, and the byte offset. This is the
 precision bug-finder for WasmTarget: where wasm-tools says "func 14 @ 0xcc18",
 this says which Julia statement and what was on the stack.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:20 ValidationError)
 """
 struct StackImbalanceError <: Exception
     func_name::String
@@ -32,6 +33,7 @@ struct StackImbalanceError <: Exception
     stack::Vector{String}  # operand-stack snapshot (types, bottom→top) at failure
     byte_offset::Int       # serialized byte length at failure
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:27 ValidationError.toString)
 function Base.showerror(io::IO, e::StackImbalanceError)
     print(io, "StackImbalanceError in `$(e.func_name)`")
     isempty(e.context) || print(io, "\n  while emitting: ", e.context)
@@ -47,6 +49,7 @@ Live, self-validating WebAssembly instruction emitter. `.instrs` is the ir/ inst
 stream (serialized to bytes by `builder_code`); `.v` is the operand-stack model
 (`WasmStackValidator`); `.locals` types `local.get/set/tee`; GC ops take their
 field/element types directly (caller has them, exactly as it does when emitting).
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:172 InstructionsBuilder)
 """
 mutable struct InstrBuilder
     instrs::Vector{InstrIR.WasmInstr}   # the ir/ layer — serialized on demand
@@ -80,6 +83,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
 end
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
+# parity(pkg/wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize)
 function builder_code(b::InstrBuilder)::Vector{UInt8}
     code = UInt8[]
     for i in eachindex(b.instrs)
@@ -95,16 +99,19 @@ function builder_code(b::InstrBuilder)::Vector{UInt8}
     code
 end
 # symbolic disassembly (dart2wasm printTo) — clarity for tracking codegen bugs.
+# parity(pkg/wasm_builder/lib/src/ir/instructions.dart:97 Instructions.printTo)
 builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
 _byte_len(b::InstrBuilder)::Int = length(builder_code(b))
 
 "Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
-set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
+set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)  # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:650 InstructionsBuilder.comment)
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:412 InstructionsBuilder._debugTrace)
 _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
 
 # Record an instruction (ir/ layer) + trace, then enforce strictness. Validation has
 # already run against the operand-stack model by the calling method.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add)
 @inline function _emit!(b::InstrBuilder, instr::InstrIR.WasmInstr)
     push!(b.instrs, instr)
     if b.trace !== nothing
@@ -115,6 +122,7 @@ _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
 end
 
 # Throw validator errors immediately with rich source context.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:452 InstructionsBuilder._reportError)
 @inline function _check!(b::InstrBuilder)
     if has_errors(b.v)
         msg = join(b.v.errors, "\n  ")
@@ -176,15 +184,20 @@ end
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ── Numeric ─────────────────────────────────────────────────────────────────────
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2054 InstructionsBuilder.i32_const)
 i32_const!(b::InstrBuilder, v::Integer) = (validate_push!(b.v, I32); _emit!(b, InstrIR.I32Const(Int64(v))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2067 InstructionsBuilder.i64_const)
 i64_const!(b::InstrBuilder, v::Integer) = (validate_push!(b.v, I64); _emit!(b, InstrIR.I64Const(Int64(v))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2079 InstructionsBuilder.f32_const)
 f32_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F32); _emit!(b, InstrIR.F32Const(Float32(x))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2091 InstructionsBuilder.f64_const)
 f64_const!(b::InstrBuilder, x::Real) = (validate_push!(b.v, F64); _emit!(b, InstrIR.F64Const(Float64(x))))
 # Generic numeric/comparison/conversion op (no immediates): reuse validate_instruction!.
 num!(b::InstrBuilder, op::UInt8) = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
 
 # Saturating truncation (FC-prefixed, sub-op 0x00–0x07): pop a float, push an int. The
 # sub-op encodes both: to = i32 (<0x04) or i64; from = f32 (0x00,0x01,0x04,0x05) or f64.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:3808 InstructionsBuilder.i32_trunc_sat_f32_s)
 function trunc_sat!(b::InstrBuilder, sub_op::UInt8)
     to   = sub_op < 0x04 ? I32 : I64
     from = (sub_op == 0x00 || sub_op == 0x01 || sub_op == 0x04 || sub_op == 0x05) ? F32 : F64
@@ -194,7 +207,9 @@ function trunc_sat!(b::InstrBuilder, sub_op::UInt8)
 end
 
 # ── Parametric ──────────────────────────────────────────────────────────────────
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:998 InstructionsBuilder.drop)
 drop!(b::InstrBuilder) = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1004 InstructionsBuilder.select)
 select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
 
 # ── Variable ────────────────────────────────────────────────────────────────────
@@ -208,10 +223,12 @@ select!(b::InstrBuilder) = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b,
     (idx + 1) <= length(b.locals) ? b.locals[idx + 1] : AnyRef
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 function local_get!(b::InstrBuilder, idx::Integer)
     validate_push!(b.v, _local_type(b, idx))
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1035 InstructionsBuilder.local_set)
 function local_set!(b::InstrBuilder, idx::Integer)
     # dart parity: local.set validates the value against the LOCAL's type when known
     # (a store is [local.type] → []; pop_any hid ill-typed stores until instantiation).
@@ -222,12 +239,14 @@ function local_set!(b::InstrBuilder, idx::Integer)
     end
     _emit!(b, InstrIR.LocalSet(UInt32(idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1049 InstructionsBuilder.local_tee)
 function local_tee!(b::InstrBuilder, idx::Integer)
     # dart2wasm: local_tee(l) is [l.type] → [l.type]
     lt = _local_type(b, idx)   # fullstrict: the live provider
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
     _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get)
 function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)
     # fullstrict: the module's declared global valtype outranks the caller's claim
     local m = b.v.mod
@@ -235,10 +254,13 @@ function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)
     validate_push!(b.v, t isa WasmValType ? t : typ)
     _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1072 InstructionsBuilder.global_set)
 global_set!(b::InstrBuilder, idx::Integer) = (validate_pop_any!(b.v); _emit!(b, InstrIR.GlobalSet(UInt32(idx))))
 
 # ── Control flow ────────────────────────────────────────────────────────────────
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:676 InstructionsBuilder.unreachable)
 unreachable!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Unreachable()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:690 InstructionsBuilder.nop)
 nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
 
 # block/loop/if: blocktype is a void byte 0x40 or a WasmValType (I32, ConcreteRef(...));
@@ -255,28 +277,35 @@ nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
     (blocktype === 0x40 || blocktype isa Int) ? WasmValType[] :
     blocktype isa WasmValType ? WasmValType[blocktype] : WasmValType[]
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
 function block!(b::InstrBuilder, blocktype=0x40;
                 inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
     label = validate_block_start!(b.v, :block, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Block(blocktype)); return label
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:741 InstructionsBuilder.loop)
 function loop!(b::InstrBuilder, blocktype=0x40;
                inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
     label = validate_block_start!(b.v, :loop, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Loop(blocktype)); return label
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 function if_!(b::InstrBuilder, blocktype=0x40;
               inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
     label = validate_if_start!(b.v, WasmValType[t for t in inputs],
                                _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.If(blocktype)); return label
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:767 InstructionsBuilder.else_)
 else_!(b::InstrBuilder) = (validate_else!(b.v); _emit!(b, InstrIR.Else()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:842 InstructionsBuilder.end)
 end_block!(b::InstrBuilder) = (validate_block_end!(b.v); _emit!(b, InstrIR.End()))
 
-"""Close the function label, rejecting any unclosed structured-control frames."""
+"""
+Close the function label, rejecting any unclosed structured-control frames.
+"""
 function finish_function!(b::InstrBuilder)
     if length(b.v.labels) != 1
         local frames = join((string(lbl.kind) for lbl in b.v.labels), " → ")
@@ -308,10 +337,13 @@ function finish_function!(b::InstrBuilder)
           _stack_snapshot(b), _byte_len(b)))
     return b
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
 _br_depth!(b::InstrBuilder, depth::Int) =
     (validate_br!(b.v, depth); _emit!(b, InstrIR.Br(UInt32(depth))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 _br_if_depth!(b::InstrBuilder, depth::Int) =
     (validate_br_if!(b.v, depth); _emit!(b, InstrIR.BrIf(UInt32(depth))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:856 InstructionsBuilder._labelIndex)
 function _label_depth(b::InstrBuilder, target::ControlLabel)::Int
     i = findlast(l -> l.handle === target, b.v.labels)
     if i === nothing
@@ -321,13 +353,16 @@ function _label_depth(b::InstrBuilder, target::ControlLabel)::Int
     end
     return length(b.v.labels) - i
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
 br!(b::InstrBuilder, target::ControlLabel) = _br_depth!(b, _label_depth(b, target))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 br_if!(b::InstrBuilder, target::ControlLabel) = _br_if_depth!(b, _label_depth(b, target))
 function br_table!(b::InstrBuilder, targets::Vector{ControlLabel}, default::ControlLabel)
     if b.v.reachable; validate_pop!(b.v, I32); b.v.reachable = false; end
     _emit!(b, InstrIR.BrTable(UInt32[UInt32(_label_depth(b, t)) for t in targets],
                               UInt32(_label_depth(b, default))))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:933 InstructionsBuilder.return_)
 return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
 # fullstrict: the module KNOWS every function's signature — derive it there; the
@@ -353,6 +388,7 @@ return_!(b::InstrBuilder) = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
     return (ft.params, ft.results)
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:947 InstructionsBuilder.call)
 function call!(b::InstrBuilder, func_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
     local tp, tr = _true_call_sig(b, func_idx, params, results)
     if b.v.reachable
@@ -364,6 +400,7 @@ end
 
 # call_indirect: pop table-index (i32) then params, push results. Caller supplies the
 # signature it already knows (same as call!).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:960 InstructionsBuilder.call_indirect)
 function call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
     if b.v.reachable
         validate_pop!(b.v, I32)  # the function index into the table
@@ -376,6 +413,7 @@ end
 # call_ref: pop the (ref $type) callee, then params, push results. The caller supplies the
 # signature it already knows (same contract as call!/call_indirect!), and `type_idx` is the
 # function-type index (dart2wasm CallRef writes the type index after 0x14).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:973 InstructionsBuilder.call_ref)
 function call_ref!(b::InstrBuilder, type_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})
     if b.v.reachable
         validate_pop_any!(b.v)  # the (ref $type) function reference on top
@@ -399,12 +437,14 @@ end
 
 # br_on_non_null: [(ref null ht)] -> [] on fallthrough; branches to `depth` carrying the
 # non-null ref (dart2wasm br_on_non_null). On fallthrough the ref is consumed; reachable stays.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1644 InstructionsBuilder.br_on_non_null)
 function _br_on_non_null_depth!(b::InstrBuilder, depth::Int)
     b.v.reachable && validate_pop_any!(b.v)
     _emit!(b, InstrIR.BrOnNonNull(UInt32(depth)))
 end
 br_on_null!(b::InstrBuilder, target::ControlLabel) =
     _br_on_null_depth!(b, _label_depth(b, target))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1644 InstructionsBuilder.br_on_non_null)
 br_on_non_null!(b::InstrBuilder, target::ControlLabel) =
     _br_on_non_null_depth!(b, _label_depth(b, target))
 
@@ -414,6 +454,7 @@ br_on_non_null!(b::InstrBuilder, target::ControlLabel) =
 # are the EXACT on-wire result-valtype bytes the caller already has (e.g.
 # `[0x63, encode_leb128_signed(type_idx)...]` for a nullable concrete ref), serialized
 # verbatim after the 0x1C + vec-len-1 prefix (dart2wasm SelectWithType).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1004 InstructionsBuilder.select)
 function select_t!(b::InstrBuilder, type_bytes::Vector{UInt8})
     validate_instruction!(b.v, Opcode.SELECT_T)
     _emit!(b, InstrIR.SelectWithType(copy(type_bytes)))
@@ -423,11 +464,13 @@ end
 # Catch-clause constructors a caller hands to `try_table!`. Label is the branch target
 # depth at the point of the try_table (dart2wasm passes a Label; here the caller resolves
 # it to a depth, exactly as it already does for br!/br_if!).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:105 TryTableCatch)
 struct SymbolicTryCatch
     opcode::UInt8
     tag_idx::UInt32
     target::ControlLabel
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:116 Catch)
 catch_clause(tag::Integer, label::ControlLabel) =
     SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
 catch_ref_clause(tag::Integer, label::ControlLabel) =
@@ -441,6 +484,7 @@ catch_all_ref_clause(label::ControlLabel) =
 # void byte 0x40 or a WasmValType; `results` feeds the validator's end-balance check. The
 # catch handlers branch OUT of the try_table to their target labels (validated at br time),
 # so here we only start the block label — matching how block!/loop! work.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:907 InstructionsBuilder.try_table)
 function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
     for c in catches
         c isa SymbolicTryCatch || throw(ArgumentError(
@@ -479,6 +523,7 @@ function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::V
     _emit!(b, InstrIR.TryTable(blocktype, encoded_catches)); return label
 end
 # throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:820 InstructionsBuilder.throw_)
 function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])
     if b.v.reachable
         for t in reverse(inputs); validate_pop!(b.v, t); end
@@ -493,6 +538,7 @@ rethrow_!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(_label_depth(b, target)))))
 
 # ── Reference ───────────────────────────────────────────────────────────────────
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1570 InstructionsBuilder.ref_null)
 ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefNullConcrete(Int64(heaptype))))
 # Abstract-heaptype ref.null (any/struct/array/i31/...): the RefType enum value IS the
@@ -505,8 +551,10 @@ ref_null_none!(b::InstrBuilder) =
     (validate_push!(b.v, AnyRef); _emit!(b, InstrIR.RefNullAbstract(0x71)))
 ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefFunc(UInt32(func_idx))))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1582 InstructionsBuilder.ref_is_null)
 ref_is_null!(b::InstrBuilder) = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
 # dart2wasm: ref_as_non_null output = actual top-of-stack with nullability=false.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1607 InstructionsBuilder.ref_as_non_null)
 function ref_as_non_null!(b::InstrBuilder)
     t = validate_pop_any!(b.v)
     nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
@@ -515,6 +563,7 @@ function ref_as_non_null!(b::InstrBuilder)
 end
 
 # ── WasmGC (type-directed; caller passes the resolved field/element types it has) ──
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1711 InstructionsBuilder.struct_new)
 function struct_new!(b::InstrBuilder, type_idx::Integer, field_types::Vector{<:Any})
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types]))
     _emit!(b, InstrIR.StructNew(UInt32(type_idx)))
@@ -532,6 +581,7 @@ function struct_new!(b::InstrBuilder, type_idx::Integer)
     end
     struct_new!(b, type_idx, _ft)
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1723 InstructionsBuilder.struct_new_default)
 function struct_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
@@ -553,11 +603,13 @@ end
     return ft isa WasmValType ? ft : declared
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1696 InstructionsBuilder.struct_set)
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
@@ -566,15 +618,18 @@ function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayNew(UInt32(type_idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1827 InstructionsBuilder.array_new_default)
 function array_new_default!(b::InstrBuilder, type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.ArrayNewDefault(UInt32(type_idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1802 InstructionsBuilder.array_new_fixed)
 function array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer, elem_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.ARRAY_NEW_FIXED, (type_idx, _true_elem_type(b, type_idx, elem_type), n))
     _emit!(b, InstrIR.ArrayNewFixed(UInt32(type_idx), UInt32(n)))
 end
 # array.new_data $type $seg : [offset:i32, length:i32] -> [(ref $type)]
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1839 InstructionsBuilder.array_new_data)
 function array_new_data!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)
     if b.v.reachable
         validate_pop!(b.v, I32); validate_pop!(b.v, I32)
@@ -594,16 +649,20 @@ end
     return ft isa WasmValType ? ft : declared
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1735 InstructionsBuilder.array_get)
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1774 InstructionsBuilder.array_set)
 function array_set!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.ARRAY_SET, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArraySet(UInt32(type_idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1790 InstructionsBuilder.array_len)
 array_len!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ARRAY_LEN); _emit!(b, InstrIR.ArrayLen()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1961 InstructionsBuilder.ref_cast)
 function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     op = nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST
     validate_gc_instruction!(b.v, op, ConcreteRef(UInt32(type_idx), nullable))
@@ -616,16 +675,20 @@ function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
     if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, nullable ? rt : NonNullAbstractRef(UInt8(rt))); end
     _emit!(b, InstrIR.RefCastAbstract(UInt8(rt), nullable))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1944 InstructionsBuilder.ref_test)
 function ref_test!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     op = nullable ? Opcode.REF_TEST_NULL : Opcode.REF_TEST
     validate_gc_instruction!(b.v, op)
     _emit!(b, InstrIR.RefTest(Int64(type_idx), nullable))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2028 InstructionsBuilder.any_convert_extern)
 any_convert_extern!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _emit!(b, InstrIR.AnyConvertExtern()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2040 InstructionsBuilder.extern_convert_any)
 extern_convert_any!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _emit!(b, InstrIR.ExternConvertAny()))
 ref_i31!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.REF_I31); _emit!(b, InstrIR.RefI31()))
 i31_get_s!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.I31_GET_S); _emit!(b, InstrIR.I31GetS()))
 i31_get_u!(b::InstrBuilder) = (validate_gc_instruction!(b.v, Opcode.I31_GET_U); _emit!(b, InstrIR.I31GetU()))
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1852 InstructionsBuilder.array_copy)
 function array_copy!(b::InstrBuilder, dst_type_idx::Integer, src_type_idx::Integer)
     validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx))
     _emit!(b, InstrIR.ArrayCopy(UInt32(dst_type_idx), UInt32(src_type_idx)))
