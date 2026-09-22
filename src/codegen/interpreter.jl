@@ -483,19 +483,6 @@ end
     return String(bytes)
 end
 
-@overlay WASM_METHOD_TABLE function Base.last(s::String, n::Int)
-    len = ncodeunits(s)
-    take = n >= len ? len : n
-    start = len - take + 1
-    bytes = UInt8[]
-    i = start
-    while i <= len
-        push!(bytes, codeunit(s, i))
-        i += 1
-    end
-    return String(bytes)
-end
-
 @overlay WASM_METHOD_TABLE function Base.reverse(s::String)
     # Reverse by CHARACTER, not byte: a naive byte-reverse splits multi-byte UTF-8
     # codepoints (e.g. the 2-byte 'é'), producing invalid strings whose char count
@@ -2121,22 +2108,6 @@ end
             i += 1
         end
         rep += 1
-    end
-    return String(bytes)
-end
-
-# ─── first(String,Int) Overlay ──────────────────────────────────────────
-# Why: Base.first(::String, ::Int) uses nextind/SubString dispatch that triggers
-#      codegen failures. Simple codeunit copy suffices for ASCII strings.
-# Remove when: codegen handles SubString creation from nextind
-@overlay WASM_METHOD_TABLE function Base.first(s::String, n::Int)
-    slen = ncodeunits(s)
-    take = n >= slen ? slen : n
-    bytes = UInt8[]
-    i = 1
-    while i <= take
-        push!(bytes, codeunit(s, i))
-        i += 1
     end
     return String(bytes)
 end

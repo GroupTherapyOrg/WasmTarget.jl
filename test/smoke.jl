@@ -598,6 +598,17 @@ _g("memory", Any[
 # Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
 _xf("memoryref_offset_after_popfirst", Any[
     ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
+# ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
+# Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
+# 11, 18, 22); Base's own method now compiles in its place.
+@noinline _sm_ovstr(x::Int64) = x > 0 ? "héllo" : "abc"
+_g("overlays", Any[
+    # first/last(::String, n) count characters, not bytes
+    ("first_nonascii_ncodeunits", (n::Int64) -> ncodeunits(first(_sm_ovstr(Int64(1)), n)), Int64(2)),
+    ("first_nonascii_eq", (n::Int64) -> Int64(first(_sm_ovstr(Int64(1)), n) == "hé"), Int64(2)),
+    ("first_past_end", (n::Int64) -> ncodeunits(first(_sm_ovstr(Int64(1)), n)), Int64(10)),
+    ("last_nonascii_ncodeunits", (n::Int64) -> ncodeunits(last(_sm_ovstr(Int64(1)), n)), Int64(4)),
+    ("last_nonascii_eq", (n::Int64) -> Int64(last(_sm_ovstr(Int64(1)), n) == "éllo"), Int64(4)),
 ])
 
 # ============================================================================
