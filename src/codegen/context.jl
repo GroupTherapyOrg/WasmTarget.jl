@@ -507,8 +507,8 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
     _numeric_joins = try
         # Parent side: record %new(Core.Box) contents types per capturing closure type
         # (feeds the closure-side seeding below when THAT closure's body compiles).
-        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
-        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+        populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
             argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
         # Closure side: seed the captured-Box getfields with the recorded contents type
         # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
@@ -518,7 +518,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         if _sbT isa DataType && isstructtype(_sbT)
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
-            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+            merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
                 argtypes=ctx.arg_types, self_shift=1))
         end
         if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
@@ -527,9 +527,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
                   _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
             if _bj !== nothing
-                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                _seeds = f3_closure_box_seeds(ctx.nir, _selfT, _bj)
                 if !isempty(_seeds)
-                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=_seeds))
                     merge!(_joins, _seeds)
                 end
             end
@@ -754,8 +754,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     _numeric_joins = try
         # Parent side: record %new(Core.Box) contents types per capturing closure type
         # (feeds the closure-side seeding below when THAT closure's body compiles).
-        populate_box_field_types!(ctx.mod, ctx.type_registry, code, ctx.ssa_types)
-        _joins = propagate_numeric_value_types(code, ctx.ssa_types;
+        populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
+        _joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
             argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
         # Closure side: seed the captured-Box getfields with the recorded contents type
         # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
@@ -765,7 +765,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         if _sbT isa DataType && isstructtype(_sbT)
             _sst = ctx.code_info.ssavaluetypes isa Vector ? ctx.code_info.ssavaluetypes : ctx.ssa_types
             _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
-            merge!(_joins, f3_self_box_joins(code, _sst, _sbT;
+            merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
                 argtypes=ctx.arg_types, self_shift=1))
         end
         if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
@@ -774,9 +774,9 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
             _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
                   _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
             if _bj !== nothing
-                _seeds = f3_closure_box_seeds(code, _selfT, _bj)
+                _seeds = f3_closure_box_seeds(ctx.nir, _selfT, _bj)
                 if !isempty(_seeds)
-                    merge!(_joins, f3_box_value_types(code, ctx.ssa_types; extra_box_seeds=_seeds))
+                    merge!(_joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=_seeds))
                     merge!(_joins, _seeds)
                 end
             end

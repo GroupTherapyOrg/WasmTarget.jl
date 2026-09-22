@@ -566,8 +566,12 @@ const LOCKS = [
             forbidden = ["actual_val = getfield(val.mod, val.name)\n            return get_phi_edge_wasm_type(actual_val",
                          "called_func = try\n            getfield(func.mod, func.name)",
                          "ft_early = try\n            infer_value_type"]
+            # dispatch.jl's own binding test moved to the NIR boundary in Phase 12D
+            # (resolve_call_callee resolves a GlobalRef ONCE, leaving it a GlobalRef when
+            # unbound), so what find_dispatch_call must still state explicitly is that an
+            # unresolved callee is SKIPPED — not swallowed into a table lookup.
             required = ["isdefined(val.mod, val.name) || return nothing",
-                        "isdefined(callee.mod, callee.name)",
+                        "callee_func isa NirNode || callee_func isa GlobalRef",
                         "isdefined(actual_func_ref.mod, actual_func_ref.name)",
                         "isdefined(func.mod, func.name)"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
@@ -1045,7 +1049,8 @@ const LOCKS = [
             required = ["foldl(typejoin, returns)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
-                        "stmt0.head === :new",
+                        # the explicit-`%new` runtime class, now read off the boundary (Phase 12D)
+                        "node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)",
                         "entry.specTypes",
                         "target_type <: atypes[p]",
                         "concrete_args = Tuple{spec...}",
@@ -1416,7 +1421,8 @@ const LOCKS = [
             required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
                         "haskey(type_globals, closure_type)",
                         "global_get!(b, type_global",
-                        "observe_callable!(CC.widenconst(t))"]
+                        # the SSA-typed callable observation, now read off the boundary (Phase 12D)
+                        "observe_callable!(s.julia_type)"]
             forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
             count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
             count(p -> occursin(p, types_src * closure_src), forbidden)

@@ -391,6 +391,19 @@ function resolve_call_callee(x, types)
     end
 end
 
+"""The callee OBJECT a NirCall/NirInvoke names, or `nothing` when there is none: a `NirNode`
+callee is dynamic (an SSA/argument value with no static identity), and a `GlobalRef` that
+survived the boundary's resolution was unbound. A callee the IR embeds as the object itself
+is neither a GlobalRef nor a QuoteNode, so the boundary classifies it as a literal operand —
+unwrapped here, and only when it is callable.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): Kernel's call node carries
+its resolved target; this reads back the target `resolve_call_callee` resolved once."""
+function _nir_callee_object(@nospecialize(callee))::Any
+    callee isa NirLiteral && return (callee.value isa Function ? callee.value : nothing)
+    (callee isa NirNode || callee isa GlobalRef || callee === nothing) && return nothing
+    return callee
+end
+
 function _resolve_type_operand(x)
     x isa Type && return x
     if x isa GlobalRef
