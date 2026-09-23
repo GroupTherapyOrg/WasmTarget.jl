@@ -531,50 +531,7 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
         elseif ft isa Union
             inner_type = get_nullable_inner_type(ft)
             if inner_type !== nothing
-                if inner_type <: Array && inner_type isa DataType
-                    # Union{Nothing, Vector{T}} - use Vector struct type
-                    elem_type = eltype(inner_type)
-                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-                        register_struct_type!(mod, registry, elem_type)
-                    end
-                    info = register_vector_type!(mod, registry, inner_type)
-                    wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-                elseif inner_type <: AbstractVector && inner_type isa DataType
-                    # Non-Array AbstractVector (BitVector, etc.) — register as struct
-                    info_av = register_struct_type!(mod, registry, inner_type)
-                    if info_av !== nothing
-                        wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
-                    else
-                        wasm_vt = ExternRef
-                    end
-                elseif inner_type <: AbstractVector
-                    # Generic AbstractVector - use raw array
-                    elem_type = eltype(inner_type)
-                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-                        register_struct_type!(mod, registry, elem_type)
-                    end
-                    array_type_idx = get_array_type!(mod, registry, elem_type)
-                    wasm_vt = ConcreteRef(array_type_idx, true)
-                elseif inner_type === String || inner_type === Symbol
-                    # Union{Nothing, String/Symbol} — nullable string array ref
-                    str_type_idx = get_string_struct_type!(mod, registry)
-                    wasm_vt = ConcreteRef(str_type_idx, true)
-                elseif isconcretetype(inner_type) && isstructtype(inner_type)
-                    if haskey(_registering_types, inner_type)
-                        r_idx = _registering_types[inner_type]
-                        if r_idx >= 0
-                            wasm_vt = ConcreteRef(UInt32(r_idx), true)
-                        else
-                            wasm_vt = StructRef
-                        end
-                    else
-                        register_struct_type!(mod, registry, inner_type)
-                        info = registry.structs[inner_type]
-                        wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-                    end
-                else
-                    wasm_vt = julia_to_wasm_type(ft)
-                end
+                wasm_vt = _nullable_field_storage_type!(mod, registry, ft, inner_type)
             else
                 # B4/U2: a union-typed field is a boxed AnyRef discriminated by classId
                 # (julia_to_wasm_type(Union)→AnyRef) — the {typeId,tag,value} wrapper is retired.
@@ -612,6 +569,58 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     registry.structs[T] = info
 
     return info
+end
+
+"""
+    _nullable_field_storage_type!(mod, registry, ft, inner_type) -> WasmValType
+
+The storage type of a struct field typed `ft = Union{Nothing, inner_type}`: the nullable ref
+of `inner_type`'s representation — a registered struct/vector/array ref (a struct being
+registered right now contributes its reserved recursion-group index), else the one
+translator's answer (for a numeric `inner_type`, its nullable box). Shared by both struct
+registrars so a nullable field has one layout.
+
+parity(class_info.dart:596 _generateFields): a field's wasm type is `translateTypeOfField`,
+i.e. translateStorageType with the field type's nullability (translator.dart:1141).
+"""
+function _nullable_field_storage_type!(mod::WasmModule, registry::TypeRegistry,
+                                       ft::Union, inner_type::Type)::WasmValType
+    if inner_type <: Array && inner_type isa DataType
+        # Union{Nothing, Vector{T}} - use Vector struct type
+        elem_type = eltype(inner_type)
+        # For non-recursive types, register the element type first
+        if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
+            register_struct_type!(mod, registry, elem_type)
+        end
+        info = register_vector_type!(mod, registry, inner_type)
+        return ConcreteRef(info.wasm_type_idx, true)  # nullable
+    elseif inner_type <: AbstractVector && inner_type isa DataType
+        # Non-Array AbstractVector (BitVector, etc.) — register as struct
+        info_av = register_struct_type!(mod, registry, inner_type)
+        return info_av !== nothing ? ConcreteRef(info_av.wasm_type_idx, true) : ExternRef
+    elseif inner_type <: AbstractVector
+        # Union{Nothing, generic AbstractVector} - use raw array
+        elem_type = eltype(inner_type)
+        # For non-recursive types, register the element type first
+        if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
+            register_struct_type!(mod, registry, elem_type)
+        end
+        # get_array_type! handles self-referential types
+        return ConcreteRef(get_array_type!(mod, registry, elem_type), true)  # nullable
+    elseif inner_type === String || inner_type === Symbol
+        # Union{Nothing, String/Symbol} — nullable string ref
+        return ConcreteRef(get_string_struct_type!(mod, registry), true)
+    elseif isconcretetype(inner_type) && isstructtype(inner_type)
+        # Union{Nothing, SomeStruct} - nullable struct ref
+        if haskey(_registering_types, inner_type)
+            reserved_idx = _registering_types[inner_type]
+            # a non-self-referential type being registered has no index yet
+            return reserved_idx >= 0 ? ConcreteRef(UInt32(reserved_idx), true) : StructRef
+        end
+        register_struct_type!(mod, registry, inner_type)
+        return ConcreteRef(registry.structs[inner_type].wasm_type_idx, true)  # nullable
+    end
+    return get_concrete_wasm_type(ft, mod, registry)
 end
 
 # parity(class_info.dart:539 _generateFields): the class's field list after the inherited prefix.
@@ -722,55 +731,7 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
             # Handle Union types for struct fields
             inner_type = get_nullable_inner_type(ft)
             if inner_type !== nothing
-                # Union{Nothing, T} as nullable reference to T
-                if inner_type <: Array && inner_type isa DataType
-                    # Union{Nothing, Vector{T}} - use Vector struct type
-                    elem_type = eltype(inner_type)
-                    # For non-recursive types, register the element type first
-                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-                        register_struct_type!(mod, registry, elem_type)
-                    end
-                    info = register_vector_type!(mod, registry, inner_type)
-                    wasm_vt = ConcreteRef(info.wasm_type_idx, true)  # nullable
-                elseif inner_type <: AbstractVector && inner_type isa DataType
-                    # Non-Array AbstractVector (BitVector, etc.) — register as struct
-                    info_av = register_struct_type!(mod, registry, inner_type)
-                    if info_av !== nothing
-                        wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)  # nullable
-                    else
-                        wasm_vt = ExternRef
-                    end
-                elseif inner_type <: AbstractVector
-                    # Union{Nothing, generic AbstractVector} - use raw array
-                    elem_type = eltype(inner_type)
-                    # For non-recursive types, register the element type first
-                    if !haskey(_registering_types, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-                        register_struct_type!(mod, registry, elem_type)
-                    end
-                    # get_array_type! handles self-referential types
-                    array_type_idx = get_array_type!(mod, registry, elem_type)
-                    wasm_vt = ConcreteRef(array_type_idx, true)  # nullable
-                elseif inner_type === String || inner_type === Symbol
-                    # Union{Nothing, String/Symbol} — nullable string array ref
-                    str_type_idx = get_string_struct_type!(mod, registry)
-                    wasm_vt = ConcreteRef(str_type_idx, true)
-                elseif isconcretetype(inner_type) && isstructtype(inner_type)
-                    # Union{Nothing, SomeStruct} - nullable struct ref
-                    if haskey(_registering_types, inner_type)
-                        reserved_idx = _registering_types[inner_type]
-                        if reserved_idx >= 0
-                            wasm_vt = ConcreteRef(UInt32(reserved_idx), true)  # nullable
-                        else
-                            wasm_vt = StructRef  # Not a self-referential type being registered
-                        end
-                    else
-                        register_struct_type!(mod, registry, inner_type)
-                        info = registry.structs[inner_type]
-                        wasm_vt = ConcreteRef(info.wasm_type_idx, true)  # nullable
-                    end
-                else
-                    wasm_vt = julia_to_wasm_type(ft)
-                end
+                wasm_vt = _nullable_field_storage_type!(mod, registry, ft, inner_type)
             else
                 # B4/U2: a union-typed field is a boxed AnyRef discriminated by classId
                 # (julia_to_wasm_type(Union)→AnyRef) — the {typeId,tag,value} wrapper is retired.

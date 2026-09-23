@@ -35,6 +35,12 @@ function is_ref_type_or_union(T::Type)::Bool
     end
     # Union types - check if any component is a ref type
     if T isa Union
+        # Union{Nothing,T} over a numeric T is T's nullable box (get_concrete_wasm_type) — a ref
+        local nullable_inner = get_nullable_inner_type(T)
+        if nullable_inner !== nothing
+            local inner_w = julia_to_wasm_type(nullable_inner)
+            (inner_w === I32 || inner_w === I64 || inner_w === F32 || inner_w === F64) && return true
+        end
         types = Base.uniontypes(T)
         for t in types
             if t !== Nothing && is_ref_type_or_union(t)

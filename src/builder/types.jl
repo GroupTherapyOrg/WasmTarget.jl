@@ -384,9 +384,8 @@ end
 Resolve a Union type to a common Wasm type.
 
 Strategy:
-- Union{Nothing, T} -> type of T (Nothing is "no value")
-- Union{T1, T2, ...} where all are numeric -> widest numeric type
-- Otherwise error
+- Union{Nothing, T} -> T's reference form (StructRef for a numeric T: its nullable box)
+- Union{T1, T2, ...} where all are numeric -> AnyRef (boxed)
 """
 function resolve_union_type(T::Union)::WasmValType
     # Get the union types
@@ -399,8 +398,11 @@ function resolve_union_type(T::Union)::WasmValType
         # Union of just Nothing - shouldn't happen but handle it
         return I32
     elseif length(non_nothing) == 1
-        # Union{Nothing, T} -> T
-        return julia_to_wasm_type(non_nothing[1])
+        # Union{Nothing, T} -> T's reference form: a numeric T is held in its nullable box
+        # struct (translator.dart:1141; the concrete box is get_concrete_wasm_type's answer).
+        local inner = julia_to_wasm_type(non_nothing[1])
+        (inner === I32 || inner === I64 || inner === F32 || inner === F64) && return StructRef
+        return inner
     else
         # Multi-variant: box mixed-CATEGORY numeric (int/float — Union{Int64,Float64}) behind
         # AnyRef. Collapsing to the widest primitive is LOSSY (Int 1 / Float 1.0 become the same

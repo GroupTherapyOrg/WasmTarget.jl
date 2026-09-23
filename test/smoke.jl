@@ -457,6 +457,46 @@ _xf("pointer_foreigncalls", Any[
 # "Int64"); on Julia 1.13 it passes (measured 2026-09-22).
 (VERSION >= v"1.13-" ? _g : _xf)("show_type", Any[
     ("repr_runtime_type", (x::Int64) -> length(repr(x > 0 ? Int64 : Float64)), Int64(1)),
+# ---- Union{Nothing,<numeric>} storage (dart's `int?` = a nullable boxed ref) ----
+# A Union{Nothing,Int64} field / return / element must hold `nothing` distinctly from 0;
+# @noinline keeps the struct, the call and the vector from being scalar-replaced away.
+struct _UFImm; f::Union{Nothing,Int64}; end
+mutable struct _UFMut; f::Union{Nothing,Int64}; end
+struct _UFF64; f::Union{Nothing,Float64}; end
+struct _UFBool; f::Union{Nothing,Bool}; end
+@noinline _uf_imm(x::Int64) = _UFImm(x > 0 ? x : nothing)
+@noinline _uf_immv(x::Int64) = _UFImm(x)
+@noinline _uf_f64(x::Int64) = _UFF64(x > 0 ? Float64(x) / 2 : nothing)
+@noinline _uf_bool(x::Int64) = _UFBool(x > 0 ? isodd(x) : nothing)
+@noinline _uf_clear!(m::_UFMut) = (m.f = nothing; nothing)
+@noinline _uf_set!(m::_UFMut, x::Int64) = (m.f = x; nothing)
+@noinline _uf_ret(x::Int64) = x > 0 ? x : nothing
+@noinline _uf_vec(x::Int64) = Union{Nothing,Int64}[x, nothing, 0]
+_g("union_fields", Any[
+    ("imm_nothing_is", (x::Int64) -> Int64(_uf_imm(x).f === nothing), Int64(-3)),
+    ("imm_int_is", (x::Int64) -> Int64(_uf_imm(x).f === nothing), Int64(3)),
+    ("imm_nothing_isnot", (x::Int64) -> Int64(_uf_imm(x).f !== nothing), Int64(-3)),
+    ("imm_int_isnot", (x::Int64) -> Int64(_uf_imm(x).f !== nothing), Int64(3)),
+    ("imm_something_nothing", (x::Int64) -> something(_uf_imm(x).f, Int64(77)), Int64(-3)),
+    ("imm_something_int", (x::Int64) -> something(_uf_imm(x).f, Int64(77)), Int64(3)),
+    ("imm_isa_nothing", (x::Int64) -> Int64(_uf_imm(x).f isa Nothing), Int64(-3)),
+    ("imm_zero_is_not_nothing", (x::Int64) -> Int64(_uf_immv(x).f === nothing), Int64(0)),
+    ("mut_set_nothing", (x::Int64) -> (m = _UFMut(x); _uf_clear!(m); Int64(m.f === nothing)), Int64(4)),
+    ("mut_roundtrip", (x::Int64) -> (m = _UFMut(nothing); _uf_set!(m, x);
+        a = m.f === nothing ? -1 : m.f::Int64; _uf_clear!(m); b = m.f === nothing ? 1 : 0; a * 10 + b), Int64(4)),
+    ("mut_roundtrip_zero", (x::Int64) -> (m = _UFMut(nothing); _uf_set!(m, x);
+        a = m.f === nothing ? -1 : m.f::Int64; a * 10 + (m.f === nothing ? 1 : 0)), Int64(0)),
+    ("f64_nothing", (x::Int64) -> (f = _uf_f64(x).f; f === nothing ? -1.0 : f::Float64), Int64(-3)),
+    ("f64_value", (x::Int64) -> (f = _uf_f64(x).f; f === nothing ? -1.0 : f::Float64), Int64(5)),
+    ("bool_nothing", (x::Int64) -> (f = _uf_bool(x).f; f === nothing ? Int64(-1) : Int64(f::Bool)), Int64(-3)),
+    ("bool_value", (x::Int64) -> (f = _uf_bool(x).f; f === nothing ? Int64(-1) : Int64(f::Bool)), Int64(5)),
+    ("ret_nothing", (x::Int64) -> (r = _uf_ret(x); r === nothing ? Int64(-1) : r::Int64), Int64(-3)),
+    ("ret_value", (x::Int64) -> (r = _uf_ret(x); r === nothing ? Int64(-1) : r::Int64), Int64(3)),
+    ("vec_elements", (x::Int64) -> (v = _uf_vec(x); c = 0; for e in v; c = 10c + (e === nothing ? 9 : e::Int64); end; c), Int64(4)),
+    # Base's own Union{Nothing,Int64} returns: a miss is `nothing`, never index 0
+    ("findfirst_vec_miss", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(9)),
+    ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
+    ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 ])
 
 # ============================================================================

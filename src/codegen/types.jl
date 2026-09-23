@@ -1399,21 +1399,13 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return type_idx
     end
 
-    # Create the array type
-    # Check if element type is currently being registered (self-referential)
-    local wasm_elem_type
-    if haskey(_registering_types, elem_type)
-        reserved_idx = _registering_types[elem_type]
-        if reserved_idx >= 0
-            # Use concrete reference to the reserved type index
-            wasm_elem_type = ConcreteRef(UInt32(reserved_idx), true)
-        else
-            # Being registered but not self-referential - use get_concrete_wasm_type
-            wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
-        end
+    # The element's storage type: a self-referential element type being registered right now
+    # contributes its reserved recursion-group index; every other element type is the one
+    # translator's answer.
+    local wasm_elem_type = if haskey(_registering_types, elem_type) && _registering_types[elem_type] >= 0
+        ConcreteRef(UInt32(_registering_types[elem_type]), true)
     else
-        # Not being registered - use get_concrete_wasm_type for proper type lookup
-        wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
+        get_concrete_wasm_type(elem_type, mod, registry)
     end
     type_idx = add_array_type!(mod, wasm_elem_type, true)  # mutable arrays
     registry.arrays[elem_type] = type_idx
@@ -2502,6 +2494,12 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 # return the derived-nullability ConcreteRef directly.
                 for_local && return EqRef
                 return ConcreteRef(_inner_w.type_idx, derive_nullability(T))
+            end
+            if _inner_w === I32 || _inner_w === I64 || _inner_w === F32 || _inner_w === F64
+                # parity(translator.dart:1141 translateStorageType): a nullable builtin is its
+                # box class, nullable (`int?` = (ref null $BoxedInt)) — `nothing` is the null
+                # ref, a value is the classId box; in every position (field, local, element).
+                return ConcreteRef(get_numeric_box_type!(mod, registry, _inner_w), true)
             end
             return _inner_w
         else
