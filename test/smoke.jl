@@ -203,6 +203,11 @@ _g("closures", Any[
     ("capture", (x::Int64) -> (f = y -> y + x; f(10)), Int64(5)),
     ("map_closure", (n::Int64) -> (k = 3; sum(map(i -> i * k, 1:n))), Int64(4)),
     ("erased_two_specializations", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1)::Int64) + Int64((fs[1](2.5)::Float64) * 2)), Int64(3)),
+    # a function value called inside nested branches whose result feeds a multiply: through
+    # the erased vtable call (one and two result classes) and a union of capturing closures
+    ("erased_nested_mul", (n::Int64) -> (m = n + 1; fs = Any[x -> x * m, x -> x + m, x -> x - m]; r = 0; for k in 1:3; g = fs[k]; if n > 0; if k != 2 || n > 3; r += (g(n)::Int64) * n; end; end; end; r), Int64(4)),
+    ("erased_nested_mul_mixed", (n::Int64) -> (fs = Any[x -> x * 2, x -> x * 0.5]; r = 0.0; for k in 1:2; g = fs[k]; if n > 0; if k == 1; r += Float64(g(n)::Int64) * n; else; r += (g(n)::Float64) * n; end; end; end; r), Int64(4)),
+    ("union_closure_nested_mul", (n::Int64) -> (m = n + 1; f = n == 1 ? (x -> x * m) : n == 2 ? (x -> x * 3m) : n == 3 ? (x -> x + m) : (x -> x - m); r = 0; if n > 0; if n < 10; r = f(n) * n; end; end; r), Int64(4)),
     # every vtable entry returns anyref (dart closures.dart:648): a Nothing-returning body's
     # entry yields null (it used to return no value, and the caller's cast to the uniform
     # signature trapped), and one arity may mix Nothing- and value-returning specializations

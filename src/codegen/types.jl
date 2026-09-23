@@ -1259,7 +1259,7 @@ overload resolution filling in for dart's static single-target reference.
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                       expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo, Nothing}
-    # 1f6e77980994 family: loose subtype passes could pick the WRONG same-name
+    # loose subtype passes could pick the WRONG same-name
     # overload (e.g. getindex(Vector{Bool})::Bool for a Vector{String} site →
     # i32 stored into an anyref local). When the caller knows the expected
     # return type, candidates with incompatible returns are skipped.
@@ -1283,7 +1283,7 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
 
     # Find matching signature (exact match for now). Even exact arg matches are
     # gated on return compatibility: two registered overloads can share loosely
-    # inferred arg types while returning different wasm classes (1f6e77980994).
+    # inferred arg types while returning different wasm classes.
     for info in infos
         if info.arg_types == arg_types && _ret_ok(info)
             return info

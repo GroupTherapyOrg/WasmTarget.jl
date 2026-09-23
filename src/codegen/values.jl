@@ -1905,7 +1905,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # Struct constant - create it with struct.new
         T = typeof(val)
 
-        # 1f6e77980994 family: struct CONSTANTS with cyclic/unboundedly deep
+        # struct CONSTANTS with cyclic/unboundedly deep
         # object graphs (Luxor/Karnak/Graphs values captured in Makie figures)
         # recursed compile_value to a StackOverflow. Guard by object identity
         # AND depth; refuse with a NAMED error so pipelines degrade honestly.

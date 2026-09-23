@@ -3634,7 +3634,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # Infer argument types BEFORE pushing (need for type checking)
             call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
 
-            # 1f6e77980994: dynamic-dispatch sites must not pick a same-name
+            # dynamic-dispatch sites must not pick a same-name
             # overload with an incompatible return (i32 getindex for a ref site)
             _exp_ret_c = get(ctx.ssa_types, idx, nothing)
             target_info = get_function(ctx.func_registry, called_func, call_arg_types;
@@ -3752,7 +3752,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             ref_cast!(_xcb, StructRef, true)  # structref heap type
                         elseif (target_local_type === AnyRef || target_local_type === StructRef) &&
                                (ret_wasm === I32 || ret_wasm === I64 || ret_wasm === F32 || ret_wasm === F64)
-                            # 1f6e77980994: callee returns a numeric but the SSA local is a
+                            # callee returns a numeric but the SSA local is a
                             # ref class (dynamic Any-typed call site, e.g. getindex on a bond
                             # Vector resolving to an i32-returning overload) — box the RESULT
                             # (on the stack) exactly like the arg path via the one emitter.
