@@ -9,6 +9,7 @@ export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, W
 
 module Opcode
     # Control instructions
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const UNREACHABLE = 0x00
     const NOP = 0x01
     const BLOCK = 0x02
@@ -36,11 +37,15 @@ module Opcode
     const THROW_REF = 0x0A     # throw_ref - rethrow exception from exnref
     const TRY_TABLE = 0x1F     # try_table blocktype catch* - structured exception handler
 
+# end parity-region
     # Catch clause types for try_table
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:4937 TryTableCatch.deserialize)
     const CATCH = 0x00         # catch tag_idx label_idx
     const CATCH_REF = 0x01     # catch_ref tag_idx label_idx (pushes exnref)
     const CATCH_ALL = 0x02     # catch_all label_idx
     const CATCH_ALL_REF = 0x03 # catch_all_ref label_idx (pushes exnref)
+# end parity-region
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
 
     # Parametric instructions
     const DROP = 0x1A
@@ -241,7 +246,9 @@ module Opcode
     const ARRAY_NEW_DEFAULT = 0x07  # array.new_default $t : [len] -> [(ref $t)]
     const ARRAY_NEW_FIXED = 0x08  # array.new_fixed $t $n : [elem...] -> [(ref $t)]
     const ARRAY_NEW_DATA = 0x09   # array.new_data $t $d : [offset, len] -> [(ref $t)]
+# end parity-region
     const ARRAY_NEW_ELEM = 0x0A   # array.new_elem $t $e
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const ARRAY_GET = 0x0B        # array.get $t : [(ref null $t) i32] -> [elem type]
     const ARRAY_GET_S = 0x0C      # array.get_s (packed signed)
     const ARRAY_GET_U = 0x0D      # array.get_u (packed unsigned)
@@ -274,6 +281,7 @@ module Opcode
     const ANY_CONVERT_EXTERN = 0x1A  # any.convert_extern
     const EXTERN_CONVERT_ANY = 0x1B  # extern.convert_any
 
+# end parity-region
     # Saturating truncation (0xFC prefix, sub-ops 0x00–0x07): float → int, clamping
     # out-of-range / NaN to the int min/max/0 instead of trapping (the non-saturating
     # 0xA8–0xB1 family traps on overflow).
@@ -284,20 +292,26 @@ module Opcode
     const I64_TRUNC_SAT_F32_S = 0x04
     const I64_TRUNC_SAT_F32_U = 0x05
     const I64_TRUNC_SAT_F64_S = 0x06
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const I64_TRUNC_SAT_F64_U = 0x07
 
     # Bulk memory operations (0xFC prefix)
     const FC_PREFIX = 0xFC
+# end parity-region
     const MEMORY_INIT = 0x08    # memory.init seg_idx mem_idx
     const DATA_DROP = 0x09      # data.drop seg_idx
     const MEMORY_COPY = 0x0A    # memory.copy dst_mem src_mem
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const MEMORY_FILL = 0x0B    # memory.fill mem_idx
+# end parity-region
     const TABLE_INIT = 0x0C     # table.init seg_idx table_idx
     const ELEM_DROP = 0x0D      # elem.drop seg_idx
     const TABLE_COPY = 0x0E     # table.copy dst_table src_table
     const TABLE_GROW = 0x0F     # table.grow table_idx
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const TABLE_SIZE = 0x10     # table.size table_idx
     const TABLE_FILL = 0x11     # table.fill table_idx
+# end parity-region
 end
 
 # ============================================================================
@@ -369,6 +383,7 @@ struct WasmElemSegment
     func_indices::Vector{UInt32}  # Function indices to place in table
     declared::Bool           # flags=3 declarative segment (ref.func in const exprs)
 end
+# parity(pkg/wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment)
 WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32}) = WasmElemSegment(t, o, f, false)
 
 """
@@ -396,6 +411,7 @@ struct WasmDataSegment
     passive::Bool            # If true, this is a passive data segment (mode 0x01)
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/data_segment.dart:25 DataSegment)
 WasmDataSegment(memory_idx, offset, data) = WasmDataSegment(memory_idx, offset, data, false)
 
 """
@@ -430,6 +446,7 @@ mutable struct WasmModule
     start_function::Union{Nothing, UInt32}  # Optional start function index
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
 WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
 # TRUE-INT-002-impl2: Wrapper function for WASM self-hosting.
@@ -508,6 +525,7 @@ function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
     return idx
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/types.dart:406 _FunctionTypeKey.==)
 function types_equal(a::FuncType, b::FuncType)
     a.params == b.params && a.results == b.results
 end
@@ -595,6 +613,7 @@ function add_import!(mod::WasmModule,
 end
 
 # Overload for WasmValType (supports RefType, externref, etc.)
+# parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
 function add_import!(mod::WasmModule,
                      module_name::String,
                      field_name::String,
@@ -829,6 +848,7 @@ function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer
     return mod
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/data_segments.dart:24 DataSegmentsBuilder.define)
 function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::String)
     add_data_segment!(mod, memory_idx, offset, Vector{UInt8}(codeunits(data)))
 end
@@ -889,10 +909,13 @@ end
 # Binary Serialization
 # ============================================================================
 
+# parity-region(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
 const WASM_MAGIC = UInt8[0x00, 0x61, 0x73, 0x6D]  # \0asm; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
 const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
+# end parity-region
 
 # Section IDs
+# parity-region(pkg/wasm_builder/lib/src/serialize/sections.dart:41 Section.id)
 const SECTION_TYPE = 0x01  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:47 TypeSection.sectionId)
 const SECTION_IMPORT = 0x02  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:145 ImportSection.sectionId)
 const SECTION_FUNCTION = 0x03  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:276 FunctionSection.sectionId)
@@ -906,6 +929,7 @@ const SECTION_DATA = 0x0B  # parity(pkg/wasm_builder/lib/src/serialize/sections.
 const SECTION_START = 0x08    # Start function (section 8); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:557 StartSection.sectionId)
 const SECTION_DATACOUNT = 0x0C  # Data count (section 12); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:653 DataCountSection.sectionId)
 const SECTION_TAG = 0x0D      # Exception tags (section 13); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:413 TagSection.sectionId)
+# end parity-region
 
 """
     to_bytes(mod::WasmModule) -> Vector{UInt8}
@@ -1567,19 +1591,26 @@ end
 # ============================================================================
 
 # Type constructors for binary encoding
-const FUNCTYPE_BYTE = 0x60  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1023 FunctionType.serializeDefinitionInner)
-const STRUCTTYPE_BYTE = 0x5F  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1168 StructType.serializeDefinitionInner)
-const ARRAYTYPE_BYTE = 0x5E  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1256 ArrayType.serializeDefinitionInner)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1023 FunctionType.serializeDefinitionInner)
+const FUNCTYPE_BYTE = 0x60
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1168 StructType.serializeDefinitionInner)
+const STRUCTTYPE_BYTE = 0x5F
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1256 ArrayType.serializeDefinitionInner)
+const ARRAYTYPE_BYTE = 0x5E
 
 # WasmGC subtype opcodes (required for GC types)
-const SUB_BYTE = 0x50       # sub (non-final subtype); parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
-const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping); parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
-const REC_BYTE = 0x4E       # rec (recursive type group); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:76 TypeSection.serializeContents)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+const SUB_BYTE = 0x50       # sub (non-final subtype)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping)
+# parity(pkg/wasm_builder/lib/src/serialize/sections.dart:76 TypeSection.serializeContents)
+const REC_BYTE = 0x4E       # rec (recursive type group)
 
 """
 Write a composite type to the type section.
 For function types, write directly (no sub wrapper needed for backward compat).
 For struct/array types, wrap in sub final.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner)
 """
 function write_composite_type!(w::WasmWriter, ft::FuncType)
     write_byte!(w, FUNCTYPE_BYTE)
@@ -1632,6 +1663,7 @@ end
 
 """
 Write a value type (NumType, RefType, or packed type).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:121 NumType.serialize)
 """
 function write_valtype!(w::WasmWriter, vt::NumType)
     write_byte!(w, UInt8(vt))
@@ -1657,10 +1689,12 @@ function write_valtype!(w::WasmWriter, vt::HeapType)
     write_byte!(w, UInt8(vt))
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize)
 function write_valtype!(w::WasmWriter, vt::UInt8)
     write_byte!(w, vt)
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
 function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)
     # Non-nullable reference to an abstract heap type: (ref extern), (ref func), etc.
     # Binary: 0x64 (non-null ref prefix) + heap type byte
@@ -1668,6 +1702,7 @@ function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)
     write_byte!(w, vt.heaptype_byte)
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
 function write_valtype!(w::WasmWriter, vt::ConcreteRef)
     # Concrete reference type: (ref null $typeidx) or (ref $typeidx)
     # Binary format: 0x63 (nullable) or 0x64 (non-nullable) followed by heap type index
