@@ -1003,7 +1003,7 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
-    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import — so host IO imports cannot shift framework-owned function indices",
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import — so host IO imports cannot shift framework-owned function indices: no host-console import exists anywhere in src, and receiver-free println/print/show reject loudly at their statement (no IO bridge exists to configure)",
         () -> begin
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
             mbv_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
@@ -1019,10 +1019,16 @@ const LOCKS = [
             required = ["explicit IO formatting does not activate host-console imports",
                         "compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), \"p\")])",
                         "@test isempty(compiled.imports)"]
+            # the receiver-free rejection, pinned where it is exercised (the reject is
+            # Julia's own console write, located at its statement)
+            diag_src = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            diag_required = ["receiver-free print/println/show reject loudly at their statement",
+                             "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
             docs_required = ["Verify interactive docs islands compiled",
                              "window.TherapyHydrate[\"examplelorenz\"]"]
             count(p -> occursin(p, src_all), forbidden) +
                 count(p -> !occursin(p, mbv_src), required) +
+                count(p -> !occursin(p, diag_src), diag_required) +
                 count(p -> !occursin(p, docs_ci), docs_required)
         end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
