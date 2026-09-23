@@ -32,13 +32,9 @@ parity(code_generator.dart:135 getStaticType): an operand's type is its defining
 _f3_ssa_type(sst::Vector{NirStmt}, id::Int)::Type = _nir_ssa_type(sst, id)
 # parity(code_generator.dart:135 getStaticType): the same read from a lattice vector or a refined map.
 function _f3_ssa_type(sst, id::Int)::Type
-    t = try
-        get(sst, id, Any)
-    catch
-        (1 <= id <= length(sst)) ? sst[id] : Any
-    end
+    t = get(sst, id, Any)   # Vector, IntKeyMap and Dict all answer an absent id with Any
     t isa Type && return t
-    return try; _F3_CC.widenconst(t); catch; Any; end
+    return _F3_CC.widenconst(t)
 end
 
 """The Julia type a literal operand contributes as a call argument. A type literal argues as
@@ -226,8 +222,7 @@ function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}},
         (clo_T in captor_types) || continue
         st in visited && continue
         push!(visited, st)
-        irs = try get_typed_ir(st) catch; nothing end
-        irs === nothing && continue
+        irs = get_typed_ir(st)
         boxfields = Set{Symbol}(f for (ty, f) in field_captors if ty === clo_T)
         for pair in irs
             body_nir = build_nir(pair.first)
