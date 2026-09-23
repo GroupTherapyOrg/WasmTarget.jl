@@ -23,6 +23,45 @@ detaches the docstring; R35 counts those), otherwise as a `#` comment directly a
 L111 keeps every model paired with its instance, a Broken variant, and an anchor. `formal.yml`
 runs the harness on every push.
 
+## Components
+
+Every algorithmic component of `src/` — a fixpoint, a graph walk, a numbering, a proof the
+compiler acts on — and the model that checks it. A row with no model names why. (C8's
+proposed lock reads this table: each modeled function carries its `formal(` anchor, and every
+anchor in `src/` has a row.)
+
+| Component | Functions | Model |
+|---|---|---|
+| Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `emit_duplicated_terminal!` (stackified.jl) | Stackifier |
+| ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
+| Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
+| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis` (trimcollect.jl) | ClosedWorld |
+| Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
+| Coercion funnel | `convert_type!` (values.jl) | Coercion |
+| Constant interning | `ensure_constant_global!` (types.jl) | Constants |
+| Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
+| Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
+| NIR boundary | `build_nir` (nir.jl) | NirBuild |
+| Box contents join | `box_contents_type` (box_capture.jl) | BoxJoin |
+| Box-derived value types | `f3_box_value_types` (box_capture.jl) | BoxValueTypes |
+| Numeric accumulator types | `propagate_numeric_value_types` (box_capture.jl) | NumericJoin |
+| Storage-relative pointers | `_storage_relative_pointer_is_closed`, `_trace_memmove_ptr` (statements.jl) | StoragePointer |
+| Dead-statement proof | `stmt_is_proven_unreachable`, `analyze_blocks` (generate.jl) | ProvenDead |
+| Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
+| Native sidecar protocol | test/sidecar | Sidecar |
+| Closure-local capture typing | `f3_self_box_joins` (box_capture.jl) | — none yet: an optimistic seed with a verify pass, the shape NumericJoin found unsound |
+| External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | — none yet: ClosedWorld abstracts it, although it removes methods from the plan |
+| Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_closure_dispatch_trampoline!` (closures.jl) | — none yet |
+| `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | — none yet: MARCH 13.4 replaces it with dart's `identical`; model it with that change |
+| Recursive type groups | `register_struct_type!` (structs.jl), `add_rec_group!` (instructions.jl) | — none yet: MARCH 13.4 replaces placeholder-and-patch with dart's define-then-fill; model it with that change |
+| Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), validator.jl | — none yet: C7's emitting-line checks, with wasm-tools as the alarm |
+| Int128 over i64 limbs | int128.jl | — none yet |
+| SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
+| Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
+| Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
+| MemoryRef offset locals | `allocate_memoryref_offset_locals!` (builtins.jl) | — the StorageRef model belongs to the MemoryRef work |
+| LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `vlq_encode` (sourcemap.jl) | — encodings; wasm-tools parses every module |
+
 ## Rules
 
 - A change to a modeled algorithm updates the model FIRST and lands with TLC green.
