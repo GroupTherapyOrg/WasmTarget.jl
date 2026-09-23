@@ -24,9 +24,13 @@ const UNITS = Dict{Tuple{Symbol,Any},String}()   # unit => display label
 
 _rec(reg, unit, f) = (args...; kw...) -> (push!(HITS, (reg, unit)); f(args...; kw...))
 
+# A callee key is labelled with its owning module: `Core.ifelse` and `Base.ifelse` (likewise
+# `sizeof`) are different objects with the same name, and one ALLOWLIST line must name one unit.
+_label(k) = (k isa Function || k isa Type) ? string(parentmodule(k), ".", nameof(k)) : string(k)
+
 function _wrap_keyed!(reg::Symbol, d)
     for (k, v) in collect(d)
-        UNITS[(reg, k)] = string(k)
+        UNITS[(reg, k)] = _label(k)
         d[k] = v isa Function ? _rec(reg, k, v) : typeof(v)(_rec(reg, k, v.emit!), v.result)
     end
 end
@@ -50,6 +54,10 @@ _wrap_keyed!(:INTRINSIC_UNOPS, WT.INTRINSIC_UNOPS)
 _wrap_keyed!(:INTRINSIC_CONVERSIONS, WT.INTRINSIC_CONVERSIONS)
 _wrap_by_fn!(:INVOKE_INTRINSICS, WT.INVOKE_INTRINSICS, e -> e.fn, (e, g) -> WT.InvokeIntrinsicEntry(g, e.mode))
 _wrap_by_fn!(:STANDALONE_INTRINSIC_BODIES, WT.STANDALONE_INTRINSIC_BODIES, identity, (_, g) -> g)
+let labels = [(reg, l) for ((reg, _), l) in UNITS]
+    allunique(labels) || error("registry_coverage: two units share a label — ",
+                               unique(filter(x -> count(==(x), labels) > 1, labels)))
+end
 
 # ---- the two corpora, compiled exactly as their lanes compile them ----
 include(joinpath(@__DIR__, "probe_corpus.jl"))
@@ -78,20 +86,20 @@ end
 # listed here that IS covered fails the lane too, so the list only shrinks; a NEW registry
 # entry without a case fails immediately.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
-    (:BUILTIN_LOWERINGS, "!==") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "_closed_world_isvisible") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "_closed_world_type_bounds") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "apply_type") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "check_world_bounded") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "getproperty") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "ifelse") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "invoke_in_world") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "isdefinedglobal") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "isvisible") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "memoryref") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "ncodeunits") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "setproperty!") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "sizeof") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Core.!==") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "WasmTarget._closed_world_isvisible") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "WasmTarget._closed_world_type_bounds") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Core.apply_type") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.check_world_bounded") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.getproperty") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.ifelse") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Core.invoke_in_world") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Core.isdefinedglobal") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.isvisible") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Core.memoryref") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.ncodeunits") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.setproperty!") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
+    (:BUILTIN_LOWERINGS, "Base.sizeof") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_is_const") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
