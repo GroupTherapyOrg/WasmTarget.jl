@@ -1493,7 +1493,7 @@ const LOCKS = [
             count(p -> !occursin(p, diag_src * gen_src), required) +
                 count(p -> occursin(p, diag_src), forbidden)
         end),
-    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, and grapheme gaps reject instead of substituting null, zero, one, or an arbitrary arm",
+    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, grapheme and isa gaps reject instead of substituting null, zero, one, or an arbitrary arm; an isa of an unboxed numeric answers Julia's own subtype test of its exact type",
         () -> begin
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             # The ifelse LOWERING is `_lower_ifelse!` (builtins.jl, an
@@ -1508,9 +1508,17 @@ const LOCKS = [
                         # an unlowered foreigncall (utf8proc's grapheme state machine
                         # among them) rejects at its statement, never a constant
                         "record_unsupported!(ctx, :unsupported_method, \"foreigncall `\$(name)` (no lowering)\"; idx=idx, detail=node)",
-                        "jl_alloc_string without its required length operand"]
+                        "jl_alloc_string without its required length operand",
+                        "_isa_reject!(bld, ctx, \"isa(x, T) with a runtime type T\")",
+                        "i32_const!(bld, isa2_julia <: check_type ? 1 : 0)",
+                        "i32_const!(bld, isa3_julia <: check_type ? 1 : 0)"]
             forbidden = ["Memory constant too large to materialize (\$n_mem elements) — emitting null",
                          "Fall back to emitting just the true value",
+                         # isa: a constant in place of a test (calls.jl _compile_call_isa)
+                         "Unknown concrete type — can't test, return false",
+                         "Unknown type - drop value and return false",
+                         "can never be Nothing, so isa(x, T) is true",
+                         "I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32",
                          "true = always a grapheme break", "_fc_utf8proc_grapheme_break_stateful!"]
             all_src = values_src * calls_src * stmt_src
             count(p -> !occursin(p, all_src), required) +

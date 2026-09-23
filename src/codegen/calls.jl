@@ -1809,11 +1809,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # isa(x, ConcreteType) -> type check
         # Value is already on stack — check if it's actually a ref type
         local isa2_val_wasm = nothing
+        local isa2_julia = nothing   # the value's own Julia type, when codegen knows it exactly
         if value_arg isa NirSSA
             # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the load (_narrow_generic_local!) delivers the SSA's REFINED
             # type — when the join proved a numeric, the value on stack IS that numeric
             # regardless of the (anyref) local. The refined type drives the fold.
             local _isa2_refined = get(ctx.ssa_types, value_arg.id, Any)
+            isconcretetype(_isa2_refined) && (isa2_julia = _isa2_refined)
             if _isa2_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
                 isa2_val_wasm = julia_to_wasm_type(_isa2_refined)
             else
@@ -1833,6 +1835,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             local arg_idx_isa = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
                 local _arg_jtype = ctx.arg_types[arg_idx_isa]
+                isconcretetype(_arg_jtype) && (isa2_julia = _arg_jtype)
                 # Check if this param was promoted to anyref for Union dispatch
                 if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
                     isa2_val_wasm = AnyRef
@@ -1842,9 +1845,14 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
         end
         if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
-            # Numeric value on stack — can never be Nothing, so isa(x, T) is true. Drop + push true.
-            drop!(bld)
-            i32_const!(bld, 1)
+            # An unboxed numeric carries no classId: the answer is Julia's own subtype test
+            # of the value's exact type — never "a numeric, so true" (an Int64 is not a Float64).
+            if isa2_julia isa Type
+                drop!(bld)
+                i32_const!(bld, isa2_julia <: check_type ? 1 : 0)
+            else
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an unboxed $(isa2_val_wasm) value whose Julia type codegen does not know")
+            end
         elseif isa2_val_wasm === ExternRef
             # Value is externref (Any-typed field). Need proper type check.
             # For Exception subtypes with DFS typeIds, use typeId comparison
@@ -1937,59 +1945,57 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
             else
-                # Unknown concrete type — can't test, return false
-                drop!(bld)
-                i32_const!(bld, 0)
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)): $(check_type) has no runtime test for a $(isa2_val_wasm) value")
             end
-        else
-            # For Union{Nothing, T}, checking isa(x, T) is equivalent to !isnull
+        elseif value_type isa Union && Nothing <: value_type && Base.typesplit(value_type, Nothing) <: check_type
+            # x::Union{Nothing, S} with S <: T: isa(x, T) is exactly "x is not the null nothing"
             ref_is_null!(bld)
             num!(bld, Opcode.I32_EQZ)  # negate: 1->0, 0->1
+        else
+            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)) has no runtime test for a $(something(isa2_val_wasm, "stack")) value")
         end
     elseif check_type !== nothing && !isconcretetype(check_type)
         # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
         # Determine value's WASM local type and local index for re-loading
         local isa3_val_wasm = nothing
-        local isa3_local_idx = nothing
+        local isa3_julia = nothing   # the value's own Julia type, when codegen knows it exactly
         if value_arg isa NirSSA
-            local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
-            if _idx3 !== nothing
-                local _off3 = _idx3 - ctx.n_params
-                if _off3 >= 0 && _off3 < length(ctx.locals)
-                    isa3_val_wasm = ctx.locals[_off3 + 1]
-                    isa3_local_idx = _idx3
+            # the load delivers the SSA's REFINED type (translator.dart:2100): a proven
+            # numeric is on the stack unboxed whatever its local's type
+            local _refined3 = get(ctx.ssa_types, value_arg.id, Any)
+            isconcretetype(_refined3) && (isa3_julia = _refined3)
+            if _refined3 in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
+                isa3_val_wasm = julia_to_wasm_type(_refined3)
+            else
+                local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
+                if _idx3 !== nothing
+                    local _off3 = _idx3 - ctx.n_params
+                    if _off3 >= 0 && _off3 < length(ctx.locals)
+                        isa3_val_wasm = ctx.locals[_off3 + 1]
+                    end
                 end
             end
         elseif value_arg isa NirArgument
             # Also detect param type for Argument values
             local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
+                isconcretetype(ctx.arg_types[_arg_idx3]) && (isa3_julia = ctx.arg_types[_arg_idx3])
                 isa3_val_wasm = get_concrete_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)
             end
         end
-        local _wasm_julia = Dict{WasmValType,Type}(I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32)
+        if isa3_val_wasm === ExternRef
+            # an externref holds a boxed Julia value: test it as the anyref it is
+            any_convert_extern!(bld)
+            isa3_val_wasm = AnyRef
+        end
         if isa3_val_wasm !== nothing && (isa3_val_wasm === I64 || isa3_val_wasm === I32 || isa3_val_wasm === F64 || isa3_val_wasm === F32)
-            # Unboxed numeric — check if representative Julia type is a subtype
-            local _jt = get(_wasm_julia, isa3_val_wasm, nothing)
-            drop!(bld)
-            i32_const!(bld, (_jt !== nothing && _jt <: check_type) ? 1 : 0)
-        elseif isa3_val_wasm === ExternRef && isa3_local_idx !== nothing
-            # Boxed externref — test each numeric box type that is a subtype of check_type
-            local _boxes = UInt32[]
-            for (wt, box_idx) in ordered_pairs(ctx.type_registry.numeric_boxes, string)
-                local _jt2 = get(_wasm_julia, wt, nothing)
-                _jt2 !== nothing && _jt2 <: check_type && push!(_boxes, box_idx)
-            end
-            drop!(bld)
-            if isempty(_boxes)
-                i32_const!(bld, 0)
+            # An unboxed numeric: Julia's own subtype test of the value's exact type (an
+            # I64 local holds an Int64 OR a UInt64 — the wasm type alone cannot answer)
+            if isa3_julia isa Type
+                drop!(bld)
+                i32_const!(bld, isa3_julia <: check_type ? 1 : 0)
             else
-                for (i, box_idx) in enumerate(_boxes)
-                    local_get!(bld, UInt32(isa3_local_idx))
-                    any_convert_extern!(bld)
-                    ref_test!(bld, Int64(box_idx), false)
-                    i > 1 && num!(bld, Opcode.I32_OR)
-                end
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an unboxed $(isa3_val_wasm) value whose Julia type codegen does not know")
             end
         elseif (isa3_val_wasm === AnyRef || isa3_val_wasm isa ConcreteRef || isa3_val_wasm === StructRef) &&
                ctx.type_registry.base_struct_idx !== nothing
@@ -2009,29 +2015,90 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local_tee!(bld, _isa_guard_local)
                 ref_test!(bld, Int64(_base_idx), false)  # ref.test (ref $JlBase)
                 num!(bld, Opcode.I32_EQZ)
-                # if (not $JlBase) { 0 } else { dfs range check } — straight on `bld`
+                # if (not $JlBase) { its type-object kind } else { dfs range check }
                 if_!(bld, I32)  # i32 result type
-                i32_const!(bld, 0)
+                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type)
                 else_!(bld)
                 local_get!(bld, _isa_guard_local)
                 emit_typeof!(bld, _base_idx)
                 emit_classid_membership!(bld, ctx, _ids)
                 end_block!(bld)
             else
-                # no concrete class of the closed world is a subtype — constant false
-                drop!(bld)
-                i32_const!(bld, 0)
+                # no class of the closed world — which numbers every class a value can have
+                # (assign_type_ids!) — is a subtype: Julia's answer for every possible value.
+                # A type object (DataType, Union, …) is not a numbered class; test its kind.
+                local _isa_guard_local = allocate_local!(ctx, AnyRef)
+                local_set!(bld, _isa_guard_local)
+                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type)
             end
         else
-            drop!(bld)
-            i32_const!(bld, 0)
+            _isa_reject!(bld, ctx, "isa(x, $(check_type)) has no runtime test for a $(something(isa3_val_wasm, "stack")) value")
         end
     else
-        # Unknown type - drop value and return false
-        drop!(bld)
-        i32_const!(bld, 0)
+        # `isa(x, T)` with a runtime `T`: no closed-world constant to test against
+        _isa_reject!(bld, ctx, "isa(x, T) with a runtime type T")
     end
     append_builder!(fb, bld)
+    return nothing
+end
+
+"""A located rejection of an `isa` codegen cannot answer — never a constant false. The
+statement's operands are on `bld`; the trap after the recorded diagnostic makes the rest
+of the fragment unreachable.
+parity(quarantine: an `isa` with no runtime test in WT's representation — a runtime type,
+or a value representation that carries no class — which Julia answers and WT must refuse
+rather than guess.)"""
+function _isa_reject!(bld::InstrBuilder, ctx::AbstractCompilationContext, construct::String)::Nothing
+    record_unsupported!(ctx, :unsupported_method, construct)
+    unreachable!(bld)
+    ctx.last_stmt_was_stub = true
+    return nothing
+end
+
+"""The i32 answer to `isa(x, check_type)` for a value in `local_idx` that is not a numbered
+class (not `\$JlBase`): a Julia type object, whose kind — DataType, Union, UnionAll,
+TypeVar — is its own wasm struct, or a `Memory`, which is a bare wasm array. OR of
+`ref.test` over the representations of the kinds and closed-world Memory classes that are
+subtypes of `check_type`; `0` when none is. When a Memory class under `check_type` shares
+its wasm array with one that is not (`Memory{Int64}`/`Memory{UInt64}` under
+`AbstractVector{Int64}`), no test can tell them apart and the `isa` rejects.
+parity(quarantine: Julia's type objects and Memory are values; WT represents a type
+object's kind as its own struct under \$JlType and a Memory as a wasm array, outside the
+numbered class hierarchy.)"""
+function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilationContext,
+                                      local_idx::Integer, @nospecialize(check_type))::Nothing
+    reg = ctx.type_registry
+    kinds = UInt32[]
+    for (K, idx) in ((DataType, reg.jl_datatype_idx), (Union, reg.jl_union_idx),
+                     (UnionAll, reg.jl_unionall_idx), (TypeVar, reg.jl_typevar_idx))
+        (idx !== nothing && K <: check_type) && push!(kinds, idx)
+    end
+    if reg.type_ids !== nothing
+        outside = UInt32[]
+        for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
+            (C isa DataType && C <: GenericMemory) || continue
+            arr = get(reg.arrays, eltype(C), nothing)   # no array type: no such value exists
+            arr === nothing && continue
+            C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
+        end
+        # a SimpleVector is a bare (array anyref) too, when the closed world has one
+        (reg.jl_svec_idx !== nothing && haskey(reg.type_ids, Core.SimpleVector)) &&
+            (Core.SimpleVector <: check_type ?
+                (reg.jl_svec_idx in kinds || push!(kinds, reg.jl_svec_idx)) : push!(outside, reg.jl_svec_idx))
+        if any(in(outside), kinds)
+            _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
+            return nothing
+        end
+    end
+    if isempty(kinds)
+        i32_const!(bld, 0)
+    else
+        for (i, idx) in enumerate(kinds)
+            local_get!(bld, UInt32(local_idx))
+            ref_test!(bld, Int64(idx), false)
+            i > 1 && num!(bld, Opcode.I32_OR)
+        end
+    end
     return nothing
 end
 

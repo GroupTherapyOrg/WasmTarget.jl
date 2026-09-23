@@ -603,14 +603,18 @@ _xf("unionall_constructor", Any[
 _xf("isa_unionall", Any[
     ("isa_unionall_any", (x::Int64) -> (v = Any[Vector, Int64]; v[x] isa UnionAll ? 1 : 0), Int64(1)),
 ])
-# isa answered by a constant instead of a test (calls.jl `_compile_call_isa`), measured
-# 2026-09-23: a captured numeric is "isa any concrete type", an I64 local is always Int64,
-# a runtime `T` is "false", and a type object is never `isa Type`.
-_xf("isa_constant_answers", Any[
-    ("isa_captured_int_float", (x::Int64) -> (c = x; g = () -> (c += 1); g(); isa(c, Float64) ? 1 : 0), Int64(3)),             # exp 0, act 1
-    ("isa_captured_uint_signed", (x::Int64) -> (c = UInt64(x); g = () -> (c += UInt64(1)); g(); isa(c, Signed) ? 1 : 0), Int64(3)),  # exp 0, act 1
-    ("isa_runtime_type", (i::Int64) -> (ts = Any[Int64, Float64]; isa(i, ts[i]) ? 1 : 0), Int64(1)),                         # exp 1, act 0
-    ("isa_type_object", (i::Int64) -> (v = Any[i, Int64, :a][i]; isa(v, Type) ? 1 : 0), Int64(2)),                             # exp 1, act 0
+# isa is a test or Julia's own answer, never a constant (calls.jl `_compile_call_isa`): an
+# unboxed numeric answers by its exact Julia type (a captured Int64 is not a Float64; a UInt64
+# in an I64 local is not Signed), and a type object answers by its kind.
+_g("isa_exact", Any[
+    ("isa_captured_int_float", (x::Int64) -> (c = x; g = () -> (c += 1); g(); isa(c, Float64) ? 1 : 0), Int64(3)),
+    ("isa_captured_uint_signed", (x::Int64) -> (c = UInt64(x); g = () -> (c += UInt64(1)); g(); isa(c, Signed) ? 1 : 0), Int64(3)),
+    ("isa_type_object", (i::Int64) -> (v = Any[i, Int64, :a][i]; isa(v, Type) ? 1 : 0), Int64(2)),
+])
+# `isa(x, T)` with a runtime `T` has no runtime subtype test: it rejects at its statement
+# ("isa(x, T) with a runtime type T"); it answered 0 where native answers 1.
+_xf("isa_runtime_type", Any[
+    ("isa_runtime_type", (i::Int64) -> (ts = Any[Int64, Float64]; isa(i, ts[i]) ? 1 : 0), Int64(1)),
 ])
 # BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
 _xf("builtin_crashes", Any[
