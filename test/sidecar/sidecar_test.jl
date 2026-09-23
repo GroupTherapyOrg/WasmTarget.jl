@@ -1,5 +1,4 @@
-# Phase 10.2 prototype — native linear-memory SIDECAR module (dev/PARITY_MASTER.md
-# roadmap item 3, design test/../scratchpad/p10/DESIGN.md §10.2).
+# Native linear-memory SIDECAR module (dev/PARITY_MASTER.md, Scope).
 #
 # dart2wasm's host boundary (functions.dart:90 wasm:import/export pragma funnel,
 # restricted by translateExternalType at translator.dart:1239) admits a real

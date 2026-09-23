@@ -5,7 +5,7 @@
 # checked for byte-for-byte identical codegen output in seconds, without running
 # the full differential suite. This is NOT a soundness or parity gate — it only
 # proves "nothing observable changed"; dart2wasm structural parity and the native
-# differential remain the real oracles (see dev/PARITY_MASTER.md).
+# differential remain the real oracles (see AGENTS.md).
 #
 # Each probe compiles with `WasmTarget.compile_multi([(f, argtypes, name)]; validate=false)`
 # — the explicit export NAME matters: `compile(f, …)` exports `string(nameof(f))`, and for an

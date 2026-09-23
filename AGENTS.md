@@ -75,6 +75,6 @@ source. Work in a worktree under `../.worktrees/`; never `git stash`, and never
 ## Where things are
 
 `dev/CHARTER.md` the definition of done · `dev/MARCH.md` the current plan and results ·
-`dev/PARITY_MASTER.md` the oracle pin and roadmap · `dev/formal/` the models · `dev/land.sh`
+`dev/PARITY_MASTER.md` the oracle pin and scope · `dev/formal/` the models · `dev/land.sh`
 landing · `test/parity_ratchet.jl` every lock and ratchet. When prose disagrees with the code
 and the locks, the prose is stale: trust the code, then fix the prose.

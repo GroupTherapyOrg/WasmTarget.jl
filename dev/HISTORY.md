@@ -95,6 +95,6 @@ The original files were valuable while their campaigns were active, but later se
 could surface stale `NEXT`, `LIVE`, `RESUME HERE`, and “remaining work” sections as if
 they described the current tree. Consolidating the outcome here makes that impossible:
 
-- completed architecture is stated once in `PARITY_MASTER.md` and locked in code;
+- completed architecture is locked in code (`test/parity_ratchet.jl`);
 - current boundaries require a present reproducer or source census;
 - exact historical prose is archaeological evidence in Git, not a zombie backlog.

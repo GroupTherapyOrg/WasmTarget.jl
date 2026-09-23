@@ -167,7 +167,7 @@ function _build()
         add(:pushfirst!, (VT, T), VT; mod = :vector, mutates = true)
         add(:sort!, (VT,), VT; mod = :vector, mutates = true)
         add(:reverse!, (VT,), VT; mod = :vector, mutates = true)
-        # NOTE: collect(Vector) omitted — raw-pointer memmove foreigncall (see FINDINGS.md).
+        # NOTE: collect(Vector) is not in the catalogue.
     end
     for T in VEC_NUM
         VT = Vector{T}
@@ -192,8 +192,8 @@ function _build()
     #
     # FLOAT `dot` IS shipped, via an `ext/` OVERLAY (WasmTargetLinearAlgebraExt):
     # dot(::Vector{<:BlasFloat}) dispatches to BLAS (matmul.jl), a ccall WT cannot
-    # lower (it otherwise compiles to a SILENT 0.0 — a strict-mode hole, see
-    # FINDINGS.md). The overlay reroutes to Base's OWN generic `dot` via `invoke`
+    # lower (it otherwise compiles to a SILENT 0.0 — a strict-mode hole).
+    # The overlay reroutes to Base's OWN generic `dot` via `invoke`
     # — value-identical to BLAS modulo summation-order rounding, which the
     # oracle tolerates (rtol 1e-9). Verified: reroute matches native 200/200 on
     # well-conditioned + wild inputs, 0/5000 exceed rtol at catalogue lengths.

@@ -2,14 +2,9 @@
 # FROZEN ORACLE POLICY — the differential oracle's float-comparison tolerances.
 # ============================================================================
 # These constants define when a native and a wasm FLOAT result are considered to
-# AGREE. They are deliberately isolated in this tiny file and HASH-PINNED
-# (`oracle_policy.jl.sha256`, checked by `loop_guard.sh`) so the autonomous
-# soundness /loop cannot silently WIDEN tolerance to bury a wrong-value
-# divergence — that would be reward-hacking the oracle (see test/fuzz/LOOP.md §3).
-#
-# Changing these is a HUMAN-ONLY, deliberate act: edit the value, then re-pin with
-#   shasum -a 256 test/fuzz/oracle_policy.jl > test/fuzz/oracle_policy.jl.sha256
-# and explain why in the commit. The loop itself must never touch this file.
+# AGREE. They are deliberately isolated in this tiny file: widening a tolerance to
+# bury a wrong-value divergence would be reward-hacking the oracle. Changing these
+# is a deliberate, human-reviewed act, explained in its commit.
 #
 # Values: integers / bools / strings / chars must match EXACTLY (no tolerance —
 # enforced in `vals_match`). Floats match on NaN==NaN, signed-Inf, exact

@@ -1,9 +1,4 @@
-# Differential fuzzer — the self-fulfilling correctness loop
-
-> **Driving an autonomous campaign?** Read **`LOOP.md`** first — it is the operational
-> contract for the WasmTarget soundness `/loop` (tiered subset, anti-reward-hacking
-> guardrails, per-iteration runbook, KPI). `loop_guard.sh` enforces the mechanical
-> guardrails each iteration. This README describes the apparatus those drive.
+# Differential fuzzer
 
 Generates **well-typed** random compositions of Base functions and checks each
 against native Julia. Native is both the **oracle** (the right answer) and the
@@ -16,29 +11,35 @@ replays first on every run, and become tracked, auto-closing gap files.
 | file | role |
 |------|------|
 | `harness.jl`    | compile once, run all sample inputs in ONE Node process |
-| `generators.jl` | type-directed `ExprNode` trees (Int64/Float64 today; extend the op tables) |
-| `property.jl`   | differential oracle + 5-way classification (`wrong_value` = soundness alarm) |
+| `bridge.jl`, `bridge_args.jl` | bit-exact value transport across the Node bridge |
+| `catalogue.jl`, `generators.jl`, `statements.jl`, `structpool.jl` | type-directed program generation |
+| `property.jl`, `oracle_policy.jl` | differential oracle + classification (`wrong_value` = soundness alarm); the frozen float tolerances |
 | `ledger.jl`     | gap tracker — each failure → `failures/<id>.md`, auto-closes when fixed |
 | `run.jl`        | entrypoint: `@check` loop + `DirectoryDB` corpus + ledger |
+| `*_diff.jl`     | per-library differential sweeps, run by `test/fuzz_suite.jl` |
 | `corpus/`       | Supposition `DirectoryDB` — committed regression ratchet |
-| `failures/`     | one Markdown gap per distinct failure + `INDEX.md` dashboard |
+| `failures/`     | one Markdown gap per distinct unfixed failure (`status: open` or `out_of_subset`) |
 
 ## The loop
 
 ```bash
-julia --project=test/fuzz test/fuzz/run.jl          # discover → shrink → persist → document
-julia --project=test/fuzz test/fuzz/run.jl verify   # re-run open gaps; auto-close the fixed ones
+julia --project=test/fuzz test/fuzz/run.jl            # discover → shrink → persist → document
+julia --project=test/fuzz test/fuzz/run.jl sweep      # parallel discovery (time-boxed)
+julia --project=test/fuzz test/fuzz/run.jl verify     # re-run open gaps; auto-close the fixed ones
+julia --project=test/fuzz test/fuzz/run.jl rank       # open gaps grouped by root-cause family
+julia --project=test/fuzz test/fuzz/run.jl coverage   # write the catalogue matrix, COVERAGE.md
+julia --project=test/fuzz test/fuzz/stdlib_coverage.jl  # write STDLIB_COVERAGE.md
 ```
 
 A gap's reproducer **throws while the bug is present and runs cleanly once fixed**,
-so `verify` flips fixed gaps to `status: fixed` with no manual bookkeeping. The
-`DirectoryDB` corpus replays every known counterexample first, so a regression
-cannot silently return. CI runs a bounded pass via `test/fuzz_suite.jl`.
+so `verify` flips fixed gaps to `status: fixed` with no manual bookkeeping; a fixed
+gap is then deleted in the commit that fixed it (Git keeps its history). A reproducer
+that now fails with a `WasmCompileError` is `out_of_subset`: a loud, sound rejection.
+`failures/INDEX.md`, `COVERAGE.md` and `STDLIB_COVERAGE.md` are regenerated reports
+and are not committed. The `DirectoryDB` corpus replays every known counterexample
+first, so a regression cannot silently return. CI runs a bounded pass via
+`test/fuzz_suite.jl`, which treats the canonical bodies of `open` gaps as known.
 
-## Extending coverage (the ongoing crank)
-
-Add ops to the tables in `generators.jl` (`INT_OPS`, `FLOAT_OPS`, and new ones for
-`Vector{T}`, `String`, mixed-type conversions). The harness/oracle already handle
-the loop; growing the op surface is how "all of core Julia, in arbitrary combos"
-gets covered incrementally. See `failures/STUBBED_METHODS.md` for known reachable
-trap branches worth targeting (`paynehanek`, empty `reduce`, …).
+`test_bridge.jl`, `test_bridge_args.jl` and `test_statements.jl` check the apparatus
+itself (bridge round-trips, generator health); run each standalone with
+`julia --project=test/fuzz <file>`.
