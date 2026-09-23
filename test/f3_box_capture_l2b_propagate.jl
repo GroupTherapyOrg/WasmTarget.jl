@@ -21,8 +21,8 @@
     for (i, _) in vt
         node = nir[i].node
         @test node isa WasmTarget.NirCall && node.callee === getfield &&
-              length(node.args) >= 2 &&
-              node.args[2] isa WasmTarget.NirLiteral && node.args[2].value === :contents
+              length(node.operands) >= 2 &&
+              node.operands[2] isa WasmTarget.NirLiteral && node.operands[2].value === :contents
     end
 
     # float accumulator → Float64 contents
