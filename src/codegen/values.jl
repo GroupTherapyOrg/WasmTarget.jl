@@ -168,19 +168,23 @@ _wt_gc_refkind(t::RefType)::Bool =
 # the RefType @enum values are nullable-shorthand (always nullable) and
 # NonNullAbstractRef is the explicit non-null abstract variant. Numerics/packed
 # are not refs (caller gates on _wt_is_ref first).
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:170 nullable)
+# parity-region(pkg/wasm_builder/lib/src/ir/type.dart:170 RefType.nullable): one method per
+# WT ref representation.
 _wt_ref_nullable(t::ConcreteRef)::Bool = t.nullable
 _wt_ref_nullable(::NonNullAbstractRef)::Bool = false
 _wt_ref_nullable(::RefType)::Bool = true  # enum refs are nullable shorthand
+# end parity-region
 
 # dart2wasm RefType.withNullability(false): the non-null variant of a ref type.
 # ConcreteRef flips its bit; a nullable-shorthand RefType becomes the matching
 # NonNullAbstractRef (same heap byte, non-null). Numerics/packed pass through.
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:229 withNullability); numerics pass through as ValueType.withNullability (:56).
+# parity-region(pkg/wasm_builder/lib/src/ir/type.dart:229 RefType.withNullability): one method per
+# WT ref representation; numerics pass through as ValueType.withNullability (:56).
 _wt_drop_nullable(t::ConcreteRef)::WasmValType = ConcreteRef(t.type_idx, false)
 _wt_drop_nullable(t::RefType)::WasmValType = NonNullAbstractRef(UInt8(t))
 _wt_drop_nullable(t::NonNullAbstractRef)::WasmValType = t
 _wt_drop_nullable(t::WasmValType)::WasmValType = t  # NumType / packed UInt8
+# end parity-region
 
 # --- heap-type resolution (B6) ------------------------------------------------
 # Resolve any ref-ish WasmValType to its abstract heap kind in
@@ -691,6 +695,8 @@ function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, t
 end
 # Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
 # codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
+# parity(translator.dart:1645 convertType): the unboxing arm — ref.cast to the box, struct.get
+# of the value field.
 function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                              to_wasm::WasmValType; nullable::Bool=false)::InstrBuilder
     box_idx = get_numeric_box_type!(mod, registry, to_wasm)
@@ -721,7 +727,10 @@ function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     return b
 end
 
-"""ctx convenience: allocates the scratch local itself."""
+"""ctx convenience: allocates the scratch local itself.
+
+parity(constants.dart:872 visitStringConstant): the same classed string producer, with the
+scratch local dart's `b.addLocal` would give it."""
 function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
                            syntax_flags::Integer=-1)::InstrBuilder
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -1144,6 +1153,9 @@ end
 parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
 _is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
 
+# parity(constants.dart:552 ConstantInstantiator): a literal operand is instantiated per
+# constant kind as dart instantiates a Constant; an SSA value, argument or slot reads its local
+# as code_generator.dart:2127 visitVariableGet does.
 function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
     # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
