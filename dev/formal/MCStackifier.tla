@@ -30,8 +30,8 @@
 (* early so the eventual back-edge br targets a construct physstack proves  *)
 (* is already gone.                                                        *)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
-CONSTANT N, SkipCrossingNormalization, UseSpanCarving
-VARIABLES kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, wsv
+CONSTANT N, SkipCrossingNormalization, UseSpanCarving, DropBoundscheckPhiStore
+VARIABLES kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, unstored, wsv
 INSTANCE Stackifier
 
 WitnessInit ==
@@ -46,6 +46,7 @@ WitnessInit ==
     /\ labelstack = BlockPushSeq(OuterTargets)
     /\ physstack = BlockPushSeq(OuterTargets)
     /\ emitted = {}
+    /\ unstored = {}
     /\ wsv = FALSE
 
 WitnessSpec == WitnessInit /\ [][Next]_vars

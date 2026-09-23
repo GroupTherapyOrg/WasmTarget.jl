@@ -27,8 +27,8 @@
 (* matching that the real bug (reduce(max, 1:n) on Julia 1.13) was a        *)
 (* silent wrong value (returned 0), not a compile-time failure.             *)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
-CONSTANT N, SkipCrossingNormalization, UseSpanCarving
-VARIABLES kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, wsv
+CONSTANT N, SkipCrossingNormalization, UseSpanCarving, DropBoundscheckPhiStore
+VARIABLES kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, unstored, wsv
 INSTANCE Stackifier
 
 WitnessInit ==
@@ -43,6 +43,7 @@ WitnessInit ==
     /\ labelstack = BlockPushSeq(OuterTargets)
     /\ physstack = BlockPushSeq(OuterTargets)
     /\ emitted = {}
+    /\ unstored = {}
     /\ wsv = FALSE
 
 WitnessSpec == WitnessInit /\ [][Next]_vars

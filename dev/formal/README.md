@@ -29,7 +29,8 @@ runs the harness on every push.
 - A new protocol or algorithm is modeled spec-first; the code is checked against the model.
 - A TLC counterexample against the real algorithm is a finding: reproduce it in Julia, fix the
   algorithm, keep the invariant. Never weaken an invariant to make TLC pass. (ConsultChain → L113;
-  ClassIdDispatch → the dispatch guards; Stackifier's Broken instance is the `b9f4d229` miscompile.)
+  ClassIdDispatch → the dispatch guards; Stackifier's Broken instances are the `b9f4d229` miscompile
+  and the `8424acd3` dropped phi store.)
 - Keep instances small enough for CI (seconds to a couple of minutes). If exhaustive enumeration at
   the size that contains a witness is intractable, the Broken instance uses a fixed witness CFG and
   the positive instance stays exhaustive at the tractable size (Stackifier: N=4 exhaustive; N=5 is

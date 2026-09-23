@@ -90,17 +90,33 @@
 (* violation with no reject in between, matching the real bug's silent-     *)
 (* wrong-value character, not a compile-time failure).                     *)
 (*                                                                          *)
+(* EVERY EDGE STORES ITS TARGET'S PHI VALUES (commit 8424acd3). A realized *)
+(* edge is only half of the job: the source must also run                   *)
+(* `set_phi_locals_for_edge!` on it, or the target's phi locals keep their  *)
+(* default and the function returns a silent wrong value with every control *)
+(* claim above still satisfied. Before 8424acd3 the always-taken boundscheck*)
+(* arm realized its FORWARD edge (a br, or an implicit fallthrough) without *)
+(* the store: `@inbounds isvalid(SubString(" ab,c ", 2, 5), 1)` returned 0 *)
+(* (native 1). The model records every realization through `Realize`,      *)
+(* which also records whether the store ran; `unstored` collects the edges  *)
+(* realized without it. An edge into a duplicated terminal target stores    *)
+(* nothing because that target is phi-free by construction (DupCandidate    *)
+(* requires phifree) -- the source skips the call there, and the model      *)
+(* counts it as stored. `DropBoundscheckPhiStore` (the Broken instance      *)
+(* MCStackifierPhiStoreBroken.cfg) reintroduces the pre-8424acd3 arm; TLC   *)
+(* must find an `EveryEdgeStoresPhis` violation with pc = "Done".           *)
+(*                                                                          *)
 (* WHAT THIS MODEL ABSTRACTS, AND WHY THAT IS SUFFICIENT.                   *)
-(*  - Values, phi nodes, and locals are erased entirely. The claims under   *)
-(*    test (WellScopedBr/Balanced/EveryEdgeRealized/RejectNeverEmits) are   *)
-(*    about CONTROL structure, not data; `set_phi_locals_for_edge!` never   *)
-(*    changes the label stack or which edges exist. The one place phi-      *)
-(*    ness matters to CONTROL is duplication eligibility ("terminal &&      *)
-(*    phi_free"), which is a per-block VALUE-domain fact independent of     *)
-(*    the CFG skeleton -- modeled as one free boolean `phifree[i]`,         *)
-(*    meaningful only when kind[i]="RET", so TLC explores both the          *)
-(*    "duplication applies" and "duplication does not apply" arms for       *)
-(*    every eligible shape.                                                *)
+(*  - Phi VALUES and locals are erased: the model tracks WHETHER each edge  *)
+(*    ran its phi store, not what it stored (the store's per-value typing   *)
+(*    is the coercion funnel's claim, Coercion.tla). `set_phi_locals_for_  *)
+(*    edge!` never changes the label stack or which edges exist. The one   *)
+(*    place phi-ness matters to CONTROL is duplication eligibility          *)
+(*    ("terminal && phi_free"), which is a per-block VALUE-domain fact      *)
+(*    independent of the CFG skeleton -- modeled as one free boolean        *)
+(*    `phifree[i]`, meaningful only when kind[i]="RET", so TLC explores     *)
+(*    both the "duplication applies" and "duplication does not apply" arms  *)
+(*    for every eligible shape.                                            *)
 (*  - The boundscheck fold and reachability-based dead-block computation    *)
 (*    ARE modeled (`boundscheck[i]`, `RawSuccessors`/`TrueDeadBlocks`/      *)
 (*    `AlgoDeadBlocks` below) -- this is the L89 mechanism as of b9f4d229.  *)
@@ -166,11 +182,13 @@ EXTENDS Naturals, Sequences, FiniteSets
 CONSTANTS
     N,                          \* number of basic blocks, indexed 1..N
     SkipCrossingNormalization,  \* BOOLEAN: TRUE = the Broken (pre-L90) variant
-    UseSpanCarving              \* BOOLEAN: TRUE = the Broken (pre-b9f4d229) dead-code variant
+    UseSpanCarving,             \* BOOLEAN: TRUE = the Broken (pre-b9f4d229) dead-code variant
+    DropBoundscheckPhiStore     \* BOOLEAN: TRUE = the Broken (pre-8424acd3) phi-store variant
 
 ASSUME N \in Nat /\ N >= 2
 ASSUME SkipCrossingNormalization \in BOOLEAN
 ASSUME UseSpanCarving \in BOOLEAN
+ASSUME DropBoundscheckPhiStore \in BOOLEAN
 
 Blocks == 1..N
 Kinds == {"FALL", "RET", "GOTO", "COND"}
@@ -192,9 +210,10 @@ VARIABLES
     labelstack,  \* Seq(LabelEntry) -- the algorithm's OWN symbolic bookkeeping
     physstack,   \* Seq(LabelEntry) -- ground-truth physical builder nesting
     emitted,     \* SUBSET EdgeRec -- edges realized (br/br_if/fallthrough/inline) so far
+    unstored,    \* SUBSET EdgeRec -- realized edges whose phi store did not run
     wsv          \* BOOLEAN -- "a well-scoped-branch violation has occurred"
 
-vars == <<kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, wsv>>
+vars == <<kind, target, phifree, boundscheck, algoDead, doms, cur, pc, labelstack, physstack, emitted, unstored, wsv>>
 
 ----------------------------------------------------------------------------
 (* Derived CFG structure -- pure functions of kind/target/boundscheck,      *)
@@ -367,7 +386,14 @@ BlockPushSeq(S) == [i \in 1..Len(SeqDesc(S)) |-> [k |-> "block", t |-> SeqDesc(S
 RemoveAt(seq, i) == SubSeq(seq, 1, i - 1) \o SubSeq(seq, i + 1, Len(seq))
 
 StepState == [ls: Seq(LabelEntry), ps: Seq(LabelEntry), em: SUBSET EdgeRec,
-               wsv: BOOLEAN, ok: BOOLEAN]
+               us: SUBSET EdgeRec, wsv: BOOLEAN, ok: BOOLEAN]
+
+\* Realize: the ONE way an edge is recorded as emitted. `stored` says whether
+\* the source ran set_phi_locals_for_edge! for it (every arm does, except the
+\* pre-8424acd3 boundscheck arm under DropBoundscheckPhiStore; an edge into a
+\* duplicated, phi-free terminal passes TRUE -- it has nothing to store).
+Realize(st, e, stored) ==
+    [st EXCEPT !.em = @ \union {e}, !.us = IF stored THEN @ ELSE @ \union {e}]
 
 \* CloseTarget: the (1)/(4)-inner-target close pattern -- physical pop
 \* happens ONLY together with a found+accepted symbolic removal (matches
@@ -417,16 +443,18 @@ ResolveJump(st, c, t, dir) ==
     IF ~st.ok THEN st
     ELSE IF t \in AlgoDeadBlocks THEN st
          ELSE IF (t \in DuplicatedTerminalTargets) \/ (t = c + 1)
-         THEN [st EXCEPT !.em = @ \union {[src |-> c, dst |-> t, dir |-> dir]}]
+         THEN Realize(st, [src |-> c, dst |-> t, dir |-> dir], TRUE)
          ELSE LET key == IF t <= c THEN [k |-> "loop", t |-> t] ELSE [k |-> "block", t |-> t]
                   openInLS == \E i \in 1..Len(st.ls) : st.ls[i] = key
                   openInPS == \E i \in 1..Len(st.ps) : st.ps[i] = key
               IN IF ~openInLS THEN [st EXCEPT !.ok = FALSE]
-                 ELSE [st EXCEPT !.em = @ \union {[src |-> c, dst |-> t, dir |-> dir]},
-                                  !.wsv = @ \/ ~openInPS]
+                 ELSE [Realize(st, [src |-> c, dst |-> t, dir |-> dir], TRUE)
+                          EXCEPT !.wsv = @ \/ ~openInPS]
 
-\* BoundscheckTerminator: the always-jump arm (line 1307-1315). Duplication
-\* realizes the edge unconditionally (no label lookup); a dead target is
+\* BoundscheckTerminator: the always-jump arm (line 1307-1315). Its forward
+\* edge into a non-duplicated target runs the phi store first (8424acd3);
+\* DropBoundscheckPhiStore reintroduces the arm that skipped it.
+\* Duplication realizes the edge unconditionally (no label lookup); a dead target is
 \* silently unresolvable exactly like ResolveJump; otherwise ONLY a
 \* forward, non-trivial target is looked up (get_forward_label) -- unlike
 \* ResolveJump, this branch has NO back-edge/get_loop_label arm at all, so
@@ -437,25 +465,27 @@ BoundscheckTerminator(st, c) ==
     IF ~st.ok THEN st
     ELSE LET t == target[c]
          IN IF t \in AlgoDeadBlocks THEN st
-            ELSE IF (t \in DuplicatedTerminalTargets) \/ (t = c + 1)
-            THEN [st EXCEPT !.em = @ \union {[src |-> c, dst |-> t, dir |-> "uncond"]}]
+            ELSE IF t \in DuplicatedTerminalTargets
+            THEN Realize(st, [src |-> c, dst |-> t, dir |-> "uncond"], TRUE)
+            ELSE IF t = c + 1
+            THEN Realize(st, [src |-> c, dst |-> t, dir |-> "uncond"], ~DropBoundscheckPhiStore)
             ELSE IF t > c
                  THEN LET key == [k |-> "block", t |-> t]
                           openInLS == \E i \in 1..Len(st.ls) : st.ls[i] = key
                           openInPS == \E i \in 1..Len(st.ps) : st.ps[i] = key
                       IN IF ~openInLS THEN [st EXCEPT !.ok = FALSE]
-                         ELSE [st EXCEPT !.em = @ \union {[src |-> c, dst |-> t, dir |-> "uncond"]},
-                                          !.wsv = @ \/ ~openInPS]
+                         ELSE [Realize(st, [src |-> c, dst |-> t, dir |-> "uncond"], ~DropBoundscheckPhiStore)
+                                  EXCEPT !.wsv = @ \/ ~openInPS]
                  ELSE st   \* t <= c: the source emits nothing here (no loop-label arm)
 
 Terminator(st, c) ==
     IF ~st.ok THEN st
     ELSE IF kind[c] = "FALL" THEN
-                [st EXCEPT !.em = @ \union {[src |-> c, dst |-> c + 1, dir |-> "uncond"]}]
+                Realize(st, [src |-> c, dst |-> c + 1, dir |-> "uncond"], TRUE)
     ELSE IF kind[c] = "RET" THEN st
     ELSE IF kind[c] = "GOTO" THEN ResolveJump(st, c, target[c], "uncond")
     ELSE IF boundscheck[c] THEN BoundscheckTerminator(st, c)   \* kind[c] = "COND"
-    ELSE LET st2 == [st EXCEPT !.em = @ \union {[src |-> c, dst |-> c + 1, dir |-> "true"]}]
+    ELSE LET st2 == Realize(st, [src |-> c, dst |-> c + 1, dir |-> "true"], TRUE)
          IN ResolveJump(st2, c, target[c], "false")
 
 \* CloseLoopLabel: the loop's OWN close (line 1599-1632). The PHYSICAL pop
@@ -523,6 +553,7 @@ Init ==
     /\ labelstack = BlockPushSeq(OuterTargets)
     /\ physstack = BlockPushSeq(OuterTargets)
     /\ emitted = {}
+    /\ unstored = {}
     /\ wsv = FALSE
 
 ----------------------------------------------------------------------------
@@ -540,7 +571,7 @@ Init ==
 ProcessBlock(c) ==
     /\ pc = "Run"
     /\ cur = c
-    /\ LET s0 == [ls |-> labelstack, ps |-> physstack, em |-> emitted, wsv |-> wsv, ok |-> TRUE]
+    /\ LET s0 == [ls |-> labelstack, ps |-> physstack, em |-> emitted, us |-> unstored, wsv |-> wsv, ok |-> TRUE]
            s1 == ArrivalClose(s0, c)
            s4 == IF (c \in AlgoDeadBlocks) \/ (c \in DuplicatedTerminalTargets)
                  THEN s1
@@ -548,6 +579,7 @@ ProcessBlock(c) ==
        IN /\ labelstack' = s4.ls
           /\ physstack' = s4.ps
           /\ emitted' = s4.em
+          /\ unstored' = s4.us
           /\ wsv' = s4.wsv
           /\ IF s4.ok
              THEN /\ pc' = IF c = N THEN "FinalSweep" ELSE "Run"
@@ -558,11 +590,12 @@ ProcessBlock(c) ==
 
 FinalSweepAction ==
     /\ pc = "FinalSweep"
-    /\ LET s0 == [ls |-> labelstack, ps |-> physstack, em |-> emitted, wsv |-> wsv, ok |-> TRUE]
+    /\ LET s0 == [ls |-> labelstack, ps |-> physstack, em |-> emitted, us |-> unstored, wsv |-> wsv, ok |-> TRUE]
            s1 == FinalCloseAllBlocks(s0)
        IN /\ labelstack' = s1.ls
           /\ physstack' = s1.ps
           /\ emitted' = s1.em
+          /\ unstored' = s1.us
           /\ wsv' = s1.wsv
           /\ pc' = IF s1.ok THEN "Done" ELSE "Reject"
           /\ cur' = cur
@@ -575,7 +608,7 @@ Next == (\E c \in Blocks : ProcessBlock(c)) \/ FinalSweepAction \/ Terminal
 Spec == Init /\ [][Next]_vars
 
 ----------------------------------------------------------------------------
-(* The five claims. *)
+(* The six claims. *)
 
 TypeOK ==
     /\ kind \in [Blocks -> Kinds]
@@ -589,6 +622,7 @@ TypeOK ==
     /\ labelstack \in Seq(LabelEntry)
     /\ physstack \in Seq(LabelEntry)
     /\ emitted \subseteq EdgeRec
+    /\ unstored \subseteq emitted
     /\ wsv \in BOOLEAN
 
 \* (1) Every branch the algorithm ever emitted targeted a label that was
@@ -613,7 +647,11 @@ Balanced == pc = "Done" => (labelstack = <<>> /\ physstack = <<>>)
 \* in between, matching the real bug's silent-wrong-value character.
 EveryEdgeRealized == pc = "Done" => emitted = AllOutEdges
 
-\* (4) Once the algorithm rejects, it is done -- no further label event or
+\* (4) At normal completion, every realized edge ran its phi store (8424acd3):
+\* an edge that jumped without it leaves the target's phi local at its default.
+EveryEdgeStoresPhis == pc = "Done" => unstored = {}
+
+\* (5) Once the algorithm rejects, it is done -- no further label event or
 \* edge emission occurs (mirrors a thrown Julia exception unwinding the
 \* rest of generate_stackified_flow!, discarding any partially-built bytes).
 RejectNeverEmits == [][pc = "Reject" => UNCHANGED vars]_vars
