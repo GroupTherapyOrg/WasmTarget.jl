@@ -1366,10 +1366,29 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
         dt_global = ctx.type_registry.type_constant_globals[arg_type]
         global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
     else
+        # parity(code_generator.dart:2258 visitInstanceGet): a potentially-null receiver's
+        # `runtimeType` branches on null (`br_on_null`) to the Null type literal; `nothing`
+        # is the null ref, so its type is Nothing, never a classId read through a null.
+        local nullable = arg_type !== nothing && Nothing <: arg_type
+        local done, isnull
+        if nullable
+            haskey(ctx.type_registry.type_constant_globals, Nothing) ||
+                error("closed-world typeof is missing the static type global for Nothing")
+            done = block!(_tofb, AnyRef)
+            isnull = block!(_tofb)
+        end
         actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
         actual_type === ExternRef && any_convert_extern!(_tofb)
+        nullable && br_on_null!(_tofb, isnull)
         temp_local = _ensure_typeof_scratch_local!(ctx)
         emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
+        if nullable
+            br!(_tofb, done)
+            end_block!(_tofb)
+            local nothing_global = ctx.type_registry.type_constant_globals[Nothing]
+            global_get!(_tofb, nothing_global, ctx.mod.globals[nothing_global + 1].valtype)
+            end_block!(_tofb)
+        end
     end
     append_builder!(fb, _tofb)
     return append_builder!(b, fb)
