@@ -161,17 +161,63 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
     return true
 end
 
-"""Convert one already-emitted literal phi edge using its proven Julia type.
+"""Convert one already-emitted phi edge value to the phi `phi_idx`'s local, using its proven
+Julia type. An edge whose Julia type is wider than the phi's numeric type takes the guarded
+form of `_emit_phi_edge_guarded_unbox!`.
 parity(code_generator.dart:665 AstCodeGenerator.translateExpression)
 """
 function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                  phi_local_type, src_type, src::InstrBuilder,
-                                 src_julia::Type)::Bool
+                                 src_julia::Type, phi_idx::Int)::Bool
     isempty(src.instrs) && return false
     (!_wt_is_ref(src_type) && _wt_is_ref(phi_local_type) && !isconcretetype(src_julia)) &&
         return false
+    local phi_julia = get(ctx.ssa_types, phi_idx, Any)
+    if _wt_is_ref(src_type) && !_wt_is_ref(phi_local_type) &&
+       phi_julia isa DataType && isconcretetype(phi_julia) && !(src_julia <: phi_julia)
+        return _emit_phi_edge_guarded_unbox!(b, ctx, phi_local_type, src_type, src,
+                                              phi_julia, phi_idx)
+    end
     append_builder!(b, src)
     coerce_stack_top!(b, phi_local_type, ctx;
                       from_julia=isconcretetype(src_julia) ? src_julia : nothing)
+    return true
+end
+
+"""
+    _emit_phi_edge_guarded_unbox!(b, ctx, phi_local_type, src_type, src, phi_julia, phi_idx)
+
+A phi's Julia type may be narrower than the type of a value flowing in on one of its
+edges: inference types the phi by the paths on which it is used, so `nothing` (or any value
+of another class) can reach an `Int64` phi on a path that never reads it. The edge unboxes
+only when the value is a `phi_julia` box; otherwise the phi keeps its local's current
+content, which no path reads. Unguarded, the unbox's `ref.cast` traps on that path.
+
+parity(quarantine: Julia types a phi narrower than an edge value's type; Julia's own codegen
+(src/codegen.cpp emit_phinode: `isvalid = emit_isa_and_defined(ctx, val, phiType)` then
+`emit_guarded_test(ctx, isvalid, undef, emit_unbox)`) gives the phi an undefined value on
+that edge instead of trapping. dart's phis are typed by the join of their inputs, so dart
+has no such edge.)
+"""
+function _emit_phi_edge_guarded_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                       phi_local_type::WasmValType, src_type::WasmValType,
+                                       src::InstrBuilder, phi_julia::DataType,
+                                       phi_idx::Int)::Bool
+    haskey(ctx.phi_locals, phi_idx) || return false
+    append_builder!(b, src)
+    src_type === ExternRef && any_convert_extern!(b)
+    # the edge value, held for the class test and the unbox
+    local val_local = allocate_local!(ctx, AnyRef)
+    builder_set_local_type!(b, val_local, AnyRef)
+    local_set!(b, val_local)
+    local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, phi_local_type)
+    local_get!(b, val_local)
+    emit_isa_classid!(b, ctx, box_idx, phi_julia)
+    if_!(b, phi_local_type)
+    local_get!(b, val_local)
+    emit_classid_unbox!(b, ctx, phi_local_type)
+    else_!(b)
+    local_get!(b, ctx.phi_locals[phi_idx])
+    end_block!(b)
     return true
 end

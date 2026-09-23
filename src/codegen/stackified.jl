@@ -755,20 +755,23 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             if haskey(ctx.phi_locals, phi_idx)
                 local_idx = ctx.phi_locals[phi_idx]
                 local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
+                local phi_julia = get(ctx.ssa_types, phi_idx, Any)
                 if local_wasm_type isa ConcreteRef
                     ref_null!(pvb, Int64(local_wasm_type.type_idx), local_wasm_type)
                 elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
                        local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
                        local_wasm_type === EqRef
                     ref_null!(pvb, local_wasm_type)
-                elseif local_wasm_type === I64
-                    i64_const!(pvb, 0)
-                elseif local_wasm_type === F32
-                    f32_const!(pvb, 0.0f0)
-                elseif local_wasm_type === F64
-                    f64_const!(pvb, 0.0)
+                elseif phi_julia isa DataType && isconcretetype(phi_julia) && phi_julia !== Nothing
+                    # `nothing` on an edge of a numeric phi of another type: Julia's phi is
+                    # undefined on this edge (see _emit_phi_edge_guarded_unbox!); it keeps
+                    # its local's content, never a zero standing for `nothing`.
+                    local_get!(pvb, local_idx)
+                elseif phi_julia === Nothing && local_wasm_type === I32
+                    i32_const!(pvb, 0)   # a Nothing-typed phi: the zero-width singleton
                 else
-                    i32_const!(pvb, 0)
+                    emit_phi_failure!(pvb, "`nothing` edge into a $(local_wasm_type) phi of type $(phi_julia)";
+                                      idx=phi_idx)
                 end
             else
                 emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
@@ -801,7 +804,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         local _src_julia = _value_julia_type(val, ctx)
                         _src_julia isa Type || (_src_julia = Any)
                         if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
-                                                    ssa_local_type, _srcb, _src_julia)
+                                                    ssa_local_type, _srcb, _src_julia, phi_idx)
                             emit_phi_failure!(pvb, "phi edge has no valid coercion"; idx=phi_idx)
                         end
                     end
@@ -830,7 +833,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _src_julia = _value_julia_type(val, ctx)
                     _src_julia isa Type || (_src_julia = Any)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
-                                                src_local_type, _srcb, _src_julia)
+                                                src_local_type, _srcb, _src_julia, phi_idx)
                         emit_phi_failure!(pvb, "phi-to-phi edge has no valid coercion"; idx=phi_idx)
                     end
                 else
@@ -870,7 +873,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     emit_value!(_sb, val, ctx)  # R17-floor: phi converter consumes the actual recomputed type
                     local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
-                                                ssa_wasm_type, _sb, _src_julia)
+                                                ssa_wasm_type, _sb, _src_julia, phi_idx)
                         emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
                     end
                 elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
@@ -901,7 +904,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                                  (val isa NirGlobalRef && val.bound) ? typeof(val.value) : Any)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
                                                 (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b,
-                                                _ne_jt)
+                                                _ne_jt, phi_idx)
                         emit_phi_failure!(pvb, "literal phi edge has no valid coercion"; idx=phi_idx)
                     end
                     return _cpv_ret()

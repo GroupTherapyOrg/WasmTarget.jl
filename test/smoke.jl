@@ -669,6 +669,66 @@ _g("union_fields", Any[
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 ])
+# ---- Union{Nothing,<numeric>} values: returns, fields, containers, phis ----
+# Each shape runs at a `nothing` input, a 0 input and a nonzero input, so a nothing-vs-0
+# confusion shows. A phi typed Int64 by inference can receive `nothing` on a path that
+# never reads it (Julia gives the phi an undefined value there).
+@noinline _un_i64(x::Int64) = x > 0 ? nothing : x
+@noinline _un_bool(x::Int64) = x > 0 ? nothing : iseven(x)
+@noinline _un_f64(x::Int64) = x > 0 ? nothing : Float64(x) / 2
+@noinline _un_char(x::Int64) = x > 0 ? nothing : Char(64 - x)
+@noinline _un_missing(x::Int64) = x > 0 ? missing : x
+struct _UNMiss; f::Union{Missing,Int64}; end
+@noinline _un_miss_field(x::Int64) = _UNMiss(x > 0 ? missing : x)
+_un_phi_loop(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = i - 2); end; r === nothing ? -1 : r)
+_un_phi_loop_bool(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = isodd(n)); end; r === nothing ? -1 : Int64(r))
+_un_phi_loop_f64(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = n / 4); end; r === nothing ? -1.0 : r)
+_un_ret(x::Int64) = (r = _un_i64(x); r === nothing ? 7 : r)
+_g("union_nothing", Any[
+    ("ret_nothing", _un_ret, Int64(1)),
+    ("ret_zero", _un_ret, Int64(0)),
+    ("ret_value", _un_ret, Int64(-4)),
+    ("bool_nothing", (x::Int64) -> (r = _un_bool(x); r === nothing ? Int64(7) : Int64(r)), Int64(1)),
+    ("bool_false", (x::Int64) -> (r = _un_bool(x); r === nothing ? Int64(7) : Int64(r)), Int64(-3)),
+    ("f64_nothing", (x::Int64) -> (r = _un_f64(x); r === nothing ? 7.0 : r), Int64(1)),
+    ("f64_zero", (x::Int64) -> (r = _un_f64(x); r === nothing ? 7.0 : r), Int64(0)),
+    ("char_nothing", (x::Int64) -> (r = _un_char(x); r === nothing ? Int64(7) : Int64(r)), Int64(1)),
+    ("char_value", (x::Int64) -> (r = _un_char(x); r === nothing ? Int64(7) : Int64(r)), Int64(0)),
+    ("missing_ret", (x::Int64) -> (r = _un_missing(x); r === missing ? 7 : r), Int64(1)),
+    ("missing_ret_zero", (x::Int64) -> (r = _un_missing(x); r === missing ? 7 : r), Int64(0)),
+    ("missing_field", (x::Int64) -> (s = _un_miss_field(x); ismissing(s.f) ? -1 : s.f::Int64), Int64(1)),
+    ("missing_field_zero", (x::Int64) -> (s = _un_miss_field(x); ismissing(s.f) ? -1 : s.f::Int64), Int64(0)),
+    ("isnothing", (x::Int64) -> Int64(isnothing(_un_i64(x))), Int64(1)),
+    ("isnothing_zero", (x::Int64) -> Int64(isnothing(_un_i64(x))), Int64(0)),
+    ("something_f64", (x::Int64) -> something(_un_f64(x), 7.5), Int64(1)),
+    ("egal_zero", (x::Int64) -> Int64(_un_i64(x) === 0), Int64(1)),
+    ("phi_loop_nothing", _un_phi_loop, Int64(1)),
+    ("phi_loop_zero", _un_phi_loop, Int64(3)),
+    ("phi_loop_bool_nothing", _un_phi_loop_bool, Int64(1)),
+    ("phi_loop_bool", _un_phi_loop_bool, Int64(3)),
+    ("phi_loop_f64_nothing", _un_phi_loop_f64, Int64(1)),
+    ("phi_loop_f64", _un_phi_loop_f64, Int64(2)),
+    ("vec_bool", (x::Int64) -> (v = Union{Nothing,Bool}[x > 0 ? nothing : true, false, nothing];
+        c = 0; for e in v; c = 10c + (e === nothing ? 9 : Int64(e)); end; c), Int64(1)),
+    ("ref_cell", (x::Int64) -> (r = Ref{Union{Nothing,Int64}}(nothing); x <= 0 && (r[] = x);
+        v = r[]; v === nothing ? -1 : v), Int64(0)),
+    ("dict_value", (x::Int64) -> (d = Dict{Int64,Union{Nothing,Int64}}(1 => nothing, 0 => 0);
+        v = d[x]; v === nothing ? -1 : v), Int64(1)),
+])
+# A tuple or NamedTuple with a Union{Nothing,T} element is an abstract type in Julia (its
+# values are Tuple{Nothing,Int64} or Tuple{Int64,Int64}); WT gives it no class, and a
+# closure capturing such a value is typed by a runtime `apply_type`. All three reject at
+# their statement today (measured 2026-09-22): `tuple` raises WasmInternalError
+# "ensure_type_id!: Tuple{Union{Nothing, Int64}, Int64} reached codegen unnumbered",
+# `getproperty` on the NamedTuple "getfield call shape not lowerable", the capture
+# "unresolved dynamic call `Core.apply_type`".
+@noinline _un_tup(x::Int64) = (x > 0 ? nothing : x, x)
+@noinline _un_nt(x::Int64) = (a = x > 0 ? nothing : iseven(x), b = x)
+_xf("union_nothing_containers", Any[
+    ("tuple_element", (x::Int64) -> (t = _un_tup(x); t[1] === nothing ? -1 : t[1]::Int64), Int64(1)),
+    ("namedtuple_field", (x::Int64) -> (t = _un_nt(x); t.a === nothing ? -1 : Int64(t.a::Bool)), Int64(1)),
+    ("closure_capture", (x::Int64) -> (r = _un_i64(x); g = () -> r === nothing ? -1 : r::Int64; g()), Int64(1)),
+])
 # ---- Memory: fill, allocation length, storage identity (C6 suspects 12, 14, 15, 27) ----
 _sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
 _g("memory", Any[
