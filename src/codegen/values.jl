@@ -27,14 +27,12 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         if val.name === :nothing
             return I32
         end
-        # Resolve the GlobalRef to get the actual value
-        try
-            actual_val = getfield(val.mod, val.name)
-            return static_wasm_type(actual_val, ctx)
-        catch
-            # If we can't resolve, fall back to AnyRef (internal polymorphic type)
-            return AnyRef
-        end
+        # Resolve the GlobalRef to get the actual value; an unbound one is the same
+        # located reject the emission of this operand raises.
+        isdefined(val.mod, val.name) || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(val) is not defined in its source module"; detail=val,
+            soundness_fatal=true)
+        return static_wasm_type(getfield(val.mod, val.name), ctx)
     end
     if val isa Core.SSAValue
         if haskey(ctx.ssa_locals, val.id)
