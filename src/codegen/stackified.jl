@@ -95,7 +95,9 @@ end
 
 """Slice B: split blocks so every region's enter_idx ENDS a block and every
 catch_dest STARTS one — the try_table/landing labels then open and close exactly at
-block boundaries and the stackifier's ordinary machinery does the rest."""
+block boundaries and the stackifier's ordinary machinery does the rest.
+parity(quarantine: Julia's try regions are a flat `Core.EnterNode` / `catch_dest` pair of CFG
+edges; dart's TryCatch is one structured statement, code_generator.dart:925 visitTryCatch.)"""
 function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{BasicBlock}
     cuts_after = Set{Int}()          # statement idx that must END a block
     for r in regions
@@ -214,6 +216,9 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{N
     return blocks
 end
 
+# parity(quarantine: Julia's typed IR is an unstructured goto CFG that must be stackified into
+# wasm blocks and loops; Kernel's control flow is already structured, so dart2wasm lowers it
+# statement by statement.)
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock};
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder
