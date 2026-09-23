@@ -1938,91 +1938,96 @@ end
     return (x << r) | (x >> (64 - r))
 end
 
+# parity(quarantine: C memhash_seed reads the bytes through a pointer, support/MurmurHash3.c;
+# here a little-endian word is read over codeunits)
+@inline function _wasm_mm3_load_u64(s, start::Int, nbytes::Int)::UInt64
+    v = UInt64(0)
+    i = 0
+    while i < nbytes
+        v |= UInt64(codeunit(s, start + i)) << (8 * i)
+        i += 1
+    end
+    return v
+end
+
+# parity(quarantine: MurmurHash3's fmix64 finalizer, support/MurmurHash3.c)
+@inline function _wasm_mm3_fmix64(k::UInt64)::UInt64
+    k ⊻= k >> 33
+    k *= 0xff51afd7ed558ccd
+    k ⊻= k >> 33
+    k *= 0xc4ceb9fe1a85ec53
+    k ⊻= k >> 33
+    return k
+end
+
+# MurmurHash3_x64_128(buf, n, seed, out) -> out[1], C `memhash_seed` on Julia 1.12 and 1.13:
+# 1.12 Base hashes a String with it, and both versions derive a Symbol's hash from it.
+# parity(quarantine: Julia's memhash_seed is C, support/hashing.c; ported over codeunit reads)
+@noinline function _wasm_memhash_seed(s::Union{String,SubString{String}}, seed::UInt32)::UInt64
+    n = ncodeunits(s)
+    c1 = 0x87c37b91114253d5
+    c2 = 0x4cf5ad432745937f
+    h1 = UInt64(seed)
+    h2 = UInt64(seed)
+
+    nblocks = n >> 4   # div(n, 16)
+    blk = 0
+    while blk < nblocks
+        base = blk * 16 + 1
+        k1 = _wasm_mm3_load_u64(s, base, 8)
+        k2 = _wasm_mm3_load_u64(s, base + 8, 8)
+
+        k1 *= c1
+        k1 = _wasm_rotl64(k1, 31)
+        k1 *= c2
+        h1 ⊻= k1
+        h1 = _wasm_rotl64(h1, 27)
+        h1 += h2
+        h1 = h1 * 5 + 0x52dce729
+
+        k2 *= c2
+        k2 = _wasm_rotl64(k2, 33)
+        k2 *= c1
+        h2 ⊻= k2
+        h2 = _wasm_rotl64(h2, 31)
+        h2 += h1
+        h2 = h2 * 5 + 0x38495ab5
+
+        blk += 1
+    end
+
+    tailstart = nblocks * 16
+    rem = n - tailstart
+
+    if rem >= 9
+        k2 = _wasm_mm3_load_u64(s, tailstart + 9, rem - 8)
+        k2 *= c2
+        k2 = _wasm_rotl64(k2, 33)
+        k2 *= c1
+        h2 ⊻= k2
+    end
+    if rem >= 1
+        nb = rem >= 8 ? 8 : rem
+        k1 = _wasm_mm3_load_u64(s, tailstart + 1, nb)
+        k1 *= c1
+        k1 = _wasm_rotl64(k1, 31)
+        k1 *= c2
+        h1 ⊻= k1
+    end
+
+    h1 ⊻= UInt64(n)
+    h2 ⊻= UInt64(n)
+    h1 += h2
+    h2 += h1
+    h1 = _wasm_mm3_fmix64(h1)
+    h2 = _wasm_mm3_fmix64(h2)
+    h1 += h2
+    h2 += h1
+
+    return h2
+end
+
 @static if VERSION < v"1.13.0-"
-    # MurmurHash3_x64_128(buf, n, seed, out) -> out[1] (1.12 Base memhash_seed).
-    @inline function _wasm_mm3_load_u64(s, start::Int, nbytes::Int)::UInt64
-        v = UInt64(0)
-        i = 0
-        while i < nbytes
-            v |= UInt64(codeunit(s, start + i)) << (8 * i)
-            i += 1
-        end
-        return v
-    end
-
-    @inline function _wasm_mm3_fmix64(k::UInt64)::UInt64
-        k ⊻= k >> 33
-        k *= 0xff51afd7ed558ccd
-        k ⊻= k >> 33
-        k *= 0xc4ceb9fe1a85ec53
-        k ⊻= k >> 33
-        return k
-    end
-
-    @noinline function _wasm_memhash_seed(s::Union{String,SubString{String}}, seed::UInt32)::UInt64
-        n = ncodeunits(s)
-        c1 = 0x87c37b91114253d5
-        c2 = 0x4cf5ad432745937f
-        h1 = UInt64(seed)
-        h2 = UInt64(seed)
-
-        nblocks = n >> 4   # div(n, 16)
-        blk = 0
-        while blk < nblocks
-            base = blk * 16 + 1
-            k1 = _wasm_mm3_load_u64(s, base, 8)
-            k2 = _wasm_mm3_load_u64(s, base + 8, 8)
-
-            k1 *= c1
-            k1 = _wasm_rotl64(k1, 31)
-            k1 *= c2
-            h1 ⊻= k1
-            h1 = _wasm_rotl64(h1, 27)
-            h1 += h2
-            h1 = h1 * 5 + 0x52dce729
-
-            k2 *= c2
-            k2 = _wasm_rotl64(k2, 33)
-            k2 *= c1
-            h2 ⊻= k2
-            h2 = _wasm_rotl64(h2, 31)
-            h2 += h1
-            h2 = h2 * 5 + 0x38495ab5
-
-            blk += 1
-        end
-
-        tailstart = nblocks * 16
-        rem = n - tailstart
-
-        if rem >= 9
-            k2 = _wasm_mm3_load_u64(s, tailstart + 9, rem - 8)
-            k2 *= c2
-            k2 = _wasm_rotl64(k2, 33)
-            k2 *= c1
-            h2 ⊻= k2
-        end
-        if rem >= 1
-            nb = rem >= 8 ? 8 : rem
-            k1 = _wasm_mm3_load_u64(s, tailstart + 1, nb)
-            k1 *= c1
-            k1 = _wasm_rotl64(k1, 31)
-            k1 *= c2
-            h1 ⊻= k1
-        end
-
-        h1 ⊻= UInt64(n)
-        h2 ⊻= UInt64(n)
-        h1 += h2
-        h2 += h1
-        h1 = _wasm_mm3_fmix64(h1)
-        h2 = _wasm_mm3_fmix64(h2)
-        h1 += h2
-        h2 += h1
-
-        return h2
-    end
-
     const _WASM_MEMHASH_SEED = 0x71e729fd56419c81
 
     @noinline function _wasm_hash_string(s::Union{String,SubString{String}}, h::UInt)::UInt
@@ -2148,6 +2153,34 @@ else
     @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
         return _wasm_hash_string(s, h)
     end
+end
+
+# ─── Symbol objectid Overlay — bit-exact with native Julia ─────────────────
+# Why: Julia interns Symbols, and objectid(::Symbol) (hence hash(::Symbol) and every
+#      Dict{Symbol}/Set{Symbol} slot) is jl_object_id reading the interned jl_sym_t's
+#      `hash`, which symbol.c `hash_symbol` derives from the name alone:
+#      `int64hash(-(memhash(name) ⊻ 0xaaaaaaaaaaaaaaaa))`, `memhash` being
+#      `memhash_seed(·, 0xcafe8881)` (measured equal to native objectid on 1.12.7 and
+#      1.13.0). WT builds a fresh Symbol object per `Symbol(...)` call, so the lowered
+#      jl_object_id (a per-object counter) gave two equal Symbols two ids.
+
+# parity(quarantine: Thomas Wang's int64hash, support/hashing.c, which symbol.c
+# hash_symbol applies to the name's memhash)
+@inline function _wasm_int64hash(key::UInt64)::UInt64
+    key = (~key) + (key << 21)
+    key = key ⊻ (key >> 24)
+    key = (key + (key << 3)) + (key << 8)
+    key = key ⊻ (key >> 14)
+    key = (key + (key << 2)) + (key << 4)
+    key = key ⊻ (key >> 28)
+    key = key + (key << 31)
+    return key
+end
+
+# parity(symbol_patch.dart:34 Symbol.hashCode): a Symbol hashes by its name alone; the
+# function is Julia's (symbol.c hash_symbol)
+@overlay WASM_METHOD_TABLE function Base.objectid(s::Symbol)
+    return _wasm_int64hash(-(_wasm_memhash_seed(String(s), 0xcafe8881) ⊻ 0xaaaaaaaaaaaaaaaa)) % UInt
 end
 
 # ─── String concatenation Overlay ───────────────────────────────────────────

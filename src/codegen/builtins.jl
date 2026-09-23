@@ -987,12 +987,25 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
-# `Symbol(x)` — in WasmGC, Symbol IS String (both are byte arrays); the
-# argument is already a string array and compiles straight through.
-# Self-contained: emits its own operand directly onto `fb`.
+# `Symbol(x)` — the Symbol named by `x`: a Symbol is itself; a String (or an Any holding a
+# String or Symbol) has its byte array wrapped under Symbol's own class, and any other
+# runtime class traps at the cast to the classed string. A static type that holds neither
+# (Julia's `Symbol(string(x...))` fallback) rejects at the statement.
+# parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
 function _lower_symbol!(b, fb, ctx, call, idx, args, callee)
     length(args) == 1 || return nothing
-    append_builder!(fb, _compile_value_b(args[1], ctx))
+    local T = get_ssa_type(ctx, args[1])
+    if T === Symbol
+        append_builder!(fb, _compile_value_b(args[1], ctx))
+    elseif T isa Type && typeintersect(T, Union{String,Symbol}) === Union{}
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+            "Symbol(::$(T)) is Symbol(string(x)), which this builtin does not lower";
+            idx=idx, detail=call)
+    else
+        emit_value!(fb, args[1], ctx,
+                    ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
+        emit_string_wrap!(fb, ctx, Symbol)
+    end
     return append_builder!(b, fb)
 end
 

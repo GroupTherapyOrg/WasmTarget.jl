@@ -118,8 +118,9 @@ mutable struct TypeRegistry
     module_init_functions::Union{Nothing, Vector{UInt32}}
     # census F3 (dart constants.dart:872 visitStringConstant): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
-    # (code size + `===` identity like dart). Keyed by the string value.
-    string_constant_globals::Union{Nothing, Dict{String, UInt32}}
+    # (code size + `===` identity like dart). Keyed by the String or Symbol value, so
+    # `"a"` and `:a` are two constants of two classes.
+    string_constant_globals::Union{Nothing, Dict{Union{String,Symbol}, UInt32}}
     # LAZY constants (dart constants.dart:2108 _createLazyConstant): long strings get an
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
@@ -154,7 +155,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions
-    Dict{String, UInt32}(),       # string_constant_globals (census F3)
+    Dict{Union{String,Symbol}, UInt32}(),  # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}()                                # step5 class-DAG synthetics
@@ -216,7 +217,7 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, 0; syntax_flags=symbol_syntax_flags(s))
+    emit_string_wrap!(b, mod, registry, 0, String; syntax_flags=symbol_syntax_flags(s))
     global_set_peek = length(b.instrs)
     # store AND return: local.tee via global — global.set then global.get
     global_set!(b, g)
@@ -349,16 +350,18 @@ end
 census F3 () — INTERNED string constants, dart's constant→deduplicated-global
 architecture (constants.dart:793 ensureConstant; a string constant is eager unless
 standalone, :872 visitStringConstant). Every use of an equal short literal reads ONE global,
-matching dart's code-size and `===`-identity semantics. Strings longer than the
+matching dart's code-size and `===`-identity semantics. A Symbol `s` is its own constant of
+its own class (constants.dart:1556 visitSymbolConstant), never the equal String's. Names longer than the
 eager threshold return `nothing` (they keep the inline data-segment path — dart
 handles those with LAZY init functions, deferred here because init functions
 cannot be added during body compilation without shifting function indices).
 
 parity(constants.dart:872 ConstantCreator.visitStringConstant): the interned string constant.
 """
-function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s::String)::Union{UInt32, Nothing}
+function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry,
+                                     s::Union{String,Symbol})::Union{UInt32, Nothing}
     registry.string_constant_globals === nothing && return nothing
-    ncodeunits(s) > 64 && return nothing   # eager threshold (dart lazies large constants)
+    ncodeunits(String(s)) > 64 && return nothing   # eager threshold (dart lazies large constants)
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
     struct_idx, init = _string_constant_initializer!(mod, registry, s)
     g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
@@ -366,21 +369,23 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry, s:
     return g
 end
 
-"""Build the canonical classed-string constant expression without adding a global.
+"""Build the canonical classed-string constant expression for a String or Symbol `s`, under
+`typeof(s)`'s classId, without adding a global.
 
 parity(constants.dart:872 ConstantCreator.visitStringConstant): its generator — object header,
-the byte array, struct.new."""
+the byte array, struct.new.
+parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol's header is its own class's."""
 function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
-                                       s::String)::Tuple{UInt32,Vector{UInt8}}
+                                       s::Union{String,Symbol})::Tuple{UInt32,Vector{UInt8}}
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     # constant initializer: classId; unassigned identityHash; byte array; struct.new
     init = UInt8[]
     push!(init, Opcode.I32_CONST)
-    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, String))))
+    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, typeof(s)))))
     push!(init, Opcode.I32_CONST)
     append!(init, encode_leb128_signed(Int64(0)))
-    bytes = codeunits(s)
+    bytes = codeunits(String(s))
     for b in bytes
         push!(init, Opcode.I32_CONST)
         append!(init, encode_leb128_signed(Int64(b)))
@@ -398,8 +403,9 @@ end
 """
     emit_string_constant_ref!(b, mod, registry, s, scratch)
 
-Push the classed string constant `s` inside an init-function body: the interned global
-when one exists (short strings), else built in place from a passive data segment
+Push the classed String or Symbol constant `s` (under `typeof(s)`'s class) inside an
+init-function body: the interned global when one exists (short names), else built in place
+from a passive data segment
 (`array.new_data` is not a constant expression, so long strings have no eager global;
 dart initialises those lazily, constants.dart:2108 _createLazyConstant). `scratch` is the index of a local of the
 string ARRAY type the caller declares only when `used[]` comes back true.
@@ -407,7 +413,8 @@ string ARRAY type the caller declares only when `used[]` comes back true.
 parity(constants.dart:1937 _ConstantAccessor._readDefinedConstant): global.get of an eager constant.
 """
 function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                                   s::String, scratch::Integer, used::Base.RefValue{Bool})::InstrBuilder
+                                   s::Union{String,Symbol}, scratch::Integer,
+                                   used::Base.RefValue{Bool})::InstrBuilder
     local g = get_string_constant_global!(mod, registry, s)
     if g !== nothing
         global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))
@@ -416,12 +423,12 @@ function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::T
     local arr_idx = get_string_array_type!(mod, registry)
     used[] || builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
     used[] = true
-    local bytes = Vector{UInt8}(codeunits(s))
+    local bytes = Vector{UInt8}(codeunits(String(s)))
     local seg_idx = add_passive_data_segment!(mod, bytes)
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, scratch; syntax_flags=symbol_syntax_flags(s))
+    emit_string_wrap!(b, mod, registry, scratch, typeof(s); syntax_flags=symbol_syntax_flags(s))
     return b
 end
 
@@ -1068,7 +1075,7 @@ function get_module_constant_global!(mod::WasmModule, registry::TypeRegistry,
         return registry.constant_globals[module_value]
     info = registry.structs[Module]
     string_idx = get_string_struct_type!(mod, registry)
-    name_global = get_string_constant_global!(mod, registry, String(nameof(module_value)))
+    name_global = get_string_constant_global!(mod, registry, nameof(module_value))
     name_global === nothing && error("Module name exceeds the eager Symbol constant limit")
     b = InstrBuilder(; func_name="get_module_constant_global!")
     i32_const!(b, Int64(ensure_type_id!(registry, Module)))
@@ -2055,7 +2062,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         # content-derived metadata across ordinary calls.
         string_idx = get_string_struct_type!(mod, registry)
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        emit_string_constant_ref!(b, mod, registry, String(tn.name), _pop_str_scratch, _pop_str_used)
+        emit_string_constant_ref!(b, mod, registry, tn.name, _pop_str_scratch, _pop_str_used)
         struct_set!(b, tn_type_idx, UInt32(2), ConcreteRef(string_idx, true))
 
         # Field 3: an interned Module object, never a name-string surrogate.
@@ -2068,7 +2075,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         end
 
         global_get!(b, tn_global_idx, ConcreteRef(tn_type_idx, true))
-        emit_string_constant_ref!(b, mod, registry, String(tn.singletonname), _pop_str_scratch, _pop_str_used)
+        emit_string_constant_ref!(b, mod, registry, tn.singletonname, _pop_str_scratch, _pop_str_used)
         struct_set!(b, tn_type_idx, UInt32(5), ConcreteRef(string_idx, true))
 
         # Field 6: whether module.singletonname is a real binding.

@@ -360,16 +360,43 @@ _g("identity", Any[
 # rejection while the value lived in an i64; now the value is its nullable box, so egal
 # answers exactly.
 _g("union_register", Any[
+# A Union{Nothing,Int64} value lives in an i64 register (builder/types.jl
+# `resolve_union_type`: Union{Nothing,T} maps to T's representation), so `nothing` and a
+# number are the same bits and `===` cannot be answered: it rejects at the statement. The
+# lowering it replaced answered a constant (native 1, wasm 0) (measured 2026-09-22).
+])
+_xf("union_register", Any[
     ("union_num_ne", (x::Int64) -> Int64(_id_maybe(x) !== 3), Int64(3)),
     ("union_nothing_egal", (x::Int64) -> Int64(_id_maybe(x) === nothing), Int64(-3)),
 ])
-_xf("symbol_class", Any[
+
+# ---- symbol_class: a Symbol is its own class, sharing the classed string layout ----
+# Egal, isa, typeof and dispatch tell `"a"` from `:a`; a runtime Symbol (`jl_symbol_n`, the
+# `Symbol` builtin) is built under Symbol's class and hashes as Julia's interned symbol does.
+@noinline _sym_of(x::Int64) = x > 0 ? :abc : :d
+@noinline _sym_dispatch(x::Symbol) = 1
+@noinline _sym_dispatch(x::String) = 2
+@noinline _sym_dispatch(x) = 3
+_g("symbol_class", Any[
     ("str_vs_sym", _id_any_pair, Int64(1), Int64(2)),
     ("str_ne_sym", _id_any_pair_ne, Int64(1), Int64(2)),
     ("typeof_sym_is_Symbol", (i::Int64) -> Int64(typeof(_id_any(_ID_SV, i)) === Symbol), Int64(2)),
     ("typeof_sym_is_String", (i::Int64) -> Int64(typeof(_id_any(_ID_SV, i)) === String), Int64(2)),
+    ("typeof_str_is_String", (i::Int64) -> Int64(typeof(_id_any(_ID_SV, i)) === String), Int64(1)),
     ("str_isa_Symbol", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa Symbol), Int64(1)),
     ("sym_isa_String", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa String), Int64(2)),
+    ("str_isa_AbstractString", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa AbstractString), Int64(1)),
+    ("sym_isa_AbstractString", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa AbstractString), Int64(2)),
+    ("dispatch_sym", (i::Int64) -> _sym_dispatch(_id_any(_ID_SV, i)), Int64(2)),
+    ("dispatch_str", (i::Int64) -> _sym_dispatch(_id_any(_ID_SV, i)), Int64(1)),
+    ("symbol_ctor_egal", (x::Int64) -> Int64(Symbol(string('a', Char(x))) === :ab), Int64(98)),     # jl_symbol_n
+    ("symbol_ctor_vs_str", (x::Int64) -> (v = Any[Symbol(string('a', Char(x))), "ab"]; Int64(_id_any(v, 1) === _id_any(v, 2))), Int64(98)),
+    ("symbol_from_bytes", (x::Int64) -> Int64(Symbol(UInt8[0x61, UInt8(x)]) === :ab), Int64(98)),  # jl_symbol_n
+    ("symbol_from_substring", (x::Int64) -> Int64(Symbol(SubString(string('x', 'a', Char(x), 'y'), 2, 3)) === :ab), Int64(98)),  # jl_symbol_n
+    ("string_of_sym", (x::Int64) -> Int64(string(_sym_of(x)) == "abc"), Int64(1)),
+    ("String_of_sym_is_String", (x::Int64) -> (v = Any[String(_sym_of(x))]; Int64(typeof(_id_any(v, 1)) === String)), Int64(1)),
+    ("symbol_hash", (x::Int64) -> Int64(hash(Symbol(string('a', Char(x)))) == hash(:ab)), Int64(98)),
+    ("dict_symbol_roundtrip", (x::Int64) -> (d = Dict{Symbol,Int64}(:a => x, :b => 2); d[:a] * 10 + d[Symbol(string('b'))]), Int64(7)),
 ])
 
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----

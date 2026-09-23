@@ -1437,7 +1437,7 @@ function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, c
                     idx=idx, detail=node, soundness_fatal=true)
             end
             array_new_default!(b, str_arr_type)
-            emit_string_wrap!(b, ctx)   # parity(constants.dart:872 visitStringConstant): a String is classed from birth
+            emit_string_wrap!(b, ctx, String)   # parity(constants.dart:872 visitStringConstant): a String is classed from birth
             return b
 end
 
@@ -1500,12 +1500,12 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, 
 
                 # parity(constants.dart:872 visitStringConstant): publish as the CLASSED string
                 local_get!(b, dest_local)
-                emit_string_wrap!(b, ctx)
+                emit_string_wrap!(b, ctx, String)
             elseif length(node.operands) >= 1
                 # Fallback: no length arg — wrap the passed-through memory as a string
                 mem_arg = node.operands[1]
                 emit_value!(b, mem_arg, ctx, ConcreteRef(UInt32(str_arr_type), true))
-                emit_string_wrap!(b, ctx)
+                emit_string_wrap!(b, ctx, String)
             end
             return b
 end
@@ -1515,8 +1515,16 @@ function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int,
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
                 source, _ = traced
-                str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
+                if get_ssa_type(ctx, source) === String
+                    str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                    emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
+                else
+                    # a Symbol's name (`String(::Symbol)`): the result is a String, so its
+                    # bytes are wrapped under String's class, never returned as the Symbol
+                    arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                    emit_value!(b, source, ctx, ConcreteRef(UInt32(arr_idx), true))
+                    emit_string_wrap!(b, ctx, String)
+                end
                 return b
             end
             record_unsupported!(ctx, :unsupported_method,
@@ -1574,7 +1582,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
 
                     # parity(constants.dart:872 visitStringConstant): publish as the CLASSED string
                     local_get!(b, dest_local)
-                    emit_string_wrap!(b, ctx)
+                    emit_string_wrap!(b, ctx, String)
                     return b
                 end
                 record_unsupported!(ctx, :unsupported_method,
@@ -1792,16 +1800,52 @@ function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     return b
 end
 
+"""
+jl_symbol_n(ptr, len) -> Symbol: the Symbol named by the `len` bytes at `ptr`, copied out of
+the storage the pointer traces to — a String's bytes from its pointer's offset
+(`Symbol(::String)`, `Symbol(::SubString)`), or the Memory passed as the GC root at the
+pointer's storage-relative offset (`Symbol(::Vector{UInt8})`) — and wrapped under Symbol's
+own class. Symbols compare by content (`_emit_string_egal!`), which is Julia's interned
+identity, so a fresh object per call is exact. An untraceable pointer rejects at the statement.
+parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
+"""
 function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
-        # jl_symbol_n(ptr::Ptr{UInt8}, len::Int64) -> Ref{Symbol}
-        # In WasmGC, Symbol is represented as a string byte array (same as String).
-        # The GC root argument (node.operands[3]) is the original String — just return it.
-        if length(node.operands) >= 3
-            gc_root = node.operands[3]
-            emit_value!(b, gc_root, ctx, static_wasm_type(gc_root, ctx))
-            return b
-        end
-    return nothing
+    length(node.operands) >= 2 || return nothing
+    local ptr_arg, len_arg = node.operands[1], node.operands[2]
+    local arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    local arr_ref = ConcreteRef(UInt32(arr_idx), true)
+    local traced = _trace_string_ptr(ptr_arg, ctx)
+    local root = length(node.operands) >= 3 ? node.operands[3] : nothing
+    local root_type = root === nothing ? nothing : get_ssa_type(ctx, root)
+    local source!, offset!
+    if traced !== nothing
+        local source, offset = traced
+        source! = () -> emit_value!(b, source, ctx, arr_ref)
+        offset! = offset === nothing ? () -> i32_const!(b, 0) :
+                  () -> emit_value!(b, offset, ctx, I32)
+    elseif root_type isa DataType && root_type.name.name in (:Memory, :GenericMemory)
+        source! = () -> _emit_backing_array!(b, root, ctx, arr_idx)
+        offset! = () -> (emit_value!(b, ptr_arg, ctx, I64);
+                         coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8}))
+    else
+        emit_unsupported_stub!(ctx, b, :unsupported_method,
+            "jl_symbol_n pointer cannot be traced to a String or Memory"; idx=idx, detail=node)
+        return b
+    end
+    local len_local = allocate_local!(ctx, I32)
+    local dest_local = allocate_local!(ctx, ConcreteRef(UInt32(arr_idx), false))
+    emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
+    local_tee!(b, len_local)
+    array_new_default!(b, arr_idx)
+    local_tee!(b, dest_local)
+    i32_const!(b, 0)                    # dest offset
+    source!()
+    offset!()
+    local_get!(b, len_local)
+    array_copy!(b, arr_idx, arr_idx)
+    local_get!(b, dest_local)
+    emit_string_wrap!(b, ctx, Symbol)
+    return b
 end
 
 function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)

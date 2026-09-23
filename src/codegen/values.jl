@@ -494,9 +494,9 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 _wt_ref_nullable(to) || ref_as_non_null!(b)
                 return b
             elseif _from_is_sarr && !_to_is_sarr
-                # a bare data array flowing to a value position: WRAP (the one producer),
-                # then adjust the struct ref to `to` normally
-                emit_string_wrap!(b, ctx)
+                # a bare data array flowing to a value position: WRAP (the one producer)
+                # under the value's class, then adjust the struct ref to `to` normally
+                emit_string_wrap!(b, ctx, from_julia === Symbol ? Symbol : String)
                 _to_is_sstr && return b
                 convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx)
                 return b
@@ -704,19 +704,25 @@ function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeReg
 end
 
 """
-    emit_string_wrap!(b, mod, registry)
+    emit_string_wrap!(b, mod, registry, scratch, class)
 
 parity(constants.dart:872 visitStringConstant) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
-byte array on the stack, wrap it as `\$JlString{classId(String), 0, data}`. The ONE
-place a string value is born; every string producer routes here.
+byte array on the stack, wrap it as `\$JlString{classId(class), 0, data}`. The ONE
+place a String or Symbol value is born; every producer routes here and names its class.
+parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
+parity(quarantine: Julia's jl_sym_t holds its name bytes inline as jl_string_t does, and Base
+reads them through the jl_symbol_name pointer, so a Symbol shares the classed string's layout
+under Symbol's classId where dart wraps a String field.)
 """
 function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                           scratch::Integer; syntax_flags::Integer=-1)::InstrBuilder
+                           scratch::Integer, class::Type; syntax_flags::Integer=-1)::InstrBuilder
+    (class === String || class === Symbol) ||
+        error("emit_string_wrap!: $class is not a classed-string class (String or Symbol)")
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
     builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
     local_set!(b, scratch)
-    i32_const!(b, Int64(ensure_type_id!(registry, String)))
+    i32_const!(b, Int64(ensure_type_id!(registry, class)))
     i32_const!(b, 0) # identityHash: lazily assigned by objectid
     local_get!(b, scratch)
     i32_const!(b, syntax_flags)
@@ -729,12 +735,12 @@ end
 
 parity(constants.dart:872 visitStringConstant): the same classed string producer, with the
 scratch local dart's `b.addLocal` would give it."""
-function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext;
+function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext, class::Type;
                            syntax_flags::Integer=-1)::InstrBuilder
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     sc = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, ConcreteRef(arr_idx, true))
-    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc;
+    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc, class;
                              syntax_flags=syntax_flags)
 end
 
@@ -1522,7 +1528,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             i32_const!(b, Int32(n_bytes))  # length
             array_new_data!(b, type_idx, seg_idx)
         end
-        emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
+        emit_string_wrap!(b, ctx, String; syntax_flags=symbol_syntax_flags(val))
 
     elseif val isa QuoteNode
         # QuoteNode wraps a constant value - unwrap and compile.
@@ -1572,11 +1578,11 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         end
 
     elseif val isa Symbol
-        # M7-c: Symbols share the classed string rep AND its intern registry —
-        # equal symbol literals read the ONE deduplicated global (dart: one constantInfo
-        # map for all kinds). Long names keep the inline data-segment path.
+        # Symbols share the classed string layout and its intern registry under their own
+        # class (dart visitSymbolConstant) — equal symbol literals read the ONE deduplicated
+        # global, never the equal String's. Long names keep the inline data-segment path.
         name_str = String(val)
-        local _syg = get_string_constant_global!(ctx.mod, ctx.type_registry, name_str)
+        local _syg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
         if _syg !== nothing
             global_get!(b, _syg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
             return b
@@ -1589,7 +1595,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # i32.const operands are SIGNED LEB128 (see String path above).
         i32_const!(b, Int32(n_bytes))
         array_new_data!(b, type_idx, seg_idx)
-        emit_string_wrap!(b, ctx; syntax_flags=symbol_syntax_flags(val))
+        emit_string_wrap!(b, ctx, Symbol; syntax_flags=symbol_syntax_flags(val))
 
     elseif typeof(val) <: Tuple
         # funnel-first (tuple) — tuples of constant-expressible fields intern

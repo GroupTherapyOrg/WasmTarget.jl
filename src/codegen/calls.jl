@@ -1890,6 +1890,11 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local _box_idx = get(ctx.type_registry.numeric_boxes, _box_wasm,
                                      get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm))
                 emit_isa_classid!(bld, ctx, _box_idx, check_type)
+            elseif check_type === String || check_type === Symbol
+                # String and Symbol share the classed string layout under their own classes
+                # (constants.dart:1556 visitSymbolConstant): isa tests the layout, then the classId
+                local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+                emit_isa_classid!(bld, ctx, _str_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 # Struct type: test against the concrete struct type.
                 # When multiple Julia types share the same WasmGC type index
@@ -1923,10 +1928,6 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 else
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
-            elseif check_type === String || check_type === Symbol || check_type <: AbstractString
-                # parity(class_info.dart:18 FieldIndex): strings are CLASSED — isa tests the string struct
-                local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                ref_test!(bld, Int64(_str_idx), false)
             else
                 # Unknown concrete type — can't test, return false
                 drop!(bld)
