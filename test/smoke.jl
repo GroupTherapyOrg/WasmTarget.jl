@@ -646,6 +646,20 @@ _g("memoryref_offset", Any[
     ("reshape_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); m = reshape(v, 2, 2); Int64(pointer(m) == pointer(v)) * 100 + m[2, 2]), Int64(6)),
     ("any_resize_isassigned", (n::Int64) -> (v = Any[1, 2, n]; resize!(v, 2); resize!(v, 3); Int64(isassigned(v, 3))), Int64(3)),
 ])
+# The MemoryRef pair channel (builtins.jl): an indexed ref carries its element offset
+# through a phi (loop-carried and branch), a chain of indexed refs, a store, and the bounds
+# check memoryrefnew runs when `bc` is true — BoundsError's `i` is the relative index, and
+# an unused check still runs.
+_g("memoryref_pair", Any[
+    ("loop_phi_offset", (n::Int64) -> (v = collect(1:10); r = v.ref; for k in 1:n; r = Core.memoryrefnew(r, 2, true); end; Core.memoryrefget(r, :not_atomic, true) * 100 + Base.memoryrefoffset(r)), Int64(3)),
+    ("branch_phi_offset", (n::Int64) -> (v = collect(1:10); r = n > 3 ? Core.memoryrefnew(v.ref, 5, true) : Core.memoryrefnew(v.ref, 2, true); Core.memoryrefget(r, :not_atomic, true) * 100 + Base.memoryrefoffset(r)), Int64(4)),
+    ("chained_get", (n::Int64) -> (v = collect(10:10:100); r = Core.memoryrefnew(Core.memoryrefnew(v.ref, 3, true), n, true); Core.memoryrefget(r, :not_atomic, true) * 100 + Base.memoryrefoffset(r)), Int64(4)),
+    ("chained_set", (n::Int64) -> (v = collect(10:10:100); r = Core.memoryrefnew(Core.memoryrefnew(v.ref, 3, true), n, true); Core.memoryrefset!(r, 7, :not_atomic, true); v[n + 2]), Int64(4)),
+    ("bc_throw_past_end", (n::Int64) -> (m = Memory{Int64}(undef, 3); r = Core.memoryrefnew(m); try; Core.memoryrefnew(r, n, true); 0; catch e; e isa BoundsError ? 1 : 2; end), Int64(5)),
+    ("bc_throw_index_zero", (n::Int64) -> (m = Memory{Int64}(undef, 3); r = Core.memoryrefnew(m); try; Core.memoryrefnew(r, n, true); 0; catch e; e isa BoundsError ? (e.i::Int) : -1; end), Int64(0)),
+    ("bc_throw_chained", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(Core.memoryrefnew(v.ref, 3, true), n, true); 0; catch e; e isa BoundsError ? (e.i::Int) : -1; end), Int64(9)),
+    ("bc_unused_check", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(v.ref, n, true); 0; catch e; e isa BoundsError ? 1 : -1; end), Int64(11)),
+])
 # ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
 # Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
 # 11, 18, 22); Base's own method now compiles in its place.

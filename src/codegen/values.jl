@@ -1188,6 +1188,12 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     end
 
     if node isa NirSSA
+        # A MemoryRef carrying an element offset in the pair channel (builtins.jl) is
+        # one value here only at offset 0; any other crossing rejects, located.
+        if first(_memoryref_source(ctx, node)) in (:indexed, :pair)
+            emit_memoryref_single!(b, ctx, node)
+            return b
+        end
         # Check if this SSA has a local allocated (either regular or phi)
         if haskey(ctx.ssa_locals, node.id)
             local_idx = ctx.ssa_locals[node.id]
@@ -1308,8 +1314,6 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 i32_const!(b, def.flag === false ? 0 : 1)
             elseif def isa NirCall || def isa NirInvoke || def isa NirNew || def isa NirForeignCall
                 # Re-compile the definition to produce its value on the stack.
-                # Call the specific compiler directly to avoid compile_statement's
-                # orphan-prevention skip for multi-arg memoryrefnew.
                 local _ssa_t = WasmValType[static_wasm_type(node, ctx)]
                 if def isa NirCall
                     compile_call!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
@@ -1848,6 +1852,12 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
         mem = T.name.name in (:MemoryRef, :GenericMemoryRef) ? getfield(val, :mem) : val
+        # A MemoryRef constant is its Memory only at offset 0 (the pair channel,
+        # builtins.jl, reads a constant's offset itself).
+        T <: Core.GenericMemoryRef && Base.memoryrefoffset(val) != 1 &&
+            record_unsupported!(ctx, :unsupported_type,
+                "a MemoryRef constant at memoryrefoffset $(Base.memoryrefoffset(val)) crosses a single-value boundary, which carries only its Memory";
+                detail=val, soundness_fatal=true)
         n_mem = length(mem)
         if n_mem > 4096
             record_unsupported!(ctx, :value_stub,

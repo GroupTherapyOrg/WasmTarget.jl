@@ -22,9 +22,10 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
         return b
     end
-    is_mem = vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory ||
-                                 vt.name.name === :MemoryRef || vt.name.name === :GenericMemoryRef)
-    if is_mem
+    if vt isa DataType && vt <: Core.GenericMemoryRef
+        # a ref's storage is its Memory; its offset rides the pointer (ptr_or_offset)
+        emit_memoryref_mem!(b, ctx, vec, ConcreteRef(UInt32(arr_t), true))
+    elseif vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory)
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
     else
         vinfo = ctx.type_registry.structs[vt]
@@ -673,12 +674,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # a value repair.
         pure_recomputed_tuple = !haskey(ctx.ssa_locals, idx) &&
             length(_sf.instrs) >= 2 && all(i -> i isa InstrIR.LocalGet, _sf.instrs)
-        # MemoryRef is a virtual two-operand value `(memory, offset)`. Its
-        # definition has no runtime effect and its consumer re-emits both
-        # operands, so materializing the definition would duplicate the pair.
-        pure_virtual_memoryref = !haskey(ctx.ssa_locals, idx) &&
-            node isa NirCall && node.callee === Core.memoryrefnew
-        (pure_recomputed_tuple || pure_virtual_memoryref) || append_builder!(b, _sf)
+        pure_recomputed_tuple || append_builder!(b, _sf)
 
         # If the statement type is Union{} (bottom/never returns), emit unreachable
         # This handles calls to error/throw functions that have void return type in wasm
@@ -913,26 +909,18 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
 
         emit_struct_prefix!(b, ctx.type_registry, struct_type, vec_info)
 
-        # Compile field 1: the array reference (from MemoryRef)
-        # Safety: if the SSA local is numeric (i64/i32) but the Vector struct expects a ref,
-        # emit ref.null of the correct array type instead of the wrong-typed local.get.
-        # This happens with non-Array AbstractVector types (UnitRange, StepRange) whose
-        # fields are i64 but get registered with Vector's ref-based layout.
-        # Check if field0 is a multi-arg memoryrefnew that produces [array_ref, i32_index].
-        # Vector only needs the array_ref — drop the extra i32 index.
-        is_multi_arg_memref = false
-        if field_values[1] isa NirSSA
-            local src = ctx.nir[field_values[1].id].node
-            is_multi_arg_memref = src isa NirCall && src.callee === Core.memoryrefnew &&
-                                  length(src.operands) >= 3
+        # Field 1: the ref's Memory. The Array has no offset field yet, so a ref whose
+        # element offset is not provably 0 is rejected here — never stored at offset 0.
+        if !memoryref_offset_is_zero(ctx, field_values[1])
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "%new(Array, ref, dims): the ref's element offset is not provably 0 and the Array has no offset field to keep it";
+                idx=idx, detail=field_values[1])
+            return b
         end
-        # (typed): the LOCAL_GET LEB decode is gone — the tracked type
-        # answers "is the source numeric where field 0 needs an array ref".
-        local _f0_b = _compile_value_b(field_values[1], ctx)
-        if is_multi_arg_memref
-            # Multi-arg memoryrefnew pushed [array_ref, i32_index] — drop the i32 index
-            drop!(_f0_b)
-        end
+        # (typed): the tracked type answers "is the source numeric where field 1 needs an
+        # array ref".
+        local _f0_b = _ctx_builder(ctx, "compile_new")
+        emit_memoryref_mem!(_f0_b, ctx, field_values[1])
         local _f0_ty = isempty(_f0_b.v.stack) ? nothing : _f0_b.v.stack[end]
         if _f0_ty === I64 || _f0_ty === I32
             # numeric source but Vector field 0 needs an array ref.
@@ -942,7 +930,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             if field_values[1] isa NirSSA
                 local _f0_rec = ctx.nir[field_values[1].id]
                 local src_f0 = _f0_rec.node
-                if src_f0 isa NirCall && (src_f0.callee === Core.memoryrefnew ||
+                if src_f0 isa NirCall && ((src_f0.callee === Core.memoryrefnew && length(src_f0.operands) == 1) ||
                                           src_f0.callee === Core.memoryref ||
                                           src_f0.callee === Core.memorynew)
                     # Recompile the source statement to get the actual array ref
@@ -997,8 +985,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             # M3: real classId for the size tuple header
             emit_struct_prefix!(b, ctx.type_registry, size_tuple_type, size_info)
             # Push array ref again for array.len
-            emit_value!(b, field_values[1], ctx,
-                        static_wasm_type(field_values[1], ctx))
+            emit_memoryref_mem!(b, ctx, field_values[1])
             array_len!(b)
             widen_length_to_i64!(b)
             struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields

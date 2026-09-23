@@ -728,6 +728,20 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
              isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
              length(pvb.v.stack))
         end
+        # A MemoryRef the pair channel (builtins.jl) carries with an element offset feeds a
+        # MemoryRef phi as its Memory — the phi's offset local takes the offset
+        # (set_phi_locals_for_edge!) — and any other phi as one value.
+        local _mr_kind = first(_memoryref_source(ctx, val))
+        if _mr_kind === :indexed || _mr_kind === :pair ||
+           (_mr_kind === :constant && !memoryref_offset_is_zero(ctx, val))
+            local _mr_phi_t = get(ctx.ssa_types, phi_idx, Any)
+            if _mr_phi_t isa Type && _mr_phi_t !== Union{} && _mr_phi_t <: Core.GenericMemoryRef
+                emit_memoryref_mem!(pvb, ctx, val; temp_map=temp_map)
+            else
+                emit_memoryref_single!(pvb, ctx, val)
+            end
+            return _cpv_ret()
+        end
         if is_nothing_value(val, ctx)
             # `nothing` is the null member of a reference-represented phi and the
             # zero-width semantic member of a numeric nullable phi. Resolve it
@@ -951,6 +965,26 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
         end
 
+        # A MemoryRef phi's element offset (allocate_memoryref_offset_locals!): every
+        # incoming offset is read before any phi on this edge is stored, then stored after
+        # the Memories.
+        offset_stores = Tuple{Int,Int}[]
+        for i in dest_start:dest_end
+            stmt = nir[i].node
+            stmt isa NirPhi || break
+            off_local = get(ctx.memoryref_offset_locals, i, nothing)
+            off_local === nothing && continue
+            for (edge_idx, edge) in enumerate(stmt.edges)
+                if edge == terminator_idx && stmt.values[edge_idx] !== nothing
+                    off_tmp = allocate_local!(ctx, I32)
+                    emit_memoryref_offset!(b, ctx, stmt.values[edge_idx])
+                    local_set!(b, off_tmp)
+                    push!(offset_stores, (off_local, off_tmp))
+                    break
+                end
+            end
+        end
+
         phi_count = 0
         for i in dest_start:dest_end
             stmt = nir[i].node
@@ -997,6 +1031,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             else
                 break  # Phi nodes are consecutive at the start
             end
+        end
+        for (off_local, off_tmp) in offset_stores
+            local_get!(b, off_tmp)
+            local_set!(b, off_local)
         end
     end
 
@@ -1215,6 +1253,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     # left on the stack (the old `ty===nothing` skip)
                                     # orphaned it: the escaping-closure double-load bug.
                                     local_set!(bb, local_idx)
+                                    if haskey(ctx.memoryref_offset_locals, i)
+                                        emit_memoryref_offset!(bb, ctx, val)
+                                        local_set!(bb, ctx.memoryref_offset_locals[i])
+                                    end
                                 end
                             end
                             break

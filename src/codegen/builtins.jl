@@ -288,6 +288,295 @@ function _lower_nfields!(b, fb, ctx, call, idx, args, callee)
     return nothing
 end
 
+# ---- The MemoryRef pair channel --------------------------------------------
+# A Julia MemoryRef is an inline immutable pair (its Memory, an element position in it).
+# WT carries exactly that pair: the Memory is the raw wasm array and the position is an
+# i32 count of elements from the array's start, off0 = memoryrefoffset - 1 — the pair
+# dart's typed-data views hold as (_data, _offsetInElements). Where the pair lives:
+#   * an indexed ref, `memoryrefnew(p, i, bc)`, is re-emitted from its operands where it
+#     is read (memory = p's memory, off0 = p's off0 + i - 1); its statement emits only
+#     its bounds check;
+#   * a MemoryRef phi with an incoming ref whose off0 is not provably 0 keeps off0 in an
+#     i32 local beside its phi local (allocate_memoryref_offset_locals!);
+#   * a MemoryRef constant carries its own offset;
+#   * every other MemoryRef value (a fresh ref, a field read, an argument, a call result)
+#     is at off0 = 0: a ref crosses a single-value boundary — a field, a call, a return,
+#     an Any slot — as its memory alone, and only when its off0 is provably 0
+#     (emit_memoryref_single! rejects the rest at the crossing).
+
+"""
+    _memoryref_source(ctx, ref) -> (kind, node)
+
+Where MemoryRef operand `ref` keeps its element offset, looking through PiNodes that have
+no local: `(:pair, phi)` for a phi with an offset local, `(:indexed, call)` for an indexed
+`memoryrefnew` re-emitted from its operands, `(:constant, value)` for a MemoryRef
+constant, and `(:zero, ref)` for every other MemoryRef value, which is at offset 0.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2441 WasmI8ArrayBase): the view's
+(_data, _offsetInElements) pair, found where the value was made.
+"""
+function _memoryref_source(ctx::AbstractCompilationContext, ref::NirNode)::Tuple{Symbol,Any}
+    node = ref
+    for _ in 1:(length(ctx.nir) + 1)
+        literal = _nir_const_operand(node)
+        literal isa Core.GenericMemoryRef && return (:constant, literal)
+        node isa NirSSA && 1 <= node.id <= length(ctx.nir) || return (:zero, ref)
+        haskey(ctx.memoryref_offset_locals, node.id) && return (:pair, node)
+        haskey(ctx.ssa_locals, node.id) && return (:zero, ref)
+        rec = ctx.nir[node.id]
+        rec.slot == 0 || return (:zero, ref)
+        def = rec.node
+        if def isa NirPi
+            node = def.value
+        elseif def isa NirCall && _nir_callee_object(def.callee) === Core.memoryrefnew &&
+               length(def.operands) >= 2
+            return (:indexed, def)
+        else
+            return (:zero, ref)
+        end
+    end
+    return (:zero, ref)
+end
+
+"""
+    memoryref_offset_is_zero(ctx, ref) -> Bool
+
+Whether MemoryRef operand `ref` is provably at element offset 0 (memoryrefoffset 1).
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2449 WasmI8ArrayBase): a view made
+from a fresh array starts at `_offsetInElements = 0`.
+"""
+function memoryref_offset_is_zero(ctx::AbstractCompilationContext, ref::NirNode)::Bool
+    kind, src = _memoryref_source(ctx, ref)
+    kind === :zero && return true
+    kind === :constant && return Base.memoryrefoffset(src) == 1
+    kind === :indexed && return _nir_const_operand(src.operands[2]) === 1 &&
+                                memoryref_offset_is_zero(ctx, src.operands[1])
+    return false
+end
+
+"""
+    emit_memoryref_mem!(b, ctx, ref[, expected; from_julia]) -> b
+
+Push the Memory (the raw wasm array) of MemoryRef operand `ref`, coerced to `expected`
+when one is given. `temp_map` substitutes a phi's saved local on a phi edge.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2442 WasmI8ArrayBase._data)
+"""
+function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode,
+                             expected::Union{WasmValType,Nothing}=nothing;
+                             from_julia::Union{Type,Nothing}=nothing,
+                             temp_map::Dict{Int,Int}=Dict{Int,Int}())::InstrBuilder
+    kind, src = _memoryref_source(ctx, ref)
+    if kind === :zero
+        expected === nothing ?
+            emit_value!(b, ref, ctx) :  # R17-floor: a MemoryRef at offset 0 is its memory, at the emitted array type
+            emit_value!(b, ref, ctx, expected; from_julia=from_julia)
+        return b
+    elseif kind === :indexed
+        emit_memoryref_mem!(b, ctx, src.operands[1]; temp_map=temp_map)
+    elseif kind === :pair
+        mem_local = ctx.ssa_locals[src.id]
+        local_get!(b, get(temp_map, mem_local, mem_local))
+    else
+        emit_value!(b, NirLiteral(getfield(src, :mem)), ctx)  # R17-floor: a constant's Memory is its array
+    end
+    expected === nothing || coerce_stack_top!(b, expected, ctx; from_julia=from_julia)
+    return b
+end
+
+"""
+    emit_memoryref_offset!(b, ctx, ref) -> b
+
+Push the i32 element offset off0 = memoryrefoffset - 1 of MemoryRef operand `ref`. An
+indexed ref adds its index to its base's off0 in i32: after the bounds check the sum is
+exact, and it equals the wrapped i64 sum either way.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2790 WasmI8ArrayBase.[]):
+`_offsetInElements + index`, wrapped to i32 by the array access (intrinsics.dart:1234).
+"""
+function emit_memoryref_offset!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode)::InstrBuilder
+    kind, src = _memoryref_source(ctx, ref)
+    if kind === :zero
+        i32_const!(b, 0)
+    elseif kind === :constant
+        i32_const!(b, Int64(Base.memoryrefoffset(src) - 1))
+    elseif kind === :pair
+        local_get!(b, ctx.memoryref_offset_locals[src.id])
+    else
+        base, index = src.operands[1], src.operands[2]
+        if memoryref_offset_is_zero(ctx, base)
+            emit_value!(b, index, ctx, I32)   # Julia's Int index, wrapped to the wasm array index
+        else
+            emit_memoryref_offset!(b, ctx, base)
+            emit_value!(b, index, ctx, I32)
+            num!(b, Opcode.I32_ADD)
+        end
+        i32_const!(b, 1)
+        num!(b, Opcode.I32_SUB)
+    end
+    return b
+end
+
+"""
+    emit_memoryref!(b, ctx, ref) -> b
+
+Push MemoryRef operand `ref` as the pair an element access consumes: its array, then its
+i32 element offset.
+parity(pkg/dart2wasm/lib/intrinsics.dart:1223 wasmArrayIndex): the array, then the index.
+"""
+function emit_memoryref!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode)::InstrBuilder
+    emit_memoryref_mem!(b, ctx, ref)
+    emit_memoryref_offset!(b, ctx, ref)
+    return b
+end
+
+"""
+    emit_memoryref_position!(b, ctx, ref) -> b
+
+Push Julia's `memoryrefoffset(ref)`, the 1-based i64 position of MemoryRef operand `ref`
+in its Memory.
+parity(quarantine: Julia's `Core.memoryrefoffset` answers a 1-based position; dart reads
+`_offsetInElements` as a 0-based count.)
+"""
+function emit_memoryref_position!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode)::InstrBuilder
+    kind, src = _memoryref_source(ctx, ref)
+    if kind === :zero
+        i64_const!(b, 1)
+    elseif kind === :constant
+        i64_const!(b, Int64(Base.memoryrefoffset(src)))
+    elseif kind === :pair
+        local_get!(b, ctx.memoryref_offset_locals[src.id])
+        widen_length_to_i64!(b)
+        i64_const!(b, 1)
+        num!(b, Opcode.I64_ADD)
+    else
+        base, index = src.operands[1], src.operands[2]
+        if memoryref_offset_is_zero(ctx, base)
+            emit_value!(b, index, ctx, I64)   # the position is Julia's Int
+        else
+            emit_memoryref_position!(b, ctx, base)
+            emit_value!(b, index, ctx, I64)
+            num!(b, Opcode.I64_ADD)
+            i64_const!(b, 1)
+            num!(b, Opcode.I64_SUB)
+        end
+    end
+    return b
+end
+
+"""
+    emit_memoryref_single!(b, ctx, ref) -> b
+
+A MemoryRef crossing a single-value boundary (a struct field, a call argument or result,
+an Any slot) is its Memory; that carries the ref only at offset 0. Any other ref rejects
+at the crossing, located — its offset is never dropped.
+The struct form (register_memoryref_box!) is so far built only for the BoundsError a bounds
+check throws; nothing reads a MemoryRef back out of one.
+parity(quarantine: Julia's MemoryRef is an inline immutable (allocatedinline); dart has no
+class it must unbox.)
+"""
+function emit_memoryref_single!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode)::InstrBuilder
+    if memoryref_offset_is_zero(ctx, ref)
+        return emit_memoryref_mem!(b, ctx, ref)
+    end
+    emit_unsupported_stub!(ctx, b, :unsupported_type,
+        "a MemoryRef whose element offset is not provably 0 crosses a single-value boundary (a field, call, return or Any slot), which carries only its Memory";
+        idx=ctx.current_stmt_idx, detail=ref)
+    return b
+end
+
+"""
+    allocate_memoryref_offset_locals!(ctx)
+
+Give every MemoryRef phi with an incoming ref whose offset is not provably 0 an i32 local
+for its off0, beside the phi local that holds its Memory — to a fixpoint, since a phi
+carrying an offset makes the phis it feeds carry one.
+parity(quarantine: Julia's MemoryRef is an inline immutable (allocatedinline); its two
+words live in two locals, as dart keeps a typed-data view's fields in its struct.)
+"""
+function allocate_memoryref_offset_locals!(ctx::AbstractCompilationContext)::Nothing
+    phis = Int[i for (i, rec) in enumerate(ctx.nir)
+               if rec.slot == 0 && rec.node isa NirPhi && haskey(ctx.ssa_locals, i) &&
+                  (T = get(ctx.ssa_types, i, Any); T isa Type && T !== Union{} &&
+                   T <: Core.GenericMemoryRef)]
+    changed = true
+    while changed
+        changed = false
+        for i in phis
+            haskey(ctx.memoryref_offset_locals, i) && continue
+            any(v -> v !== nothing && !memoryref_offset_is_zero(ctx, v), ctx.nir[i].node.values) ||
+                continue
+            ctx.memoryref_offset_locals[i] = allocate_local!(ctx, I32)
+            changed = true
+        end
+    end
+    return nothing
+end
+
+"""
+    _emit_memoryrefnew_boundscheck!(b, ctx, call) -> b
+
+The bounds check of `memoryrefnew(p, i, bc)`: unless `bc` is false, the new element offset
+off0(p) + i - 1, computed in i64, must lie in [0, length(mem)) read unsigned, or Julia's
+`BoundsError(p, i)` is thrown, a MemoryRef `p` in its single-value struct
+(register_memoryref_box!). On Julia 1.13 `p` may be a Memory, the ref at its offset 0.
+parity(sdk/lib/_internal/wasm/common/error_utils.dart:22 IndexErrorUtils.checkIndexBCE):
+`length.leU(index)` then the throw; `checkBounds` off is Julia's `bc == false`.
+"""
+function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                         call::NirCall)::InstrBuilder
+    length(call.operands) >= 3 || return b
+    base, index, bc = call.operands[1], call.operands[2], call.operands[3]
+    bc_def = bc isa NirSSA && 1 <= bc.id <= length(ctx.nir) && ctx.nir[bc.id].slot == 0 ?
+        ctx.nir[bc.id].node : bc
+    bc_static = bc_def isa NirBoundscheck ? bc_def.flag !== false : _nir_const_operand(bc)
+    bc_static === false && return b
+    if bc_static !== true
+        emit_value!(b, bc, ctx, I32)
+        if_!(b)
+    end
+    if memoryref_offset_is_zero(ctx, base)
+        emit_value!(b, index, ctx, I64)
+    else
+        emit_memoryref_offset!(b, ctx, base)
+        widen_length_to_i64!(b)
+        emit_value!(b, index, ctx, I64)
+        num!(b, Opcode.I64_ADD)
+    end
+    i64_const!(b, 1)
+    num!(b, Opcode.I64_SUB)
+    emit_memoryref_mem!(b, ctx, base)
+    array_len!(b)
+    widen_length_to_i64!(b)
+    num!(b, Opcode.I64_GE_U)
+    if_!(b)
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    error_info = register_struct_type!(ctx.mod, ctx.type_registry, BoundsError)
+    error_info === nothing && error("BoundsError layout is unavailable")
+    emit_struct_prefix!(b, ctx.type_registry, BoundsError, error_info)
+    # BoundsError's `a` holds any value: the base as Julia passes it — a Memory base (Julia
+    # 1.13 indexes a Memory directly) as itself, a MemoryRef base in its single-value struct,
+    # with its offset.
+    base_type = get_ssa_type(ctx, base)
+    if base_type isa DataType && base_type <: GenericMemory
+        emit_value!(b, base, ctx, AnyRef; from_julia=base_type)
+    else
+        base_type isa DataType && base_type <: Core.GenericMemoryRef && isconcretetype(base_type) ||
+            error("memoryrefnew's base is neither a Memory nor a concrete MemoryRef: $base_type")
+        box_idx = register_memoryref_box!(ctx.mod, ctx.type_registry, base_type)
+        emit_object_prefix!(b, ctx.type_registry, base_type)
+        emit_memoryref!(b, ctx, base)
+        struct_new!(b, box_idx)
+    end
+    emit_value!(b, index, ctx, AnyRef; from_julia=Int64)
+    struct_new!(b, error_info.wasm_type_idx)
+    global_set!(b, exn_global)
+    global_get!(b, exn_global, AnyRef)
+    ref_null!(b, ExternRef)
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    end_block!(b)
+    bc_static !== true && end_block!(b)
+    return b
+end
+
 # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
 # arrays have no undefined representation and are always assigned. Reference
 # arrays encode Julia's undefined slot as null and require an actual load.
@@ -308,7 +597,7 @@ function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)
     arr_def = ctx.mod.types[array_type_idx + 1]
     elem_wasm = arr_def isa ArrayType ? arr_def.elem.valtype : AnyRef
     mib = _ctx_builder(ctx, "compile_call.memoryref_isassigned")
-    emit_value!(mib, ref_arg, ctx)  # R17-floor: consumes MemoryRef's tracked (array,index) multi-value representation
+    emit_memoryref!(mib, ctx, ref_arg)
     if _wt_is_ref(elem_wasm)
         array_get!(mib, array_type_idx, elem_wasm;
                    signed=packed_array_signedness(elem_type))
@@ -336,8 +625,7 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)
     if ref_type isa DataType && (
         (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
         (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
-        # Compile ref_arg to push [array_ref, i32_index], then drop both
-        emit_value!(fb, ref_arg, ctx)  # R17-floor: MemoryRef{Nothing} is a deliberate two-value emission
+        emit_memoryref!(fb, ctx, ref_arg)
         drop!(fb)  # drop i32_index
         drop!(fb)  # drop array_ref
         i32_const!(fb, 0)
@@ -382,10 +670,8 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)
     # Get or create array type for this element type
     array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-    # The ref SSA value from memoryrefnew will have compiled to [array_ref, i32_index]
-    # We need to compile ref_arg which will leave [array_ref, i32_index] on stack
     local _mrgb = _ctx_builder(ctx, "compile_call")
-    emit_value!(_mrgb, ref_arg, ctx)  # R17-floor: memoryrefget consumes the emitted (array,index) pair
+    emit_memoryref!(_mrgb, ctx, ref_arg)
 
     array_get!(_mrgb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
 
@@ -395,26 +681,13 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
-# Special case for memoryrefoffset - get the 1-based offset of a MemoryRef
-# This is used by push!, resize!, and other dynamic array operations
-# Fresh MemoryRefs (from Core.memoryref, getfield(vec, :ref)) have offset 1
-# Indexed MemoryRefs (from memoryrefnew(ref, index, bc)) have offset = index
+# `memoryrefoffset(ref)`: the 1-based position the pair channel carries (emit_memoryref_position!).
 # parity(quarantine: Julia's `Core.memoryrefoffset`, the 1-based position of a GenericMemoryRef
 # in its Memory; dart has no interior array reference.)
 function _lower_memoryrefoffset!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 1 || return nothing
-    ref_arg = args[1]
-
-    # Check if this ref came from a memoryrefnew with an index
     local _mrob = _ctx_builder(ctx, "compile_call")
-    if ref_arg isa NirSSA && haskey(ctx.memoryref_offsets, ref_arg.id)
-        # This MemoryRef has a recorded offset - compile the index value
-        index_val = ctx.memoryref_offsets[ref_arg.id]
-        emit_value!(_mrob, index_val, ctx, I64)   # the offset is Julia's Int; a narrower index widens through the funnel
-    else
-        # Fresh MemoryRef - offset is always 1
-        i64_const!(_mrob, 1)  # 1
-    end
+    emit_memoryref_position!(_mrob, ctx, args[1])
     append_builder!(fb, _mrob)
     return append_builder!(b, fb)
 end
@@ -431,12 +704,11 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)
     ref_type = infer_value_type(ref_arg, ctx)
 
     # Nothing-typed memory — storing nothing is a no-op.
-    # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then done.
     # Don't push a result — Nothing has no Wasm representation to keep on the stack.
     if ref_type isa DataType && (
         (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
         (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
-        emit_value!(fb, ref_arg, ctx)  # R17-floor: MemoryRef{Nothing} pair is consumed without a scalar sink
+        emit_memoryref!(fb, ctx, ref_arg)
         drop!(fb)  # drop i32_index
         drop!(fb)  # drop array_ref
         return append_builder!(b, fb)
@@ -476,9 +748,8 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)
     # Get or create array type for this element type
     array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-    # Compile ref_arg which will leave [array_ref, i32_index] on stack
     local _msb = _ctx_builder(ctx, "compile_call")
-    emit_value!(_msb, ref_arg, ctx)  # R17-floor: memoryrefset consumes the emitted (array,index) pair
+    emit_memoryref!(_msb, ctx, ref_arg)
 
     # Compile the value to store - we need it twice (for array.set and return)
     # First compile gets the value on stack for array.set
@@ -678,51 +949,20 @@ function _lower_memoryref!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
-# Special case for memoryrefnew - handle both patterns:
-# 1. memoryrefnew(memory) -> MemoryRef (for Vector allocation, just pass through)
-# 2. memoryrefnew(base_ref, index, boundscheck) -> MemoryRef at offset
+# `memoryrefnew(mem)` is the fresh ref at offset 0: its Memory. `memoryrefnew(p, i, bc)` is an
+# indexed ref, re-emitted from its operands wherever it is read (the pair channel above);
+# its statement runs only the bounds check, which is its one effect.
 # parity(quarantine: Julia's `Core.memoryrefnew` makes a GenericMemoryRef at an index; dart has
 # no interior array reference.)
 function _lower_memoryrefnew!(b, fb, ctx, call, idx, args, callee)
     if length(args) == 1
-        # Single arg: just wrapping a Memory - pass through the array reference
-        # This is a "fresh" MemoryRef with offset 1
-        emit_value!(fb, args[1], ctx)  # R17-floor: one-arg memoryrefnew preserves representation
+        emit_value!(fb, args[1], ctx)  # R17-floor: a fresh ref is its Memory, at the Memory's array type
         return append_builder!(b, fb)
     elseif length(args) >= 2
-        base_ref = args[1]
-        index = args[2]
-
-        # Record the offset for this MemoryRef SSA so memoryrefoffset can use it
-        ctx.memoryref_offsets[idx] = index
-
-        # For Nothing-typed MemoryRef, check if result is used.
-        # If the SSA has no local and no subsequent statement references it,
-        # skip bytecode to avoid orphaning [array_ref, i32_index] on the stack.
-        ssa_type_mr = get(ctx.ssa_types, idx, Any)
-        is_nothing_ref_mr = ssa_type_mr isa DataType && (
-            (ssa_type_mr.name.name === :MemoryRef && length(ssa_type_mr.parameters) >= 1 && ssa_type_mr.parameters[1] === Nothing) ||
-            (ssa_type_mr.name.name === :GenericMemoryRef && length(ssa_type_mr.parameters) >= 2 && ssa_type_mr.parameters[2] === Nothing))
-        if is_nothing_ref_mr && !haskey(ctx.ssa_locals, idx)
-            # Check if any subsequent statement uses this SSA
-            ssa_used = any((idx+1):length(ctx.nir)) do j
-                any(a -> a isa NirSSA && a.id == idx, nir_direct_operands(ctx.nir[j]))
-            end
-            if !ssa_used
-                return append_builder!(b, fb)  # Skip — orphaned MemoryRef{Nothing}
-            end
-        end
-
-        # Compile the base array reference
+        haskey(ctx.ssa_locals, idx) &&
+            error("an indexed MemoryRef has no local of its own; it is re-emitted from its operands")
         local _mrnb = _ctx_builder(ctx, "compile_call")
-        emit_value!(_mrnb, base_ref, ctx)  # R17-floor: base may itself be a virtual MemoryRef pair
-
-        # the index narrows to i32 through the funnel (Julia is 1-based Int; wasm is 0-based i32)
-        emit_value!(_mrnb, index, ctx, I32)
-        i32_const!(_mrnb, 1)  # 1
-        num!(_mrnb, Opcode.I32_SUB)  # index - 1 for 0-based
-
-        # Now stack has [array_ref, i32_index] which is what memoryrefget needs
+        _emit_memoryrefnew_boundscheck!(_mrnb, ctx, call)
         append_builder!(fb, _mrnb)
         return append_builder!(b, fb)
     end
@@ -1526,11 +1766,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             field_sym = nir_const(field_ref)
 
             if field_sym === :mem
-                # A virtual MemoryRef may emit `(memory, offset)`; getfield(:mem)
-                # projects the memory operand and discards only the offset.
-                local _mrb = _compile_value_b(obj_arg, ctx)
-                append_builder!(fb, _mrb)
-                length(_mrb.v.stack) == 2 && drop!(fb)
+                emit_memoryref_mem!(fb, ctx, obj_arg)
                 return append_builder!(b, fb)
             elseif field_sym === :ptr_or_offset
                 _storage_relative_pointer_is_closed(ctx, idx; storage_pointer=true) || begin
@@ -1541,25 +1777,19 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     return append_builder!(b, fb)
                 end
                 # P4-stdlib (SHA update!): the target pointer value is a
-                # storage-relative byte offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
-                # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
-                # pointer arithmetic over indexed refs stays faithful.
-                local _poo_idx = obj_arg isa NirSSA ?
-                    get(ctx.memoryref_offsets, obj_arg.id, nothing) : nothing
+                # storage-relative byte offset from the start of the ref's Memory:
+                # off0 * elsize, off0 read from the pair channel.
                 local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
                     (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
                      obj_type.parameters[2] : obj_type.parameters[1]) : nothing
                 local _poob = _ctx_builder(ctx, "compile_call")
-                if _poo_idx !== nothing && _poo_el isa Type
+                if first(_memoryref_source(ctx, obj_arg)) !== :zero
+                    _poo_el isa Type || error("a MemoryRef's ptr_or_offset needs the ref's element type; $obj_type has none")
                     # Julia's element stride: sizeof for an isbits element, 8 (a boxed
                     # slot, Base.aligned_sizeof(Any)) for a reference element — the same
                     # rule jl_genericmemory_copyto's lowering divides by
                     local _poo_sz = memory_element_stride(_poo_el)
-                    local _poo_it = infer_value_type(_poo_idx, ctx)
-                    emit_value!(_poob, _poo_idx, ctx,
-                                (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ? I64 : I32)
-                    (_poo_it === Int64 || _poo_it === Int || _poo_it === UInt64) ||
-                        num!(_poob, Opcode.I64_EXTEND_I32_S)
+                    emit_memoryref_position!(_poob, ctx, obj_arg)
                     i64_const!(_poob, Int64(1))
                     num!(_poob, Opcode.I64_SUB)
                     if _poo_sz != 1
@@ -1939,22 +2169,29 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             field_sym = nir_const(field_ref)
             if field_sym === :ref && haskey(ctx.type_registry.structs, obj_type)
                 # setfield!(vector, :ref, new_memref) — update data array
-                # :ref is field index 1 in the Vector struct (field 0 = typeId)
-                # Guard: only handle if value_arg has a local (skip multi-arg memoryrefnew)
+                # :ref is field index 1 in the Vector struct (field 0 = typeId). The Array
+                # stores the ref's Memory; it has no offset field yet, so a ref whose
+                # offset is not provably 0 is rejected here rather than stored at offset 0.
+                if !memoryref_offset_is_zero(ctx, value_arg)
+                    emit_unsupported_stub!(ctx, fb, :unsupported_type,
+                        "setfield!(::Array, :ref, ref): the ref's element offset is not provably 0 and the Array has no offset field to keep it";
+                        idx=idx, detail=value_arg)
+                    return append_builder!(b, fb)
+                end
                 value_has_local = false
                 if value_arg isa NirSSA && haskey(ctx.ssa_locals, value_arg.id)
                     value_has_local = true
                 elseif value_arg isa NirArgument
                     value_has_local = true
                 end
-                if value_has_local
+                if value_has_local || first(_memoryref_source(ctx, value_arg)) === :indexed
                     info = ctx.type_registry.structs[obj_type]
                     value_type = infer_value_type(value_arg, ctx)
                     local _vr_def = ctx.mod.types[info.wasm_type_idx + 1]
                     local _vr_expected = _vr_def.fields[wasm_field_idx(info, 1) + 1].valtype
                     temp_local = allocate_local!(ctx, _vr_expected)
                     local _vrb = _ctx_builder(ctx, "compile_call")
-                    emit_value!(_vrb, value_arg, ctx, _vr_expected;
+                    emit_memoryref_mem!(_vrb, ctx, value_arg, _vr_expected;
                                 from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
@@ -1966,7 +2203,6 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     append_builder!(fb, _vrb)
                     return append_builder!(b, fb)
                 end
-                # Fall through to generic handling for multi-arg memoryrefnew values
             elseif field_sym === :size && haskey(ctx.type_registry.structs, obj_type)
                 info = ctx.type_registry.structs[obj_type]
                 # :size is field index 2 (0=typeId, 1=ref, 2=size)

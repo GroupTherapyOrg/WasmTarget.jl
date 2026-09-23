@@ -2703,7 +2703,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 local _psg_is_mem = _psg_vt isa DataType &&
                     _psg_vt.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
                 if _psg_is_mem
-                    emit_value!(_psgb, _psg_vec, ctx, ConcreteRef(UInt32(_psg_arr), true))
+                    # a ref's storage is its Memory; its offset rides the pointer
+                    emit_memoryref_mem!(_psgb, ctx, _psg_vec, ConcreteRef(UInt32(_psg_arr), true))
                 end
                 if !_psg_is_mem
                     if !haskey(ctx.type_registry.structs, _psg_vt)

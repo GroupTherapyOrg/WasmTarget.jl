@@ -1151,6 +1151,32 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
 end
 
 """
+    register_memoryref_box!(mod, registry, T) -> UInt32
+
+The single-value form of a `MemoryRef{T}` value, for a slot that holds any value (an `Any`
+field): `{classId, identityHash, mem, off0}` — the ref's Memory (the raw wasm array) and its
+i32 element offset, memoryrefoffset - 1. Immutable after construction, as the MemoryRef is.
+parity(class_info.dart:420 ClassInfoCollector._createStructForClass): a class struct under
+Object, carrying the fields a typed-data view keeps (typed_data.dart:2441 WasmI8ArrayBase:
+_data, _offsetInElements).
+"""
+function register_memoryref_box!(mod::WasmModule, registry::TypeRegistry, T::DataType)::UInt32
+    haskey(registry.memoryref_box_idxs, T) && return registry.memoryref_box_idxs[T]
+    T <: Core.GenericMemoryRef && isconcretetype(T) ||
+        error("register_memoryref_box!: $T is not a concrete MemoryRef type")
+    data_array_idx = get_array_type!(mod, registry, eltype(T))
+    wasm_fields = FieldType[object_prefix_fields()...,
+                            FieldType(ConcreteRef(data_array_idx, true), false),  # mem
+                            FieldType(I32, false)]                                # off0
+    local _dagp = dag_supertype_idx!(mod, registry, T)
+    type_idx = _dagp === nothing ?
+        UInt32(add_type!(mod, StructType(wasm_fields, get_object_struct_type!(mod, registry)))) :
+        UInt32(add_type!(mod, StructType(wasm_fields, _dagp)))
+    registry.memoryref_box_idxs[T] = type_idx
+    return type_idx
+end
+
+"""
 Register a 128-bit integer type (Int128 or UInt128) as a WasmGC struct.
 
 128-bit integers are stored as WasmGC structs with two i64 fields:

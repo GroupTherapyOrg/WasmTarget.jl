@@ -136,6 +136,9 @@ mutable struct TypeRegistry
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
     abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
+    # MemoryRef{T} -> its single-value struct {classId, identityHash, mem, off0}
+    # (register_memoryref_box!, structs.jl)
+    memoryref_box_idxs::Union{Nothing, Dict{Type, UInt32}}
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -158,7 +161,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Union{String,Symbol}, UInt32}(),  # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
-    Dict{Type, UInt32}()                                # step5 class-DAG synthetics
+    Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
+    Dict{Type, UInt32}()                                # MemoryRef single-value structs
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -182,7 +186,8 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing,  # string_constant_globals (census F3)
     nothing,  # lazy_string_globals
     nothing, nothing, nothing,  # closure layouter
-    nothing                     # step5 class-DAG synthetics
+    nothing,                    # step5 class-DAG synthetics
+    nothing                     # MemoryRef single-value structs
 )
 
 # parity(quarantine: Julia's Base.isoperator / is_syntactic_operator are the foreigncalls

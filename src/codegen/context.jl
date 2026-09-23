@@ -41,9 +41,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # Central convertType boxing reuses one scratch local per physical numeric
     # representation; scratch lifetime ends at each synchronous box emission.
     boxing_scratch_locals::Dict{WasmValType, Int}
-    # MemoryRef offset tracking: maps SSA id -> index SSA/value for memoryrefnew(ref, index, bc)
-    # Used by memoryrefoffset to get the offset. Fresh refs (not in this map) have offset 1.
-    memoryref_offsets::Dict{Int, Any}
+    # The i32 element-offset local of each MemoryRef phi that carries one; the phi's
+    # memory rides its phi local (allocate_memoryref_offset_locals!, builtins.jl).
+    memoryref_offset_locals::Dict{Int, Int}
     # Set true by compile_call/compile_invoke when a stub emits UNREACHABLE.
     # compile_statement reads and resets this to skip LOCAL_SET in dead code.
     last_stmt_was_stub::Bool
@@ -124,7 +124,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         dom_bindings,           # DOM bindings for Therapy.jl
         nothing,                # scratch_locals (set by allocate_scratch_locals!)
         Dict{WasmValType, Int}(), # boxing_scratch_locals
-        Dict{Int, Any}(),       # memoryref_offsets (populated during compilation)
+        Dict{Int, Int}(),       # memoryref_offset_locals (allocate_memoryref_offset_locals!)
         false,                  # last_stmt_was_stub 
         0,                      # current_stmt_idx
         Dict{Int, Int}(),       # slot_locals (unoptimized IR slot variables)
@@ -149,6 +149,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
         allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
         allocate_ssa_locals!(ctx)
+        allocate_memoryref_offset_locals!(ctx)
         allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     catch e
         (e isa WasmCompileError || e isa WasmInternalError) && rethrow()
@@ -963,10 +964,10 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
                 continue
             end
 
-            # Skip multi-arg memoryrefnew results - they leave [array_ref, i32_index] on stack
-            # and can't be stored in a single local. They must be used immediately.
-            if call !== nothing && call.callee === Core.memoryrefnew && length(call.operands) >= 3
-                # Multi-arg memoryrefnew - don't allocate a local
+            # An indexed MemoryRef, memoryrefnew(p, i, bc), has no local: the pair channel
+            # (builtins.jl) re-emits it from its operands wherever it is read.
+            if call !== nothing && _nir_callee_object(call.callee) === Core.memoryrefnew &&
+               length(call.operands) >= 3
                 continue
             end
 
