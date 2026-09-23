@@ -65,6 +65,7 @@ mutable struct InstrBuilder
     seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
                       func_name::String="", mod=nothing)
@@ -103,8 +104,11 @@ end
 builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
 _byte_len(b::InstrBuilder)::Int = length(builder_code(b))
 
-"Set the high-level context (Julia statement) the next emits belong to — surfaces in errors."
-set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)  # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:650 InstructionsBuilder.comment)
+"""
+Set the high-level context (Julia statement) the next emits belong to — surfaces in errors.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:650 InstructionsBuilder.comment)
+"""
+set_context!(b::InstrBuilder, ctx::AbstractString) = (b.context = String(ctx); b.v.context_hint = b.context; b)
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:412 InstructionsBuilder._debugTrace)
 _stack_snapshot(b::InstrBuilder) = String[string(t) for t in b.v.stack]
@@ -543,6 +547,7 @@ ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType) =
     (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefNullConcrete(Int64(heaptype))))
 # Abstract-heaptype ref.null (any/struct/array/i31/...): the RefType enum value IS the
 # single on-wire heaptype byte (dart2wasm encodes HeapType directly).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1570 InstructionsBuilder.ref_null)
 ref_null!(b::InstrBuilder, rt::RefType) =
     (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
 # ref.null none (heaptype 0x71, the bottom of the any hierarchy — not a RefType enum
@@ -571,6 +576,7 @@ end
 # Mod-resolving form (dart wasm_builder — the instruction knows its type).
 # Pops the REAL declared field list from the module; the empty-list fudge (which
 # left every operand phantom-tracked — the value-channel liar class) has no home here.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1711 InstructionsBuilder.struct_new)
 function struct_new!(b::InstrBuilder, type_idx::Integer)
     local _mod = b.v.mod
     local _ft = if _mod !== nothing && type_idx + 1 >= 1 && type_idx + 1 <= length(_mod.types) &&
@@ -671,6 +677,7 @@ end
 # Cast to an abstract heaptype (i31/array/struct/...): single on-wire heaptype byte.
 # The tracked result is the non-null variant for `ref.cast` (the RefType enum is the
 # nullable shorthand; `ref.cast null` keeps it).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1961 InstructionsBuilder.ref_cast)
 function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
     if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, nullable ? rt : NonNullAbstractRef(UInt8(rt))); end
     _emit!(b, InstrIR.RefCastAbstract(UInt8(rt), nullable))
