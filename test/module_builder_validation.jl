@@ -31,6 +31,7 @@ Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
 _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
 _mbv_void_numeric_root(x::Int64) = x + Int64(1)
 _mbv_string_init() = "framework-seed"
+Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', c); nothing)
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -153,12 +154,10 @@ _mbv_string_init() = "framework-seed"
     end
 
     @testset "explicit IO formatting does not activate host-console imports" begin
-        # The one explicit-IO classifier is invoke.jl's per-Method test: `print(io, ...)`
-        # is an ordinary compiled formatting Method, `print(x)` the receiver-free one.
-        @test !MBV._invoke_receiver_free_method(which(print, (IOBuffer, Char, Char)))
-        @test MBV._invoke_receiver_free_method(which(print, (Int64,)))
-        @test MBV._invoke_has_explicit_io((IOBuffer, Char))
-        @test !MBV._invoke_has_explicit_io((Int64,))
+        # `print(io, ...)` is an ordinary compiled formatting call: Julia's own body
+        # compiles and the module declares no host-console import.
+        compiled = MBV.compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), "p")])
+        @test isempty(compiled.imports)
     end
 
     @testset "closure roots use declared global substitutions" begin

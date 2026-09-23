@@ -24,13 +24,16 @@ _wt_exact_kwerr_exception()::Int64 = try
     Base.kwerr((; unsupported_keyword=true), identity)
     0
 catch err
-    err isa MethodError && err.f === Core.kwcall ? 1 : 2
+    # Base.kwerr's own body: MethodError(Core.kwcall, (kw, args...), tls_world_age())
+    err isa MethodError && err.f === Core.kwcall &&
+        err.args isa Tuple{NamedTuple{(:unsupported_keyword,), Tuple{Bool}}, typeof(identity)} ? 1 : 2
 end
 _wt_exact_inexact_exception()::Int64 = try
     Core.throw_inexacterror(:convert, UInt8, UInt64(300))
     0
 catch err
-    err isa InexactError && err.func === :convert ? 1 : 2
+    # Core.throw_inexacterror's own body: InexactError(func, (T, val))
+    err isa InexactError && err.func === :convert && err.args isa Tuple{DataType, UInt64} ? 1 : 2
 end
 function _wt_exact_undef_capture_exception(n::Int64)::Int64
     local x
@@ -43,6 +46,13 @@ function _wt_exact_undef_capture_exception(n::Int64)::Int64
         # Expr(:throw_undef_if_not, :x, cond) — the exact UndefVarError, never a skipped check
         return err isa UndefVarError && err.var === :x ? -1 : -2
     end
+end
+_wt_exact_error_exception(n::Int64)::Int64 = try
+    n > 0 && error("bad n")
+    0
+catch err
+    # Base.error's own body: throw(ErrorException(s)) — the exact message, never ""
+    err isa ErrorException && err.msg == "bad n" ? 1 : 2
 end
 _wt_many_string_length()::Int64 = Int64(ncodeunits(Base._string("aa", "bbb", "cccc")))
 function _wt_vector_mutation_semantics()::Int64
@@ -73,6 +83,8 @@ _wt_unsupported_show() = (show(_WTUnsupportedShow(1)); Int64(1))
     @test compare_julia_wasm(_wt_exact_undef_capture_exception, Int64(3)).pass
     @test compare_julia_wasm(_wt_exact_undef_capture_exception, Int64(0)).pass
     @test compare_julia_wasm(_wt_exact_inexact_exception).pass
+    @test compare_julia_wasm(_wt_exact_error_exception, Int64(1)).pass
+    @test compare_julia_wasm(_wt_exact_error_exception, Int64(0)).pass
     @test compare_julia_wasm(_wt_many_string_length).pass
     @test compare_julia_wasm(_wt_vector_mutation_semantics).pass
     @test compare_julia_wasm(_wt_resize_broadcast_fill, Int32(5), Int32(3)).pass

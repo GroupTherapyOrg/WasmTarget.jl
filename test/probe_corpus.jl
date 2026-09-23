@@ -290,9 +290,8 @@ _c("string_uppercase", () -> uppercase("abc"))
 # ─────────────────────────────────────────────────────────────────────────────
 # 5b. Phase 5.2 (dev/MARCH.md §2 "Identity registries", §4 Phase 5 items 2/4):
 #     spike A (bespoke string builders hash/repeat/lpad/rpad → generic/overlay
-#     path) and registry B (invoke.jl name===:x arms → Method-keyed
-#     INVOKE_INTRINSICS). These wrapper functions exercise ops that route
-#     through the registry so the invoke arm/registry entry actually compiles.
+#     path). These wrapper functions pin the bytes of the string operations
+#     whose bespoke builders were deleted, now compiled from Base's own bodies.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _c("string_repeat_char", () -> repeat('a', 3))

@@ -584,20 +584,22 @@ const LOCKS = [
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
         () -> count_sites(r"bytes shell|\(bytes::Vector\{UInt8\}|target_bytes::Vector\{UInt8\}";
                           roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
-    "L66_no_fabricated_string_results" => ("specialized string lowering either proves every input representation or rejects it; mixed arguments can never become an empty string",
+    "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
             strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            builtins_src = read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)",
-                         "For now, just do first two", "Multi-string concat: concat pairwise"]
-            required = ["specialized multi-argument string lowering requires every argument to be String or Symbol",
-                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value",
-                        "function compile_string_concat_many_b", "for loc in str_locals",
-                        "_wt_many_string_length"]
-            all_src = invoke_src * strings_src * test_src
-            count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                         "For now, just do first two", "Multi-string concat: concat pairwise",
+                         "_invoke_string_concat_or_reject_b", "_invoke_star_concat_b"]
+            required = ["function compile_string_concat_many_b", "for loc in str_locals"]
+            builtins_required = ["(_conc1 === String || _conc1 === Symbol) && (_conc2 === String || _conc2 === Symbol)"]
+            test_required = ["compare_julia_wasm(_wt_many_string_length).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, strings_src), required) +
+                count(p -> !occursin(p, builtins_src), builtins_required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
     "L67_one_exception_and_block_owner" => ("the stackifier alone owns block and try-region structure; no dead block-emission adapter or statement-level EnterNode implementation may coexist",
         () -> begin
@@ -656,16 +658,19 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src * compile_src), forbidden) +
                 count(p -> !occursin(p, test_src), required)
         end),
-    "L71_no_silent_io_argument_skip" => ("out-of-scope IO glue may reject an unrepresentable show argument but cannot silently omit it and report success",
+    "L71_no_silent_io_argument_skip" => ("show of any argument compiles Julia's own show body or rejects at its statement; no show builder exists that could silently omit an argument and report success",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
-            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            forbidden = ["show: unsupported argument type \$arg_type, skipping"]
-            required = ["show has no IO bridge representation for argument type",
-                        "_wt_unsupported_show", "@test_throws WasmTarget.WasmCompileError"]
-            all_src = invoke_src * test_src
-            count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String) *
+                       read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            # no show builder exists: show(x) compiles Julia's own body, whose console
+            # write rejects at its statement
+            forbidden = ["show: unsupported argument type \$arg_type, skipping", "_invoke_show_b"]
+            required = ["@test_throws WasmTarget.WasmCompileError WasmTarget.compile(_wt_unsupported_show, ())",
+                        "receiver-free print/println/show reject loudly at their statement",
+                        "(DiagAttrib.shows, (Float64,))"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
         end),
     "L72_no_fabricated_string_encoder" => ("the JS string boundary exposes only implemented imports; no unused encoder API may alias the decoder as a placeholder",
         () -> begin
@@ -717,19 +722,24 @@ const LOCKS = [
                         "\n        called_func = func isa GlobalRef ? nothing : func"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
         end),
-    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; unsupported IO cannot disappear or fabricate question-mark output",
+    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; receiver-free print/println/show compile Julia's own bodies and reject loudly at their statement — no console builder exists that could disappear or fabricate question-mark output",
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            diag_src = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
             forbidden = ["func_type.instance\n                    catch", "try infer_value_type",
                          "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
-                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup"]
-            required = ["function _compile_invoke_print_b", "_invoke_singleton_instance",
-                        "Base.issingletontype(T)",
-                        "println/print requires an explicitly configured IO bridge",
-                        "show requires an explicitly configured IO bridge",
-                        "println/print has no IO bridge representation"]
-            count(p -> occursin(p, invoke_src), forbidden) +
-                count(p -> !occursin(p, invoke_src), required)
+                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup",
+                         "_compile_invoke_print", "_invoke_print_b", "_invoke_println_b"]
+            required = ["_invoke_singleton_instance", "Base.issingletontype(T)"]
+            # receiver-free print/println/show compile Julia's own bodies, whose console
+            # write rejects loudly at its statement — pinned behaviorally
+            diag_required = ["(DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,))",
+                             "@test_throws WasmTarget.WasmCompileError WasmTarget.compile(f, argtypes)",
+                             "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, invoke_src), required) +
+                count(p -> !occursin(p, diag_src), diag_required)
         end),
     "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
         () -> begin
@@ -790,24 +800,31 @@ const LOCKS = [
             count(p -> occursin(p, trim_src), forbidden) +
                 count(p -> !occursin(p, trim_src), required)
         end),
-    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and the module's one world age (WASM_WORLD_AGE — never the host counter) instead of a generic trap",
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths compile Base.kwerr's own body, which throws a real MethodError with Core.kwcall, the exact argument tuple, and the module's one world age (WASM_WORLD_AGE — never the host counter) instead of a generic trap",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            # Base.kwerr's own body builds the MethodError; its tls_world_age() is the
+            # jl_get_tls_world_age foreigncall, which lowers to the module's one age
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["function _invoke_kwerr_b", "emit_value!(bkw, NirLiteral(Core.kwcall)",
-                        "args_tuple_type = Tuple{arg_julia_types...}",
-                        "Int64(WASM_WORLD_AGE)", "_wt_exact_kwerr_exception"]
-            count(p -> !occursin(p, invoke_src * test_src), required)
+            forbidden = ["_invoke_kwerr_b"]
+            stmts_required = ["function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)\n    i64_const!(b, Int64(WASM_WORLD_AGE))"]
+            test_required = ["err.args isa Tuple{NamedTuple{(:unsupported_keyword,), Tuple{Bool}}, typeof(identity)}",
+                             "compare_julia_wasm(_wt_exact_kwerr_exception).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, stmts_src), stmts_required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
-    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
+    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror compiles its own body, which constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            # Core.throw_inexacterror's own body builds InexactError(func, (T, val))
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["function _invoke_throw_inexacterror_b", "payload = args[2:end]",
-                        "payload_type = Tuple{payload_types...}",
-                        "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
-                        "_wt_exact_inexact_exception"]
-            count(p -> !occursin(p, invoke_src * test_src), required)
+            forbidden = ["_invoke_throw_inexacterror_b"]
+            required = ["err isa InexactError && err.func === :convert && err.args isa Tuple{DataType, UInt64}",
+                        "compare_julia_wasm(_wt_exact_inexact_exception).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
         end),
     "L83_fieldwise_constructors_are_structural" => ("concrete exact-field constructors route through the sole %new implementation before dynamic dispatch, even when inference erased a field expression",
         () -> begin
@@ -986,24 +1003,24 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
-    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls, so host IO imports cannot shift framework-owned function indices: the planner never appends host-console imports, and receiver-free println/print/show reject loudly at their statement unless an IO bridge is explicitly configured",
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import — so host IO imports cannot shift framework-owned function indices",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
-            # the planner never appends host-console imports (they would shift the
-            # framework's function indices); explicit IO is classified only per Method
-            forbidden = ["add_io_imports!("]
-            required = ["_invoke_has_explicit_io(param_types)",
-                        "\"println/print requires an explicitly configured IO bridge\")",
-                        "\"show requires an explicitly configured IO bridge\"; idx=idx)",
-                        "explicit IO formatting does not activate host-console imports",
-                        "Verify interactive docs islands compiled",
-                        "window.TherapyHydrate[\"examplelorenz\"]"]
-            count(p -> occursin(p, compile_src), forbidden) +
-            count(p -> !occursin(p,
-                compile_src * invoke_src * read(joinpath(ROOT, "test", "module_builder_validation.jl"), String) * docs_ci),
-                required)
+            mbv_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
+            # neither the planner nor invoke lowering appends host-console imports (they
+            # would shift the framework's function indices); no IO classifier exists —
+            # print(io, ...) is an ordinary call and compiles to a module with no imports
+            forbidden = ["add_io_imports!(", "_invoke_has_explicit_io"]
+            required = ["explicit IO formatting does not activate host-console imports",
+                        "compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), \"p\")])",
+                        "@test isempty(compiled.imports)"]
+            docs_required = ["Verify interactive docs islands compiled",
+                             "window.TherapyHydrate[\"examplelorenz\"]"]
+            count(p -> occursin(p, compile_src * invoke_src), forbidden) +
+                count(p -> !occursin(p, mbv_src), required) +
+                count(p -> !occursin(p, docs_ci), docs_required)
         end),
     "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin
@@ -1077,10 +1094,17 @@ const LOCKS = [
             forbidden = ["struct_new_default!(_thrb", "Default: push null ref for ref fields",
                          "ref_null!(berr, ArrayRef)", "name === :throw || name === :throw_boundserror",
                          "PURE-9032: Error constructors"]
-            required = ["constant exception contains undefined fields",
-                        "isempty(args) ? NirLiteral(\"\") : args[1]"]
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            # error(...), throw payloads and tuple errors compile Julia's own bodies;
+            # the builders that re-implemented them are deleted
+            forbidden_builders = ["_invoke_error_b", "_invoke_throw_payload_b", "_invoke_tuple_error_b"]
+            required = ["constant exception contains undefined fields"]
+            test_required = ["err isa ErrorException && err.msg == \"bad n\"",
+                             "compare_julia_wasm(_wt_exact_error_exception, Int64(1)).pass"]
             count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden) +
-                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required)
+                count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden_builders) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
     "L59_real_base_exception_helpers" => ("Bounds/Inexact/Domain/Overflow helper bodies construct and throw their real Julia exceptions; no name-routed null-payload helper family remains",
         () -> begin
@@ -1860,7 +1884,11 @@ const LOCKS = [
                        "_is_typelevel_foldable",   # Phase 12 C: the fold enumeration
                        # the two `===` ladders `emit_egal!` replaced
                        "_compile_call_egaleq", "_lower_egal_early", "_emit_egal_box_vs_num",
-                       "_egal_num_eqop", "_is_typeof_ssa", "_resolve_type_const"]
+                       "_egal_num_eqop", "_is_typeof_ssa", "_resolve_type_const",
+                       # C3 deletion wave: the Method-keyed invoke builders, all unreached
+                       "INVOKE_INTRINSICS", "InvokeIntrinsicEntry", "_register_invoke_intrinsic!",
+                       "_build_invoke_intrinsics!", "_invoke_receiver_free_method",
+                       "_invoke_box_arith_result!", "_emit_str_arg!", "_skip_cross_call"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
@@ -1869,7 +1897,7 @@ const LOCKS = [
             end
             n
         end),
-    "L123_wt_only_intrinsic_surface_extinct" => ("the WT-only str_*/arr_* runtime intrinsic surface (src/runtime/{stringops,arrayops,intrinsics}.jl, compile.jl's name-ladder is_intrinsic_function/generate_intrinsic_body, and their invoke.jl standalone builders) is DELETED — dart2wasm has no hand-written-wasm runtime library keyed by function NAME; users reach strings/arrays through Base, which lowers through Base's own overlays and INVOKE_INTRINSICS (Method-keyed, L115) (H(4); locked 2026-09-07)",
+    "L123_wt_only_intrinsic_surface_extinct" => ("the WT-only str_*/arr_* runtime intrinsic surface (src/runtime/{stringops,arrayops,intrinsics}.jl, compile.jl's name-ladder is_intrinsic_function/generate_intrinsic_body, and their invoke.jl standalone builders) is DELETED — dart2wasm has no hand-written-wasm runtime library keyed by function NAME; users reach strings/arrays through Base, which lowers through Base's own overlays and compiled bodies (L115) (H(4); locked 2026-09-07)",
         () -> begin
             retired = ["is_intrinsic_function", "generate_intrinsic_body",
                        "str_char", "str_getchar", "str_charlen", "str_setchar!",
@@ -1919,8 +1947,8 @@ const LOCKS = [
             outside + max(total - 6, 0) +
                 (occursin("function compile_with_base", wt_src) ? 0 : 1)
         end),
-    "L115_invokes_dispatch_through_registry_only" => ("parity(intrinsics.dart:26-64 MemberIntrinsic/StaticIntrinsic; `_lookup` :75-100/:401-428): every invoke target compile_invoke! recognizes is resolved through ONE Method-keyed lookup (INVOKE_INTRINSICS) — a bare-Symbol `name === :sym` ladder arm can never coexist with it in invoke.jl (R20's floor, locked here so it cannot regress back above 0)",
-        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+    "L115_invokes_dispatch_through_registry_only" => ("parity(code_generator.dart:1668-1686 visitStaticInvocation): an invoke of a member with a body is a direct `call` of that member's compiled function — compile_invoke! keeps no intrinsic table (INVOKE_INTRINSICS: 35 entries measured unreached 2026-09-22, deleted) and no bare-Symbol `name === :sym` ladder arm; neither can return to invoke.jl",
+        () -> count_sites(r"(?<![.\w])name === :\w+|INVOKE_INTRINSICS|_register_invoke_intrinsic!|InvokeIntrinsicEntry"; roots=[CODEGEN],
                           exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
     "L122_closed_world_numbered_once" => ("Phase 12B (dev/MARCH.md, formal(dev/formal/ClassIdDispatch.tla)): assign_type_ids! numbers the WHOLE closed world in ONE DFS — _collect_reachable_ir_types (ir.jl) admits every concrete kind that can carry a classId (structs, closures, Core.Box, Memory/MemoryRef, primitives incl. Char/Int128/a user `primitive type`, a Tuple with a Type{X} element or a runtime-length Vararg tuple) before the DFS runs. A type reaching ensure_type_id! unnumbered is a loud collector bug, never a second, order-dependent id — `type_extra_ids` and its allocating branch are extinct (locked 2026-09-07)",
         () -> begin

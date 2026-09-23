@@ -14,6 +14,8 @@ using WasmTarget
 module DiagAttrib
     # A receiver-free `show` kept out of line (its Method `show(x)` invoked directly).
     shows(x::Float64) = (@noinline show(x); x)
+    hostprint(x::Int64) = (print(x); x)
+    hostprintln(x::Int64) = (println(x); x)
     # An unsupported construct (a foreigncall WT has no lowering for) inside a helper
     # that inference inlines into its caller.
     @inline helper_uses_ccall(x::Float64) = ccall(:wt_test_no_such_symbol, Float64, (Float64,), x)
@@ -164,26 +166,14 @@ end
     @test sprint(show, d) == "[unsupported_type] in `f`: x"
 end
 
-@testset "diagnostics: show with no IO bridge rejects at its statement (C6)" begin
-    # Natively show(x) writes to the console; with no configured IO bridge WT must reject
-    # loudly, exactly as print/println do, never emit nothing.
-    # The receiver-free `show` Method's lowering, on the statement that invokes it (a
-    # compile normally cross-calls the collected Base body first, so it is driven directly).
-    ci, _ = WasmTarget.get_typed_ir(DiagAttrib.shows, (Float64,))
-    body = WasmTarget.nir_body(ci)
-    k = findfirst(s -> s.node isa WasmTarget.NirInvoke, body.stmts)
-    @test k !== nothing
-    node = body.stmts[k].node
-    ctx = WasmTarget.CompilationContext(body, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
-    @test WasmTarget.get_io_imports() === nothing
-    @test_throws WasmTarget.WasmCompileError WasmTarget._invoke_show_b(node.operands, ctx, k, node)
-    err = try
-        WasmTarget._invoke_show_b(node.operands, ctx, k, node)
-        nothing
-    catch e
-        e
+@testset "diagnostics: receiver-free print/println/show reject loudly at their statement (C6)" begin
+    # Natively these write to the console; a WT module has no console, so each must
+    # reject — never compile to nothing. The rejection lands on the statement that makes
+    # the console call (Julia's own bodies route it through `stdout::IO`).
+    for (f, argtypes) in ((DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,)),
+                          (DiagAttrib.shows, (Float64,)))
+        @test_throws WasmTarget.WasmCompileError WasmTarget.compile(f, argtypes)
+        e = _first_diag(f, argtypes)
+        @test e !== nothing && e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)
     end
-    d = err.diag
-    @test occursin("show requires an explicitly configured IO bridge", d.construct)
-    @test d.stmt_idx == k && occursin("show", d.stmt)
 end

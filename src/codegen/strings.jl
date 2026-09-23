@@ -415,9 +415,6 @@ function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_l
     return b
 end
 
-_all_string_args(args, ctx::AbstractCompilationContext)::Bool =
-    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
-
 """Concatenate every proven String/Symbol argument through one N-way builder.
 Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`."""
 function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder

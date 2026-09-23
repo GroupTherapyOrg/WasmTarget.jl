@@ -104,21 +104,17 @@ end
 # STANDALONE_INTRINSIC_BODIES — Method-keyed, for entries function_data compiles
 # as their OWN body (not a compile_invoke! call-site substitution).
 #
-# Every call site of `rethrow` is already replaced inline by compile_invoke!'s
-# Method-keyed INVOKE_INTRINSICS (_invoke_rethrow_b, invoke.jl) — L115 covers
-# that. But `rethrow`'s native body is itself just a bare `:foreigncall` to
+# `rethrow`'s native body is itself just a bare `:foreigncall` to
 # `jl_rethrow`/`jl_rethrow_other` with no lowering, and Julia's own closed-world
 # discovery (collect_closed_world) adds `rethrow`'s MethodInstance to
 # function_data as a real entry needing a compiled body whenever ANY reachable
-# `:invoke` resolves to it — independently of whether compile_invoke! later
-# replaces that call site. This is common: `try ... finally ... end` nested
+# `:invoke` resolves to it; every such call site is an ordinary cross-call to
+# that compiled body. This is common: `try ... finally ... end` nested
 # inside an enclosing `catch` lowers to an IMPLICIT `rethrow()` call on the
 # exceptional path with no `rethrow` token anywhere in the Julia source
 # (confirmed by deleting this arm: a differential test with two nested
 # try/finally regions inside a catch failed to compile with no source-text
-# `rethrow(` anywhere in the test file). The compiled body below is only ever
-# reached as this closed-world placeholder; per L115 the actual call sites never
-# call it. It ignores its argument, if any — `rethrow(e)`'s `e` is always the
+# `rethrow(` anywhere in the test file). It ignores its argument, if any — `rethrow(e)`'s `e` is always the
 # ALREADY-caught exception in `$current_exn`, so rethrowing the global slot is
 # exact, not an approximation, for the only valid call shape (`rethrow()`/
 # `rethrow(e)` from inside the handler that caught `e`).
