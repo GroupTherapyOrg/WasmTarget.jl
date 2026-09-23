@@ -669,16 +669,18 @@ _g("union_fields", Any[
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 ])
-# ---- Union{Nothing,<numeric>} values: returns, fields, containers, phis, typeof ----
+# ---- Union{Nothing,<numeric>} values: returns, phis, typeof, union-split calls ----
 # Each shape runs at a `nothing` input, a 0 input and a nonzero input, so a nothing-vs-0
 # confusion shows. A phi typed Int64 by inference can receive `nothing` on a path that
 # never reads it (Julia gives the phi an undefined value there); `typeof` of `nothing`
-# held in a Union is Nothing.
+# held in a Union is Nothing; a union-split call returns its branch's concrete type.
 @noinline _un_i64(x::Int64) = x > 0 ? nothing : x
 @noinline _un_bool(x::Int64) = x > 0 ? nothing : iseven(x)
 @noinline _un_f64(x::Int64) = x > 0 ? nothing : Float64(x) / 2
 @noinline _un_char(x::Int64) = x > 0 ? nothing : Char(64 - x)
 @noinline _un_missing(x::Int64) = x > 0 ? missing : x
+@noinline _un_pass(r::Union{Nothing,Int64}) = r
+@noinline _un_passb(r::Union{Nothing,Bool}) = r
 struct _UNMiss; f::Union{Missing,Int64}; end
 @noinline _un_miss_field(x::Int64) = _UNMiss(x > 0 ? missing : x)
 _un_phi_loop(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = i - 2); end; r === nothing ? -1 : r)
@@ -686,6 +688,8 @@ _un_phi_loop_bool(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = isodd(n
 _un_phi_loop_f64(n::Int64) = (r = nothing; for i in 1:n; i == 2 && (r = n / 4); end; r === nothing ? -1.0 : r)
 _un_ret(x::Int64) = (r = _un_i64(x); r === nothing ? 7 : r)
 _un_typeof(x::Int64) = (r = _un_i64(x); typeof(r) === Nothing ? 1 : (typeof(r) === Int64 ? 2 : 3))
+_un_split(x::Int64) = (r = _un_pass(_un_i64(x)); r === nothing ? -1 : r)
+_un_split_bool(x::Int64) = (r = _un_passb(_un_bool(x)); r === nothing ? -1 : Int64(r))
 _g("union_nothing", Any[
     ("ret_nothing", _un_ret, Int64(1)),
     ("ret_zero", _un_ret, Int64(0)),
@@ -713,6 +717,11 @@ _g("union_nothing", Any[
     ("typeof_nothing", _un_typeof, Int64(1)),
     ("typeof_zero", _un_typeof, Int64(0)),
     ("typeof_any_nothing", (x::Int64) -> Int64(typeof(_id_anyval(x)) === Nothing), Int64(-3)),
+    ("split_call_nothing", _un_split, Int64(1)),
+    ("split_call_zero", _un_split, Int64(0)),
+    ("split_call_value", _un_split, Int64(-4)),
+    ("split_call_bool_nothing", _un_split_bool, Int64(1)),
+    ("split_call_bool", _un_split_bool, Int64(-4)),
     ("vec_bool", (x::Int64) -> (v = Union{Nothing,Bool}[x > 0 ? nothing : true, false, nothing];
         c = 0; for e in v; c = 10c + (e === nothing ? 9 : Int64(e)); end; c), Int64(1)),
     ("ref_cell", (x::Int64) -> (r = Ref{Union{Nothing,Int64}}(nothing); x <= 0 && (r[] = x);

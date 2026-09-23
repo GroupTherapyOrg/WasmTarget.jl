@@ -671,7 +671,17 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                             local_arr_idx = local_idx_val - ctx.n_params + 1
                             if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
                                 target_local_type = ctx.locals[local_arr_idx]
-                                if target_local_type isa ConcreteRef
+                                local _cc_result = isempty(bcc.v.stack) ? nothing : bcc.v.stack[end]
+                                if _cc_result !== nothing && !_wt_is_ref(_cc_result) &&
+                                   _wt_is_ref(target_local_type) && isconcretetype(target_info.return_type)
+                                    # parity(code_generator.dart:677 convertType): the call's
+                                    # result converts from the CALLEE's output type. A
+                                    # union-split call is typed by the whole call's union
+                                    # (Union{Nothing,Int64}) while the invoked branch returns
+                                    # its own concrete type, which stamps the box's classId.
+                                    coerce_stack_top!(bcc, target_local_type, ctx;
+                                                      from_julia=target_info.return_type)
+                                elseif target_local_type isa ConcreteRef
                                     ret_wasm = julia_to_wasm_type(target_info.return_type)
                                     if ret_wasm === ExternRef
                                         # Function returns externref, local expects concrete ref
