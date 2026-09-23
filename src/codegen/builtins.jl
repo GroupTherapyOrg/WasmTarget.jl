@@ -497,12 +497,13 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)
             end
         end
     elseif wasm_elem_type isa ConcreteRef
-        # Array of concrete ref types (e.g., struct or array refs)
-        # If value is numeric (nothing represented as i32_const 0), emit ref.null instead
-        # (Typed): numeric-typed value into a ref-typed array slot → ref.null
-        # (the const first-byte gate + LOCAL_GET LEB walk are the tracked type now)
-        if mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
-            ref_null!(_msb, Int64(wasm_elem_type.type_idx), ConcreteRef(UInt32(wasm_elem_type.type_idx), true))
+        # Array of concrete ref types (struct/array refs, or a nullable numeric's box):
+        # `nothing` is the element type's null; a numeric value is boxed with its Julia
+        # classId by the value wrap (never replaced by a null).
+        if is_nothing_value(value_arg, ctx)
+            ref_null!(_msb, Int64(wasm_elem_type.type_idx), wasm_elem_type)
+        elseif mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
+            emit_value!(_msb, value_arg, ctx, wasm_elem_type)   # the wrap boxes it
         else
             append_builder!(_msb, _mv_b)
             # If value is externref but array element is concrete ref,
@@ -513,17 +514,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)
             end
         end
     else
-        # TRUE-INT-002-impl2: When storing nothing (i32_const 0) into an i64 array
-        # (e.g., Union{Nothing, Int64} element type), emit i64_const 0 instead.
-        # compile_value(nothing) always produces i32_const 0, but array_set expects
-        # the element type — i64 for Union{Nothing, Int64} arrays.
-        if wasm_elem_type === I64 && mset_val_ty === I32
-            i64_const!(_msb, 0)  # i64 value 0
-        elseif wasm_elem_type === F64 && mset_val_ty === I32
-            f64_const!(_msb, 0.0)
-        else
-            append_builder!(_msb, _mv_b)
-        end
+        append_builder!(_msb, _mv_b)
     end
 
     # array.set consumes [array_ref, i32_index, value] and returns nothing
