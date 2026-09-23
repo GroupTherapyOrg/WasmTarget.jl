@@ -129,8 +129,8 @@ when they point into the same object at the same storage-relative offset — or 
 empty Memory objects of one element type (Julia allocates length 0 as the type's singleton).
 parity(quarantine: a Julia pointer is an address; WasmGC has none, so a pointer compared only for identity is compared as dart's identical() compares references, intrinsics.dart:1409.)
 """
-function _storage_pointer_backing(ctx::AbstractCompilationContext, operand)::Union{NirNode,Nothing}
-    node = nir_node(ctx, operand)
+function _storage_pointer_backing(ctx::AbstractCompilationContext, operand::NirNode)::Union{NirNode,Nothing}
+    node = operand
     node isa NirSSA && 1 <= node.id <= length(ctx.nir) || return nothing
     T = get_ssa_type(ctx, node)
     def = ctx.nir[node.id].node
@@ -154,8 +154,8 @@ without storage of its own; a mutable object's id hashes its address and an immu
 hashes its content, so it meets a storage address only by a 64-bit hash collision).
 parity(quarantine: Base's NULL checks and dataids compare storage addresses against C_NULL and objectids; WasmGC has no addresses.)
 """
-function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand)::Bool
-    node = nir_node(ctx, operand)
+function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand::NirNode)::Bool
+    node = operand
     literal = _nir_const_operand(node)
     (literal isa Base.BitInteger || literal isa Ptr) && return iszero(UInt(literal))
     for _ in 1:8
