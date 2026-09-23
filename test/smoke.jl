@@ -255,6 +255,25 @@ _disp(x::Float64) = x + 0.5
 struct _SmA x::Int32 end; struct _SmB x::Int32 end; struct _SmC x::Int32 end; struct _SmD x::Int32 end
 _smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _smd(a::_SmD) = Int32(4)
 @noinline _smd_fwd(x::Any)::Int32 = _smd(x)
+# Ten methods pass Julia's max_methods cutoff, so inference types each call below `::Any`;
+# the result type is Julia's answer with the cutoff lifted (every applicable method's
+# inferred result, joined). _smm: all Int64. _smw: nine Int64 methods and one WIDER
+# `_smw(::Any, ::Int64)::Float64` that the tenth class reaches. _smx: five Int64, five Float64.
+abstract type _SmM end
+abstract type _SmW end
+abstract type _SmX end
+for i in 1:10
+    @eval struct $(Symbol("_SmM", i)) <: _SmM; v::Int64; end
+    @eval _smm(x::$(Symbol("_SmM", i)), k::Int64)::Int64 = x.v * $i + k
+    @eval struct $(Symbol("_SmW", i)) <: _SmW; v::Int64; end
+    i < 10 && @eval _smw(x::$(Symbol("_SmW", i)), k::Int64)::Int64 = x.v * $i + k
+    @eval struct $(Symbol("_SmX", i)) <: _SmX; v::Int64; end
+    @eval _smx(x::$(Symbol("_SmX", i)), k::Int64) = $(i <= 5 ? :(x.v + k) : :(Float64(x.v) * 0.5))
+end
+_smw(x, k::Int64)::Float64 = Float64(k) + 0.5
+for (A, T) in ((:_smm_xs, :_SmM), (:_smw_xs, :_SmW), (:_smx_xs, :_SmX))
+    @eval @noinline $A() = $T[$([:($(Symbol(T, i))($i)) for i in 1:10]...)]
+end
 _g("dispatch", Any[
     ("dispatch_int", (x::Int64) -> _disp(x), Int64(5)),
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
@@ -264,6 +283,9 @@ _g("dispatch", Any[
     # skip non-struct classes and trap at runtime with no row
     ("eq_any_mixed", (n::Int64) -> (v = Any[1, "x", 2.5]; (v[1] == 1 ? 1 : 0) + (v[2] == "x" ? 10 : 0) + (v[3] == 2.5 ? 100 : 0) + n), Int64(1)),
     ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
+    ("megamorphic_all_int64", (n::Int64) -> ((t = 0; for x in _smm_xs(); t += _smm(x, n); end; t)::Int64), Int64(3)),
+    ("megamorphic_wider_method", (n::Int64) -> (c = 0; for x in _smw_xs(); c += _smw(x, n) isa Float64 ? 100 : 1; end; c), Int64(3)),
+    ("megamorphic_disagree", (n::Int64) -> (c = 0; for x in _smx_xs(); c += _smx(x, n) isa Int64 ? 1 : 100; end; c), Int64(3)),
 ])
 
 # ---- filtered folds (was the #1 SILENT MISCOMPILE: _InitialValue sentinel through

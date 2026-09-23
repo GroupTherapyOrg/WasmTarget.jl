@@ -1617,11 +1617,11 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
         end
     end
 
-    # A call statement Julia left `::Any` stays `Any`: a dynamic call's result is whatever
-    # its runtime target returns. The one refinement is an `:invoke` whose value the
-    # optimizer left unused (the caller's IR then reads `::Any`): its result is the invoked
-    # MethodInstance's own inferred return type, which the closed world registered for
-    # exactly that signature. Another specialization of the same function never answers.
+    # A statement Julia left `::Any` is re-asked of Julia only where its `Any` is a cutoff,
+    # not an answer. A dynamic call to a known function: `closed_world_call_result`. An
+    # `:invoke` whose value the optimizer left unused (the caller's IR then reads `::Any`):
+    # its result is the invoked MethodInstance's own inferred return type, which the closed
+    # world registered for exactly that signature; another specialization never answers.
     # parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
     # invocation's type is its target's return type.
     ctx.func_registry === nothing && return
@@ -1629,6 +1629,11 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
         haskey(ctx.ssa_types, i) && continue
         rec.slot == 0 || continue
         node = rec.node
+        if node isa NirCall
+            local _cw = closed_world_call_result(ctx, node)
+            _cw === Any || (ctx.ssa_types[i] = _cw)
+            continue
+        end
         (node isa NirInvoke && node.mi isa Core.MethodInstance) || continue
         func = node.callee
         (func isa NirNode || func isa GlobalRef || func === nothing) && continue
@@ -1642,6 +1647,46 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
             end
         end
     end
+end
+
+"""
+    closed_world_call_result(ctx, call) -> Type
+
+The result type of a call to a known function that Julia's inference left `::Any`. Julia
+stops enumerating a call's methods at `max_methods`; this is Julia's own answer with that
+cutoff lifted: every method applicable to the operands' Julia types, each inferred through
+the one inference path and joined with Julia's `tmerge` (`Base.infer_return_type`). The
+answer is used only when it is concrete; otherwise the call stays `Any`. An ambiguous or
+unenumerable call stays `Any`. A concrete answer is used only when the call's dispatch can
+reach every applicable method — each has a specialization in the closed world. Otherwise
+the call stays `Any`: a method no allocated class reaches (`ncodeunits(::LazyString)` in a
+program that makes no LazyString) is not evidence against the answer, but it is not in the
+closed world to prove it either.
+parity(pkg/vm/lib/transformations/type_flow/analysis.dart:535 process): a dynamic
+invocation's type is the union of the results of all its possible targets.
+"""
+function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall)::Type
+    ctx.func_registry === nothing && return Any
+    f = _nir_callee_object(call.callee)
+    (f isa Function || f isa Type) || return Any
+    f isa Core.Builtin && return Any
+    argtypes = Tuple(Any[get_ssa_type(ctx, a) for a in call.operands])
+    interp = get_wasm_interpreter()
+    table = CC.method_table(interp)
+    lookup = CC.findall(Tuple{Core.Typeof(f), argtypes...}, table; limit=-1)
+    (lookup === nothing || lookup.ambig || isempty(lookup.matches)) && return Any
+    rt = infer_return_type(f, argtypes; interp=interp)
+    isconcretetype(rt) || return Any
+    reached = Set{Method}()
+    for info in something(get_func_ref_infos(ctx.func_registry, f), FunctionInfo[])
+        local sig = (!isempty(info.arg_types) && info.arg_types[1] === Core.Typeof(f) &&
+                     length(info.arg_types) == length(argtypes) + 1) ?
+                    Tuple{info.arg_types...} : Tuple{Core.Typeof(f), info.arg_types...}
+        local own = CC.findall(sig, table; limit=1)
+        (own === nothing || isempty(own.matches)) || push!(reached, own.matches[1].method)
+    end
+    all(match -> match.method in reached, lookup.matches) || return Any
+    return rt
 end
 
 function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)
