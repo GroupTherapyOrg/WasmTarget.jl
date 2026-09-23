@@ -741,6 +741,12 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             elseif cross_call_handled
                 # Already handled above
 
+            # Name-keyed; L124 counts it. Julia's own _growend!/_growbeg!/_growat! closure
+            # body stores `a.ref = memoryref(newmem, offset)`, and WT's Vector {data, size}
+            # carries no MemoryRef offset, so compiling that body rejects at array.jl:1156
+            # (measured 2026-09-22). The arm goes with the structural item "Vector/MemoryRef
+            # carries its offset", which also admits the invoked Base closures to the closed
+            # world and retires the reallocating Vector overlays.
             elseif meth.module === Base &&
                    occursin(r"^#_(?:growend|growbeg|growat)!", string(name))
                 # Clear any accumulated bytes from argument compilation

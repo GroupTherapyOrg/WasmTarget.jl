@@ -1942,13 +1942,12 @@ function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return nothing
 end
 
-function _fc_operator_flags!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_operator_flags!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext,
+                             bit::Int32)
     length(node.operands) >= 1 || return nothing
-    name = node.c_symbol
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
                 source, _ = traced
-                bit = name === :jl_is_operator ? Int32(0x01) : Int32(0x02)
                 literal = source isa NirLiteral ? source.value : source
                 if literal isa Symbol || literal isa AbstractString
                     i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
@@ -1973,6 +1972,14 @@ function _fc_operator_flags!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
             end
     return nothing
 end
+
+# parity(functions.dart:90-189 FunctionCollector): one registry entry per C symbol, each
+# selecting its own flag bit — the symbol, never a re-read of its name inside the handler.
+_fc_jl_is_operator!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} =
+    _fc_operator_flags!(b, node, idx, ctx, Int32(0x01))
+# parity(functions.dart:90-189 FunctionCollector): see _fc_jl_is_operator!.
+_fc_jl_is_syntactic_operator!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} =
+    _fc_operator_flags!(b, node, idx, ctx, Int32(0x02))
 
 function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
@@ -2254,8 +2261,8 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_is_binding_deprecated => _fc_jl_is_binding_deprecated!,
     :jl_genericmemory_owner => _fc_jl_genericmemory_owner!,
     :jl_stored_inline => _fc_jl_stored_inline!,
-    :jl_is_operator => _fc_operator_flags!,
-    :jl_is_syntactic_operator => _fc_operator_flags!,
+    :jl_is_operator => _fc_jl_is_operator!,
+    :jl_is_syntactic_operator => _fc_jl_is_syntactic_operator!,
     :jl_id_start_char => _fc_jl_id_start_char!,
     :jl_id_char => _fc_jl_id_char!,
     :memmove => _fc_memmove!,

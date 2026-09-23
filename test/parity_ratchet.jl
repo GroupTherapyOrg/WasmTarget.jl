@@ -523,6 +523,28 @@ _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === noth
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
+    "L124_no_name_keyed_call_arms" => ("call sites in codegen that select a callee by its NAME. Terminal state 0; it returns to the locks at 0. Phase 12F (dev/MARCH.md item F, formal(dev/formal/ConsultChain.tla)) drove the `is_func(func, :sym)` arms to ZERO — every Core/Base builtin call lowers through THE identity-keyed BUILTIN_LOWERINGS entry for its resolved callee OBJECT (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup, never on a bare name that any module's same-named function also answers to). Retires ratchet R19_call_is_func_arms and lock L116_call_arms_are_the_allowlist, whose fifteen-site allowlist this reduces to zero (locked 2026-09-08). Widened 2026-09-22 (C3 deletion wave), and held as a ratchet until its last sites go, to every spelling that selects a callee by its NAME: a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex or prefix over `string(name)`, and `nameof(f) ===`/`in`. The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds exactly one const object per name, so there the name IS the identity",
+        () -> begin
+            n = count_sites(r"is_func\(func, :"; roots=[CODEGEN])
+            spellings = [r"(?<![.\w])name\s*(?:===|in)\s*\(?:",
+                         r"\.def\.name\s*(?:===|in\b)",
+                         r"\b(?:meth|method|m|_\w*_m|callee|func|f|g)\.name\s*(?:===|in)\s",
+                         r"(?:occursin|match)\(r\"[^\"]*\",\s*string\(",
+                         r"(?:startswith|endswith)\(string\(",
+                         r"nameof\([\w.]+\)\s*(?:===|in\b)"]
+            for (dir, _, files) in walkdir(CODEGEN), file in files
+                endswith(file, ".jl") || continue
+                src = read(joinpath(dir, file), String)
+                for re in spellings, m in eachmatch(re, src)
+                    line_start = something(findprev('\n', src, m.offset), 0) + 1
+                    startswith(lstrip(src[line_start:m.offset]), "#") && continue
+                    guard = src[thisind(src, max(1, m.offset - 200)):m.offset]
+                    (startswith(re.pattern, "nameof") && occursin("isa Core.IntrinsicFunction", guard)) && continue
+                    n += 1
+                end
+            end
+            n
+        end),
     "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Terminal state 0 (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
@@ -1293,11 +1315,13 @@ const LOCKS = [
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
             all_src = types_src * values_src * stmt_src
             required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
-                        ":jl_is_operator => _fc_operator_flags!",
-                        ":jl_is_syntactic_operator => _fc_operator_flags!",
+                        ":jl_is_operator => _fc_jl_is_operator!",
+                        ":jl_is_syntactic_operator => _fc_jl_is_syntactic_operator!",
+                        "_fc_operator_flags!(b, node, idx, ctx, Int32(0x01))",
+                        "_fc_operator_flags!(b, node, idx, ctx, Int32(0x02))",
                         "dynamically-created Symbol lacks operator metadata"]
             forbidden = [":name_is_operator", ":singleton_is_operator",
-                         "ASCII-only operator"]
+                         "ASCII-only operator", "name === :jl_is_operator"]
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
@@ -1853,8 +1877,7 @@ const LOCKS = [
                             occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
                   split(stmt_src, '\n'))
         end),
-    "L124_no_name_keyed_call_arms" => ("Phase 12F (dev/MARCH.md item F, formal(dev/formal/ConsultChain.tla)): ZERO `is_func(func, :sym)` arms anywhere in codegen — every Core/Base builtin call lowers through THE identity-keyed BUILTIN_LOWERINGS entry for its resolved callee OBJECT (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup, never on a bare name that any module's same-named function also answers to). Retires ratchet R19_call_is_func_arms and lock L116_call_arms_are_the_allowlist, whose fifteen-site allowlist this reduces to zero (locked 2026-09-08)",
-        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
+
     "L117_identity_keyed_registries_walk_in_program_order" => ("every identity-keyed registry dictionary (type_ids, type_ranges, type_constant_globals, typename_constant_globals, constant_globals, arrays, numeric_boxes, dispatch tables/positions/cascades) is walked ONLY through ordered_pairs — a raw walk orders by address-based hashes, which differ per process AND per architecture (the whole probe corpus differed x64 vs aarch64 until this lock); reads by key are fine (locked 2026-09-02)",
         () -> begin
             regs = "type_ids|type_ranges|type_constant_globals|typename_constant_globals|constant_globals|arrays|numeric_boxes|tables|selector_positions|selector_cascades"
