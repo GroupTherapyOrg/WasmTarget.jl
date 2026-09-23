@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_slot_types, nir_expr_operands, nir_raw_code, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
+       build_nir, nir_slot_types, nir_expr_operands, nir_text, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -705,6 +705,51 @@ function nir_expr_operands(node::NirNode)::Vector{NirNode}
     return NirNode[]
 end
 
+"""One NIR record printed in Julia's IR notation (`%3`, `_2`, `callee(args…)`, `goto #7 if
+not %5`, …) — what a located diagnostic shows as the statement codegen was compiling. A
+slot assignment prints as `_n = …`; an unclassified statement prints its source form.
+parity(target.dart:719 DiagnosticReporter): a located report names the node it was raised on."""
+function nir_text(rec::NirStmt)::String
+    body = _nir_text(rec.node)
+    return rec.slot > 0 ? string("_", rec.slot, " = ", body) : body
+end
+
+# parity(target.dart:719 DiagnosticReporter): one node's printed form (see nir_text).
+function _nir_text(x)::String
+    x === nothing && return "#undef"
+    x isa NirSSA && return string("%", x.id)
+    (x isa NirArgument) && return string("_", x.n)
+    (x isa NirSlot) && return string("_", x.id)
+    x isa NirGlobalRef && return string(x.mod, ".", x.name)
+    x isa NirLiteral && return repr(x.value)
+    _args(ops) = join((_nir_text(o) for o in ops), ", ")
+    _callee(c) = c isa NirNode ? _nir_text(c) : string(c)
+    x isa NirCall && return string(_callee(x.callee), "(", _args(x.operands), ")")
+    x isa NirInvoke && return string("invoke ", x.mi === nothing ? _callee(x.callee) : string(x.mi),
+                                     "(", _args(x.operands), ")")
+    x isa NirNew && return string("%new(", x.T, isempty(x.operands) ? "" : ", ", _args(x.operands), ")")
+    x isa NirForeignCall && return string("foreigncall(", repr(x.c_symbol),
+                                          isempty(x.operands) ? "" : ", ", _args(x.operands), ")")
+    x isa NirReturn && return string("return ", _nir_text(x.value))
+    x isa NirGoto && return string("goto #", x.target)
+    x isa NirGotoIfNot && return string("goto #", x.target, " if not ", _nir_text(x.cond))
+    x isa NirPhi && return string("φ (", join((string("#", e, " => ", _nir_text(v))
+                                              for (e, v) in zip(x.edges, x.values)), ", "), ")")
+    x isa NirPi && return string("π (", _nir_text(x.value), ", ", x.typ, ")")
+    x isa NirEnter && return string("enter #", x.catch_target)
+    x isa NirLeave && return string("leave ", _args(x.enters))
+    x isa NirPopException && return string("pop_exception ", _nir_text(x.enter))
+    x isa NirTheException && return "the_exception"
+    x isa NirBoundscheck && return string("boundscheck(", x.flag === nothing ? "" : x.flag, ")")
+    x isa NirThrowUndefIfNot && return string("throw_undef_if_not(", repr(x.var), ", ", _nir_text(x.cond), ")")
+    x isa NirNewvar && return string("newvar _", x.slot)
+    x isa NirNoOp && return string(x.kind, "(", _args(x.operands), ")")
+    x isa NirUpsilon && return string("ϒ (", _nir_text(x.value), ")")
+    x isa NirPhiC && return string("φᶜ (", _args(x.values), ")")
+    x isa NirUnsupported && return string(x.raw)
+    return string(x)
+end
+
 """True for the node kinds an `Expr` statement classifies to. compile_statement! emits
 those through a per-statement FRAGMENT builder (the value they may leave on the stack is
 then stored/coerced/dropped by one tail); the IR-node kinds — return/goto/phi/pi/enter/
@@ -717,11 +762,6 @@ _nir_from_expr(node::NirNode)::Bool =
     node isa NirBoundscheck || node isa NirThrowUndefIfNot || node isa NirLeave ||
     node isa NirPopException || node isa NirTheException || node isa NirNoOp ||
     node isa NirUnsupported
-
-"""Reconstruct the raw statement array from `ctx.nir` — the ONE place a not-yet-NIR-aware
-consumer (has_try_catch/find_try_regions/compile_call!/...) gets back exactly
-`code_info.code`, without that consumer ever writing the identifier `code_info` itself."""
-nir_raw_code(ctx) = Any[s.raw for s in ctx.nir]
 
 """The raw statement a NIR record's `node` classifies — the original statement, or its RHS
 when the record is a slot assignment. The transitional hand-off to the consumers that still

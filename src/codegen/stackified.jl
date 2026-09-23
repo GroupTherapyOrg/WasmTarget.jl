@@ -33,15 +33,18 @@ or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-pa
 decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 """
 function _value_julia_type(val, ctx::AbstractCompilationContext)
-    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
-    if val isa Core.SSAValue
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    if val isa NirSSA
         return get(ctx.ssa_types, val.id, nothing)
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         return source_slot_type(ctx, val.n)
-    elseif val isa QuoteNode
-        return typeof(val.value)
-    elseif val isa Union{Bool, Signed, Unsigned, AbstractFloat, Char}
-        return typeof(val)
+    elseif val isa NirLiteral
+        lit = val.value
+        # a quoted literal (a Symbol or IR-reference value) and a numeric/Char literal
+        # carry their own type
+        (lit isa Symbol || lit isa Core.SSAValue || lit isa Core.Argument ||
+         lit isa Core.SlotNumber || lit isa Union{Bool, Signed, Unsigned, AbstractFloat, Char}) &&
+            return typeof(lit)
     end
     return nothing
 end
@@ -123,7 +126,7 @@ function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{
 end
 
 """
-    _thread_backward_trampolines!(blocks, code, try_regions) -> blocks
+    _thread_backward_trampolines!(blocks, nir, try_regions) -> blocks
 
 Julia's optimizer may place a phi's predecessor AFTER the phi block as a one-statement
 `goto` trampoline: `%39 goto %53 if not …` / `%44 = φ(%43 => …, %53 => …)` / `%53 goto %44`.
@@ -138,14 +141,15 @@ are threaded (a fall-through into a trampoline is left for the stackifier's own 
 Kernel never produces this shape; it is a Julia-layout quarantine
 (parity(quarantine: Julia IR block order)).
 """
-function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, code, try_regions)::Vector{BasicBlock}
+function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{NirStmt},
+                                      try_regions)::Vector{BasicBlock}
     region_bounds = Set{Int}()
     for r in try_regions
         push!(region_bounds, r.enter_idx); push!(region_bounds, r.catch_dest)
     end
     # fast path: no one-statement goto block that jumps backwards → nothing to thread
-    any(b -> b.terminator isa Core.GotoNode && b.start_idx == b.end_idx &&
-             b.terminator.label < b.start_idx, blocks) || return blocks
+    any(b -> b.terminator isa NirGoto && b.start_idx == b.end_idx &&
+             b.terminator.target < b.start_idx, blocks) || return blocks
     for _ in 1:16   # each round threads one trampoline and re-derives the CFG
         n = length(blocks)
         stmt_to_block = Dict{Int,Int}()
@@ -155,14 +159,14 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, code, try_reg
         succs = [Int[] for _ in 1:n]; preds = [Int[] for _ in 1:n]
         for (bi, b) in enumerate(blocks)
             t = b.terminator
-            if t isa Core.GotoIfNot
+            if t isa NirGotoIfNot
                 bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
-                d = get(stmt_to_block, t.dest, nothing)
+                d = get(stmt_to_block, t.target, nothing)
                 d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
-            elseif t isa Core.GotoNode
-                d = get(stmt_to_block, t.label, nothing)
+            elseif t isa NirGoto
+                d = get(stmt_to_block, t.target, nothing)
                 d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
-            elseif !(t isa Core.ReturnNode)
+            elseif !(t isa NirReturn)
                 bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
             end
         end
@@ -182,32 +186,33 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, code, try_reg
         threaded = false
         for (s, b) in enumerate(blocks)
             t = b.terminator
-            (t isa Core.GotoNode && b.start_idx == b.end_idx) || continue   # a pure goto block
-            d = get(stmt_to_block, t.label, nothing)
+            (t isa NirGoto && b.start_idx == b.end_idx) || continue   # a pure goto block
+            d = get(stmt_to_block, t.target, nothing)
             (d !== nothing && d <= s && !(d in dom[s])) || continue           # backward, not a loop
             isempty(preds[s]) && continue
-            (b.start_idx in region_bounds || t.label in region_bounds) && continue
-            all(p -> (pt = blocks[p].terminator; (pt isa Core.GotoNode && pt.label == b.start_idx) ||
-                      (pt isa Core.GotoIfNot && pt.dest == b.start_idx)), preds[s]) || continue
+            (b.start_idx in region_bounds || t.target in region_bounds) && continue
+            all(p -> (pt = blocks[p].terminator; pt isa Union{NirGoto,NirGotoIfNot} &&
+                      pt.target == b.start_idx), preds[s]) || continue
             # re-key the target's phi edges from the trampoline to each predecessor
             for i in blocks[d].start_idx:blocks[d].end_idx
-                ph = code[i]
-                ph isa Core.PhiNode || continue
+                rec = nir[i]
+                ph = rec.node
+                ph isa NirPhi || continue
                 k = findfirst(==(b.end_idx), ph.edges)
                 k === nothing && continue
-                edges = Any[ph.edges...]; values = Any[]
-                for j in eachindex(ph.edges); push!(values, isassigned(ph.values, j) ? ph.values[j] : nothing); end
+                edges = copy(ph.edges); values = copy(ph.values)
                 v = values[k]
                 deleteat!(edges, k); deleteat!(values, k)
                 for p in preds[s]
                     push!(edges, blocks[p].end_idx); push!(values, v)
                 end
-                code[i] = Core.PhiNode(Int32[e for e in edges], values)
+                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.line, rec.slot, rec.raw)
             end
             for p in preds[s]
                 pb = blocks[p]; pt = pb.terminator
-                nt = pt isa Core.GotoNode ? Core.GotoNode(t.label) : Core.GotoIfNot(pt.cond, t.label)
-                code[pb.end_idx] = nt
+                nt = pt isa NirGoto ? NirGoto(t.target) : NirGotoIfNot(pt.cond, t.target)
+                prec = nir[pb.end_idx]
+                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.line, prec.slot, prec.raw)
                 blocks[p] = BasicBlock(pb.start_idx, pb.end_idx, nt)
             end
             threaded = true
@@ -218,9 +223,12 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, code, try_reg
     return blocks
 end
 
-function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock}, code;
+function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock};
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder
+    # The flow's own view of the IR: the trampoline threading below re-keys phi edges and
+    # re-targets jumps in THIS copy; the context's NIR is left as Julia produced it.
+    nir = copy(ctx.nir)
     # Slice B: try regions are FIRST-CLASS — pre-split at their boundaries,
     # then the two label events below (open at the enter block's end, close at the
     # handler block's start) are the ENTIRE try lowering. Handler blocks compile as
@@ -230,7 +238,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         ensure_exception_tag!(ctx.mod)
         ensure_exception_global!(ctx.mod)
     end
-    blocks = _thread_backward_trampolines!(blocks, code, try_regions)
+    blocks = _thread_backward_trampolines!(blocks, nir, try_regions)
     # ========================================================================
     # STEP 0: FOLD THE ALWAYS-TAKEN BOUNDSCHECK BRANCHES
     # ========================================================================
@@ -248,14 +256,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     dead_regions = Set{Int}()       # Statement indices that are dead code
     dead_blocks = Set{Int}()        # Block indices unreachable from the entry
 
-    for i in 1:length(code)
-        # parity(code_generator.dart:77 typeContext): classification via the NIR boundary
-        # (frontend/nir.jl) — NirBoundscheck's `flag` is `nothing` unless the arg was a
-        # literal Bool, so `flag === false` is exactly `Expr(:boundscheck, false)`.
-        if (nstmt = ctx.nir[i].node) isa NirBoundscheck && nstmt.flag === false
-            if i + 1 <= length(code) && code[i + 1] isa Core.GotoIfNot
-                goto_stmt = code[i + 1]::Core.GotoIfNot
-                if goto_stmt.cond isa Core.SSAValue && goto_stmt.cond.id == i
+    for i in 1:length(nir)
+        # NirBoundscheck's `flag` is `nothing` unless the arg was a literal Bool, so
+        # `flag === false` is exactly `Expr(:boundscheck, false)`.
+        if (nstmt = nir[i].node) isa NirBoundscheck && nstmt.flag === false
+            if i + 1 <= length(nir) && nir[i + 1].node isa NirGotoIfNot
+                goto_stmt = nir[i + 1].node::NirGotoIfNot
+                if goto_stmt.cond isa NirSSA && goto_stmt.cond.id == i
                     push!(boundscheck_jumps, i + 1)
                     push!(dead_regions, i)
                 end
@@ -301,16 +308,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # an always-taken boundscheck branch keeps only its target edge.
     for (block_idx, block) in enumerate(blocks)
         term = block.terminator
-        if term isa Core.GotoIfNot
+        if term isa NirGotoIfNot
             term_idx = block.end_idx
             if term_idx in boundscheck_jumps
-                dest_block = get(stmt_to_block, term.dest, nothing)
+                dest_block = get(stmt_to_block, term.target, nothing)
                 if dest_block !== nothing
                     push!(successors[block_idx], dest_block)
                     push!(predecessors[dest_block], block_idx)
                 end
             else
-                dest_block = get(stmt_to_block, term.dest, nothing)
+                dest_block = get(stmt_to_block, term.target, nothing)
                 fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
 
                 if fall_through_block !== nothing && fall_through_block <= length(blocks)
@@ -322,13 +329,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     push!(predecessors[dest_block], block_idx)
                 end
             end
-        elseif term isa Core.GotoNode
-            dest_block = get(stmt_to_block, term.label, nothing)
+        elseif term isa NirGoto
+            dest_block = get(stmt_to_block, term.target, nothing)
             if dest_block !== nothing
                 push!(successors[block_idx], dest_block)
                 push!(predecessors[dest_block], block_idx)
             end
-        elseif term isa Core.ReturnNode
+        elseif term isa NirReturn
             # No successors for return
         else
             # Fall through to next block
@@ -461,10 +468,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
     ssa_use_count = Dict{Int, Int}()
     ssa_non_phi_uses = Dict{Int, Int}()  # Uses from non-PhiNode statements only
-    for stmt in code
-        count_ssa_uses!(stmt, ssa_use_count)
-        if !(stmt isa Core.PhiNode)
-            count_ssa_uses!(stmt, ssa_non_phi_uses)
+    for rec in nir
+        count_ssa_uses!(rec, ssa_use_count)
+        if !(rec.node isa NirPhi)
+            count_ssa_uses!(rec, ssa_non_phi_uses)
         end
     end
 
@@ -515,24 +522,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         term = block.terminator
         term_idx = block.end_idx
 
-        if term isa Core.GotoIfNot
+        if term isa NirGotoIfNot
             # Check if this is a boundscheck always-jump
             if term_idx in boundscheck_jumps
                 # Boundscheck jumps ALWAYS go to dest, so it's like an unconditional jump
                 # Only record it as non-trivial if it's not immediate fall-through
-                dest_block = get(stmt_to_block, term.dest, nothing)
+                dest_block = get(stmt_to_block, term.target, nothing)
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             else
                 # Real conditional - the false branch destination
-                dest_block = get(stmt_to_block, term.dest, nothing)
+                dest_block = get(stmt_to_block, term.target, nothing)
                 if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                     push!(non_trivial_targets, dest_block)
                 end
             end
-        elseif term isa Core.GotoNode
-            dest_block = get(stmt_to_block, term.label, nothing)
+        elseif term isa NirGoto
+            dest_block = get(stmt_to_block, term.target, nothing)
             if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
                 push!(non_trivial_targets, dest_block)
             end
@@ -552,14 +559,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         for target in copy(non_trivial_targets)
             block = blocks[target]
             term = block.terminator
-            terminal = term isa Core.ReturnNode && !isdefined(term, :val)
-            phi_free = all(i -> !(code[i] isa Core.PhiNode),
+            terminal = term isa NirReturn && term.value === nothing
+            phi_free = all(i -> !(nir[i].node isa NirPhi),
                            block.start_idx:block.end_idx)
             prev_can_fallthrough = if target == 1
                 true
             else
                 prev = blocks[target - 1].terminator
-                !(prev isa Core.GotoNode || prev isa Core.ReturnNode)
+                !(prev isa NirGoto || prev isa NirReturn)
             end
             if terminal && phi_free && !prev_can_fallthrough
                 push!(duplicated_terminal_targets, target)
@@ -683,8 +690,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         dest_start = blocks[dest_block].start_idx
         dest_end = blocks[dest_block].end_idx
         for i in dest_start:dest_end
-            stmt = code[i]
-            if stmt isa Core.PhiNode
+            stmt = nir[i].node
+            if stmt isa NirPhi
                 if haskey(ctx.phi_locals, i) && terminator_idx in stmt.edges
                     return true
                 end
@@ -715,6 +722,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # pushes; the pv_ty===nothing guess that let an invalid module through WT's
         # own validation is structurally impossible now). `temp_map` substitutes
         # circular-phi temp locals at the plain local.get branches.
+        val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
         pvb = _ctx_builder(ctx, "compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin
@@ -751,7 +759,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             else
                 emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
             end
-        elseif val isa Core.SSAValue
+        elseif val isa NirSSA
             # Determine the phi local's wasm type for compatibility checking
             phi_local_wasm_type = nothing
             if haskey(ctx.phi_locals, phi_idx)
@@ -818,11 +826,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # SSA without local - need to recompute the statement
                 # This should ideally not happen for phi values, but handle it
                 # Guard against out-of-bounds SSAValue IDs (sentinel values)
-                if val.id < 1 || val.id > length(code)
+                if val.id < 1 || val.id > length(nir)
                     emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
                     return _cpv_ret()
                 end
-                stmt = code[val.id]
+                # the defining statement can be re-emitted unless it is a phi or the
+                # `nothing` statement
+                def_rec = nir[val.id]
+                recomputable = !(def_rec.slot == 0 && def_rec.node isa NirLiteral &&
+                                 def_rec.node.value === nothing) && !(def_rec.node isa NirPhi)
                 # Type compatibility for recomputed SSA values (the M10a fix lives in the
                 # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
@@ -831,7 +843,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Revisit its real statement so the throw/unreachable terminator is
                     # preserved; the enclosing edge is then stack-polymorphic by Wasm
                     # validation, exactly as in dart's unreachable expression handling.
-                    stmt !== nothing && !(stmt isa Core.PhiNode) ?
+                    recomputable ?
                         compile_statement!(pvb, val.id, ctx) :
                         emit_phi_failure!(pvb, "bottom phi source has no terminating statement";
                                           idx=phi_idx)
@@ -852,7 +864,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx, I32)
-                elseif stmt !== nothing && !(stmt isa Core.PhiNode)
+                elseif recomputable
                     compile_statement!(pvb, val.id, ctx)   # THE visitor — tracked
                 else
                     # Can't recompute - try compile_value as fallback
@@ -871,7 +883,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local _ne_b = _compile_value_b(val, ctx)
                     local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
                     local _ne_jt = _value_julia_type(val, ctx)
-                    _ne_jt isa Type || (_ne_jt = typeof(val))
+                    _ne_jt isa Type || (_ne_jt = val isa NirLiteral ? typeof(val.value) :
+                                                 (val isa NirGlobalRef && val.bound) ? typeof(val.value) : Any)
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
                                                 (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b,
                                                 _ne_jt)
@@ -908,20 +921,20 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         phi_locals_being_set = Set{Int}()  # phi local indices being updated on this edge
         phi_values_reading = Dict{Int,Int}()  # phi_stmt_idx → phi_local it reads from (if any)
         for i in dest_start:dest_end
-            stmt = code[i]
-            if stmt isa Core.PhiNode && haskey(ctx.phi_locals, i)
+            stmt = nir[i].node
+            if stmt isa NirPhi && haskey(ctx.phi_locals, i)
                 for (edge_idx, edge) in enumerate(stmt.edges)
-                    if edge == terminator_idx && isassigned(stmt.values, edge_idx)
+                    if edge == terminator_idx && stmt.values[edge_idx] !== nothing
                         push!(phi_locals_being_set, ctx.phi_locals[i])
                         val = stmt.values[edge_idx]
                         # Check if val references another phi local
-                        if val isa Core.SSAValue && haskey(ctx.phi_locals, val.id)
+                        if val isa NirSSA && haskey(ctx.phi_locals, val.id)
                             phi_values_reading[i] = ctx.phi_locals[val.id]
                         end
                         break
                     end
                 end
-            elseif !(stmt isa Core.PhiNode)
+            elseif !(stmt isa NirPhi)
                 break
             end
         end
@@ -945,13 +958,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
         phi_count = 0
         for i in dest_start:dest_end
-            stmt = code[i]
-            if stmt isa Core.PhiNode
+            stmt = nir[i].node
+            if stmt isa NirPhi
                 if haskey(ctx.phi_locals, i)
                     found_edge = false
                     for (edge_idx, edge) in enumerate(stmt.edges)
                         if edge == terminator_idx
-                            if isassigned(stmt.values, edge_idx)
+                            if stmt.values[edge_idx] !== nothing
                                 val = stmt.values[edge_idx]
                                 # Check type compatibility before emitting local.set
                                 local_idx = ctx.phi_locals[i]
@@ -1006,8 +1019,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             "block $target is not an admitted duplicated terminal")
         block = blocks[target]
         for i in block.start_idx:block.end_idx
-            stmt = code[i]
-            stmt isa Core.ReturnNode && continue
+            nir[i].node isa NirReturn && continue
             compile_statement!(tb, i, ctx)
             (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
         end
@@ -1027,7 +1039,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # out-of-subset forward branches br to it, landing exactly where the
     # caller's continuation (e.g. the try_table) begins.
     _subset_end = isempty(blocks) ? 0 : maximum(byt.end_idx for byt in blocks)
-    _term_dest(t) = t isa Core.GotoIfNot ? t.dest : t isa Core.GotoNode ? t.label : 0
+    _term_dest(t) = t isa Union{NirGotoIfNot, NirGoto} ? t.target : 0
     needs_exit_block = any(begin
                                d = _term_dest(byt.terminator)
                                d > _subset_end && get(stmt_to_block, d, nothing) === nothing
@@ -1154,17 +1166,18 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 continue
             end
 
-            stmt = code[i]
+            rec = nir[i]
+            stmt = rec.node
 
             # Skip terminator if we're going to handle it separately
-            if i == block.end_idx && (stmt isa Core.GotoIfNot || stmt isa Core.GotoNode || stmt isa Core.ReturnNode)
+            if i == block.end_idx && (stmt isa NirGotoIfNot || stmt isa NirGoto || stmt isa NirReturn)
                 continue
             end
 
-            if stmt isa Core.ReturnNode
-                if isdefined(stmt, :val)
+            if stmt isa NirReturn
+                if stmt.value !== nothing
                     # THE single return-coercion path (dead pre-emit type locals deleted).
-                    bb = emit_return_coerced!(bb, stmt.val, ctx)
+                    bb = emit_return_coerced!(bb, stmt.value, ctx)
                 else
                     # A valueless ReturnNode is Julia IR `unreachable` (the tail of a
                     # throw branch) — a structural trap, NEVER a bare `return` (which is
@@ -1173,20 +1186,20 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     unreachable!(bb)   # structural trap (dart-legit dead path)
                 end
 
-            elseif stmt isa Core.GotoIfNot
+            elseif stmt isa NirGotoIfNot
                 # GotoIfNot: handled by control flow structure
                 # Nothing to emit here
 
-            elseif stmt isa Core.GotoNode
+            elseif stmt isa NirGoto
                 # Unconditional goto: handled by control flow structure
                 # Nothing to emit here
 
-            elseif stmt isa Core.PhiNode
+            elseif stmt isa NirPhi
                 # Phi nodes: check if we're falling through from a previous statement
                 if haskey(ctx.phi_locals, i)
                     for (edge_idx, edge) in enumerate(stmt.edges)
                         if edge >= block.start_idx && edge < i
-                            if isassigned(stmt.values, edge_idx)
+                            if stmt.values[edge_idx] !== nothing
                                 val = stmt.values[edge_idx]
                                 # Check type compatibility before storing
                                 local_idx = ctx.phi_locals[i]
@@ -1214,7 +1227,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end
                 end
 
-            elseif stmt === nothing
+            elseif rec.slot == 0 && stmt isa NirLiteral && stmt.value === nothing
                 # Nothing statement
 
             else
@@ -1230,10 +1243,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 _dbg_fn = try string(ctx.func_name) catch; "" end
                 if contains(_dbg_fn, "test_if_call")
                     _drop_count = count(x -> x isa InstrIR.Drop, @view bb.instrs[_stmt_i0+1:end])
-                    # parity(code_generator.dart:77 typeContext): NIR-node dispatch instead
-                    # of Expr.head — exactly `stmt.head === :call || stmt.head === :invoke`
-                    # (NirCall/NirInvoke classify exactly those two heads, unconditionally).
-                    if ctx.nir[i].node isa Union{NirCall, NirInvoke}
+                    if stmt isa Union{NirCall, NirInvoke}
                         @warn "STACKIFIED-DROP stmt=$i kind=$(nameof(typeof(ctx.nir[i].node))) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
                     end
                 end
@@ -1252,9 +1262,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Skip if the visitor already emitted a DROP.
                     # The func_idx-0x1a false positive cannot exist at the ir/ layer.
                     already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
-                    # parity(code_generator.dart:77 typeContext): NIR-node dispatch instead
-                    # of Expr.head — exactly `stmt.head in (:call, :invoke, :foreigncall)`.
-                    if ctx.nir[i].node isa Union{NirCall, NirInvoke, NirForeignCall}
+                    if stmt isa Union{NirCall, NirInvoke, NirForeignCall}
                         if !already_dropped && _stmt_emitted && _stmt_pushed_value
                             if !haskey(ctx.phi_locals, i)
                                 use_count = get(ssa_use_count, i, 0)
@@ -1264,7 +1272,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 end
                             end
                         end
-                    elseif stmt isa Core.PiNode && _stmt_emitted
+                    elseif stmt isa NirPi && _stmt_emitted
                         # PiNode without ssa_local pushed a value onto the stack.
                         # Drop it if it's only used by phi edges (phi stores re-compute
                         # the value via compile_phi_value, so this stack value is orphaned).
@@ -1283,9 +1291,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         terminator_idx = block.end_idx
 
         # Check if this terminator is a boundscheck always-jump
-        if terminator_idx in boundscheck_jumps && term isa Core.GotoIfNot
+        if terminator_idx in boundscheck_jumps && term isa NirGotoIfNot
             # This is an always-jump - emit unconditional br to the target
-            dest_block = get(stmt_to_block, term.dest, nothing)
+            dest_block = get(stmt_to_block, term.target, nothing)
             if dest_block !== nothing && dest_block in duplicated_terminal_targets
                 emit_duplicated_terminal!(b, dest_block)
             elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
@@ -1294,7 +1302,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # a backward always-taken jump is a loop back edge — the same br a
                 # GotoNode emits (dev/formal/Stackifier.tla: every edge is realized;
                 # this arm used to emit nothing)
-                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
                 dest_block in loop_headers ||
                     record_unsupported!(ctx, :unsupported_control_flow,
                         "backward always-taken boundscheck jump whose target block $dest_block is not a loop header";
@@ -1303,31 +1311,31 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
             # Otherwise, it's just a fall-through to a live block - nothing needed
 
-        elseif term isa Core.ReturnNode
+        elseif term isa NirReturn
             if _debug_stackified
-                @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(isdefined(term,:val) ? term.val : :undef)"
+                @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(term.value)"
             end
-            if isdefined(term, :val)
+            if term.value !== nothing
                 # parity(code_generator.dart:1372 visitReturnStatement): THE single return-coercion path (emit_return_coerced!, same as
                 # the block-statement ReturnNode site) — deletes this duplicated ladder
                 # (byte-scanned externref check + hand widening/casts + a numeric→ConcreteRef
                 # ref.null VALUE DROP; the single source boxes/converts properly).
-                b = emit_return_coerced!(b, term.val, ctx)
+                b = emit_return_coerced!(b, term.value, ctx)
             else
                 # A valueless ReturnNode terminator is Julia IR `unreachable` (throw tail):
                 # a structural trap, never a bare `return` (invalid in result-typed fns).
                 unreachable!(b)   # structural trap (dart-legit dead path)
             end
 
-        elseif term isa Core.GotoIfNot
-            dest_block = get(stmt_to_block, term.dest, nothing)
+        elseif term isa NirGotoIfNot
+            dest_block = get(stmt_to_block, term.target, nothing)
 
 
             # Check if destination has phi nodes that need values from this edge
             has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
 
             if _debug_stackified
-                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.dest) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.target) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
             end
 
             # Compile condition (THE condition front)
@@ -1354,7 +1362,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # Then branch: condition true, fall through (empty)
                         else_!(b)
                         # Else branch: condition false, set all phi locals and jump
-                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
                         br!(b, get_forward_label(dest_block))
                         end_block!(b)
                     else
@@ -1367,7 +1375,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if has_phi
                         if_!(b)
                         else_!(b)
-                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
                         end_block!(b)
                     else
                         if_!(b)
@@ -1380,7 +1388,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     if has_phi
                         if_!(b)
                         else_!(b)
-                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.dest)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
                         br!(b, get_loop_label(dest_block))
                         end_block!(b)
                     else
@@ -1388,7 +1396,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         br_if!(b, get_loop_label(dest_block))
                     end
                 end
-            elseif dest_block === nothing && needs_exit_block && term.dest > _subset_end
+            elseif dest_block === nothing && needs_exit_block && term.target > _subset_end
                 # Dest is beyond the compiled subset — branch to the
                 # exit block (the caller's continuation begins right after it).
                 num!(b, Opcode.I32_EQZ)
@@ -1412,8 +1420,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
             end
 
-        elseif term isa Core.GotoNode
-            dest_block = get(stmt_to_block, term.label, nothing)
+        elseif term isa NirGoto
+            dest_block = get(stmt_to_block, term.target, nothing)
             terminator_idx = block.end_idx
 
 
@@ -1421,7 +1429,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             # Pass the actual target statement to find phi nodes (might be inside the block)
             if dest_block !== nothing
                 if !(dest_block in duplicated_terminal_targets)
-                    set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.label)
+                    set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
                 end
             end
 
@@ -1445,9 +1453,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         dest_start = blocks[dest_block].start_idx
                         dest_end = blocks[dest_block].end_idx
                         for di in dest_start:dest_end
-                            s = code[di]
-                            if s isa Core.ReturnNode && isdefined(s, :val) && s.val isa Core.SSAValue
-                                vid = s.val.id
+                            s = nir[di].node
+                            if s isa NirReturn && s.value isa NirSSA
+                                vid = s.value.id
                                 if haskey(ctx.phi_locals, vid)
                                     ret_local = ctx.phi_locals[vid]
                                     break
@@ -1493,7 +1501,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if dest_block in loop_headers
                     br!(b, get_loop_label(dest_block))
                 end
-            elseif dest_block === nothing && needs_exit_block && term.label > _subset_end
+            elseif dest_block === nothing && needs_exit_block && term.target > _subset_end
                 # Unconditional jump beyond the compiled subset —
                 # branch to the exit block (the caller's continuation).
                 br!(b, exit_label::ControlLabel)

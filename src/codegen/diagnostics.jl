@@ -149,52 +149,57 @@ Base.showerror(io::IO, e::WasmValidationError) =
           isempty(e.bytes) ? "" : "\n($(length(e.bytes)) bytes of rejected module in `.bytes`)")
 
 # --- Source attribution -----------------------------------------------------
-# ctx.code_info is a Core.CodeInfo for normal compilation and a SimpleIR wrapper
-# for the in-place (self-hosting) path; both branches are guarded so either works.
+# A located report reads the compiled function's NIR (a statement's line and printed
+# form) and its DebugInfo (the inline chain, the method's definition site) — both carried
+# by the compilation context from the one NIR boundary. A context without them (none is
+# constructed today) reports unlocated rather than failing the report itself.
 
-# Per-statement line from the CodeInfo's DebugInfo — the per-query form of the rule
-# frontend/nir.jl's `_nir_lines` applies in one forward pass to fill `NirStmt.line`:
-# a position whose own entry is ≤ 0 ("inherited/none") takes the nearest earlier
-# statement that carries a concrete line. `_debug_line` (nir.jl) is the one decode.
-# parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
-function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
-    di = try; ci.debuginfo; catch; nothing; end
-    di === nothing && return nothing
-    for i in idx:-1:1
-        ln = _debug_line(di, i)
-        ln > 0 && return ln
-    end
-    return nothing
+# parity(code_generator.dart:190 setSourceMapFileOffset): the NIR a located report reads.
+_ctx_nir(ctx) = hasproperty(ctx, :nir) ? ctx.nir : NirStmt[]
+# parity(code_generator.dart:190 setSourceMapFileOffset): the DebugInfo a located report decodes.
+_ctx_debuginfo(ctx) = hasproperty(ctx, :debuginfo) ? ctx.debuginfo : nothing
+
+# Per-statement line — the NIR boundary's `NirStmt.line` (frontend/nir.jl `_nir_lines`:
+# a position whose own DebugInfo entry is ≤ 0 takes the nearest earlier concrete line);
+# `nothing` when the IR carries no line for it.
+# parity(code_generator.dart:190 setSourceMapFileOffset): the line recorded on the node, read once.
+function _stmt_line(ctx, idx::Int)::Union{Nothing,Int}
+    nir = _ctx_nir(ctx)
+    1 <= idx <= length(nir) || return nothing
+    ln = Int(nir[idx].line)
+    return ln > 0 ? ln : nothing
 end
+
+# The statement as a located report prints it: its NIR record.
+_stmt_text(ctx, idx::Int)::String =
+    (nir = _ctx_nir(ctx); 1 <= idx <= length(nir) ? first(nir_text(nir[idx]), 160) : "")
 
 # Method definition "(file, line)" — the always-available anchor.
 # parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
-function _method_loc(ci)::Union{Nothing,Tuple{String,Int}}
-    try
-        mi = ci.debuginfo.def
-        if mi isa Core.MethodInstance && mi.def isa Method
-            m = mi.def
-            return (string(m.file), Int(m.line))
-        end
-    catch
+function _method_loc(di)::Union{Nothing,Tuple{String,Int}}
+    di isa Core.DebugInfo || return nothing
+    mi = di.def
+    if mi isa Core.MethodInstance && mi.def isa Method
+        m = mi.def
+        return (string(m.file), Int(m.line))
     end
     return nothing
 end
 
 """
-    stmt_frames(ci, idx) -> Vector{String}
+    stmt_frames(di, idx) -> Vector{String}
 
 The inline chain of SSA statement `idx`, innermost first — `"method @ file:line"` per
-frame — decoded from the CodeInfo's DebugInfo edges (Julia 1.12+: `Core.DebugInfo`).
+frame — decoded from the function's DebugInfo edges (Julia 1.12+: `Core.DebugInfo`).
 A statement with no location of its own (a synthesized one) takes the nearest earlier
 statement's chain. Empty when the IR carries no debug info at all.
 
 parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
-function stmt_frames(ci, idx::Int)::Vector{String}
+function stmt_frames(di, idx::Int)::Vector{String}
     frames = String[]
+    di isa Core.DebugInfo || return frames
     try
-        di = ci.debuginfo
         i = idx
         while i >= 1
             t = Base.IRShow.getdebugidx(di, i)
@@ -225,14 +230,14 @@ no location.
 parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
 function julia_loc(ctx, idx::Int)::Union{Nothing,String}
-    ci = ctx.code_info
-    frames = stmt_frames(ci, idx)
+    di = _ctx_debuginfo(ctx)
+    frames = stmt_frames(di, idx)
     if !isempty(frames)
         at = findlast(" @ ", frames[1])
         at !== nothing && return frames[1][at.stop+1:end]
     end
-    ml = _method_loc(ci)
-    sl = _stmt_line(ci, idx)
+    ml = _method_loc(di)
+    sl = _stmt_line(ctx, idx)
     if ml !== nothing
         file, mline = ml
         return string(file, ":", sl === nothing ? mline : sl)
@@ -241,10 +246,6 @@ function julia_loc(ctx, idx::Int)::Union{Nothing,String}
     end
     return nothing
 end
-
-# The ONE read of the compiled IR for attribution (its DebugInfo carries the
-# provenance); every located report — diagnostic or internal — goes through it.
-_ctx_ir(ctx) = try; ctx.code_info; catch; nothing; end
 
 """
     located_internal_error(ctx, idx, cause) -> WasmInternalError
@@ -255,10 +256,8 @@ with the statement and its inline chain.
 parity(compile.dart:345 CFECrashError)
 """
 function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
-    ci = _ctx_ir(ctx)
-    stmt = try; first(string(ci.code[idx]), 160); catch; ""; end
-    return WasmInternalError(_ctx_func_name(ctx), idx, stmt,
-                             ci === nothing ? String[] : stmt_frames(ci, idx), cause)
+    return WasmInternalError(_ctx_func_name(ctx), idx, _stmt_text(ctx, idx),
+                             stmt_frames(_ctx_debuginfo(ctx), idx), cause)
 end
 
 function _ctx_func_name(ctx)::String
@@ -315,15 +314,14 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
     idx > 0 || (idx = try; ctx.current_stmt_idx; catch; 0; end)   # helpers without an idx
-    local _ci = _ctx_ir(ctx)
-    local _stmt = idx > 0 ? (try; first(string(_ci.code[idx]), 160); catch; ""; end) : ""
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail,
-                          idx, _stmt, idx > 0 ? stmt_frames(_ci, idx) : String[])
+                          idx, _stmt_text(ctx, idx),
+                          idx > 0 ? stmt_frames(_ctx_debuginfo(ctx), idx) : String[])
     push!(ctx.diagnostics, diag)
     DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
     fatal = soundness_fatal === nothing ?
-            !stmt_is_proven_unreachable(try _ci.code catch; nothing end, idx) :
+            !stmt_is_proven_unreachable(_ctx_nir(ctx), idx) :
             soundness_fatal
     if fatal
         _sink = DIAGNOSTICS_SINK[]
@@ -355,8 +353,7 @@ parity(code_generator.dart:5084 UnreachableCodeGenerator)
 function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)::Nothing
-    local _code2 = try ctx.code_info.code catch; nothing end
-    local _dead2 = stmt_is_proven_unreachable(_code2, idx)
+    local _dead2 = stmt_is_proven_unreachable(_ctx_nir(ctx), idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
                         soundness_fatal=(soundness_fatal && !_dead2))
     unreachable!(b)  # structural trap after recorded, proven-dead unsupported lowering
@@ -368,8 +365,7 @@ function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)::Nothing
     # A trap is retained only for a block the Julia CFG proves unreachable.
-    local _code = try ctx.code_info.code catch; nothing end
-    local _dead = stmt_is_proven_unreachable(_code, idx)
+    local _dead = stmt_is_proven_unreachable(_ctx_nir(ctx), idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
                         soundness_fatal=(soundness_fatal && !_dead))
     push!(bytes, Opcode.UNREACHABLE)

@@ -40,10 +40,8 @@ Uses a block-based translation for control flow.
 parity(code_generator.dart:38 CodeGenerator.generate)
 """
 function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
-    code = ctx.code_info.code
-
     # Analyze control flow to find basic block structure
-    blocks = analyze_blocks(code)
+    blocks = analyze_blocks(ctx.nir)
 
     # The finalized typed instruction stream is authoritative. In particular,
     # post-return code is already stack-polymorphic in the builder; no serialized
@@ -62,7 +60,7 @@ Represents a basic block in the IR.
 struct BasicBlock
     start_idx::Int
     end_idx::Int
-    terminator::Any  # GotoIfNot, GotoNode, or ReturnNode
+    terminator::Union{NirGotoIfNot, NirGoto, NirReturn, Nothing}   # nothing: falls through
 end
 
 """
@@ -77,31 +75,19 @@ struct TryRegion
 end
 
 """
-Find try/catch regions by scanning for Core.EnterNode statements.
+Find try/catch regions by scanning for try-region entries (`Core.EnterNode`).
 Returns a list of TryRegion structs.
 """
-function find_try_regions(code)::Vector{TryRegion}
+function find_try_regions(nir::Vector{NirStmt})::Vector{TryRegion}
     regions = TryRegion[]
 
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.EnterNode
-            catch_dest = stmt.catch_dest
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirEnter
+            catch_dest = rec.node.catch_target
             # Find the corresponding :leave that references this EnterNode
-            leave_idx = 0
-            for (j, s) in enumerate(code)
-                if s isa Expr && s.head === :leave
-                    # :leave args contain references to EnterNode SSA values
-                    for arg in s.args
-                        if arg isa Core.SSAValue && arg.id == i
-                            leave_idx = j
-                            break
-                        end
-                    end
-                    if leave_idx > 0
-                        break
-                    end
-                end
-            end
+            leave_idx = something(findfirst(nir) do s
+                s.node isa NirLeave && any(a -> a isa NirSSA && a.id == i, s.node.enters)
+            end, 0)
 
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
@@ -122,31 +108,24 @@ function find_try_regions(code)::Vector{TryRegion}
 end
 
 """
-Check if code contains try/catch regions.
+Check if the IR contains try/catch regions.
 
 parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode statement, where Kernel has a structured TryCatch node)
 """
-function has_try_catch(code)::Bool
-    for stmt in code
-        if stmt isa Core.EnterNode
-            return true
-        end
-    end
-    return false
-end
+has_try_catch(nir::Vector{NirStmt})::Bool = any(rec -> rec.node isa NirEnter, nir)
 
 """
-    stmt_is_proven_unreachable(code, idx) -> Bool
+    stmt_is_proven_unreachable(nir, idx) -> Bool
 
 Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reached
 from entry.  This is the sole condition under which an unsupported lowering may be
 kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
 (including exception-bearing CFGs) is reachable for soundness purposes.
 """
-function stmt_is_proven_unreachable(code, idx::Int)::Bool
-    (code isa AbstractVector && 1 <= idx <= length(code)) || return false
-    has_try_catch(code) && return false
-    blocks = analyze_blocks(code)
+function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
+    1 <= idx <= length(nir) || return false
+    has_try_catch(nir) && return false
+    blocks = analyze_blocks(nir)
     isempty(blocks) && return false
     bidx = findfirst(b -> b.start_idx <= idx <= b.end_idx, blocks)
     bidx === nothing && return false
@@ -158,12 +137,12 @@ function stmt_is_proven_unreachable(code, idx::Int)::Bool
         bi = pop!(work)
         term = blocks[bi].terminator
         successors = Int[]
-        if term isa Core.GotoNode
-            haskey(start2id, term.label) && push!(successors, start2id[term.label])
-        elseif term isa Core.GotoIfNot
-            haskey(start2id, term.dest) && push!(successors, start2id[term.dest])
+        if term isa NirGoto
+            haskey(start2id, term.target) && push!(successors, start2id[term.target])
+        elseif term isa NirGotoIfNot
+            haskey(start2id, term.target) && push!(successors, start2id[term.target])
             bi < length(blocks) && push!(successors, bi + 1)
-        elseif !(term isa Core.ReturnNode)
+        elseif !(term isa NirReturn)
             bi < length(blocks) && push!(successors, bi + 1)
         end
         for si in successors
@@ -177,29 +156,26 @@ end
 Analyze the IR to find basic block boundaries.
 A new block starts after each terminator AND at each jump target.
 """
-function analyze_blocks(code)::Vector{BasicBlock}
+function analyze_blocks(nir::Vector{NirStmt})::Vector{BasicBlock}
     # First, collect all jump targets
     jump_targets = Set{Int}()
-    for stmt in code
-        if stmt isa Core.GotoNode
-            push!(jump_targets, stmt.label)
-        elseif stmt isa Core.GotoIfNot
-            push!(jump_targets, stmt.dest)
+    for rec in nir
+        if rec.node isa NirGoto || rec.node isa NirGotoIfNot
+            push!(jump_targets, rec.node.target)
         end
     end
 
     blocks = BasicBlock[]
     block_start = 1
 
-    for i in 1:length(code)
-        stmt = code[i]
+    for i in 1:length(nir)
+        node = nir[i].node
 
         # Check if NEXT statement is a jump target (start new block after this one)
-        is_terminator = stmt isa Core.GotoIfNot || stmt isa Core.GotoNode || stmt isa Core.ReturnNode
         next_is_jump_target = (i + 1) in jump_targets
 
-        if is_terminator
-            push!(blocks, BasicBlock(block_start, i, stmt))
+        if node isa NirGotoIfNot || node isa NirGoto || node isa NirReturn
+            push!(blocks, BasicBlock(block_start, i, node))
             block_start = i + 1
         elseif next_is_jump_target && i >= block_start
             # Current statement is NOT a terminator but next statement IS a jump target
@@ -210,53 +186,13 @@ function analyze_blocks(code)::Vector{BasicBlock}
     end
 
     # Handle trailing code without explicit terminator
-    if block_start <= length(code)
-        push!(blocks, BasicBlock(block_start, length(code), nothing))
+    if block_start <= length(nir)
+        push!(blocks, BasicBlock(block_start, length(nir), nothing))
     end
 
     return blocks
 end
 
-
-"""
-Find merge points - targets of multiple forward jumps.
-These are blocks that need WASM block/br structure for proper control flow.
-Returns a Dict mapping target index to list of source indices.
-"""
-function find_merge_points(code)::Dict{Int, Vector{Int}}
-    # Track all forward jump targets
-    forward_targets = Dict{Int, Vector{Int}}()
-
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode
-            target = stmt.label
-            if target > i  # Forward jump
-                if !haskey(forward_targets, target)
-                    forward_targets[target] = Int[]
-                end
-                push!(forward_targets[target], i)
-            end
-        elseif stmt isa Core.GotoIfNot
-            target = stmt.dest
-            if target > i  # Forward jump (the false branch)
-                if !haskey(forward_targets, target)
-                    forward_targets[target] = Int[]
-                end
-                push!(forward_targets[target], i)
-            end
-        end
-    end
-
-    # Merge points are targets with multiple sources
-    merge_points = Dict{Int, Vector{Int}}()
-    for (target, sources) in forward_targets
-        if length(sources) >= 2
-            merge_points[target] = sources
-        end
-    end
-
-    return merge_points
-end
 
 """
 Generate code for try/catch blocks using WASM exception handling (try_table).

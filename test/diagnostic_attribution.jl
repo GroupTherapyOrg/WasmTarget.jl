@@ -44,9 +44,9 @@ end
     @test !isempty(nir) && all(s -> s.line > 0, nir)
     # the multiply inside c6_mid, inlined into c6_outer: innermost first — Base's `*`, then
     # c6_mid, then the compiled function c6_outer
-    k = findfirst(i -> any(f -> occursin("c6_mid", f), WasmTarget.stmt_frames(ci, i)), eachindex(ci.code))
+    k = findfirst(i -> any(f -> occursin("c6_mid", f), WasmTarget.stmt_frames(ci.debuginfo, i)), eachindex(ci.code))
     @test k !== nothing
-    fr = WasmTarget.stmt_frames(ci, something(k, 1))
+    fr = WasmTarget.stmt_frames(ci.debuginfo, something(k, 1))
     im = findfirst(f -> occursin("c6_mid", f), fr)
     @test length(fr) >= 3 && im !== nothing && im > 1 && occursin("c6_outer", fr[end])
 end

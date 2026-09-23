@@ -717,7 +717,7 @@ const LOCKS = [
             # (resolve_call_callee resolves a GlobalRef ONCE, leaving it a GlobalRef when
             # unbound), so what find_dispatch_call must still state explicitly is that an
             # unresolved callee is SKIPPED — not swallowed into a table lookup.
-            required = ["isdefined(val.mod, val.name) || return nothing",
+            required = ["val.bound || return nothing",
                         "callee_func isa NirNode || callee_func isa GlobalRef",
                         "isdefined(actual_func_ref.mod, actual_func_ref.name)",
                         "isdefined(func.mod, func.name)"]
@@ -860,9 +860,9 @@ const LOCKS = [
         () -> begin
             unions_src = read(joinpath(CODEGEN, "unions.jl"), String)
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
-            required = ["stmt isa GlobalRef && stmt.name === :nothing",
-                        "stmt.typ === Nothing && return true",
-                        "return is_nothing_value(stmt.val, ctx)",
+            required = ["def isa NirGlobalRef && def.name === :nothing",
+                        "def.typ === Nothing && return true",
+                        "return is_nothing_value(def.value, ctx)",
                         "if is_nothing_value(val, ctx)",
                         "before compiling SSA aliases"]
             count(p -> !occursin(p, unions_src * stack_src), required)

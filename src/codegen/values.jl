@@ -15,28 +15,24 @@ test/parity_ratchet.jl; every remaining caller of this function is a pre-emit de
 parity(code_generator.dart:124 translateType) of dartTypeOf (:129).
 """
 function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
-    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
-    # Handle nothing specially - compile_value(nothing) produces i32_const 0
-    if val === nothing
-        return I32
-    end
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
     # Handle GlobalRef by resolving it and recursively determining type
     # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
     # GlobalRef to struct instance emits struct_new
-    if val isa GlobalRef
+    if val isa NirGlobalRef
         if val.name === :nothing
             return I32
         end
-        # Resolve the GlobalRef to get the actual value
+        # The binding was resolved once at the NIR boundary; an unbound one has no type
+        val.bound || return AnyRef
         try
-            actual_val = getfield(val.mod, val.name)
-            return static_wasm_type(actual_val, ctx)
+            return static_wasm_type(NirLiteral(val.value), ctx)
         catch
             # If we can't resolve, fall back to AnyRef (internal polymorphic type)
             return AnyRef
         end
     end
-    if val isa Core.SSAValue
+    if val isa NirSSA
         if haskey(ctx.ssa_locals, val.id)
             local_idx = ctx.ssa_locals[val.id]
             local_array_idx = local_idx - ctx.n_params + 1
@@ -53,7 +49,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
         # Fall back to Julia type inference
         ssa_type = get(ctx.ssa_types, val.id, Any)
         return get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
-    elseif val isa Core.SlotNumber
+    elseif val isa NirSlot
         # SlotNumber in unoptimized IR — check slot_locals first, then params
         if haskey(ctx.slot_locals, val.id)
             local_idx = ctx.slot_locals[val.id]
@@ -75,7 +71,7 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
         return AnyRef
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         # Match compile_value's offset — for regular functions, _1 is the
         # function object, so actual args start at _2 → arg_types[1].
         if ctx.is_compiled_closure
@@ -92,55 +88,56 @@ function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
             return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         end
         return I32
-    else
+    elseif val isa NirLiteral
         # Literal value
-        if val isa Int64 || val isa UInt64
+        lit = val.value
+        # Handle nothing specially - compile_value(nothing) produces i32_const 0
+        if lit === nothing
+            return I32
+        elseif lit isa Int64 || lit isa UInt64
             return I64
-        elseif val isa Int32 || val isa UInt32 || val isa Bool ||
-               val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
+        elseif lit isa Int32 || lit isa UInt32 || lit isa Bool ||
+               lit isa Int8 || lit isa UInt8 || lit isa Int16 || lit isa UInt16
             # Narrow ints were MISSING here — a literal like 0x00
             # fell through to AnyRef, so `return 0x00` failed
             # return_type_compatible(AnyRef, I32) and compiled to `unreachable`
             # (gap 46fd6782e95c). compile_value already emits i32.const for these.
             return I32
-        elseif val isa Float64
+        elseif lit isa Float64
             return F64
-        elseif val isa Float32
+        elseif lit isa Float32
             return F32
-        elseif val isa QuoteNode
-            # QuoteNode wraps a value - recursively determine its type.
-            # D-001: IR reference types inside QuoteNodes are literal structs, not IR refs.
-            inner = val.value
-            if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
-                T = typeof(inner)
-                info = register_struct_type!(ctx.mod, ctx.type_registry, T)
-                return ConcreteRef(info.wasm_type_idx, false)
-            end
-            return static_wasm_type(inner, ctx)
-        elseif val isa Symbol || val isa String
+        elseif lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
+            # D-001: an IR reference type carried as a literal VALUE is a literal struct,
+            # not an IR ref.
+            T = typeof(lit)
+            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+            return ConcreteRef(info.wasm_type_idx, false)
+        elseif lit isa Symbol || lit isa String
             # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
-        elseif val isa Type
+        elseif lit isa Type
             # Type values (like Bool, Int64) compile to global.get (DataType struct ref).
             # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
             # Use $JlDataType when hierarchy is available
             dt_idx = get_datatype_type_idx(ctx.type_registry)
             return ConcreteRef(dt_idx, true)
-        elseif val isa Core.TypeName
+        elseif lit isa Core.TypeName
             # TypeName constants compile to global.get ($JlTypeName struct ref)
             tn_idx = ctx.type_registry.jl_typename_idx
             if tn_idx !== nothing
                 return ConcreteRef(tn_idx, true)
             end
             return StructRef
-        elseif isstructtype(typeof(val))
+        elseif isstructtype(typeof(lit))
             # Struct values compile to struct_new (ConcreteRef)
-            return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
+            return get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry)
         else
             return AnyRef
         end
     end
+    error("static_wasm_type: $(nameof(typeof(val))) is not a value operand")
 end
 
 # ---------------------------------------------------------------------------
@@ -896,9 +893,10 @@ function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilati
         end
     end
     set_context!(b, "GotoIfNot cond → i32")
+    cond isa NirNode || (cond = nir_node(ctx, cond))   # transitional (R29): a raw operand enters as its node
     emit_value!(b, cond, ctx)  # R17-floor: actual local representation drives Bool unboxing
     # Check if the condition value is in a non-i32 local
-    if cond isa Core.SSAValue
+    if cond isa NirSSA
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
         if local_idx === nothing
             local_idx = get(ctx.phi_locals, cond.id, nothing)
@@ -967,6 +965,9 @@ parity(quarantine: Julia's typed IR passes compile-time Types as ordinary call a
 its positional operands.)
 """
 _is_type_operand(arg)::Bool =
+    arg isa NirNode ? ((arg isa NirLiteral && arg.value isa Type) ||
+                       (arg isa NirGlobalRef && arg.bound && arg.value isa Type)) :
+    # transitional (R29): a raw operand
     arg isa Type || (arg isa GlobalRef && isdefined(arg.mod, arg.name) &&
                      getfield(arg.mod, arg.name) isa Type)
 
@@ -1012,7 +1013,8 @@ included: as in dart's translator.dart:2099 translateTypeOfLocalVariable, the lo
 is THE single unbox source there, and a second unbox double-converted.
 """
 function _is_boxed_numeric_operand(arg, ctx::AbstractCompilationContext)::Bool
-    arg isa Core.SSAValue || return false
+    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+    arg isa NirSSA || return false
     _is_externref_value(arg, ctx) && return false
     get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
         return false

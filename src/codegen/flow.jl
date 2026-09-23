@@ -5,11 +5,6 @@ parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     b = _ctx_builder(ctx, "generate_structured")
-    # parity(code_generator.dart:77 typeContext): the raw statement array, via the NIR
-    # boundary (frontend/nir.jl) rather than ctx.code_info directly — has_try_catch/
-    # find_try_regions/generate_stackified_flow! are not NIR-converted yet (R29), so this
-    # hands them back exactly code_info.code without this file naming `code_info` itself.
-    code = nir_raw_code(ctx)
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
     # THE stackifier. Retired strategies this replaced: the nested-conditional
@@ -17,8 +12,8 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     # phi init), and generate_loop_code + generate_branched_loops (no-phi loops).
     # Try regions are first-class stackifier metadata; handler blocks remain plain
     # CFG blocks and the same phi machinery owns all of their edges.
-    regions = has_try_catch(code) ? Vector{Any}(find_try_regions(code)) : Any[]
-    generate_stackified_flow!(b, ctx, blocks, code; try_regions=regions)
+    regions = has_try_catch(ctx.nir) ? Vector{Any}(find_try_regions(ctx.nir)) : Any[]
+    generate_stackified_flow!(b, ctx, blocks; try_regions=regions)
 
     # Close exactly the seeded function frame. Any remaining block/loop is a
     # stackifier bug and must fail here, never serialize into malformed Wasm.
@@ -33,16 +28,13 @@ Determine the Wasm type that a phi edge value will produce on the stack.
 Used to check compatibility before storing to a phi local.
 """
 function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
-    # Handle nothing literal - compile_value(nothing) emits i32_const 0
-    if val === nothing
-        return I32
-    end
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
     # Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
     # These compile to i32_const 0 just like literal nothing
-    if val isa GlobalRef && val.name === :nothing
+    if val isa NirGlobalRef && val.name === :nothing
         return I32
     end
-    if val isa Core.SSAValue
+    if val isa NirSSA
         # If the SSA has a local allocated, return the local's actual Wasm type.
         # This is what local.get will actually push on the stack, which may differ
         # from the Julia-inferred type when PiNodes narrow types.
@@ -63,7 +55,7 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         if edge_julia_type !== nothing
             return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
         end
-    elseif val isa Core.SlotNumber
+    elseif val isa NirSlot
         # SlotNumber in unoptimized IR — check slot_locals first
         if haskey(ctx.slot_locals, val.id)
             local_idx = ctx.slot_locals[val.id]
@@ -80,7 +72,7 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
             source_type = source_slot_type(ctx, val.id)
             source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
         # Julia IR uses _1 for function type (not in arg_types), _2 for first arg (arg_types[1]), etc.
         # So arg_types index = val.n - 1 for non-closures.
@@ -93,38 +85,39 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
             end
             return get_concrete_wasm_type(_arg_t, ctx.mod, ctx.type_registry)
         end
-    elseif val isa Int64 || val isa UInt64 || val isa Int
-        return I64
-    elseif val isa Int32 || val isa UInt32 || val isa Bool || val isa UInt8 || val isa Int8 || val isa UInt16 || val isa Int16
-        return I32
-    elseif val isa Float64
-        return F64
-    elseif val isa Float32
-        return F32
-    elseif val isa Symbol || val isa String
-        # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
-        str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(str_type_idx, false)
-    elseif val isa QuoteNode
-        return get_phi_edge_wasm_type(val.value, ctx)
-    elseif val isa GlobalRef
+    elseif val isa NirGlobalRef
         # Resolve GlobalRef to actual value to determine Wasm type
-        if val.name === :nothing
+        val.bound || return nothing
+        return get_phi_edge_wasm_type(NirLiteral(val.value), ctx)
+    elseif val isa NirLiteral
+        lit = val.value
+        # Handle nothing literal - compile_value(nothing) emits i32_const 0
+        if lit === nothing
             return I32
+        elseif lit isa Int64 || lit isa UInt64 || lit isa Int
+            return I64
+        elseif lit isa Int32 || lit isa UInt32 || lit isa Bool || lit isa UInt8 || lit isa Int8 || lit isa UInt16 || lit isa Int16
+            return I32
+        elseif lit isa Float64
+            return F64
+        elseif lit isa Float32
+            return F32
+        elseif lit isa Symbol || lit isa String
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
+        elseif lit isa Char
+            # Char is a 4-byte primitive, compiled as I32
+            return I32
+        elseif lit isa Type
+            # Type{T} values are now represented as DataType struct refs (global.get).
+            # Use $JlDataType when hierarchy is available
+            dt_idx = get_datatype_type_idx(ctx.type_registry)
+            return ConcreteRef(dt_idx, true)
+        elseif isstructtype(typeof(lit))
+            # a struct literal is compiled as struct_new → a non-nullable concrete ref
+            return get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry)
         end
-        isdefined(val.mod, val.name) || return nothing
-        return get_phi_edge_wasm_type(getfield(val.mod, val.name), ctx)
-    elseif val isa Char
-        # Char is a 4-byte primitive, compiled as I32
-        return I32
-    elseif val isa Type
-        # Type{T} values are now represented as DataType struct refs (global.get).
-        # Use $JlDataType when hierarchy is available
-        dt_idx = get_datatype_type_idx(ctx.type_registry)
-        return ConcreteRef(dt_idx, true)
-    elseif isstructtype(typeof(val))
-        # a struct literal is compiled as struct_new → a non-nullable concrete ref
-        return get_concrete_wasm_type(typeof(val), ctx.mod, ctx.type_registry)
     end
     return nothing
 end

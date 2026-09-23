@@ -84,6 +84,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # Julia inference's type for every IR slot, widened once at the boundary
     # (frontend/nir.jl's nir_slot_types) — what an Argument/SlotNumber operand is typed by.
     slot_types::Vector{Type}
+    # The function's source-location table: a located diagnostic decodes a statement's
+    # inline chain and the method's definition site from it (diagnostics.jl).
+    debuginfo::Union{Core.DebugInfo, Nothing}
 end
 
 function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
@@ -136,7 +139,8 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}(),       # exn_region_locals
         build_nir(code_info),   # NIR boundary — a pure function of the CodeInfo, built first
-        nir_slot_types(code_info)
+        nir_slot_types(code_info),
+        code_info.debuginfo
     )
     # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
@@ -1520,10 +1524,10 @@ function packed_vararg_source_type(ctx::AbstractCompilationContext,
 end
 
 function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
-    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
-    if val isa Core.SSAValue
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    if val isa NirSSA
         return get(ctx.ssa_types, val.id, Any)
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         # Core.Argument indexes Julia IR slots, whose inferred source contract
         # is CodeInfo.slottypes. `ctx.arg_types` is the flattened physical Wasm
         # signature and intentionally differs for packed Vararg slots, closures,
@@ -1540,14 +1544,12 @@ function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
             return ctx.arg_types[idx]
         end
         return Any
-    elseif val isa Type
-        return Type{val}  # It's a type constant
-    elseif val isa QuoteNode
+    elseif val isa NirLiteral
         # Literal Symbols and other quoted constants carry the type of their
-        # payload, not the compiler wrapper node itself.
-        return typeof(val.value)
+        # payload; a Type literal is a type constant.
+        return val.value isa Type ? Type{val.value} : typeof(val.value)
     else
-        return typeof(val)
+        return typeof(nir_operand(val))
     end
 end
 
@@ -1734,8 +1736,8 @@ function infer_call_type(node::NirCall, ctx::AbstractCompilationContext)
 end
 
 function infer_value_type(val, ctx::AbstractCompilationContext)
-    val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
-    if val isa Core.Argument
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    if val isa NirArgument
         # Source IR semantics are authoritative. The physical signature can be
         # flattened (notably a vararg tuple), so indexing ctx.arg_types first
         # can turn one Tuple source argument into its first physical element.
@@ -1759,7 +1761,7 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
             # Return typeof(func_ref) so cross-function lookup can match the registered signature.
             return typeof(ctx.func_ref)
         end
-    elseif val isa Core.SlotNumber
+    elseif val isa NirSlot
         # SlotNumber is the unoptimized IR equivalent of Core.Argument.
         # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
         # For local variable slots (not params), use slottypes from CodeInfo.
@@ -1773,26 +1775,12 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
         if idx >= 1 && idx <= length(ctx.arg_types)
             return ctx.arg_types[idx]
         end
-    elseif val isa Core.SSAValue
+    elseif val isa NirSSA
         return get(ctx.ssa_types, val.id, Any)
-    elseif val isa Int64 || val isa Int
-        return Int64
-    elseif val isa Int32
-        return Int32
-    elseif val isa Float64
-        return Float64
-    elseif val isa Float32
-        return Float32
-    elseif val isa Bool
-        return Bool
-    elseif val isa Char
-        return Char
-    elseif val isa WasmGlobal
-        return typeof(val)
-    elseif val isa GlobalRef
+    elseif val isa NirGlobalRef
         # GlobalRef to a constant - infer type from the actual value
-        try
-            actual_val = getfield(val.mod, val.name)
+        if val.bound
+            actual_val = val.value
             if actual_val isa Int32
                 return Int32
             elseif actual_val isa Int64 || actual_val isa Int
@@ -1813,25 +1801,41 @@ function infer_value_type(val, ctx::AbstractCompilationContext)
             else
                 return typeof(actual_val)
             end
-        catch
-            # An unresolved global has no numeric type evidence; fall through to Any.
         end
-    elseif val isa QuoteNode
-        # QuoteNode wraps a value - return the type of the wrapped value
-        return typeof(val.value)
-    elseif val isa Type
-        # Type{T} references - return Type{T}
-        return Type{val}
-    elseif val isa Function
-        # Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
-        # Return typeof(f) so cross-function lookup can match the registered signature
-        return typeof(val)
-    elseif isprimitivetype(typeof(val))
-        # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
-        return typeof(val)
-    elseif isstructtype(typeof(val)) && !isa(val, Type) && !isa(val, Function) && !isa(val, Module)
-        # Struct constant - return actual type
-        return typeof(val)
+        # An unresolved global has no numeric type evidence; fall through to Any.
+    elseif val isa NirLiteral
+        lit = val.value
+        if lit isa Symbol || lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
+            # a quoted literal carries the type of its payload
+            return typeof(lit)
+        elseif lit isa Int64 || lit isa Int
+            return Int64
+        elseif lit isa Int32
+            return Int32
+        elseif lit isa Float64
+            return Float64
+        elseif lit isa Float32
+            return Float32
+        elseif lit isa Bool
+            return Bool
+        elseif lit isa Char
+            return Char
+        elseif lit isa WasmGlobal
+            return typeof(lit)
+        elseif lit isa Type
+            # Type{T} references - return Type{T}
+            return Type{lit}
+        elseif lit isa Function
+            # Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
+            # Return typeof(f) so cross-function lookup can match the registered signature
+            return typeof(lit)
+        elseif isprimitivetype(typeof(lit))
+            # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
+            return typeof(lit)
+        elseif isstructtype(typeof(lit)) && !isa(lit, Type) && !isa(lit, Function) && !isa(lit, Module)
+            # Struct constant - return actual type
+            return typeof(lit)
+        end
     end
     return Any
 end
@@ -1844,7 +1848,8 @@ feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/a
 or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
 """
 function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
-    if val isa Core.SSAValue
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    if val isa NirSSA
         local_idx = get(ctx.ssa_locals, val.id, nothing)
         if local_idx === nothing
             local_idx = get(ctx.phi_locals, val.id, nothing)
@@ -1855,7 +1860,7 @@ function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
                 return ctx.locals[arr_idx]
             end
         end
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         # the operand is a function PARAMETER. Its declared wasm slot
         # type can be abstract (structref/anyref) when the method was specialized
         # on an abstract value arg (e.g. `show(::IO, x)` where the body narrows x
