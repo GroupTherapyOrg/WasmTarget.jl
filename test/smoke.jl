@@ -629,6 +629,8 @@ _g("overlays", Any[
     ("isletter_greek", (c::Char) -> Int64(isletter(c)), 'λ'),
     ("isletter_cjk", (c::Char) -> Int64(isletter(c)), '中'),
     ("isspace_em_space", (c::Char) -> Int64(isspace(c)), '\u2003'),
+    ("textwidth_wide", (c::Char) -> Int64(textwidth(c)), '中'),
+    ("isletter_astral", (c::Char) -> Int64(isletter(c)) * 10 + Int64(isspace(c)), '𐐨'),
     ("uppercase_greek", (c::Char) -> Int64(UInt32(uppercase(c))), 'λ'),
     ("lowercase_greek", (c::Char) -> Int64(UInt32(lowercase(c))), 'Σ'),
     ("titlecase_digraph", (c::Char) -> Int64(UInt32(titlecase(c))), 'ǆ'),

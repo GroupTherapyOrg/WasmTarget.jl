@@ -1320,7 +1320,7 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper; target Wasm never substitutes ASCII-only answers",
+    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper, and Base's Char case mapping/predicates read utf8proc's own case records through the same two-stage lookup; target Wasm never substitutes ASCII-only answers",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
@@ -1330,7 +1330,12 @@ const LOCKS = [
                         "needs_unicode_properties && get_or_create_unicode_property_func!",
                         ":utf8proc_category => _fc_utf8proc_category!",
                         ":utf8proc_charwidth => _fc_utf8proc_charwidth!",
-                        ":jl_id_start_char => _fc_jl_id_start_char!", ":jl_id_char => _fc_jl_id_char!"]
+                        ":jl_id_start_char => _fc_jl_id_start_char!", ":jl_id_char => _fc_jl_id_char!",
+                        "const _UTF8PROC_CASE_DATA",
+                        "needs_unicode_case && get_or_create_unicode_case_func!",
+                        ":utf8proc_toupper => _fc_utf8proc_toupper!", ":utf8proc_tolower => _fc_utf8proc_tolower!",
+                        ":utf8proc_totitle => _fc_utf8proc_totitle!", ":utf8proc_isupper => _fc_utf8proc_isupper!",
+                        ":utf8proc_islower => _fc_utf8proc_islower!"]
             forbidden = ["assume valid, conservative", "true = always a grapheme break"]
             all_src = types_src * compile_src * stmt_src
             count(p -> !occursin(p, all_src), required) +

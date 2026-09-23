@@ -1466,95 +1466,26 @@ function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
     return registry.string_struct_idx
 end
 
-# parity(quarantine: Julia's Unicode predicates are the foreigncalls utf8proc_category,
-# utf8proc_charwidth, jl_id_start_char and jl_id_char; this table bakes their exact answers.)
-const _UTF8PROC_PROPERTY_DATA = let data = Vector{UInt8}(undef, 2 * 0x110000)
-    for cp in UInt32(0):UInt32(0x10ffff)
-        category = ccall(:utf8proc_category, Cint, (UInt32,), cp)
-        width = ccall(:utf8proc_charwidth, Cint, (UInt32,), cp)
-        id_start = ccall(:jl_id_start_char, Cint, (UInt32,), cp)
-        id_char = ccall(:jl_id_char, Cint, (UInt32,), cp)
-        (0 <= category <= 31 && 0 <= width <= 3) ||
-            error("utf8proc property outside packed table range at U+$(string(cp; base=16))")
-        packed = UInt16(category | (width << 5) | (id_start << 7) | (id_char << 8))
-        i = 2 * Int(cp) + 1
-        data[i] = UInt8(packed & 0xff)
-        data[i + 1] = UInt8(packed >> 8)
+# utf8proc's per-codepoint answers in utf8proc's own two-stage shape: `stage1[cp >> 8]`
+# names a deduplicated 256-codepoint block and `stage2[block][cp & 0xff]` a record in a
+# deduplicated record table. Both stages are one UInt8 table, stage1 (0x1100 entries)
+# first. `record(cp)` is read for every codepoint through the same ccalls Base makes; a
+# codepoint past U+10FFFF reads record(0x110000), utf8proc's own answer there.
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+function _utf8proc_two_stage_tables(record::Function)::NamedTuple
+    order = Vector{Vector{Int32}}()
+    records = Dict{Vector{Int32},Int}()
+    index!(rec) = get!(records, rec) do
+        push!(order, rec)
+        length(order) - 1
     end
-    data
-end
-
-"""
-    get_or_create_unicode_property_func!(mod, registry) → UInt32
-
-Create one lazy, module-global packed utf8proc table and a helper `(i32 cp) -> i32`.
-Bits 0–4 are `utf8proc_category`; bits 5–6 are `utf8proc_charwidth`; bits 7–8
-are Julia identifier-start/continuation predicates. The table is
-generated from the exact utf8proc ABI Julia itself uses and serialized into the
-package precompile image; target Wasm performs no FFI.
-
-parity(quarantine: the lazy global and lookup helper over the utf8proc answers, see
-_UTF8PROC_PROPERTY_DATA.)
-"""
-function get_or_create_unicode_property_func!(mod::WasmModule,
-                                              registry::TypeRegistry)::UInt32
-    registry.unicode_property_func_idx !== nothing &&
-        return registry.unicode_property_func_idx
-    arr_idx = get_array_type!(mod, registry, UInt16)
-    seg_idx = add_passive_data_segment!(mod, _UTF8PROC_PROPERTY_DATA)
-    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(arr_idx)))
-    global_idx = add_global_ref!(mod, arr_idx, true, init)
-    arr_ref = ConcreteRef(arr_idx, true)
-    block_type = add_type!(mod, FuncType(WasmValType[], WasmValType[arr_ref]))
-    b = InstrBuilder(WasmValType[I32, arr_ref], WasmValType[I32];
-                     func_name="unicode_property")
-    initialized_label = block!(b, Int(block_type); results=WasmValType[arr_ref])
-    global_get!(b, global_idx, arr_ref)
-    br_on_non_null!(b, initialized_label)
-    i32_const!(b, 0)
-    i32_const!(b, 0x110000)
-    array_new_data!(b, arr_idx, seg_idx)
-    global_set!(b, global_idx)
-    global_get!(b, global_idx, arr_ref)
-    end_block!(b)
-    local_get!(b, 0)
-    array_get!(b, arr_idx, I32; signed=false)
-    return_!(b)
-    end_block!(b)
-    idx = add_function!(mod, WasmValType[I32], WasmValType[I32],
-                        WasmValType[arr_ref], builder_code(b))
-    registry.unicode_property_func_idx = idx
-    return idx
-end
-
-# utf8proc's case records as Base reaches them through the `utf8proc_toupper`/`_tolower`/
-# `_totitle`/`_isupper`/`_islower` foreigncalls: per record [upper - cp, lower - cp,
-# title - cp, isupper, islower]; record 0 is the identity. A codepoint reaches its record
-# through utf8proc's own two-stage shape: `stage1[cp >> 8]` names a deduplicated
-# 256-codepoint block, `stage2[block][cp & 0xff]` the record. Both stages are one UInt8
-# table, stage1 (0x1100 entries) first.
-# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
-const _UTF8PROC_CASE_TABLES = let
-    zero_rec = (Int32(0), Int32(0), Int32(0), Int32(0), Int32(0))
-    records = Dict{NTuple{5,Int32},Int}(zero_rec => 0)
-    order = NTuple{5,Int32}[zero_rec]
     blocks = Dict{Vector{UInt8},Int}()
     stage1 = UInt8[]
     stage2 = UInt8[]
     block = Vector{UInt8}(undef, 256)
     for hi in UInt32(0):UInt32(0x10ff)
         for lo in UInt32(0):UInt32(0xff)
-            cp = (hi << 8) | lo
-            rec = (ccall(:utf8proc_toupper, Int32, (UInt32,), cp) - Int32(cp),
-                   ccall(:utf8proc_tolower, Int32, (UInt32,), cp) - Int32(cp),
-                   ccall(:utf8proc_totitle, Int32, (UInt32,), cp) - Int32(cp),
-                   Int32(ccall(:utf8proc_isupper, Cint, (UInt32,), cp)),
-                   Int32(ccall(:utf8proc_islower, Cint, (UInt32,), cp)))
-            r = get!(records, rec) do
-                push!(order, rec)
-                length(order) - 1
-            end
-            block[lo + 1] = UInt8(r)   # InexactError past 255 records: loud at precompile
+            block[lo + 1] = UInt8(index!(record((hi << 8) | lo)))   # InexactError past 256 records
         end
         k = get!(blocks, copy(block)) do
             append!(stage2, block)
@@ -1562,23 +1493,46 @@ const _UTF8PROC_CASE_TABLES = let
         end
         push!(stage1, UInt8(k))
     end
+    oob = index!(record(UInt32(0x110000)))
+    width = length(order[1])
     words = Int32[x for rec in order for x in rec]
-    (stages = vcat(stage1, stage2), records = collect(reinterpret(UInt8, htol.(words))),
-     nwords = length(words))
+    return (stages = vcat(stage1, stage2), records = collect(reinterpret(UInt8, htol.(words))),
+            nwords = length(words), width = width, oob = oob)
+end
+
+# Per codepoint: utf8proc_category (bits 0-4), utf8proc_charwidth (bits 5-6), and Julia's
+# identifier-start/continuation predicates (bits 7-8), packed in one word.
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+const _UTF8PROC_PROPERTY_DATA = _utf8proc_two_stage_tables() do cp
+    category = ccall(:utf8proc_category, Cint, (UInt32,), cp)
+    width = ccall(:utf8proc_charwidth, Cint, (UInt32,), cp)
+    id_start = ccall(:jl_id_start_char, Cint, (UInt32,), cp)
+    id_char = ccall(:jl_id_char, Cint, (UInt32,), cp)
+    (0 <= category <= 31 && 0 <= width <= 3) ||
+        error("utf8proc property outside packed table range at U+$(string(cp; base=16))")
+    Int32[category | (width << 5) | (id_start << 7) | (id_char << 8)]
+end
+
+# Per codepoint, as Base reaches them through the `utf8proc_toupper`/`_tolower`/`_totitle`/
+# `_isupper`/`_islower` foreigncalls: [upper - cp, lower - cp, title - cp, isupper, islower].
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+const _UTF8PROC_CASE_DATA = _utf8proc_two_stage_tables() do cp
+    Int32[ccall(:utf8proc_toupper, Int32, (UInt32,), cp) - Int32(cp),
+          ccall(:utf8proc_tolower, Int32, (UInt32,), cp) - Int32(cp),
+          ccall(:utf8proc_totitle, Int32, (UInt32,), cp) - Int32(cp),
+          ccall(:utf8proc_isupper, Cint, (UInt32,), cp),
+          ccall(:utf8proc_islower, Cint, (UInt32,), cp)]
 end
 
 """
-    get_or_create_unicode_case_func!(mod, registry) → UInt32
+    _two_stage_lookup_func!(mod, registry, tables, name) → UInt32
 
-Create the lazy, module-global utf8proc case tables and a helper
-`(i32 cp, i32 field) -> i32` returning field `field` of `cp`'s case record
-(0 upper delta, 1 lower delta, 2 title delta, 3 isupper, 4 islower). A codepoint past
-U+10FFFF reads the identity record, as utf8proc's own property lookup does.
+A helper `(i32 cp, i32 field) -> i32` returning field `field` of `cp`'s record in
+`tables` (see `_utf8proc_two_stage_tables`), over two lazy module-global arrays built
+from passive data segments on first use.
 """
-# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
-function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    registry.unicode_case_func_idx !== nothing && return registry.unicode_case_func_idx
-    tables = _UTF8PROC_CASE_TABLES
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables, name::String)::UInt32
     stage_idx = get_array_type!(mod, registry, UInt8)
     rec_idx = get_array_type!(mod, registry, Int32)
     stage_ref = ConcreteRef(stage_idx, true)
@@ -1591,9 +1545,9 @@ function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistr
         vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(rec_idx))))
     stage_block = add_type!(mod, FuncType(WasmValType[], WasmValType[stage_ref]))
     rec_block = add_type!(mod, FuncType(WasmValType[], WasmValType[rec_ref]))
-    # locals: 0 cp, 1 field, 2 the stage table, 3 the record index (0 unless cp <= U+10FFFF)
-    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32];
-                     func_name="unicode_case")
+    # locals: 0 cp, 1 field, 2 the stage table, 3 the record index
+    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32]; func_name=name)
+    i32_const!(b, tables.oob); local_set!(b, 3)
     local_get!(b, 0); i32_const!(b, 0x110000); num!(b, Opcode.I32_LT_U)
     if_!(b)
     initialized = block!(b, Int(stage_block); results=WasmValType[stage_ref])
@@ -1626,15 +1580,42 @@ function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistr
     global_set!(b, rec_global)
     global_get!(b, rec_global, rec_ref)
     end_block!(b)
-    local_get!(b, 3); i32_const!(b, 5); num!(b, Opcode.I32_MUL)
+    local_get!(b, 3); i32_const!(b, tables.width); num!(b, Opcode.I32_MUL)
     local_get!(b, 1); num!(b, Opcode.I32_ADD)
     array_get!(b, rec_idx, I32)
     return_!(b)
     end_block!(b)
-    idx = add_function!(mod, WasmValType[I32, I32], WasmValType[I32],
-                        WasmValType[stage_ref, I32], builder_code(b))
-    registry.unicode_case_func_idx = idx
-    return idx
+    return add_function!(mod, WasmValType[I32, I32], WasmValType[I32],
+                         WasmValType[stage_ref, I32], builder_code(b))
+end
+
+"""
+    get_or_create_unicode_property_func!(mod, registry) → UInt32
+
+The module's `(i32 cp, i32 0) -> i32` lookup of `_UTF8PROC_PROPERTY_DATA`: bits 0–4
+`utf8proc_category`, bits 5–6 `utf8proc_charwidth`, bits 7–8 Julia's identifier
+start/continuation predicates.
+"""
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+function get_or_create_unicode_property_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.unicode_property_func_idx === nothing &&
+        (registry.unicode_property_func_idx =
+            _two_stage_lookup_func!(mod, registry, _UTF8PROC_PROPERTY_DATA, "unicode_property"))
+    return registry.unicode_property_func_idx
+end
+
+"""
+    get_or_create_unicode_case_func!(mod, registry) → UInt32
+
+The module's `(i32 cp, i32 field) -> i32` lookup of `_UTF8PROC_CASE_DATA`: field 0 upper
+delta, 1 lower delta, 2 title delta, 3 isupper, 4 islower.
+"""
+# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
+function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.unicode_case_func_idx === nothing &&
+        (registry.unicode_case_func_idx =
+            _two_stage_lookup_func!(mod, registry, _UTF8PROC_CASE_DATA, "unicode_case"))
+    return registry.unicode_case_func_idx
 end
 
 """

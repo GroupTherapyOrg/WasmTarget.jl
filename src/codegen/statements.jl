@@ -1990,8 +1990,9 @@ function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=node)
             emit_value!(b, node.operands[1], ctx, I32)
+            i32_const!(b, 0)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
             i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
@@ -2001,8 +2002,9 @@ function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::A
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_char missing codepoint"; idx=idx, detail=node)
             emit_value!(b, node.operands[1], ctx, I32)
+            i32_const!(b, 0)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+            call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
             i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
@@ -2187,8 +2189,9 @@ end
 function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
+        i32_const!(b, 0)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-        call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+        call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
         i32_const!(b, 5); num!(b, Opcode.I32_SHR_U)
         i32_const!(b, 0x03); num!(b, Opcode.I32_AND)
         return b
@@ -2197,8 +2200,9 @@ end
 function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
+        i32_const!(b, 0)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-        call!(b, prop_idx, WasmValType[I32], WasmValType[I32])
+        call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
         i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
         return b
 end
