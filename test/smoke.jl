@@ -721,7 +721,14 @@ _xf("memoryref_unbox", Any[
 # An Array keeps its :ref's element offset (the Array struct's off0 field): Julia's own
 # `_deletebeg!` (not an overlay) and `Base.wrap` store an offset ref, and every reader —
 # indexing, reshape, push!, copy, splatting, `take!` — honours it.
+# A self-referential struct's Vector field is registered in its recursion group, a second
+# Vector layout builder that must carry the offset field too.
+mutable struct _SmMRRec
+    value::Int64
+    children::Vector{_SmMRRec}
+end
 _g("memoryref_array_offset", Any[
+    ("recursive_vector_field", (n::Int64) -> (r = _SmMRRec(n, _SmMRRec[]); push!(r.children, _SmMRRec(n + 1, _SmMRRec[])); r.value * 10 + length(r.children) + r.children[1].value * 100), Int64(4)),
     ("wrap_offset", (n::Int64) -> (m = Memory{Int64}(undef, 10); for i in 1:10; m[i] = i * 10; end; v = Base.wrap(Array, memoryref(m, n), 3); v[1] + v[3] * 1000 + Base.memoryrefoffset(v.ref) * 1000000), Int64(4)),
     ("wrap_offset_matrix", (n::Int64) -> (m = Memory{Int64}(undef, 10); for i in 1:10; m[i] = i; end; a = Base.wrap(Array, memoryref(m, n), (2, 3)); a[2, 3] * 100 + Base.memoryrefoffset(a.ref)), Int64(3)),
     ("setfield_ref_offset", (n::Int64) -> (v = collect(1:10); setfield!(v, :ref, Core.memoryrefnew(v.ref, n, true)); setfield!(v, :size, (10 - n + 1,)); v[1] * 100 + length(v) + sum(v)), Int64(3)),

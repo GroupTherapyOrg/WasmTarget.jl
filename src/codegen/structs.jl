@@ -416,7 +416,8 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
                         FieldType(I32, false),  # classId
                         FieldType(I32, true),   # identityHash
                         FieldType(ConcreteRef(arr_idx, true), true),
-                        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)
+                        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true),
+                        FieldType(I32, true)   # off0 (array_offset_field_idx), as register_vector_type!
                     ]
                     local vec_parent = dag_supertype_idx!(mod, registry, vec_type)
                     vec_type_idx = vec_parent === nothing ? add_struct_type!(mod, vec_fields) :
