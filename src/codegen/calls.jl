@@ -4123,6 +4123,7 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     tail_len = allocate_local!(ctx, I32)
     total_len = allocate_local!(ctx, I32)
     dst_local = allocate_local!(ctx, arr_ref)
+    src_off_local = allocate_local!(ctx, I32)
 
     # The SSA producer already carries the canonical registered Vector ref. Do
     # not introduce a downcast here: the local declaration validates the exact
@@ -4132,6 +4133,9 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     local_get!(bld, vec_local)
     struct_get!(bld, vec_idx, off, arr_ref)
     local_set!(bld, src_local)
+    local_get!(bld, vec_local)
+    struct_get!(bld, vec_idx, array_offset_field_idx(vec_info), I32)
+    local_set!(bld, src_off_local)
     local_get!(bld, vec_local)
     struct_get!(bld, vec_idx, off + 1, size_ref)
     struct_get!(bld, size_idx, size_info.field_offset, I64)
@@ -4154,7 +4158,7 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     local_get!(bld, dst_local)
     i32_const!(bld, n_prefix)
     local_get!(bld, src_local)
-    i32_const!(bld, 0)
+    local_get!(bld, src_off_local)   # the tail's elements start at its :ref offset
     local_get!(bld, tail_len)
     array_copy!(bld, arr_type_idx, arr_type_idx)
 
@@ -4165,6 +4169,7 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     local_get!(bld, total_len)
     widen_length_to_i64!(bld)
     struct_new!(bld, size_idx)
+    i32_const!(bld, 0)   # off0 of the fresh array
     struct_new!(bld, vec_idx)
     append_builder!(fb, bld)
 end
@@ -4264,12 +4269,16 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         local arr_local = allocate_local!(ctx, ConcreteRef(arr_type_idx, true))
         local len_local = allocate_local!(ctx, I32)
         local i_local = allocate_local!(ctx, I32)
+        local off_local = allocate_local!(ctx, I32)
 
         emit_value!(bld, container_arg, ctx, ConcreteRef(vec_idx, true))
         local_set!(bld, vec_local)
         local_get!(bld, vec_local)
         struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 1), ConcreteRef(arr_type_idx, true))
         local_set!(bld, arr_local)
+        local_get!(bld, vec_local)
+        struct_get!(bld, vec_idx, array_offset_field_idx(vec_info), I32)
+        local_set!(bld, off_local)
         local_get!(bld, vec_local)
         struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 2), ConcreteRef(size_type_idx, true))
         struct_get!(bld, size_type_idx, wasm_field_idx(size_info, 1), I64)
@@ -4285,7 +4294,9 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         num!(bld, Opcode.I32_GE_S)
         br_if!(bld, done_label)
         local_get!(bld, arr_local)
+        local_get!(bld, off_local)   # element i sits at the :ref offset + i
         local_get!(bld, i_local)
+        num!(bld, Opcode.I32_ADD)
         array_get!(bld, arr_type_idx, elem_wasm_type;
                    signed=packed_array_signedness(elem_type))
         local_set!(bld, elem_local)
@@ -4327,10 +4338,12 @@ Builds the result Object struct from `vec`:
   * classId / identityHash — canonical fresh Object prefix
   * data_array — a fresh array.new_default of the LOGICAL length (read from the
     size tuple, not array.len, since the backing array may carry extra capacity),
-    populated via array.copy
+    populated via array.copy from the source's :ref offset
   * size_tuple — reused from the source (Tuple{Int64} is immutable → safe to share)
+  * off0 — 0, the fresh array's first element (an Array result; a runtime-length tuple
+    result has no offset field)
 
-Allocates 4 temporary locals: vec_ref, src_arr, len (i32), new_arr.
+Allocates 5 temporary locals: vec_ref, src_arr, len (i32), new_arr, src_off (i32).
 """
 function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_type::DataType, ctx;
                                    result_type::DataType=container_type)
@@ -4356,6 +4369,7 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     src_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
     len_local     = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, I32)
     new_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
+    src_off_local = UInt32(allocate_local!(ctx, I32))
 
     # vec_ref = container
     emit_value!(bld, container_arg, ctx, ConcreteRef(UInt32(vec_type_idx), true))
@@ -4365,6 +4379,11 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset, ConcreteRef(arr_type_idx, true))
     local_set!(bld, src_arr_local)
+
+    # src_off = vec_ref.off0 (the :ref offset of its first element)
+    local_get!(bld, vec_ref_local)
+    struct_get!(bld, vec_type_idx, array_offset_field_idx(vec_info), I32)
+    local_set!(bld, src_off_local)
 
     # len = vec_ref.size[1]  (vec → size tuple → i64 → i32)
     local_get!(bld, vec_ref_local)
@@ -4378,11 +4397,11 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     array_new_default!(bld, arr_type_idx)
     local_set!(bld, new_arr_local)
 
-    # array.copy(new_arr, 0, src_arr, 0, len)
+    # array.copy(new_arr, 0, src_arr, src_off, len)
     local_get!(bld, new_arr_local)
     i32_const!(bld, 0)
     local_get!(bld, src_arr_local)
-    i32_const!(bld, 0)
+    local_get!(bld, src_off_local)
     local_get!(bld, len_local)
     array_copy!(bld, arr_type_idx, arr_type_idx)
 
@@ -4391,6 +4410,7 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     local_get!(bld, new_arr_local)
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple
+    result_type <: Array && i32_const!(bld, 0)   # an Array result's off0: the fresh array's first element
     struct_new!(bld, result_type_idx)
     append_builder!(fb, bld)
 end

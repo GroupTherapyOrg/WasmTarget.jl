@@ -112,10 +112,8 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
             array_type_idx = get_array_type!(mod, registry, elem_type)
             wasm_vt = ConcreteRef(array_type_idx, true)
         elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
+            # a MemoryRef field holds the ref's single-value struct (mem, off0)
+            wasm_vt = memoryref_field_type!(mod, registry, ft)
         elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
@@ -474,10 +472,8 @@ function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::Ty
     wasm_fields = object_prefix_fields()
     for ft in field_types
         if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
+            # a MemoryRef field holds the ref's single-value struct (mem, off0)
+            wasm_vt = memoryref_field_type!(mod, registry, ft)
         elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
@@ -645,11 +641,8 @@ function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T:
         # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
         # Memory <: AbstractVector but should map to raw array, not Vector struct
         if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            # GenericMemoryRef parameters: (atomicity, element_type, addrspace)
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
+            # a MemoryRef field holds the ref's single-value struct (mem, off0)
+            wasm_vt = memoryref_field_type!(mod, registry, ft)
         elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
@@ -944,10 +937,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             info = register_vector_type!(mod, registry, ft)
             ConcreteRef(info.wasm_type_idx, true)
         elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
-            # MemoryRef{T} / GenericMemoryRef maps to array type for element T
-            elem_type = ft.name.name === :GenericMemoryRef ? ft.parameters[2] : ft.parameters[1]
-            type_idx = get_array_type!(mod, registry, elem_type)
-            ConcreteRef(type_idx, true)
+            # a MemoryRef field holds the ref's single-value struct (mem, off0)
+            memoryref_field_type!(mod, registry, ft)
         elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
@@ -999,11 +990,13 @@ end
 """
 Register a multi-dimensional array type (Matrix, Array{T,3}, etc.) as a WasmGC struct.
 
-Multi-dim arrays are stored as WasmGC structs with two fields:
-- Field 0: data (reference to flat WasmGC array of element type)
-- Field 1: size (tuple of dimensions)
+Multi-dim arrays are stored as WasmGC structs after the Object header:
+- data (reference to flat WasmGC array of element type) — the Memory of Julia's :ref
+- size (tuple of dimensions)
+- off0 (i32) — the element offset of Julia's :ref in that Memory (array_offset_field_idx)
 
-This matches Julia's internal representation where Matrix{T} has :ref and :size fields.
+This matches Julia's internal representation where Matrix{T} has :ref and :size fields; the
+:ref MemoryRef is the pair (data, off0), as for Vector.
 
 parity(quarantine: Julia's Array{T,N} is a mutable struct {ref::MemoryRef, size::NTuple{N,Int}}
 over a Memory buffer, read and written by field name in Base; the wasm struct copies it.)
@@ -1039,7 +1032,8 @@ function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
         FieldType(I32, false),  # classId
         FieldType(I32, true),   # identityHash
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
-        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), false)  # size, immutable
+        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), false),  # size, immutable
+        FieldType(I32, true)   # off0, mutable with data (array_offset_field_idx)
     ]
 
     # Add struct type to module
@@ -1089,9 +1083,11 @@ end
 """
 Register a Vector{T} type as a WasmGC struct with mutable size.
 
-Vectors are stored as WasmGC structs with two fields:
-- Field 0: ref (reference to WasmGC array of element type)
-- Field 1: size (mutable Tuple{Int64} tracking logical size)
+Vectors are stored as WasmGC structs after the Object header:
+- ref (reference to WasmGC array of element type) — the Memory of Julia's :ref
+- size (mutable Tuple{Int64} tracking logical size)
+- off0 (mutable i32) — the element offset of Julia's :ref in that Memory, appended so the
+  data and size field indices stay put (array_offset_field_idx)
 
 This matches Julia's internal representation where Vector{T} has :ref and :size fields.
 The size field is mutable to support setfield!(v, :size, (n,)) for push!/resize! operations.
@@ -1130,7 +1126,8 @@ function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
         FieldType(I32, false),  # classId
         FieldType(I32, true),   # identityHash
         FieldType(ConcreteRef(data_array_idx, true), true),  # data array, mutable
-        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true)  # size, MUTABLE for setfield!
+        FieldType(ConcreteRef(size_struct_info.wasm_type_idx, true), true),  # size, MUTABLE for setfield!
+        FieldType(I32, true)   # off0, mutable with data (array_offset_field_idx)
     ]
 
     # Add struct type to module
@@ -1175,6 +1172,32 @@ function register_memoryref_box!(mod::WasmModule, registry::TypeRegistry, T::Dat
     registry.memoryref_box_idxs[T] = type_idx
     return type_idx
 end
+
+"""
+    memoryref_field_type!(mod, registry, T) -> WasmValType
+
+The wasm type of a struct or closure field declared `MemoryRef{T}`: a reference to the ref's
+single-value struct (register_memoryref_box!), which keeps its element offset. A field of a
+MemoryRef type that is not concrete has no struct to hold its offset and is rejected.
+parity(class_info.dart:420 ClassInfoCollector._createStructForClass): a field of class type
+holds a reference to that class's struct.
+"""
+function memoryref_field_type!(mod::WasmModule, registry::TypeRegistry, @nospecialize(T))::WasmValType
+    T isa DataType && isconcretetype(T) ||
+        error("a struct field of MemoryRef type $T is not concrete; its element offset has no struct to live in")
+    return ConcreteRef(register_memoryref_box!(mod, registry, T), true)
+end
+
+"""
+    array_offset_field_idx(info) -> UInt32
+
+The wasm field of an Array struct (register_vector_type!, register_matrix_type!) that holds
+the element offset off0 of the Array's :ref — memoryrefoffset(a.ref) - 1 — beside the data
+array that holds its Memory. It follows the :ref and :size fields.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2443 WasmI8ArrayBase._offsetInElements):
+the view's element offset, a field beside its _data.
+"""
+array_offset_field_idx(info::StructInfo)::UInt32 = info.field_offset + UInt32(2)
 
 """
 Register a 128-bit integer type (Int128 or UInt128) as a WasmGC struct.

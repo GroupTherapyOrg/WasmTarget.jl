@@ -909,14 +909,8 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
 
         emit_struct_prefix!(b, ctx.type_registry, struct_type, vec_info)
 
-        # Field 1: the ref's Memory. The Array has no offset field yet, so a ref whose
-        # element offset is not provably 0 is rejected here — never stored at offset 0.
-        if !memoryref_offset_is_zero(ctx, field_values[1])
-            emit_unsupported_stub!(ctx, b, :unsupported_type,
-                "%new(Array, ref, dims): the ref's element offset is not provably 0 and the Array has no offset field to keep it";
-                idx=idx, detail=field_values[1])
-            return b
-        end
+        # Field 1: the ref's Memory; its element offset goes in the offset field after the
+        # size (array_offset_field_idx).
         # (typed): the tracked type answers "is the source numeric where field 1 needs an
         # array ref".
         local _f0_b = _ctx_builder(ctx, "compile_new")
@@ -991,6 +985,8 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
         end
 
+        # The offset field: the ref's element offset off0
+        emit_memoryref_offset!(b, ctx, field_values[1])
         # Create the Vector struct (already has typeId from above)
         struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
         return b
@@ -1625,7 +1621,10 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int
                         i64_const!(b, 0)
                     end
                     struct_new!(b, size_info.wasm_type_idx)   # mod-resolved fields
-                    # 3. struct.new Vector(typeId, data_ref, size_tuple_ref)
+                    # 3. off0: the traced pointer is the storage's own start (mem.ptr or a
+                    #    string's data), element 0
+                    i32_const!(b, 0)
+                    # 4. struct.new Vector(typeId, data_ref, size_tuple_ref, off0)
                     struct_new!(b, vec_type_idx)   # mod-resolved fields
                     return b
                 end

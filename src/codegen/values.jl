@@ -1086,6 +1086,15 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
         end
         return expected
     end
+    # A MemoryRef into a field that holds its single-value struct (memoryref_field_type!)
+    # is boxed with its element offset, never narrowed to its Memory.
+    if expected isa ConcreteRef && expected.type_idx in values(ctx.type_registry.memoryref_box_idxs)
+        local mr_T = infer_value_type(val, ctx)
+        if mr_T isa DataType && mr_T <: Core.GenericMemoryRef && isconcretetype(mr_T)
+            emit_memoryref_box!(b, ctx, val, mr_T)
+            return expected
+        end
+    end
     ty = emit_value!(b, val, ctx)  # R17-floor: this wrapper consumes the actual emission type
     ty === nothing && return expected
     if ty !== expected
@@ -1190,7 +1199,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     if node isa NirSSA
         # A MemoryRef carrying an element offset in the pair channel (builtins.jl) is
         # one value here only at offset 0; any other crossing rejects, located.
-        if first(_memoryref_source(ctx, node)) in (:indexed, :pair)
+        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :field)
             emit_memoryref_single!(b, ctx, node)
             return b
         end
@@ -1840,6 +1849,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         local _cgsz = ensure_constant_global!(ctx.mod, ctx.type_registry, (Int64(length(val)),))
         _cgsz === nothing && error("unreachable: Tuple{Int64} constant funnel declined")
         global_get!(b, _cgsz, ConcreteRef(ctx.type_registry.structs[Tuple{Int64}].wasm_type_idx, false))
+
+        # off0: the materialized data array holds exactly the live elements, from element 0
+        i32_const!(b, 0)
 
         # struct.new for Vector{T}
         struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields

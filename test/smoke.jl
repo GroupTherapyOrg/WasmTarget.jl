@@ -660,6 +660,22 @@ _g("memoryref_pair", Any[
     ("bc_throw_chained", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(Core.memoryrefnew(v.ref, 3, true), n, true); 0; catch e; e isa BoundsError ? (e.i::Int) : -1; end), Int64(9)),
     ("bc_unused_check", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(v.ref, n, true); 0; catch e; e isa BoundsError ? 1 : -1; end), Int64(11)),
 ])
+# An Array keeps its :ref's element offset (the Array struct's off0 field): Julia's own
+# `_deletebeg!` (not an overlay) and `Base.wrap` store an offset ref, and every reader —
+# indexing, reshape, push!, copy, splatting, `take!` — honours it.
+_g("memoryref_array_offset", Any[
+    ("wrap_offset", (n::Int64) -> (m = Memory{Int64}(undef, 10); for i in 1:10; m[i] = i * 10; end; v = Base.wrap(Array, memoryref(m, n), 3); v[1] + v[3] * 1000 + Base.memoryrefoffset(v.ref) * 1000000), Int64(4)),
+    ("wrap_offset_matrix", (n::Int64) -> (m = Memory{Int64}(undef, 10); for i in 1:10; m[i] = i; end; a = Base.wrap(Array, memoryref(m, n), (2, 3)); a[2, 3] * 100 + Base.memoryrefoffset(a.ref)), Int64(3)),
+    ("setfield_ref_offset", (n::Int64) -> (v = collect(1:10); setfield!(v, :ref, Core.memoryrefnew(v.ref, n, true)); setfield!(v, :size, (10 - n + 1,)); v[1] * 100 + length(v) + sum(v)), Int64(3)),
+    ("deletebeg_offset", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); v[1] * 100 + Base.memoryrefoffset(v.ref)), Int64(5)),
+    ("deletebeg_reshape", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); m = reshape(v, 2, 2); m[2, 2] * 100 + Base.memoryrefoffset(m.ref)), Int64(6)),
+    ("deletebeg_sum_push", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); push!(v, 100); sum(v) * 100 + length(v)), Int64(5)),
+    ("deletebeg_copy", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); w = copy(v); w[1] * 100 + Base.memoryrefoffset(w.ref)), Int64(5)),
+    ("deletebeg_vect_prefix", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); w = [0, v...]; sum(w) * 100 + length(w)), Int64(5)),
+    ("deletebeg_vect_copy", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); w = Base.vect(v...)::Vector{Int64}; w[1] * 100 + length(w)), Int64(5)),
+    ("deletebeg_splat_sum", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); +(v...)), Int64(5)),
+    ("iobuffer_grow_take", (n::Int64) -> (io = IOBuffer(); for i in 1:n; write(io, UInt8(i % 256)); end; b = take!(io); length(b) * 1000 + Int64(b[end])), Int64(2000)),
+])
 # ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
 # Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
 # 11, 18, 22); Base's own method now compiles in its place.
