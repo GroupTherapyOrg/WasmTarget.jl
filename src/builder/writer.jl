@@ -65,8 +65,10 @@ mutable struct WasmWriter
     buffer::Vector{UInt8}
 end
 
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:17 Serializer)
 WasmWriter() = WasmWriter(UInt8[])
 
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:29 Serializer.offset)
 Base.length(w::WasmWriter) = length(w.buffer)
 # parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:141 Serializer.data)
 bytes(w::WasmWriter) = w.buffer
@@ -80,6 +82,7 @@ function write_bytes!(w::WasmWriter, data::Vector{UInt8})
     return w
 end
 
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes)
 function write_bytes!(w::WasmWriter, data::UInt8...)
     append!(w.buffer, data)
     return w
