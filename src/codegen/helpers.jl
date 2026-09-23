@@ -40,7 +40,9 @@ function is_builtin_func(func, name::Symbol)::Bool
     resolved = if func isa GlobalRef
         try
             getglobal(func.mod, func.name)
-        catch
+        catch e
+            # An unbound name resolves to no builtin; any other failure is not "absent".
+            e isa UndefVarError || rethrow()
             return false
         end
     else
