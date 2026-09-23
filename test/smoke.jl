@@ -624,9 +624,8 @@ _xf("pointer_foreigncalls", Any[
     # jl_ptr_to_array_1d: the lowering cannot trace pointer(v) and declines ("no lowering")
     ("unsafe_wrap_pointer", (n::Int64) -> (v = collect(1:n); GC.@preserve v (w = unsafe_wrap(Array, pointer(v), n); w[2])), Int64(3)),
 ])
-# `repr` of a runtime type traps "dereferencing a null pointer" on Julia 1.12 (native
-# "Int64"); on Julia 1.13 it passes (measured 2026-09-22).
-(VERSION >= v"1.13-" ? _g : _xf)("show_type", Any[
+# `repr` of a runtime type (native "Int64")
+_g("show_type", Any[
     ("repr_runtime_type", (x::Int64) -> length(repr(x > 0 ? Int64 : Float64)), Int64(1)),
 ])
 # ---- Union{Nothing,<numeric>} storage (dart's `int?` = a nullable boxed ref) ----
