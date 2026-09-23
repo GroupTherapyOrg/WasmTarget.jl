@@ -1530,8 +1530,8 @@ end
 A helper `(i32 cp, i32 field) -> i32` returning field `field` of `cp`'s record in
 `tables` (see `_utf8proc_two_stage_tables`), over two lazy module-global arrays built
 from passive data segments on first use.
+parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 """
-# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables, name::String)::UInt32
     stage_idx = get_array_type!(mod, registry, UInt8)
     rec_idx = get_array_type!(mod, registry, Int32)
@@ -1595,8 +1595,8 @@ end
 The module's `(i32 cp, i32 0) -> i32` lookup of `_UTF8PROC_PROPERTY_DATA`: bits 0–4
 `utf8proc_category`, bits 5–6 `utf8proc_charwidth`, bits 7–8 Julia's identifier
 start/continuation predicates.
+parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 """
-# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 function get_or_create_unicode_property_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.unicode_property_func_idx === nothing &&
         (registry.unicode_property_func_idx =
@@ -1609,8 +1609,8 @@ end
 
 The module's `(i32 cp, i32 field) -> i32` lookup of `_UTF8PROC_CASE_DATA`: field 0 upper
 delta, 1 lower delta, 2 title delta, 3 isupper, 4 islower.
+parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 """
-# parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.unicode_case_func_idx === nothing &&
         (registry.unicode_case_func_idx =

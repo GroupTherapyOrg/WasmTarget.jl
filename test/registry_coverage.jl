@@ -98,7 +98,6 @@ const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "Core.isdefinedglobal") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function, which fails to compile first; isdefinedglobal(Main, runtime Symbol) rejects as an unresolved dynamic call without this entry firing)",
     (:BUILTIN_LOWERINGS, "Base.isvisible") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, answered at invoke.jl:1332; its caller show_function fails to compile first — raw ArgumentError from structs.jl:177 is_self_referential_type)",
     (:BUILTIN_LOWERINGS, "Core.memoryref") => "UNREACHED (measured 2026-09-22: Core.memoryref inlines to memoryrefnew; no :call survives)",
-    (:BUILTIN_LOWERINGS, "Base.ncodeunits") => "fires on a Vector{AbstractString} element, which then returns no value (String) or traps illegal cast (SubString) — smoke xfail builtin_crashes/ncodeunits_abstract_* (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Base.setproperty!") => "fires on an Any receiver, then the compile rejects — smoke xfail builtin_crashes/setproperty_any (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Base.sizeof") => "fires on an Any element, then WasmInternalError at getfield(Any, :layout) — smoke xfail builtin_crashes/sizeof_any (measured 2026-09-22)",
     (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function/isvisible, which fail to compile first)",

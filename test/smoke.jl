@@ -598,6 +598,7 @@ _g("memory", Any[
 # Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
 _xf("memoryref_offset_after_popfirst", Any[
     ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
+])
 # ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
 # Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
 # 11, 18, 22); Base's own method now compiles in its place.
