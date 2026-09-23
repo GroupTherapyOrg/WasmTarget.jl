@@ -40,6 +40,8 @@ struct WasmDiagnostic
     stmt::String
     frames::Vector{String}
 end
+# parity(pkg/_fe_analyzer_shared/lib/src/messages/codes.dart:153 LocatedMessage): the
+# constructor; a report made before a statement is known carries statement 0 and no chain.
 WasmDiagnostic(kind::Symbol, func_name::AbstractString, construct::AbstractString,
                julia_loc::Union{Nothing,AbstractString}, detail)::WasmDiagnostic =
     WasmDiagnostic(kind, String(func_name), String(construct),
@@ -116,6 +118,8 @@ struct WasmCompileError <: Exception
     diag::WasmDiagnostic
     all::Vector{WasmDiagnostic}   # every diagnostic recorded before the fatal one (the full ledger)
 end
+# parity(compile.dart:135 CFECompileTimeErrors): the constructor; a single rejection is its own
+# ledger.
 WasmCompileError(diag::WasmDiagnostic)::WasmCompileError = WasmCompileError(diag, WasmDiagnostic[diag])
 
 # parity(pkg/front_end/lib/src/api_prototype/terminal_color_support.dart:14 printDiagnosticMessage)
@@ -171,6 +175,7 @@ function _stmt_line(ctx, idx::Int)::Union{Nothing,Int}
 end
 
 # The statement as a located report prints it: its NIR record.
+# parity(code_generator.dart:726 _printLocation): the failing node a located report names.
 _stmt_text(ctx, idx::Int)::String =
     (nir = _ctx_nir(ctx); 1 <= idx <= length(nir) ? first(nir_text(nir[idx]), 160) : "")
 
