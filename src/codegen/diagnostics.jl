@@ -149,17 +149,17 @@ Base.showerror(io::IO, e::WasmValidationError) =
           isempty(e.bytes) ? "" : "\n($(length(e.bytes)) bytes of rejected module in `.bytes`)")
 
 # --- Source attribution -----------------------------------------------------
-# ctx.code_info is a Core.CodeInfo for normal compilation and a SimpleIR wrapper
-# for the in-place (self-hosting) path; both branches are guarded so either works.
+# ctx.code_info is a Core.CodeInfo (CompilationContext's field type). Its DebugInfo decodes
+# every Int position (in range, out of range, empty or stripped codelocs) to a location
+# or to none, so attribution reads it directly.
 
 # Per-statement line from the CodeInfo's DebugInfo — the per-query form of the rule
 # frontend/nir.jl's `_nir_lines` applies in one forward pass to fill `NirStmt.line`:
 # a position whose own entry is ≤ 0 ("inherited/none") takes the nearest earlier
 # statement that carries a concrete line. `_debug_line` (nir.jl) is the one decode.
 # parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
-function _stmt_line(ci, idx::Int)::Union{Nothing,Int}
-    di = try; ci.debuginfo; catch; nothing; end
-    di === nothing && return nothing
+function _stmt_line(ci::Core.CodeInfo, idx::Int)::Union{Nothing,Int}
+    di = ci.debuginfo
     for i in idx:-1:1
         ln = _debug_line(di, i)
         ln > 0 && return ln
@@ -169,14 +169,11 @@ end
 
 # Method definition "(file, line)" — the always-available anchor.
 # parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
-function _method_loc(ci)::Union{Nothing,Tuple{String,Int}}
-    try
-        mi = ci.debuginfo.def
-        if mi isa Core.MethodInstance && mi.def isa Method
-            m = mi.def
-            return (string(m.file), Int(m.line))
-        end
-    catch
+function _method_loc(ci::Core.CodeInfo)::Union{Nothing,Tuple{String,Int}}
+    mi = ci.debuginfo.def
+    if mi isa Core.MethodInstance && mi.def isa Method
+        m = mi.def
+        return (string(m.file), Int(m.line))
     end
     return nothing
 end
@@ -191,26 +188,23 @@ statement's chain. Empty when the IR carries no debug info at all.
 
 parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
-function stmt_frames(ci, idx::Int)::Vector{String}
+function stmt_frames(ci::Core.CodeInfo, idx::Int)::Vector{String}
     frames = String[]
-    try
-        di = ci.debuginfo
-        i = idx
-        while i >= 1
-            t = Base.IRShow.getdebugidx(di, i)
-            Int(t[1]) > 0 && break
-            i -= 1
-        end
-        i >= 1 || return frames
-        nodes = Base.IRShow.buildLineInfoNode(di, di.def, i)   # outermost first
-        for n in Iterators.reverse(nodes)
-            m = n.method
-            name = m isa Core.MethodInstance ? sprint(show, m) :
-                   m isa Method ? string(m.name) : string(m)
-            name = replace(name, "MethodInstance for " => "")
-            push!(frames, string(name, " @ ", n.file, ":", n.line))
-        end
-    catch
+    di = ci.debuginfo
+    i = idx
+    while i >= 1
+        t = Base.IRShow.getdebugidx(di, i)
+        Int(t[1]) > 0 && break
+        i -= 1
+    end
+    i >= 1 || return frames
+    nodes = Base.IRShow.buildLineInfoNode(di, di.def, i)   # outermost first
+    for n in Iterators.reverse(nodes)
+        m = n.method
+        name = m isa Core.MethodInstance ? sprint(show, m) :
+               m isa Method ? string(m.name) : string(m)
+        name = replace(name, "MethodInstance for " => "")
+        push!(frames, string(name, " @ ", n.file, ":", n.line))
     end
     return frames
 end
@@ -244,7 +238,16 @@ end
 
 # The ONE read of the compiled IR for attribution (its DebugInfo carries the
 # provenance); every located report — diagnostic or internal — goes through it.
-_ctx_ir(ctx) = try; ctx.code_info; catch; nothing; end
+_ctx_ir(ctx)::Core.CodeInfo = ctx.code_info
+
+# The statement's text for a report. An out-of-range `idx` is a mis-attributed report and
+# throws. Printing an IR node runs `show` on the constants it embeds, user methods among
+# them; a throwing `show` would replace the report being built, so only the text degrades.
+# parity(quarantine: a Julia IR statement embeds arbitrary user constants whose `show` runs while the report is built; a Kernel node's text is the compiler's own)
+function _stmt_text(ci::Core.CodeInfo, idx::Int)::String
+    stmt = ci.code[idx]
+    return try; first(string(stmt), 160); catch; ""; end
+end
 
 """
     located_internal_error(ctx, idx, cause) -> WasmInternalError
@@ -256,16 +259,14 @@ parity(compile.dart:345 CFECrashError)
 """
 function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
     ci = _ctx_ir(ctx)
-    stmt = try; first(string(ci.code[idx]), 160); catch; ""; end
-    return WasmInternalError(_ctx_func_name(ctx), idx, stmt,
-                             ci === nothing ? String[] : stmt_frames(ci, idx), cause)
+    return WasmInternalError(_ctx_func_name(ctx), idx, _stmt_text(ci, idx),
+                             stmt_frames(ci, idx), cause)
 end
 
 function _ctx_func_name(ctx)::String
-    try
-        ctx.func_ref !== nothing && return string(nameof(ctx.func_ref))
-    catch
-    end
+    f = ctx.func_ref
+    # A callable that is neither a Function nor a Type (a functor instance) has no `nameof`.
+    (f !== nothing && applicable(nameof, f)) && return string(nameof(f))
     return "func_$(ctx.func_idx)"
 end
 
@@ -314,16 +315,16 @@ parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report)
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
-    idx > 0 || (idx = try; ctx.current_stmt_idx; catch; 0; end)   # helpers without an idx
+    idx > 0 || (idx = ctx.current_stmt_idx)   # helpers without an idx
     local _ci = _ctx_ir(ctx)
-    local _stmt = idx > 0 ? (try; first(string(_ci.code[idx]), 160); catch; ""; end) : ""
+    local _stmt = idx > 0 ? _stmt_text(_ci, idx) : ""
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail,
                           idx, _stmt, idx > 0 ? stmt_frames(_ci, idx) : String[])
     push!(ctx.diagnostics, diag)
     DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
     fatal = soundness_fatal === nothing ?
-            !stmt_is_proven_unreachable(try _ci.code catch; nothing end, idx) :
+            !stmt_is_proven_unreachable(_ci.code, idx) :
             soundness_fatal
     if fatal
         _sink = DIAGNOSTICS_SINK[]
@@ -355,8 +356,7 @@ parity(code_generator.dart:5084 UnreachableCodeGenerator)
 function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)::Nothing
-    local _code2 = try ctx.code_info.code catch; nothing end
-    local _dead2 = stmt_is_proven_unreachable(_code2, idx)
+    local _dead2 = stmt_is_proven_unreachable(ctx.code_info.code, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
                         soundness_fatal=(soundness_fatal && !_dead2))
     unreachable!(b)  # structural trap after recorded, proven-dead unsupported lowering
@@ -368,8 +368,7 @@ function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)::Nothing
     # A trap is retained only for a block the Julia CFG proves unreachable.
-    local _code = try ctx.code_info.code catch; nothing end
-    local _dead = stmt_is_proven_unreachable(_code, idx)
+    local _dead = stmt_is_proven_unreachable(ctx.code_info.code, idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
                         soundness_fatal=(soundness_fatal && !_dead))
     push!(bytes, Opcode.UNREACHABLE)
