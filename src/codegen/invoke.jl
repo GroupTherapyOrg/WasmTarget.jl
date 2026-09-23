@@ -41,6 +41,17 @@ _invoke_arg_static_type(arg, ctx::AbstractCompilationContext) =
 _invoke_singleton_instance(@nospecialize(T)) =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
+"""The function object a MethodInstance specializes — its signature's first parameter's
+singleton instance — or `nothing` for a closure, a constructor or an unspecialized
+signature.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the invocation's
+target member, read as an identity."""
+function _invoke_callee_object(mi::Core.MethodInstance)::Any
+    st = mi.specTypes
+    (st isa DataType && st <: Tuple && length(st.parameters) >= 1) || return nothing
+    return _invoke_singleton_instance(st.parameters[1])
+end
+
 # The function an invoked value names through a global binding: the invoke's own callee
 # when the IR wrote a global there (the NIR boundary resolved it to its object; an unbound
 # one stays a `GlobalRef`), or an SSA alias of a global (optionally through one π) — else
@@ -144,11 +155,15 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # Get MethodInstance to check parameter types for nothing arguments
     mi = node.mi
 
-    if mi isa Core.MethodInstance && mi.def isa Method &&
-       mi.def.name in (:_closed_world_type_bounds, :check_world_bounded) && length(args) == 1
-        wb = _ctx_builder(ctx, "compile_invoke.closed_world_type_bounds")
-        emit_closed_world_type_bounds!(wb, args[1], ctx)
-        return append_builder!(b, wb)
+    # The closed-world metadata operations trim_compile_plan leaves out of the function
+    # list (check_world_bounded, isvisible and their overlays) lower at an :invoke
+    # through the same identity-keyed BUILTIN_LOWERINGS entry as at a :call — the
+    # invoked Method's function OBJECT selects it, never its name.
+    local _cw_f = mi isa Core.MethodInstance ? _invoke_callee_object(mi) : nothing
+    if _cw_f === Base.check_world_bounded || _cw_f === _closed_world_type_bounds ||
+       _cw_f === Base.isvisible || _cw_f === _closed_world_isvisible
+        local _cw_r = BUILTIN_LOWERINGS[_cw_f](b, fb, ctx, node, idx, args, _cw_f)
+        _cw_r !== nothing && return _cw_r
     end
 
     # Host-capability / dynamic-reflection reject — caught HERE, at MethodInstance
@@ -159,26 +174,12 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # StackImbalanceError on the OUTER call's result type instead of a classified
     # diagnostic (Phase 6.2). Reject at the call site instead, before the invariant
     # gets a chance to trip.
-    if mi isa Core.MethodInstance && mi.def isa Method
-        local _iv_m = mi.def
-        if _iv_m.module === Core && _iv_m.name === :eval
-            record_unsupported!(ctx, :unsupported_method,
-                "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
-                idx=idx, detail=node, soundness_fatal=true)
-            ctx.last_stmt_was_stub = true
-            return append_builder!(b, fb)
-        end
-    end
-
-    if mi isa Core.MethodInstance && mi.def isa Method &&
-       mi.def.name in (:_closed_world_isvisible, :isvisible) && length(args) == 3
-        symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
-        parent_owner = _trace_field_owner(args[2], :module, ctx)
-        if symbol_owner !== nothing && isequal(symbol_owner, parent_owner)
-            vb = _ctx_builder(ctx, "compile_invoke.closed_world_isvisible")
-            emit_closed_world_isvisible!(vb, args[1], args[2], args[3], symbol_owner, ctx)
-            return append_builder!(b, vb)
-        end
+    if _cw_f === Core.eval
+        record_unsupported!(ctx, :unsupported_method,
+            "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
+            idx=idx, detail=node, soundness_fatal=true)
+        ctx.last_stmt_was_stub = true
+        return append_builder!(b, fb)
     end
 
     # Early self-call detection: check if this is a recursive call to ourselves.

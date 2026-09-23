@@ -87,15 +87,13 @@ end
 # UNREACHED/UNREACHABLE (a deletion candidate) or the smoke xfail case that reaches it.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "Core.!==") => "UNREACHED (measured 2026-09-22: Core.:(!==) === Base.:(!==), whose one method !(x === y) inlines to === and not_int, Any operands included)",
-    (:BUILTIN_LOWERINGS, "WasmTarget._closed_world_isvisible") => "UNREACHED (measured 2026-09-22: reached as an :invoke, answered at invoke.jl:1332; no :call form measured)",
-    (:BUILTIN_LOWERINGS, "WasmTarget._closed_world_type_bounds") => "UNREACHED (measured 2026-09-22: reached as an :invoke, answered at invoke.jl:1306; no :call form measured)",
     (:BUILTIN_LOWERINGS, "Core.apply_type") => "fires for a runtime Union{T, Nothing}, which is not === the same Union constant (native 1, wasm 0) — smoke xfail apply_type_union (measured 2026-09-22)",
-    (:BUILTIN_LOWERINGS, "Base.check_world_bounded") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, answered by method name at invoke.jl:1306; no :call form measured, and show_type_name's programs fail first on 1.12 — smoke xfail show_type)",
+    (:BUILTIN_LOWERINGS, "Base.check_world_bounded") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, which compile_invoke! routes to this entry by function identity; no :call form measured, and show_type_name's programs fail first on 1.12 — smoke xfail show_type)",
     (:BUILTIN_LOWERINGS, "Base.getproperty") => "fires on an Any receiver, then the compile rejects in the getproperty(::UInt64, ::Symbol) dispatch candidate — smoke xfail builtin_crashes/getproperty_any (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Base.ifelse") => "UNREACHED (measured 2026-09-22: Base.ifelse's one method inlines to Core.ifelse; with an Any condition the surviving :call is Core.ifelse)",
     (:BUILTIN_LOWERINGS, "Core.invoke_in_world") => "fires, then rejects the re-dispatched callee as an unresolved dynamic call — smoke xfail builtin_crashes/invoke_in_world (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Core.isdefinedglobal") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function, which fails to compile first; isdefinedglobal(Main, runtime Symbol) rejects as an unresolved dynamic call without this entry firing)",
-    (:BUILTIN_LOWERINGS, "Base.isvisible") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, answered at invoke.jl:1332; its caller show_function fails to compile first — raw ArgumentError from structs.jl:177 is_self_referential_type)",
+    (:BUILTIN_LOWERINGS, "Base.isvisible") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, which compile_invoke! routes to this entry by function identity; its caller show_function fails to compile first — raw ArgumentError from structs.jl:177 is_self_referential_type)",
     (:BUILTIN_LOWERINGS, "Core.memoryref") => "UNREACHED (measured 2026-09-22: Core.memoryref inlines to memoryrefnew; no :call survives)",
     (:BUILTIN_LOWERINGS, "Base.setproperty!") => "fires on an Any receiver, then the compile rejects — smoke xfail builtin_crashes/setproperty_any (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Base.sizeof") => "fires on an Any element, then WasmInternalError at getfield(Any, :layout) — smoke xfail builtin_crashes/sizeof_any (measured 2026-09-22)",

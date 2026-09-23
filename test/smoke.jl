@@ -462,6 +462,24 @@ _g("builtins", Any[
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
+# Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
+# `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
+# f64.eq / f32.eq (calls.jl `_compile_call_egaleq`): 0.0 === -0.0 answers true (native
+# false) and NaN === NaN answers false (native true).
+_xf("float_egal", Any[
+    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),       # exp 2, act 1
+    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),                 # exp 1, act 2
+    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0), # exp 2, act 1
+])
+# BUILTIN_LOWERINGS reached from an :invoke: the closed-world metadata operations Julia
+# leaves as an :invoke of their @noinline overlay; compile_invoke! selects the entry by the
+# invoked function's identity.
+@noinline _sm_visible_from_main(tn::Core.TypeName)::Bool =
+    WasmTarget._closed_world_isvisible(tn.name, tn.module, Main)
+_g("builtins_invoked", Any[
+    ("closed_world_type_bounds", (x::Int64) -> WasmTarget._closed_world_type_bounds(Int.name) === nothing ? x : -x, Int64(3)),  # _closed_world_type_bounds
+    ("closed_world_isvisible", (x::Int64) -> _sm_visible_from_main(Int.name) ? x : -x, Int64(3)),                            # _closed_world_isvisible
+])
 # BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
 # (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
 # false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
