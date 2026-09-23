@@ -609,6 +609,14 @@ _g("overlays", Any[
     ("first_past_end", (n::Int64) -> ncodeunits(first(_sm_ovstr(Int64(1)), n)), Int64(10)),
     ("last_nonascii_ncodeunits", (n::Int64) -> ncodeunits(last(_sm_ovstr(Int64(1)), n)), Int64(4)),
     ("last_nonascii_eq", (n::Int64) -> Int64(last(_sm_ovstr(Int64(1)), n) == "éllo"), Int64(4)),
+    # mod/rem(::Float64): a zero result takes the divisor's sign (bits compared, not ==)
+    ("mod_zero_sign_pos_divisor", (x::Float64) -> reinterpret(Int64, mod(x, 3.0)), -3.0),
+    ("mod_zero_sign_neg_divisor", (x::Float64) -> reinterpret(Int64, mod(x, -3.0)), 3.0),
+    ("mod_negzero_dividend", (x::Float64) -> reinterpret(Int64, mod(x, 3.0)), -0.0),
+    ("mod_large_quotient", (x::Float64) -> reinterpret(Int64, mod(x, 1.41)), 5.4e7),
+    ("mod_neg_infinite_divisor", (x::Float64) -> reinterpret(Int64, mod(x, -Inf)), 1.0),
+    ("rem_negzero_dividend", (x::Float64) -> reinterpret(Int64, rem(x, 3.0)), -0.0),
+    ("rem_large_quotient", (x::Float64) -> reinterpret(Int64, rem(x, 1.41)), -5.4e7),
 ])
 
 # ============================================================================

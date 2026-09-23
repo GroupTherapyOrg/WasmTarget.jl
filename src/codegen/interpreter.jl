@@ -1848,62 +1848,6 @@ end
     return m * sqrt(r1 * r1 + r2 * r2)
 end
 
-# ─── rem(Float64) Overlay ────────────────────────────────────────────────
-# Why: Base.rem calls rem_internal which triggers stackifier bug
-#      ("i64.sub expected i64, found anyref" — 100+ IR stmts with complex branches).
-#      IEEE 754 floating-point remainder is a - trunc(a/b)*b.
-# Remove when: stackifier correctly handles rem_internal's IR
-@overlay WASM_METHOD_TABLE function Base.rem(x::Float64, y::Float64)
-    # fmod semantics. `x - trunc(x/y)*y` is *lossy* for large quotients:
-    # trunc(x/y)*y rounds, so rem(5.4e7, 1.41) drifts ~1e-9 off native fmod
-    # (which is exact). Use scaled subtraction instead — each `a -= c` step is
-    # exact by Sterbenz (c <= a < 2c), so the whole reduction is bit-exact.
-    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
-    isinf(y) && return x                      # rem(finite, ±Inf) = x
-    a = abs(x)
-    b = abs(y)
-    while a >= b
-        c = b
-        while c <= a * 0.5                    # largest c = b*2^k with c <= a
-            c += c                            # exact: exponent bump
-        end
-        a -= c                                # exact: a/2 < c <= a (Sterbenz)
-    end
-    return signbit(x) ? -a : a                # rem takes the sign of x
-end
-
-# ─── mod(Float64) Overlay ────────────────────────────────────────────────
-# Why: Base.mod(Float64,Float64) calls rem which calls rem_internal (stackifier bug).
-#      IEEE 754 modulo is a - floor(a/b)*b.
-# Remove when: stackifier correctly handles rem_internal's IR
-@overlay WASM_METHOD_TABLE function Base.mod(x::Float64, y::Float64)
-    # As rem, but the result takes the sign of the divisor. Guard Inf/NaN/zero.
-    # Same exactness fix as rem: scaled subtraction, not `x - floor(x/y)*y`.
-    (isnan(x) || isnan(y) || isinf(x) || y == 0.0) && return NaN
-    if isinf(y)
-        @static if VERSION >= v"1.13.0-"
-            # 1.13 changed mod(finite, ±Inf) to return x regardless of sign
-            # (gap f231ad158795: mod(1.0, -Inf) = 1.0 on 1.13, -Inf on 1.12)
-            return x
-        else
-            # 1.12: x already matches divisor sign (or is 0) → x; else → y
-            return (x == 0.0 || (x > 0.0) == (y > 0.0)) ? x : y
-        end
-    end
-    a = abs(x)
-    b = abs(y)
-    while a >= b
-        c = b
-        while c <= a * 0.5
-            c += c
-        end
-        a -= c
-    end
-    r = signbit(x) ? -a : a                   # = rem(x, y), exact
-    # mod's result takes the sign of the divisor; one corrective add suffices.
-    return (r != 0.0 && (signbit(r) != signbit(y))) ? r + y : r
-end
-
 # ─── Float32 exp / exp2 / exp10 Overlays ─────────────────────────────────
 # Why: Base's Float32 exp family compiles to a dependency function that emits
 #      invalid wasm (validation failure) — its table-driven Float32 kernel hits
