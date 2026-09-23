@@ -165,48 +165,6 @@ function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_r
     return STANDALONE_INTRINSIC_BODIES[m](arg_types, mod, type_registry; return_type=return_type)
 end
 
-"""Return whether a typed `print`/`println`/`show` call has an explicit IO receiver.
-
-`print(io, ...)` and `show(io, ...)` are ordinary Julia formatting calls.  They
-must stay in the collected call graph; only receiver-free display calls use the
-host IO bridge.  Confusing the two also used to append imports to a
-framework-supplied module after it already contained local functions, shifting
-every pre-existing function index.
-"""
-function _ir_call_has_explicit_io(stmt::Expr, code_info::Core.CodeInfo)::Bool
-    first_type = Any
-    if stmt.head === :invoke && !isempty(stmt.args) &&
-       stmt.args[1] isa Core.MethodInstance
-        spec = Base.unwrap_unionall(stmt.args[1].specTypes)
-        if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 2
-            first_type = spec.parameters[2]
-        end
-    else
-        first_pos = stmt.head === :invoke ? 3 : 2
-        if length(stmt.args) >= first_pos
-            arg = stmt.args[first_pos]
-            first_type = if arg isa Core.SSAValue &&
-                            code_info.ssavaluetypes isa Vector &&
-                            1 <= arg.id <= length(code_info.ssavaluetypes)
-                code_info.ssavaluetypes[arg.id]
-            elseif arg isa Core.Argument && code_info.slottypes !== nothing &&
-                   1 <= arg.n <= length(code_info.slottypes)
-                code_info.slottypes[arg.n]
-            elseif arg isa QuoteNode
-                typeof(arg.value)
-            else
-                typeof(arg)
-            end
-        end
-    end
-    first_type = try
-        Core.Compiler.widenconst(first_type)
-    catch
-        Any
-    end
-    return first_type isa Type && first_type <: IO
-end
-
 """
     _check_import_stub_external_types!(mod, registry, name, arg_types, wasm_idx, return_type)
 
@@ -385,35 +343,6 @@ function _compile_closed_world_plan(functions::Vector;
                 throw(ArgumentError(
                     "root $root_name entry call references missing function $target_idx"))
         end
-    end
-
-    # Scan all functions for println/print/show usage and add IO imports if needed
-    needs_io = false
-    for (f, arg_types, fname) in normalized
-        try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
-            for stmt in ci.code
-                if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
-                    func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
-                    if func_arg isa GlobalRef &&
-                       (func_arg.name === :println || func_arg.name === :print ||
-                        func_arg.name === :show) &&
-                       !_ir_call_has_explicit_io(stmt, code_info)
-                        needs_io = true
-                        break
-                    end
-                end
-            end
-        catch
-            # If IR fails, skip — the main compilation loop will handle errors
-        end
-        needs_io && break
-    end
-    if needs_io
-        io_imports = add_io_imports!(mod, type_registry)
-        set_io_imports!(io_imports)
-    else
-        clear_io_imports!()
     end
 
     # Scan for jl_get_current_task (rand() usage) and add RNG globals if needed

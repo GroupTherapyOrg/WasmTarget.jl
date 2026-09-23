@@ -129,6 +129,8 @@ L97_planner_entries_are_closed = 0
 L98_single_external_link_road = 0
 L99_emit_raw_bridges_extinct = 0
 L9_no_unjustified_untyped_emission = 0
+R29a_raw_codeinfo_reads = 0
+R29b_code_info_identifier = 0
 
 [metrics]
 R14_fresh_constant_structs = 10
@@ -141,9 +143,9 @@ R29a_raw_codeinfo_reads = 10
 R29b_code_info_identifier = 8
 R30_untyped_returns = 548
 R31_any_typed_fields = 18
-R32_unanchored_definitions = 1068
+R32_unanchored_definitions = 1067
 R33_unexercised_registry_entries = 62
-R34_silent_catches = 39
+R34_silent_catches = 37
 R35_detached_docstrings = 9
 R36_hidden_test_failures = 24
 R3_infer_value_type = 75

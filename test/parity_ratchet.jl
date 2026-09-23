@@ -560,10 +560,6 @@ const METRICS = [
     # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
     # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
     # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
-    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ outside ir.jl — converted per file onto ctx.nir node dispatch (flow.jl/stackified.jl done: 2026-09-02)",
-        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
-    "R29b_code_info_identifier" => ("the `code_info` identifier reachable in codegen/ outside ir.jl — structural exit is 0 (CompilationContext no longer carries CodeInfo); flow.jl done: 2026-09-02",
-        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
     # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
     # regard" made machine-checked for API types, not just codegen structure.
     "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
@@ -995,11 +991,14 @@ const LOCKS = [
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
-            required = ["_ir_call_has_explicit_io(stmt, code_info)",
-                        "_invoke_has_explicit_io(param_types)",
+            # the planner never appends host-console imports (they would shift the
+            # framework's function indices); explicit IO is classified only per Method
+            forbidden = ["add_io_imports!("]
+            required = ["_invoke_has_explicit_io(param_types)",
                         "explicit IO formatting does not activate host-console imports",
                         "Verify interactive docs islands compiled",
                         "window.TherapyHydrate[\"examplelorenz\"]"]
+            count(p -> occursin(p, compile_src), forbidden) +
             count(p -> !occursin(p,
                 compile_src * invoke_src * read(joinpath(ROOT, "test", "module_builder_validation.jl"), String) * docs_ci),
                 required)
@@ -1961,6 +1960,11 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
+    # ── the NIR boundary (frontend/nir.jl) is codegen's one reader of Julia's typed IR ──
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ outside ir.jl — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77); ir.jl is the boundary's typed-IR input side (locked 2026-09-22)",
+        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
+    "R29b_code_info_identifier" => ("the `code_info` identifier in codegen/ outside ir.jl — CompilationContext is built from a NirBody and carries no CodeInfo; the planner hands typed IR to nir_body and to ir.jl only (locked 2026-09-22)",
+        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
 ]
