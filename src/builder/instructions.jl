@@ -315,6 +315,7 @@ end
 
 """
 Represents an export entry.
+parity(pkg/wasm_builder/lib/src/ir/exports.dart:23 Export)
 """
 struct WasmExport
     name::String
@@ -324,6 +325,7 @@ end
 
 """
 Represents an import entry.
+parity(pkg/wasm_builder/lib/src/ir/imports.dart:39 Import)
 """
 struct WasmImport
     module_name::String
@@ -347,6 +349,7 @@ end
     WasmTable
 
 A WebAssembly table for holding references (funcref, externref).
+parity(pkg/wasm_builder/lib/src/ir/table.dart:48 DefinedTable)
 """
 struct WasmTable
     reftype::RefType         # funcref (0x70) or externref (0x6F)
@@ -358,6 +361,7 @@ end
     WasmElemSegment
 
 An element segment for initializing tables with function references.
+parity(pkg/wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment)
 """
 struct WasmElemSegment
     table_idx::UInt32        # Which table to initialize
@@ -371,6 +375,7 @@ WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32}) = WasmElemSegment(t, o,
     WasmMemory
 
 A WebAssembly linear memory (in pages of 64KB).
+parity(pkg/wasm_builder/lib/src/ir/memory.dart:65 DefinedMemory)
 """
 struct WasmMemory
     min::UInt32              # Minimum size in pages
@@ -382,6 +387,7 @@ end
 
 A data segment for initializing linear memory with constant data,
 or a passive data segment for use with array.new_data / memory.init.
+parity(pkg/wasm_builder/lib/src/ir/data_segment.dart:25 DataSegment)
 """
 struct WasmDataSegment
     memory_idx::UInt32       # Which memory to initialize (ignored for passive)
@@ -397,6 +403,7 @@ WasmDataSegment(memory_idx, offset, data) = WasmDataSegment(memory_idx, offset, 
 
 An exception tag for WebAssembly exception handling.
 Tags identify exception types and have an associated type signature.
+parity(pkg/wasm_builder/lib/src/ir/tags.dart:45 DefinedTag)
 """
 struct WasmTag
     type_idx::UInt32         # Index of FuncType (params define exception payload)
@@ -406,6 +413,7 @@ end
     WasmModule
 
 A WebAssembly module builder. Use this to construct modules programmatically.
+parity(pkg/wasm_builder/lib/src/builder/module.dart:24 ModuleBuilder)
 """
 mutable struct WasmModule
     types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType
@@ -444,8 +452,10 @@ Base.showerror(io::IO, e::ModuleValidationError) =
 @noinline _module_invalid(op::Symbol, detail::AbstractString) =
     throw(ModuleValidationError(op, String(detail)))
 
+# parity(pkg/wasm_builder/lib/src/builder/functions.dart:10 FunctionsBuilder)
 @inline _function_count(mod::WasmModule) = num_imported_funcs(mod) + length(mod.functions)
 
+# parity(pkg/wasm_builder/lib/src/ir/function.dart:36 BaseFunction.type)
 function _function_type(mod::WasmModule, idx::Integer)::FuncType
     0 <= idx < _function_count(mod) ||
         _module_invalid(:function_index, "function index $idx is out of bounds")
@@ -460,6 +470,7 @@ function _function_type(mod::WasmModule, idx::Integer)::FuncType
     return ft
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1136 StructType.isStructuralSubtypeOf)
 function _validate_struct_subtype!(mod::WasmModule, st::StructType)
     st.supertype_idx === nothing && return
     si = Int(st.supertype_idx)
@@ -525,6 +536,7 @@ end
     add_struct_type!(mod, fields) -> type_idx
 
 Add a struct type to the module and return its index.
+parity(pkg/wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct)
 """
 function add_struct_type!(mod::WasmModule, fields::Vector{FieldType})::UInt32
     return add_type!(mod, StructType(fields))
@@ -534,6 +546,7 @@ end
     add_array_type!(mod, elem_type, mutable_=true) -> type_idx
 
 Add an array type to the module and return its index.
+parity(pkg/wasm_builder/lib/src/builder/types.dart:368 TypesBuilder.defineArray)
 """
 function add_array_type!(mod::WasmModule, elem_type::WasmValType, mutable_::Bool=true)::UInt32
     add_type!(mod, ArrayType(FieldType(elem_type, mutable_)))
@@ -568,6 +581,7 @@ end
 
 Add an imported function to the module and return its function index.
 Imported functions come before local functions in the function index space.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
 """
 function add_import!(mod::WasmModule,
                      module_name::String,
@@ -599,6 +613,7 @@ end
     num_imported_funcs(mod) -> Int
 
 Return the number of imported functions (affects function index space).
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:13 FunctionsBuilder._importedFunctions)
 """
 function num_imported_funcs(mod::WasmModule)::Int
     count(imp -> imp.kind == 0x00, mod.imports)
@@ -610,6 +625,7 @@ end
 Add a function to the module and return its index.
 Note: Local function indices start after imported functions.
 Params and results can be NumType or WasmValType vectors.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)
 """
 function add_function!(mod::WasmModule,
                        params::Vector{<:WasmValType},
@@ -628,6 +644,7 @@ end
 
 Add an export entry to the module.
 - kind: 0=func, 1=table, 2=memory, 3=global
+parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
     0 <= kind <= 3 || _module_invalid(:add_export, "unknown export kind $kind")
@@ -713,6 +730,7 @@ end
     add_global_export!(mod, name, global_idx)
 
 Export a global variable.
+parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_global_export!(mod::WasmModule, name::String, global_idx::Integer)
     add_export!(mod, name, 3, global_idx)  # kind 3 = global
@@ -722,6 +740,7 @@ end
     add_table!(mod, reftype, min, max=nothing) -> table_idx
 
 Add a table to the module. Tables hold references (funcref or externref).
+parity(pkg/wasm_builder/lib/src/builder/tables.dart:18 TablesBuilder.define)
 """
 function add_table!(mod::WasmModule, reftype::RefType, min::Integer, max::Union{Integer, Nothing}=nothing)::UInt32
     min >= 0 || _module_invalid(:add_table, "minimum must be nonnegative")
@@ -735,6 +754,7 @@ end
     add_table_export!(mod, name, table_idx)
 
 Export a table.
+parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_table_export!(mod::WasmModule, name::String, table_idx::Integer)
     add_export!(mod, name, 1, table_idx)  # kind 1 = table
@@ -744,6 +764,7 @@ end
     add_elem_segment!(mod, table_idx, offset, func_indices)
 
 Add an element segment to initialize a table with function references.
+parity(pkg/wasm_builder/lib/src/builder/elements.dart:84 ActiveFunctionSegmentBuilder.setFunctionAt)
 """
 function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer, func_indices::Vector{<:Integer})
     0 <= table_idx < length(mod.tables) || _module_invalid(:add_elem_segment, "unknown table $table_idx")
@@ -760,6 +781,7 @@ end
 
 A DECLARATIVE element segment (flags=3) — makes the functions legal
 `ref.func` targets in constant expressions (the vtable-global initializers).
+parity(pkg/wasm_builder/lib/src/builder/elements.dart:68 DeclarativeSegmentBuilder.declare)
 """
 function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})
     isempty(func_indices) && return
@@ -773,6 +795,7 @@ end
     add_memory!(mod, min, max=nothing) -> memory_idx
 
 Add a linear memory to the module. Size is in pages (64KB each).
+parity(pkg/wasm_builder/lib/src/builder/memories.dart:18 MemoriesBuilder.define)
 """
 function add_memory!(mod::WasmModule, min::Integer, max::Union{Integer, Nothing}=nothing)::UInt32
     min >= 0 || _module_invalid(:add_memory, "minimum must be nonnegative")
@@ -786,6 +809,7 @@ end
     add_memory_export!(mod, name, memory_idx)
 
 Export a memory.
+parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_memory_export!(mod::WasmModule, name::String, memory_idx::Integer)
     add_export!(mod, name, 2, memory_idx)  # kind 2 = memory
@@ -796,6 +820,7 @@ end
 
 Add a data segment to initialize linear memory with constant data.
 Data can be a Vector{UInt8} or a String.
+parity(pkg/wasm_builder/lib/src/builder/data_segments.dart:24 DataSegmentsBuilder.define)
 """
 function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::Vector{UInt8})
     0 <= memory_idx < length(mod.memories) || _module_invalid(:add_data_segment, "unknown memory $memory_idx")
@@ -834,6 +859,7 @@ end
 
 Add an exception tag to the module and return its index.
 The type_idx refers to a FuncType whose params define the exception payload.
+parity(pkg/wasm_builder/lib/src/builder/tags.dart:27 TagsBuilder.define)
 """
 function add_tag!(mod::WasmModule, type_idx::Integer)::UInt32
     0 <= type_idx < length(mod.types) || _module_invalid(:add_tag, "unknown type $type_idx")
@@ -849,6 +875,7 @@ end
 
 Set the start function for the module. This function is called automatically
 on module instantiation. The function must take no parameters and return nothing.
+parity(pkg/wasm_builder/lib/src/builder/module.dart:79 ModuleBuilder.startFunction)
 """
 function add_start_function!(mod::WasmModule, func_idx::Integer)
     ft = _function_type(mod, func_idx)
@@ -862,28 +889,29 @@ end
 # Binary Serialization
 # ============================================================================
 
-const WASM_MAGIC = UInt8[0x00, 0x61, 0x73, 0x6D]  # \0asm
-const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1
+const WASM_MAGIC = UInt8[0x00, 0x61, 0x73, 0x6D]  # \0asm; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
+const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
 
 # Section IDs
-const SECTION_TYPE = 0x01
-const SECTION_IMPORT = 0x02
-const SECTION_FUNCTION = 0x03
-const SECTION_TABLE = 0x04
-const SECTION_MEMORY = 0x05
-const SECTION_GLOBAL = 0x06
-const SECTION_EXPORT = 0x07
-const SECTION_ELEMENT = 0x09
-const SECTION_CODE = 0x0A
-const SECTION_DATA = 0x0B
-const SECTION_START = 0x08    # Start function (section 8)
-const SECTION_DATACOUNT = 0x0C  # Data count (section 12)
-const SECTION_TAG = 0x0D      # Exception tags (section 13)
+const SECTION_TYPE = 0x01  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:47 TypeSection.sectionId)
+const SECTION_IMPORT = 0x02  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:145 ImportSection.sectionId)
+const SECTION_FUNCTION = 0x03  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:276 FunctionSection.sectionId)
+const SECTION_TABLE = 0x04  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:322 TableSection.sectionId)
+const SECTION_MEMORY = 0x05  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:367 MemorySection.sectionId)
+const SECTION_GLOBAL = 0x06  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:457 GlobalSection.sectionId)
+const SECTION_EXPORT = 0x07  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:508 ExportSection.sectionId)
+const SECTION_ELEMENT = 0x09  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:582 ElementSection.sectionId)
+const SECTION_CODE = 0x0A  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:682 CodeSection.sectionId)
+const SECTION_DATA = 0x0B  # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:760 DataSection.sectionId)
+const SECTION_START = 0x08    # Start function (section 8); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:557 StartSection.sectionId)
+const SECTION_DATACOUNT = 0x0C  # Data count (section 12); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:653 DataCountSection.sectionId)
+const SECTION_TAG = 0x0D      # Exception tags (section 13); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:413 TagSection.sectionId)
 
 """
     to_bytes(mod::WasmModule) -> Vector{UInt8}
 
 Serialize a WasmModule to binary format.
+parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
 """
 function to_bytes(mod::WasmModule)::Vector{UInt8}
     w = WasmWriter()
@@ -1498,6 +1526,7 @@ end
 
 """
 Write a section with automatic size calculation.
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:26 Section.serialize)
 """
 function write_section!(f::Function, w::WasmWriter, section_id::UInt8)
     section = WasmWriter()
@@ -1510,6 +1539,7 @@ end
 
 """
 Group consecutive locals of the same type.
+parity(pkg/wasm_builder/lib/src/ir/function.dart:101 DefinedFunction.serialize)
 """
 function group_locals(locals::Vector{<:WasmValType})
     isempty(locals) && return Tuple{Int, WasmValType}[]
@@ -1537,14 +1567,14 @@ end
 # ============================================================================
 
 # Type constructors for binary encoding
-const FUNCTYPE_BYTE = 0x60
-const STRUCTTYPE_BYTE = 0x5F
-const ARRAYTYPE_BYTE = 0x5E
+const FUNCTYPE_BYTE = 0x60  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1023 FunctionType.serializeDefinitionInner)
+const STRUCTTYPE_BYTE = 0x5F  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1168 StructType.serializeDefinitionInner)
+const ARRAYTYPE_BYTE = 0x5E  # parity(pkg/wasm_builder/lib/src/ir/type.dart:1256 ArrayType.serializeDefinitionInner)
 
 # WasmGC subtype opcodes (required for GC types)
-const SUB_BYTE = 0x50       # sub (non-final subtype)
-const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping)
-const REC_BYTE = 0x4E       # rec (recursive type group)
+const SUB_BYTE = 0x50       # sub (non-final subtype); parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping); parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+const REC_BYTE = 0x4E       # rec (recursive type group); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:76 TypeSection.serializeContents)
 
 """
 Write a composite type to the type section.
@@ -1593,6 +1623,7 @@ end
 
 """
 Write a field type (valtype + mutability).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize)
 """
 function write_field_type!(w::WasmWriter, ft::FieldType)
     write_valtype!(w, ft.valtype)
