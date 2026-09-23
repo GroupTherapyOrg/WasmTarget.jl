@@ -35,21 +35,42 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
     return b
 end
 
-"""
-Prove that a `jl_value_ptr` result never escapes WT's storage-relative pointer
-algebra. In that algebra a storage object's base offset is exactly zero; the
-backing object is carried by the recognized consumer and may never be observed as
-a fabricated numeric address. Any return, aggregate store, comparison, or unknown
-consumer rejects the compilation.
-The only consumers that keep a storage-relative pointer inside the algebra.
-parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
-"""
+# The only consumers that keep a storage-relative pointer inside the algebra.
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 const _STORAGE_RELATIVE_PTR_OPS = (Core.Intrinsics.add_ptr, Core.Intrinsics.sub_ptr,
                                    Core.Intrinsics.bitcast, Core.Intrinsics.pointerref,
                                    Core.Intrinsics.pointerset)
+# Integer arithmetic over a storage-relative offset stays a storage-relative offset
+# (Base.unsafe_convert(Ptr, ::MemoryRef) scales `UInt(ptr_or_offset)` by the element
+# size before add_ptr); its result is followed like the pointer it came from.
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
+const _STORAGE_RELATIVE_OFFSET_OPS = (Core.Intrinsics.add_int, Core.Intrinsics.sub_int,
+                                      Core.Intrinsics.mul_int)
+# The foreigncalls whose lowerings trace a pointer operand back to its backing storage
+# (or reject it): they consume a storage-relative pointer without reading it as a number.
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
+const _STORAGE_RELATIVE_PTR_FOREIGNCALLS = (:memcpy, :memmove, :memset, :memchr,
+                                            :jl_genericmemory_copyto, :jl_pchar_to_string,
+                                            :jl_cstr_to_string, :jl_ptr_to_array_1d)
 
+# `storage_pointer`: the root is a Memory's `ptr` or a MemoryRef's `ptr_or_offset`. Such a
+# pointer may also be compared for identity (`===`/`!==`, see `_storage_pointer_backing`),
+# and while still typed `Ptr` may leave the function — returned, or passed to a callee —
+# (Base.pointer(::Vector) is often a call), where it is held as a Ptr again.
+# `jl_value_ptr` keeps the stricter rule.
+"""
+Prove that a storage pointer (`jl_value_ptr`, a Memory's `ptr`, a MemoryRef's
+`ptr_or_offset`) never escapes WT's storage-relative pointer algebra. In that algebra a
+storage object's base offset is exactly zero; the backing object is carried by the
+recognized consumer and may never be observed as a fabricated numeric address. For a
+Memory/MemoryRef root the one comparison admitted is `===`/`!==` against another storage
+pointer (`_storage_pointer_backing`: `ref.eq` of the backing objects and equality of the
+storage-relative offsets) or against NULL or an objectid (`_is_never_a_storage_pointer`),
+and a still-`Ptr` value may be returned or passed to a callee. Any other return, aggregate
+store, comparison, or unknown consumer rejects the compilation.
+"""
 function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
-                                             root_ssa::Int)::Bool
+                                             root_ssa::Int; storage_pointer::Bool=false)::Bool
     pending = Int[root_ssa]
     seen = Set{Int}()
     while !isempty(pending)
@@ -66,12 +87,23 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                 push!(pending, consumer_idx)
                 continue
             end
-            if consumer isa NirCall
+            if storage_pointer && (consumer isa NirReturn || consumer isa NirInvoke)
+                source_type = get(ctx.ssa_types, source, Any)
+                source_type isa Type && source_type <: Ptr || return false
+            elseif consumer isa NirCall && (consumer.callee === Core.:(===) || consumer.callee === Core.:(!==))
+                storage_pointer && length(consumer.operands) == 2 &&
+                    all(o -> _storage_pointer_backing(ctx, o) !== nothing ||
+                             _is_never_a_storage_pointer(ctx, o), consumer.operands) || return false
+            elseif consumer isa NirCall && consumer.callee in _STORAGE_RELATIVE_OFFSET_OPS
+                push!(pending, consumer_idx)
+            elseif consumer isa NirCall
                 consumer.callee in _STORAGE_RELATIVE_PTR_OPS || return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)
-                result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
+                # a bitcast to an integer is followed too: its consumers decide
+                (result_type isa Type && result_type <: Ptr ||
+                 consumer.callee === Core.Intrinsics.bitcast) && push!(pending, consumer_idx)
             elseif consumer isa NirForeignCall
-                consumer.c_symbol in (:memcpy, :memmove, :memset) || return false
+                consumer.c_symbol in _STORAGE_RELATIVE_PTR_FOREIGNCALLS || return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)
                 result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
             else
@@ -80,6 +112,60 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
         end
     end
     return true
+end
+
+# parity(quarantine: a storage identity comparison reads no element, so the pointer trace admits every element type.)
+struct _EveryEltype end
+Base.in(@nospecialize(_), ::_EveryEltype)::Bool = true
+
+"""
+    _storage_pointer_backing(ctx, operand) -> backing | nothing
+
+The storage object a pointer-valued operand (a `Ptr`, or an integer `bitcast` from one —
+Base.dataids reads `UInt(m.ptr)`) points into, found by the storage-relative pointer trace;
+`nothing` for anything else, and for a String/Symbol backing, whose pointer origin differs.
+Julia gives each Memory object its own storage, so two such pointers are equal exactly
+when they point into the same object at the same storage-relative offset — or into two
+empty Memory objects of one element type (Julia allocates length 0 as the type's singleton).
+"""
+# parity(quarantine: a Julia pointer is an address; WasmGC has none, so a pointer compared only for identity is compared as dart's identical() compares references, intrinsics.dart:1409.)
+function _storage_pointer_backing(ctx::AbstractCompilationContext, operand)::Union{NirNode,Nothing}
+    node = nir_node(ctx, operand)
+    node isa NirSSA && 1 <= node.id <= length(ctx.nir) || return nothing
+    T = get_ssa_type(ctx, node)
+    def = ctx.nir[node.id].node
+    T isa DataType && (T <: Ptr || (T <: Base.BitInteger && def isa NirCall &&
+                                    def.callee === Core.Intrinsics.bitcast)) || return nothing
+    # an object's own address (pointer_from_objref) is not the storage it may hold
+    backing = _trace_memmove_ptr(node, ctx; eltypes = _EveryEltype(), through_value_ptr = false)
+    backing === nothing && return nothing
+    backing_type = get_ssa_type(ctx, backing)
+    return backing_type === String || backing_type === Symbol ? nothing : backing
+end
+
+"""
+    _is_never_a_storage_pointer(ctx, operand) -> Bool
+
+Whether `operand` is a value Julia never makes equal to a storage address: NULL (a
+literal zero integer or `C_NULL` — Julia's allocator never returns NULL, and an empty
+Memory still points at its own instance), or an `objectid` (the `jl_object_id`
+foreigncall, possibly through `bitcast` — the id Base.dataids gives an AbstractArray
+without storage of its own; a mutable object's id hashes its address and an immutable's
+hashes its content, so it meets a storage address only by a 64-bit hash collision).
+"""
+# parity(quarantine: Base's NULL checks and dataids compare storage addresses against C_NULL and objectids; WasmGC has no addresses.)
+function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand)::Bool
+    node = nir_node(ctx, operand)
+    literal = _nir_const_operand(node)
+    (literal isa Base.BitInteger || literal isa Ptr) && return iszero(UInt(literal))
+    for _ in 1:8
+        node isa NirSSA && 1 <= node.id <= length(ctx.nir) && ctx.nir[node.id].slot == 0 || return false
+        def = ctx.nir[node.id].node
+        def isa NirForeignCall && return def.c_symbol === :jl_object_id
+        def isa NirCall && def.callee === Core.Intrinsics.bitcast && length(def.operands) == 2 || return false
+        node = def.operands[2]
+    end
+    return false
 end
 
 # parity(quarantine: Julia byte pointers into storage; dart's WasmArrayExt.copy/fill take element offsets, intrinsics.dart:1255/:1279.)
@@ -111,6 +197,7 @@ end
 
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
+                            through_value_ptr::Bool = true,
                             _seen::Set{Int} = Set{Int}())
     # Walk through recognized storage-relative operations looking only for the
     # backing object's identity. Offsets remain runtime values and are compiled
@@ -130,7 +217,8 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
         _mm_dbg && println(stderr, "  MMtrace %", cur.id, " = ", repr(st)[1:min(end, 100)])
         if st isa NirPi
             cur = st.value
-        elseif st isa NirForeignCall && st.c_symbol === :jl_value_ptr && !isempty(st.operands)
+        elseif st isa NirForeignCall && st.c_symbol === :jl_value_ptr && !isempty(st.operands) &&
+               through_value_ptr
             # `jl_value_ptr(obj)` contributes the backing identity; its exact
             # target address component is the storage-relative base offset.
             cur = st.operands[1]
@@ -147,7 +235,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
             for value in st.values
                 value === nothing && continue
                 value isa NirSSA && value.id == cur.id && continue
-                terminal = _trace_memmove_ptr(value, ctx; eltypes, allow_ref,
+                terminal = _trace_memmove_ptr(value, ctx; eltypes, allow_ref, through_value_ptr,
                                               _seen=copy(_seen))
                 terminal === nothing && return _fail("phi-untraceable", st)
                 any(t -> isequal(t, terminal), terminals) || push!(terminals, terminal)

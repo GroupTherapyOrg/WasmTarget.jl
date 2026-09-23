@@ -499,6 +499,7 @@ _g("union_fields", Any[
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 # ---- Memory: allocation length (C6 suspects 15, 27) ----
 # ---- Memory: fill, allocation length (C6 suspects 12, 15, 27) ----
+# ---- Memory: fill, allocation length, storage identity (C6 suspects 12, 14, 15, 27) ----
 _sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
 _g("memory", Any[
     # memset with a runtime byte, and a zero memset over live data (Dict/Set empty!)
@@ -514,6 +515,16 @@ _g("memory", Any[
     ("memory_new_fill", (n::Int64) -> (m = Memory{Int64}(undef, n); fill!(m, 3); length(m) * 100 + sum(m)), Int64(4)),
     ("memory_new_negative", (n::Int64) -> try; length(Memory{Int64}(undef, n)); catch e; e isa ArgumentError ? -1 : -2; end, Int64(-1)),
     ("growbeg_mem_length", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); pushfirst!(v, 100); pushfirst!(v, 200); _sm_enc(v) + length(v.ref.mem) * 1_000_000_000), Int64(5)),
+    # a Memory's ptr identifies its storage: distinct arrays never alias, overlapping views do
+    ("mightalias_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(Base.mightalias(a, b))), Int64(3)),
+    ("mightalias_view", (n::Int64) -> (a = collect(1:n); Int64(Base.mightalias(a, view(a, 1:2)))), Int64(3)),
+    ("copyto_view_overlap", (n::Int64) -> (v = collect(1:n); copyto!(view(v, 2:n), view(v, 1:n-1)); _sm_enc(v)), Int64(5)),
+    ("bcast_reverse_view", (n::Int64) -> (v = collect(1:n); v .= @view v[end:-1:1]; _sm_enc(v)), Int64(5)),
+    ("pointer_eq_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(pointer(a) == pointer(b))), Int64(3)),
+    ("pointer_eq_empty_memory", (n::Int64) -> (a = Memory{Int64}(undef, n); b = Memory{Int64}(undef, n); Int64(pointer(a) == pointer(b))), Int64(0)),
+    ("mightalias_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(Base.mightalias(view(a, 1:2), view(b, 1:2)))), Int64(3)),
+    ("copyto_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(10:10+n-1); copyto!(view(a, 2:n), view(b, 1:n-1)); _sm_enc(a)), Int64(5)),
+    ("bcast_view_into_vector", (n::Int64) -> (a = collect(1:n); b = collect(1:n); a .= view(b, n:-1:1); _sm_enc(a)), Int64(4)),
 ])
 
 # ============================================================================

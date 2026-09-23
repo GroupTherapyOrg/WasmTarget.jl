@@ -825,6 +825,39 @@ end
 # `calls.jl` by ratchet lock L57_exact_typeassert_exception, which reads only
 # `calls.jl` (+ the real_bottom_exceptions.jl test). It stays an in-place arm.
 
+# parity(intrinsics.dart:1409 identical): two storage pointers (Base.dataids' `UInt(m.ptr)`,
+# `pointer(A) == pointer(B)`) are equal exactly when their backing objects are identical —
+# `ref.eq`, as dart compares references — or, per Julia, both are the one empty Memory of
+# their element type, and their storage-relative offsets (the compiled pointer values)
+# are equal.
+function _emit_storage_pointer_egal!(fb::InstrBuilder, ctx::AbstractCompilationContext,
+                                     ptr_a, backing_a::NirNode, ptr_b, backing_b::NirNode)::InstrBuilder
+    elem_a = _storage_element_type(backing_a, ctx)
+    same_type = elem_a === _storage_element_type(backing_b, ctx)
+    locals = map(((backing_a, elem_a), (backing_b, _storage_element_type(backing_b, ctx)))) do (backing, elem)
+        arr = get_array_type!(ctx.mod, ctx.type_registry, elem)
+        _emit_backing_array!(fb, backing, ctx, arr)
+        l = allocate_local!(ctx, ConcreteRef(UInt32(arr), true))
+        local_tee!(fb, l)
+        return l
+    end
+    num!(fb, Opcode.REF_EQ)
+    if same_type
+        for l in locals
+            local_get!(fb, l)
+            array_len!(fb)
+            num!(fb, Opcode.I32_EQZ)
+        end
+        num!(fb, Opcode.I32_AND)
+        num!(fb, Opcode.I32_OR)
+    end
+    emit_value!(fb, ptr_a, ctx, I64)
+    emit_value!(fb, ptr_b, ctx, I64)
+    num!(fb, Opcode.I64_EQ)
+    num!(fb, Opcode.I32_AND)
+    return fb
+end
+
 # Special case for string/symbol equality/identity comparison (=== and !==)
 # Must be handled before generic argument pushing since strings/symbols are refs, not integers
 # Symbol uses same array<i32> representation as String, so ref.eq would fail (reference equality)
@@ -834,6 +867,19 @@ end
 function _lower_egal_early!(b, fb, ctx, call, idx, args, callee)
     length(args) == 2 || return nothing
     is_ne = callee === Core.:(!==)
+    local backing_a = _storage_pointer_backing(ctx, args[1])
+    local backing_b = _storage_pointer_backing(ctx, args[2])
+    if backing_a !== nothing && backing_b !== nothing
+        _emit_storage_pointer_egal!(fb, ctx, args[1], backing_a, args[2], backing_b)
+        is_ne && num!(fb, Opcode.I32_EQZ)
+        return append_builder!(b, fb)
+    elseif (backing_a !== nothing && _is_never_a_storage_pointer(ctx, args[2])) ||
+           (backing_b !== nothing && _is_never_a_storage_pointer(ctx, args[1]))
+        # a storage address against NULL or an objectid: Julia never makes them equal
+        # (_is_never_a_storage_pointer), so the comparison is decided.
+        i32_const!(fb, is_ne ? 1 : 0)
+        return append_builder!(b, fb)
+    end
     arg1_type = infer_value_type(args[1], ctx)
     arg2_type = infer_value_type(args[2], ctx)
     if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
@@ -1524,6 +1570,13 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 length(_mrb.v.stack) == 2 && drop!(fb)
                 return append_builder!(b, fb)
             elseif field_sym === :ptr_or_offset
+                _storage_relative_pointer_is_closed(ctx, idx; storage_pointer=true) || begin
+                    record_unsupported!(ctx, :unsupported_method,
+                        "a MemoryRef's ptr_or_offset escapes storage-relative WasmGC operations";
+                        idx=idx, soundness_fatal=true)
+                    ctx.last_stmt_was_stub = true
+                    return append_builder!(b, fb)
+                end
                 # P4-stdlib (SHA update!): the target pointer value is a
                 # storage-relative byte offset. Base refs → 0; refs from memoryrefnew(ref, i, bc)
                 # carry (i-1)*elsize (ctx.memoryref_offsets records i), so
@@ -1571,7 +1624,15 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 num!(fb, Opcode.I64_EXTEND_I32_S)
                 return append_builder!(b, fb)
             elseif field_sym === :ptr
-                # Not meaningful in WasmGC - return 0
+                # The storage-relative base offset (zero), sound only while the
+                # pointer stays inside that algebra or is compared for identity.
+                _storage_relative_pointer_is_closed(ctx, idx; storage_pointer=true) || begin
+                    record_unsupported!(ctx, :unsupported_method,
+                        "a Memory's ptr escapes storage-relative WasmGC operations";
+                        idx=idx, soundness_fatal=true)
+                    ctx.last_stmt_was_stub = true
+                    return append_builder!(b, fb)
+                end
                 i64_const!(fb, 0)
                 return append_builder!(b, fb)
             end
