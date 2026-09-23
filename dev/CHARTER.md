@@ -78,7 +78,7 @@ with the per-clause status. A clause is never closed by argument.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.**
   No dead definition, fossil comment, retired name, campaign narration, or second
   computation of a fact the first already produced; the plan holds only open work and the
-  history only short entries. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `R3`
+  history only short entries. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `R35` `R3`
   `R5` `R7` `R14` `R15` `R27`. Planned: every tracked file outside `src/` is consumed — by
   the build, a test, a lane, CI or the docs site, by path or by the loader that walks its
   directory — and none records finished work (fixed-gap ledgers, completed-campaign plans).

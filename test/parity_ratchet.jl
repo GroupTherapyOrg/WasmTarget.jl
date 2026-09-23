@@ -410,6 +410,29 @@ function toplevel_definitions(path::String)::Vector{Tuple{String,Int,Bool}}
     return out
 end
 
+"""
+Bare string literals among the top-level statements of `src` — each is a docstring cut off from
+its definition (a comment line between a docstring and its definition detaches it) or prose
+with no definition under it. Either way the documentation is attached to nothing: stale by
+construction (dev/CHARTER.md C9). Counted on the parsed syntax tree.
+"""
+function count_detached_docstrings(root::String=SRC)::Int
+    n = 0
+    function visit(ex)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :module, :block)
+            body = ex.head === :module ? ex.args[3].args : ex.args
+            for a in body
+                a isa String ? (n += 1) : visit(a)
+            end
+        end
+    end
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") && visit(Meta.parseall(_text(joinpath(dir, f)); filename=f))
+    end
+    return n
+end
+
 """The top-level definitions in `src/` with no `parity(` anchor — dev/CHARTER.md C2."""
 function count_unanchored_definitions(root::String=SRC)::Int
     n = 0
@@ -553,6 +576,8 @@ const METRICS = [
         () -> count_unanchored_definitions()),
     "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
+    "R35_detached_docstrings" => ("bare string literals among top-level statements in src: docstrings a comment line cut off from their definition (Julia then attaches them to nothing — a `# formal(…)` line between docstring and function did this repeatedly) or prose with no definition under it (dev/CHARTER.md C9). Terminal state 0: a docstring sits directly on its definition, with any anchor inside it",
+        () -> count_detached_docstrings()),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
         () -> count_silent_catches()),
 ]
