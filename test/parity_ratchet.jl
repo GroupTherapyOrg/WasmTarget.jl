@@ -564,7 +564,7 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, and `nameof(f) ===`/`in` (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
+    "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
         () -> begin
             n = count_sites(r"is_func\(func, :"; roots=[CODEGEN])
             spellings = [r"(?<![.\w])name\s*(?:===|in)\s*\(?:",
@@ -582,6 +582,21 @@ const METRICS = [
                     guard = src[thisind(src, max(1, m.offset - 200)):m.offset]
                     (startswith(re.pattern, "nameof") && occursin("isa Core.IntrinsicFunction", guard)) && continue
                     n += 1
+                end
+                # a name carried through a variable: `nm = callee.name` / `nameof(f)`, then
+                # `nm === :getfield` — one site per such variable that is compared
+                lines = split(src, '\n')
+                for line in lines
+                    startswith(lstrip(line), "#") && continue
+                    b = match(r"(?:^|\blocal\s+|\s)(\w+)\s*=(?!=)\s*(.*)", line)
+                    b === nothing && continue
+                    v, rhs = b.captures[1], b.captures[2]
+                    v == "name" && continue                       # the bare spelling above
+                    occursin(r"\bnameof\(|\.name\b(?!\.name)", rhs) || continue
+                    occursin(r"\.name\.name\b", rhs) && !occursin(r"\bnameof\(", rhs) && continue
+                    occursin("isa Core.IntrinsicFunction", rhs) && continue
+                    cmp = Regex("(?<![.\\w])" * v * "\\s*(?:===|in\\b)\\s*\\(?:")
+                    any(l -> !startswith(lstrip(l), "#") && occursin(cmp, l), lines) && (n += 1)
                 end
             end
             n
