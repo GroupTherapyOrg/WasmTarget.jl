@@ -1477,7 +1477,8 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             # byte array — getfield(cu, :s) is the array itself. Must run BEFORE
             # the generic struct_get path (CodeUnits is no longer a struct).
             if obj_type isa DataType && obj_type.name.name === :CodeUnits &&
-               length(obj_type.parameters) >= 1 && obj_type.parameters[1] === UInt8
+               length(obj_type.parameters) >= 2 && obj_type.parameters[1] === UInt8 &&
+               obj_type.parameters[2] === String
                 local _cu_field0 = nir_const(field_ref)
                 if _cu_field0 === :s
                     emit_value!(fb, obj_arg, ctx, static_wasm_type(obj_arg, ctx))

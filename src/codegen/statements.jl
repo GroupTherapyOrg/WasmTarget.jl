@@ -891,8 +891,8 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
     # array (same representation contract as Memory) — %new(CodeUnits, s)
     # compiles to s itself. Trim-collected string internals construct these.
     if struct_type isa DataType && struct_type.name.name === :CodeUnits &&
-       length(struct_type.parameters) >= 1 && struct_type.parameters[1] === UInt8 &&
-       length(field_values) >= 1
+       length(struct_type.parameters) >= 2 && struct_type.parameters[1] === UInt8 &&
+       struct_type.parameters[2] === String && length(field_values) >= 1
         emit_value!(b, field_values[1], ctx,
                     ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         return b
@@ -1655,10 +1655,13 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
         byte_arg = node.operands[2]  # Int32 — the byte to search for
         count_arg = node.operands[3] # UInt64 — number of bytes to search
 
-        # Trace the pointer back to find the string array ref
-        str_info = ptr_arg isa NirSSA ? _trace_string_ptr(ptr_arg, ctx) : nothing
-        if str_info !== nothing
-            str_ssa, _idx_ssa = str_info
+        # Trace the pointer to its backing storage through WT's storage-relative
+        # pointer algebra, as memmove and memcmp read it (a SubString's
+        # pointer(s.string) + s.offset included). Only a String/Symbol backing is
+        # accepted: its base is 1, so a match at its first byte stays distinct from
+        # C NULL (0), which a Memory backing's base 0 could not guarantee.
+        str_ssa = _trace_memmove_ptr(ptr_arg, ctx)
+        if str_ssa !== nothing && get_ssa_type(ctx, str_ssa) in (String, Symbol)
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
             # Allocate locals for the loop (same pattern as scratch_local allocation)
@@ -1744,6 +1747,61 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
             return b
         end
     return nothing
+end
+
+# memcmp(a, b, n) -> Cint: the first differing byte pair's difference, 0 when the n bytes
+# agree. Each pointer is storage-relative (WT's pointer algebra, _trace_memmove_ptr): its
+# value is the byte offset into the traced backing array, 1-based for a String/Symbol
+# (jl_string_ptr is 1), exactly as memmove reads it.
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi. Base's String/SubString ==, cmp and memcmp compare bytes through this libc call)
+function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing}
+    length(node.operands) >= 3 || return nothing
+    a_backing = _trace_memmove_ptr(node.operands[1], ctx)
+    a_backing === nothing && return nothing
+    b_backing = _trace_memmove_ptr(node.operands[2], ctx)
+    b_backing === nothing && return nothing
+    arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+    arr_ref = ConcreteRef(UInt32(arr), true)
+    a_arr = allocate_local!(ctx, arr_ref); a_off = allocate_local!(ctx, I32)
+    b_arr = allocate_local!(ctx, arr_ref); b_off = allocate_local!(ctx, I32)
+    n = allocate_local!(ctx, I32); i = allocate_local!(ctx, I32); diff = allocate_local!(ctx, I32)
+    for (backing, ptr, arr_local, off_local) in ((a_backing, node.operands[1], a_arr, a_off),
+                                                 (b_backing, node.operands[2], b_arr, b_off))
+        _emit_backing_array!(b, backing, ctx, arr)
+        local_set!(b, arr_local)
+        emit_value!(b, ptr, ctx, I64)
+        backing_type = get_ssa_type(ctx, backing)
+        if backing_type === String || backing_type === Symbol
+            i64_const!(b, 1)
+            num!(b, Opcode.I64_SUB)
+        end
+        narrow_length_to_i32!(b)
+        local_set!(b, off_local)
+    end
+    emit_value!(b, node.operands[3], ctx, I64)
+    narrow_length_to_i32!(b)
+    local_set!(b, n)
+    i32_const!(b, 0); local_set!(b, i)
+    i32_const!(b, 0); local_set!(b, diff)
+    done = block!(b)
+    scan = loop!(b)
+    local_get!(b, i); local_get!(b, n); num!(b, Opcode.I32_GE_U)
+    br_if!(b, done)
+    local_get!(b, a_arr)
+    local_get!(b, a_off); local_get!(b, i); num!(b, Opcode.I32_ADD)
+    array_get!(b, arr, I32; signed=false)
+    local_get!(b, b_arr)
+    local_get!(b, b_off); local_get!(b, i); num!(b, Opcode.I32_ADD)
+    array_get!(b, arr, I32; signed=false)
+    num!(b, Opcode.I32_SUB)
+    local_tee!(b, diff)
+    br_if!(b, done)
+    local_get!(b, i); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i)
+    br!(b, scan)
+    end_block!(b)
+    end_block!(b)
+    local_get!(b, diff)
+    return b
 end
 
 function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
@@ -2193,6 +2251,7 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :utf8proc_grapheme_break_stateful => _fc_utf8proc_grapheme_break_stateful!,
     :jl_ptr_to_array_1d => _fc_jl_ptr_to_array_1d!,
     :memchr => _fc_memchr!,
+    :memcmp => _fc_memcmp!,
     :jl_symbol_n => _fc_jl_symbol_n!,
     :jl_get_current_task => _fc_jl_get_current_task!,
     :jl_hrtime => _fc_jl_hrtime!,

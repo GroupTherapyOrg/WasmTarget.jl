@@ -415,73 +415,10 @@ end
     return out
 end
 
-# ─── String Comparison Overlays ────────────────────────────────────────────
-# Base implementations use foreigncall :memcmp which can't run in WASM.
-# Pure Julia byte-by-byte comparisons using ncodeunits + codeunit.
-
-# Typed `AbstractString` (not just `String`) so SubString operands work too — e.g.
-# `startswith(s, chomp(t))`, where chomp returns a SubString. `codeunit`/`ncodeunits`
-# both compile for SubString, but `String(::SubString)` traps (memmove), so we must
-# byte-compare in place rather than materialize. Byte prefix == UTF-8 prefix.
-@overlay WASM_METHOD_TABLE function Base.startswith(a::AbstractString, b::AbstractString)
-    al = ncodeunits(a)
-    bl = ncodeunits(b)
-    bl > al && return false
-    i = 1
-    while i <= bl
-        codeunit(a, i) != codeunit(b, i) && return false
-        i += 1
-    end
-    return true
-end
-
-@overlay WASM_METHOD_TABLE function Base.endswith(a::AbstractString, b::AbstractString)
-    al = ncodeunits(a)
-    bl = ncodeunits(b)
-    bl > al && return false
-    offset = al - bl
-    i = 1
-    while i <= bl
-        codeunit(a, offset + i) != codeunit(b, i) && return false
-        i += 1
-    end
-    return true
-end
-
-@overlay WASM_METHOD_TABLE function Base.cmp(a::String, b::String)
-    al = ncodeunits(a)
-    bl = ncodeunits(b)
-    ml = al < bl ? al : bl
-    i = 1
-    while i <= ml
-        ca = codeunit(a, i)
-        cb = codeunit(b, i)
-        if ca != cb
-            return ca < cb ? -1 : 1
-        end
-        i += 1
-    end
-    return al < bl ? -1 : al > bl ? 1 : 0
-end
-
 # ─── String Manipulation Overlays ──────────────────────────────────────────
 # Base versions use SubString, IOBuffer, or deep dispatch chains.
 # All overlays use only: ncodeunits, codeunit, String(UInt8[...]) construction.
 # This is pure Julia that WasmTarget's codegen can handle.
-
-@overlay WASM_METHOD_TABLE function Base.chop(s::String; head::Int=0, tail::Int=1)
-    n = ncodeunits(s)
-    endpos = n - tail
-    startpos = head + 1
-    endpos < startpos && return ""
-    bytes = UInt8[]
-    i = startpos
-    while i <= endpos
-        push!(bytes, codeunit(s, i))
-        i += 1
-    end
-    return String(bytes)
-end
 
 @overlay WASM_METHOD_TABLE function Base.reverse(s::String)
     # Reverse by CHARACTER, not byte: a naive byte-reverse splits multi-byte UTF-8
@@ -545,83 +482,6 @@ end
     return _wasm_titlecase_impl(s, strict)
 end
 
-
-# ─── strip Overlay ─────────────────────────────────────────────────────────
-# Why: Base.strip uses SubString ref cast that codegen can't handle.
-#      Delegate to working lstrip + rstrip overlays.
-# Remove when: codegen stackifier handles inlined lstrip+rstrip (526 stmts)
-# Using @noinline to prevent Julia from inlining lstrip/rstrip into strip,
-# keeping each function's IR small enough for the stackifier.
-@overlay WASM_METHOD_TABLE function Base.strip(s::AbstractString)
-    return @noinline rstrip(@noinline lstrip(s))
-end
-
-# NOTE: Two-pass approach avoids codegen bug where `===` comparison combined with
-# push! in a loop produces wrong results. Pass 1 finds the boundary index, Pass 2
-# does an unconditional copy.
-# Scan/copy bounds are BYTE counts — these loops index codeunits, and
-# the old `length(s)` bound (char count) truncated multibyte strings
-# (strip("héllo") dropped the last byte → gap 0beb5ec969a2 family). The
-# ncodeunits-on-String(bytes) aliasing bug that originally forced length() here
-# no longer reproduces (probed: ncodeunits is correct on built strings).
-# Handles space (0x20), tab (0x09), newline (0x0a), CR (0x0d), VT (0x0b), FF (0x0c)
-@noinline @overlay WASM_METHOD_TABLE function Base.lstrip(s::String)
-    n = length(s)
-    n == 0 && return s
-    # Pass 1: find first non-whitespace byte index. Leading whitespace is ASCII
-    # (1 char == 1 byte), so the char-count bound is always >= the prefix length
-    # — and length(s) here keeps the loop in the exact shape that compiles
-    # correctly (this overlay is knife-edge sensitive: swapping the SCAN bound
-    # to sizeof/ncodeunits miscompiles in dependency context — see NOTE above).
-    start = 1
-    while start <= n
-        bi = Int64(codeunit(s, start))
-        # Use Int64 != comparisons (avoids UInt8 === codegen bug)
-        if bi != Int64(0x20) && bi != Int64(0x09) && bi != Int64(0x0a) && bi != Int64(0x0d) && bi != Int64(0x0b) && bi != Int64(0x0c)
-            break
-        end
-        start += 1
-    end
-    start > n && return ""
-    # Pass 2: unconditional copy from start to the LAST BYTE. The
-    # copy bound must be the byte count — the old length(s) bound truncated
-    # multibyte strings (strip("héllo") dropped a byte, gap 0beb5ec969a2).
-    nb = sizeof(s)
-    bytes = UInt8[]
-    i = start
-    while i <= nb
-        push!(bytes, codeunit(s, i))
-        i += 1
-    end
-    return String(bytes)
-end
-
-@noinline @overlay WASM_METHOD_TABLE function Base.rstrip(s::String)
-    n = sizeof(s)   # BYTE count — backward scan starts at the last
-    # byte; UTF-8 continuation bytes (0x80-0xBF) never match ASCII whitespace,
-    # so byte-wise scanning is multibyte-safe. (The old length(s) bound started
-    # the scan mid-string for multibyte inputs and truncated the result.)
-    n == 0 && return s
-    # Scan backward from end to find last non-whitespace
-    last_nws = n
-    while last_nws >= 1
-        bi = Int64(codeunit(s, last_nws))
-        if bi != Int64(0x20) && bi != Int64(0x09) && bi != Int64(0x0a) && bi != Int64(0x0d) && bi != Int64(0x0b) && bi != Int64(0x0c)
-            break
-        end
-        last_nws -= 1
-    end
-    last_nws < 1 && return ""
-    last_nws == n && return s
-    # Copy 1..last_nws (single loop, no dependency on previous loop variable)
-    bytes = UInt8[]
-    i = 1
-    while i <= last_nws
-        push!(bytes, codeunit(s, i))
-        i += 1
-    end
-    return String(bytes)
-end
 
 # ─── Ryu scalar writeshortest Overlay (string(::Float64/Float32)) ─────────
 # Why: the digit-generation kernel writeshortest(buf, pos, x, ...) compiles
@@ -958,32 +818,6 @@ end
     m = -n
     (m < 0 || m >= nb) && return zero(T)
     return Base.shl_int(x, Core.bitcast(UInt64, m))
-end
-
-# ─── chomp Overlay ────────────────────────────────────────────────────────
-# Why: Base.chomp returns a SubString{String}, and SubString poisons every
-#      downstream consumer in the compiled world: uppercase(::SubString) emits
-#      invalid wasm, SubString as a Dict value promotes the Dict to an abstract
-#      value type that traps, and == against String stubs (gap 05bc422e7ffb /
-#      627592b54cf2 / 655cf74e7170 family). The established convention here is
-#      String-returning overlays (lstrip/rstrip already do this) — observable
-#      only via typeof(), which generated programs don't inspect. Byte-level:
-#      drop one trailing "\n" or "\r\n", exactly Base's semantics.
-# Remove when: SubString has a full wasm repr (uppercase/==/Dict-value paths).
-@noinline @overlay WASM_METHOD_TABLE function Base.chomp(s::String)
-    n = sizeof(s)
-    n == 0 && return s
-    if codeunit(s, n) != 0x0a
-        return s
-    end
-    last = (n >= 2 && codeunit(s, n - 1) == 0x0d) ? n - 2 : n - 1
-    bytes = UInt8[]
-    i = 1
-    while i <= last
-        push!(bytes, codeunit(s, i))
-        i += 1
-    end
-    return String(bytes)
 end
 
 @overlay WASM_METHOD_TABLE function Base.replace(s::String, pair::Pair{String,String})

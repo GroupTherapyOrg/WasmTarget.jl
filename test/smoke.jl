@@ -640,6 +640,23 @@ _g("overlays", Any[
     ("uppercase_string_sharp_s", (n::Int64) -> ncodeunits(uppercase(n > 0 ? "straße λ" : "x")), Int64(1)),
     # an always-taken `@inbounds` boundscheck branch carries its target's phi values
     ("inbounds_isvalid_substring", (i::Int64) -> Int64(@inbounds isvalid(SubString(i > 0 ? " ab,c " : "xyz", 2, 5), i)), Int64(1)),
+    # strip/lstrip/rstrip/chomp return Base's SubString; ==/cmp/startswith compare through memcmp
+    ("strip_is_substring", (n::Int64) -> Int64(typeof(strip(n > 0 ? "  héllo \n" : "x")) === SubString{String}), Int64(1)),
+    ("strip_offset", (n::Int64) -> strip(n > 0 ? "  héllo \n" : "x").offset, Int64(1)),
+    ("strip_eq_string", (n::Int64) -> Int64(strip(n > 0 ? "  héllo \n" : "x") == "héllo"), Int64(1)),
+    ("strip_unicode_space", (n::Int64) -> ncodeunits(strip(n > 0 ? "\u00a0x y\u2003" : "x")), Int64(1)),
+    ("lstrip_ncodeunits", (n::Int64) -> ncodeunits(lstrip(n > 0 ? "\t héllo " : "x")), Int64(1)),
+    ("rstrip_ncodeunits", (n::Int64) -> ncodeunits(rstrip(n > 0 ? "\t héllo \r\n" : "x")), Int64(1)),
+    ("chomp_crlf_offset", (n::Int64) -> (c = chomp(n > 0 ? "abc\r\n" : "x"); c.offset * 10 + ncodeunits(c)), Int64(1)),
+    ("chop_nonascii", (n::Int64) -> Int64(chop(n > 0 ? "hé" : "x") == "h"), Int64(1)),
+    ("chop_head_tail", (n::Int64) -> ncodeunits(chop(n > 0 ? "élan vital" : "x"; head = 1, tail = 1)), Int64(1)),
+    ("cmp_strings", (n::Int64) -> cmp(n > 0 ? "abc" : "x", "abd") * 10 + cmp("abd", n > 0 ? "abc" : "x"), Int64(1)),
+    ("startswith_substring", (n::Int64) -> Int64(startswith(strip(n > 0 ? " héllo" : "x"), "hé")), Int64(1)),
+    ("endswith_nonascii", (n::Int64) -> Int64(endswith(n > 0 ? "vital é" : "x", " é")), Int64(1)),
+    # a SubString's codeunits are a window, not the parent's byte array; memchr reads through it
+    ("substring_codeunits_findfirst", (n::Int64) -> something(findfirst(==(UInt8(',')), codeunits(strip(n > 0 ? " ab,c " : "x"))), 0), Int64(1)),
+    ("substring_occursin", (n::Int64) -> Int64(occursin(",", strip(n > 0 ? " a,b " : "x"))), Int64(1)),
+    ("strip_split_join", (n::Int64) -> length(join(split(strip(n > 0 ? "  hello,world,test  " : "x"), ","), "-")), Int64(1)),
 ])
 
 # ============================================================================
