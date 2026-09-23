@@ -2073,7 +2073,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         push!(branches, (tid, cw, c))
     end
 
-    result_julia = get(ctx.ssa_types, idx, nothing)
+    result_julia = get(ctx.ssa_types, idx, Any)
     result_wasm = (result_julia isa Type && result_julia !== Nothing && result_julia !== Union{}) ?
         get_concrete_wasm_type(result_julia, ctx.mod, ctx.type_registry) : nothing
 

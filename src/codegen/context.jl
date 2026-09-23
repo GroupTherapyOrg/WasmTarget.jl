@@ -1617,112 +1617,31 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
         end
     end
 
-    # Fallback: infer from calls for any missing types
+    # A call statement Julia left `::Any` stays `Any`: a dynamic call's result is whatever
+    # its runtime target returns. The one refinement is an `:invoke` whose value the
+    # optimizer left unused (the caller's IR then reads `::Any`): its result is the invoked
+    # MethodInstance's own inferred return type, which the closed world registered for
+    # exactly that signature. Another specialization of the same function never answers.
+    # parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
+    # invocation's type is its target's return type.
+    ctx.func_registry === nothing && return
     for (i, rec) in enumerate(ctx.nir)
         haskey(ctx.ssa_types, i) && continue
         rec.slot == 0 || continue
         node = rec.node
-        if node isa NirCall
-            # Skip memoryrefset! — its return type is the stored element (Any),
-            # NOT the MemoryRef first argument. infer_call_type would incorrectly infer
-            # MemoryRef{T}, causing the SSA local to be allocated as ConcreteRef (array type)
-            # instead of ExternRef. This leads to illegal ref.cast at runtime.
-            node.callee === Core.memoryrefset! && continue
-            ctx.ssa_types[i] = infer_call_type(node, ctx)
-        elseif node isa NirInvoke && node.method isa Method
-            # For invoke expressions with Any type, get the actual method return type:
-            # look the invoked function up in the registry by its function object
-            func = node.callee
-            (func isa NirNode || func isa GlobalRef || func === nothing) && continue
-            if ctx.func_registry !== nothing && has_func_ref(ctx.func_registry, func)
-                infos = get_func_ref_infos(ctx.func_registry, func)
-                if !isempty(infos)
-                    # Use the first matching function's return type
-                    ctx.ssa_types[i] = infos[1].return_type
-                end
+        (node isa NirInvoke && node.mi isa Core.MethodInstance) || continue
+        func = node.callee
+        (func isa NirNode || func isa GlobalRef || func === nothing) && continue
+        infos = get_func_ref_infos(ctx.func_registry, func)
+        infos === nothing && continue
+        spec = node.mi.specTypes
+        for info in infos
+            if Tuple{typeof(func), info.arg_types...} == spec || Tuple{info.arg_types...} == spec
+                ctx.ssa_types[i] = info.return_type
+                break
             end
         end
     end
-end
-
-# The callees whose result is not their first argument's type — a mutation returning its
-# collection's element or the collection, an IO write, a display call, a compiler barrier.
-# parity(quarantine: a fallback result type for a call Julia inference left erased — dart
-# reads every expression's static type from the CFE and has no such fallback.)
-const _NON_IDENTITY_RESULT_CALLEES = Tuple(unique(Any[getfield(M, n)
-    for M in (Base, Core.Compiler)
-    for n in (:push!, :pushfirst!, :pop!, :popfirst!, :setindex!, :insert!, :deleteat!,
-              :write, :print, :println, :show, :compilerbarrier)
-    if isdefined(M, n)]))
-
-function infer_call_type(node::NirCall, ctx::AbstractCompilationContext)
-    func = node.callee
-    args = node.operands
-
-    # Comparison operations return Bool
-    if is_comparison(func)
-        return Bool
-    end
-
-    # Dart selector signatures carry the LUB of every matching target result.
-    # Julia inference may erase a dynamic call to Any/abstract; recover the same
-    # closed-world fact from the already-complete function registry.
-    if ctx.func_registry !== nothing
-        called = _nir_callee_object(func)
-        if called !== nothing && has_func_ref(ctx.func_registry, called)
-            call_types = Any[get_ssa_type(ctx, arg) for arg in args]
-            returns = Type[]
-            for info in get_func_ref_infos(ctx.func_registry, called)
-                length(info.arg_types) == length(call_types) || continue
-                compatible = all(eachindex(call_types)) do j
-                    actual, candidate = call_types[j], info.arg_types[j]
-                    actual isa Type && candidate isa Type &&
-                        (isconcretetype(actual) ? actual == candidate : candidate <: actual)
-                end
-                compatible || continue
-                info.return_type isa Type && push!(returns, info.return_type)
-            end
-            if !isempty(returns)
-                return foldl(typejoin, returns)
-            end
-        end
-    end
-
-    # getfield returns the field type, not the object type
-    if _is_getfield_callee(func) && length(args) >= 2
-        obj_type = infer_value_type(args[1], ctx)
-        field_ref = args[2]
-        if obj_type isa DataType && isstructtype(obj_type) && !isabstracttype(obj_type)
-            field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
-            try
-                if field_sym isa Symbol && hasfield(obj_type, field_sym)
-                    return fieldtype(obj_type, field_sym)
-                elseif field_sym isa Integer && 1 <= field_sym <= fieldcount(obj_type)
-                    return fieldtype(obj_type, Int(field_sym))
-                end
-            catch
-                # fieldcount may fail for types without definite field count
-            end
-        end
-    end
-
-    # Infer return type from first argument for most intrinsics.
-    # For calls where the first arg is Type{T} (constructor/conversion), return Any
-    # since the return type is T, not Type{T}. Same for known non-identity functions.
-    if length(args) > 0
-        arg1_type = infer_value_type(args[1], ctx)
-        # Type{T} as first arg means this is a constructor — return type is T, not Type{T}
-        if arg1_type isa DataType && arg1_type <: Type
-            return Any  # Safe default for constructors
-        end
-        # Known functions where return type != first arg type
-        if any(f -> f === func, _NON_IDENTITY_RESULT_CALLEES)
-            return Any
-        end
-        return arg1_type
-    end
-
-    return Any  # Safe default — maps to ExternRef
 end
 
 function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)

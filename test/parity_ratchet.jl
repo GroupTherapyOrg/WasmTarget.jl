@@ -1243,12 +1243,14 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L50_closed_world_result_lub_and_reinterpret_bits" => ("dynamic selector results use the closed-world target LUB, proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own statement type — a call Julia typed `Any` is never re-typed from its first argument, a field, or the LUB of the closed world's targets, and the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads its own MethodInstance's return type, never another specialization's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["foldl(typejoin, returns)",
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["result_julia = get(ctx.ssa_types, idx, Any)",
+                        "Tuple{typeof(func), info.arg_types...} == spec",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
                         # the explicit-`%new` runtime class, now read off the boundary (Phase 12D)
@@ -1261,8 +1263,9 @@ const LOCKS = [
                         "Core.bitcast(T, bits)",
                         "% TargetBits",
                         "% SourceBits"]
-            forbidden = ["getfield(a, :parent)"]
-            all_src = context_src * interp_src * trim_src
+            forbidden = ["getfield(a, :parent)",
+                         "infer_call_type", "foldl(typejoin, returns)", "infos[1].return_type"]
+            all_src = context_src * interp_src * trim_src * calls_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),

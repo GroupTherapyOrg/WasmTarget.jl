@@ -202,8 +202,6 @@ _g("structs_tuples", Any[
 _g("closures", Any[
     ("capture", (x::Int64) -> (f = y -> y + x; f(10)), Int64(5)),
     ("map_closure", (n::Int64) -> (k = 3; sum(map(i -> i * k, 1:n))), Int64(4)),
-    ("erased_call", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1) + fs[1](2))::Int64), Int64(3)),
-    ("erased_two_closures", (n::Int64) -> (fs = Any[x -> x + n, x -> x * n]; (fs[1](1) + fs[2](2))::Int64), Int64(3)),
     ("erased_two_specializations", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1)::Int64) + Int64((fs[1](2.5)::Float64) * 2)), Int64(3)),
     # every vtable entry returns anyref (dart closures.dart:648): a Nothing-returning body's
     # entry yields null (it used to return no value, and the caller's cast to the uniform
@@ -211,20 +209,18 @@ _g("closures", Any[
     # (it used to be refused at compile time)
     ("erased_nothing_body", (n::Int64) -> (v = Int64[]; h = s -> (push!(v, length(s) * n); nothing); fs = Any[h]; fs[1]("ab"); fs[1]("abc"); sum(v)), Int64(3)),
     ("erased_nothing_specialization", (n::Int64) -> (v = Int64[]; h = x -> (x isa String ? (push!(v, length(x)); nothing) : x * n); fs = Any[h]; fs[1]("abcd"); Int64((fs[1](2.5)::Float64) * 2) + sum(v)), Int64(3)),
+    # an erased call's result is Julia's `::Any`, never its first argument's type: the value
+    # keeps its own class (native 2, 1, 1; typed as the Int64 argument it answered 1, and
+    # trapped an illegal cast for the Bool and Float64 results)
+    ("erased_result_uint64", (n::Int64) -> (fs = Any[x -> UInt64(x)]; r = fs[1](n); r isa Int64 ? 1 : 2), Int64(3)),
+    ("erased_result_bool", (n::Int64) -> (fs = Any[x -> x > 0]; r = fs[1](n); r isa Bool ? 1 : 2), Int64(3)),
+    ("erased_result_float64", (n::Int64) -> (fs = Any[x -> x * 0.5]; r = fs[1](n); r isa Float64 ? 1 : 2), Int64(3)),
 ])
 
 # ---- KNOWN-PENDING (xfail) — gaps with an open loop; reported, do NOT fail the gate.
 # When one flips to passing, the smoke says so loudly (the loop that closes it is done).
 const XFAIL = Vector{Pair{String,Vector{Any}}}()
 _xf(name, cases) = push!(XFAIL, name => cases)
-# An erased call's result is Julia's `::Any`, never its first argument's type: the value
-# keeps its own class (native 2, 1, 1; typed as the Int64 argument it answers 1, and traps
-# an illegal cast for the Bool and Float64 results).
-_xf("erased_call_result", Any[
-    ("erased_result_uint64", (n::Int64) -> (fs = Any[x -> UInt64(x)]; r = fs[1](n); r isa Int64 ? 1 : 2), Int64(3)),
-    ("erased_result_bool", (n::Int64) -> (fs = Any[x -> x > 0]; r = fs[1](n); r isa Bool ? 1 : 2), Int64(3)),
-    ("erased_result_float64", (n::Int64) -> (fs = Any[x -> x * 0.5]; r = fs[1](n); r isa Float64 ? 1 : 2), Int64(3)),
-])
 # M6 progress (2026-07-02): the closure body now compiles VALID wasm (the self-box numeric
 # join types the capture cycle — f3_self_box_joins, dart Capture.type). The remaining gap is
 # SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
@@ -484,11 +480,6 @@ _g("builtins", Any[
     ("compilerbarrier_const", (x::Int64) -> Base.compilerbarrier(:const, x) + 1, Int64(1)),                         # Core.compilerbarrier
     ("inferencebarrier_ref", (x::Int64) -> (Base.inferencebarrier(Any[x])::Vector{Any})[1]::Int64, Int64(1)),     # Core.compilerbarrier
     ("getglobal_const_vector", (x::Int64) -> getglobal(Main, :_SMOKE_GLOBAL_VEC)[x], Int64(2)),                    # Core.getglobal
-    # `+`/`-`/`*` whose operands are results of an erased (Vector{Any}) closure call
-    ("erased_results_sub", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) - fs[1](2))::Int64), Int64(3)),     # Base.:-
-    ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),     # Base.:*
-    ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),  # Base.:-
-    ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),  # Base.:*
     # `-`/`*` on a captured, mutated accumulator: the dynamic operator whose operands carry
     # the variable's joined type (translateTypeOfLocalVariable)
     ("mutate_capture_sub", (n::Int64) -> ((s = 100; foreach(i -> (s -= i), 1:n); s)::Int64), Int64(5)),   # Base.:-
@@ -505,6 +496,21 @@ _g("builtins_invoked", Any[
     ("closed_world_type_bounds", (x::Int64) -> WasmTarget._closed_world_type_bounds(Int.name) === nothing ? x : -x, Int64(3)),  # _closed_world_type_bounds
     ("closed_world_isvisible", (x::Int64) -> _sm_visible_from_main(Int.name) ? x : -x, Int64(3)),                            # _closed_world_isvisible
 ])
+# Arithmetic whose operands are results of an erased (Vector{Any}) closure call: Julia
+# types each result `::Any`, so `+`/`-`/`*` runs on two Any values and rejects located at
+# `dynamic (%a + %b)::Any` ("boxed arithmetic result lacks a concrete Julia source type").
+# These passed only while the call result was guessed as its first argument's type. Gap:
+# the typed value channel — each boxed operand unboxed by its classId and the operator
+# dispatched on the classes, the result boxed with the class the chosen method returns.
+_xf("erased_arithmetic", Any[
+    ("erased_call", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1) + fs[1](2))::Int64), Int64(3)),
+    ("erased_two_closures", (n::Int64) -> (fs = Any[x -> x + n, x -> x * n]; (fs[1](1) + fs[2](2))::Int64), Int64(3)),
+    ("erased_results_sub", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) - fs[1](2))::Int64), Int64(3)),
+    ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),
+    ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),
+    ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),
+])
+
 # BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
 # (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
 # false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).

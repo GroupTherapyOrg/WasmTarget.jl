@@ -216,6 +216,10 @@ function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)
         emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         array_len!(_ncb)
         widen_length_to_i64!(_ncb)
+        # parity(translator.dart:1597 Translator.convertType): the lowering's value is `Int`;
+        # a statement Julia typed wider (`::Any` for an AbstractString receiver) receives
+        # it boxed with Int's class
+        get(ctx.ssa_types, idx, Any) === Int || coerce_stack_top!(_ncb, AnyRef, ctx; from_julia=Int)
         append_builder!(fb, _ncb)
         return append_builder!(b, fb)
     end
