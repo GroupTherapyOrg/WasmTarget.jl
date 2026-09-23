@@ -36,10 +36,10 @@
 module WasmTargetSimpleDiffEqExt
 
 using WasmTarget
-using SimpleDiffEq
-using SciMLBase
-using DiffEqBase
-using LinearAlgebra
+using SimpleDiffEq: SimpleDiffEq, LoopEuler, LoopRK4, SimpleEuler, SimpleRK4, SimpleTsit5
+using SciMLBase: SciMLBase
+using DiffEqBase: DiffEqBase
+using LinearAlgebra: LinearAlgebra
 using Base.Experimental: @overlay
 
 const WMT = WasmTarget.WASM_METHOD_TABLE
@@ -79,6 +79,6 @@ end
 
 # (3) generic solve → __solve (bypass the kwarg-Pairs machinery).
 @overlay WMT SB.solve(prob::SB.ODEProblem, alg::_WT_SOLVERS; dt, kw...) =
-    DiffEqBase.__solve(prob, alg; dt = dt)
+    SciMLBase.__solve(prob, alg; dt = dt)
 
 end # module

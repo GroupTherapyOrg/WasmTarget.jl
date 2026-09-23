@@ -32,6 +32,18 @@ _wt_exact_inexact_exception()::Int64 = try
 catch err
     err isa InexactError && err.func === :convert ? 1 : 2
 end
+function _wt_exact_undef_capture_exception(n::Int64)::Int64
+    local x
+    n > 0 && (x = n)
+    g = () -> x
+    try
+        v = g()
+        return v isa Int64 ? v + 100 : -3
+    catch err
+        # Expr(:throw_undef_if_not, :x, cond) — the exact UndefVarError, never a skipped check
+        return err isa UndefVarError && err.var === :x ? -1 : -2
+    end
+end
 _wt_many_string_length()::Int64 = Int64(ncodeunits(Base._string("aa", "bbb", "cccc")))
 function _wt_vector_mutation_semantics()::Int64
     v = Int64[]
@@ -58,6 +70,8 @@ _wt_unsupported_show() = (show(_WTUnsupportedShow(1)); Int64(1))
     @test_throws WasmTarget.WasmCompileError WasmTarget.compile(_wt_make_undefined_field, ())
     @test compare_julia_wasm(_wt_use_definitely_initialized_fields, Int64(4)).pass
     @test compare_julia_wasm(_wt_exact_kwerr_exception).pass
+    @test compare_julia_wasm(_wt_exact_undef_capture_exception, Int64(3)).pass
+    @test compare_julia_wasm(_wt_exact_undef_capture_exception, Int64(0)).pass
     @test compare_julia_wasm(_wt_exact_inexact_exception).pass
     @test compare_julia_wasm(_wt_many_string_length).pass
     @test compare_julia_wasm(_wt_vector_mutation_semantics).pass

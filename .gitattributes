@@ -1,1 +1,3 @@
+# One line ending everywhere: a Windows checkout reads the same bytes as every other.
+* text=auto eol=lf
 *.jl text eol=lf

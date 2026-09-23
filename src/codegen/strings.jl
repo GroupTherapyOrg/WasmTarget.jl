@@ -5,13 +5,15 @@
 # Module-level storage for the i16 char array type index used at the JS boundary
 const _CHAR_ARRAY_TYPE_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_char_array_idx, nothing)
 
-function clear_char_array_type!()
+function clear_char_array_type!()::Nothing
     _CHAR_ARRAY_TYPE_IDX[] = nothing
 end
 
 """
 Get or create the i16 char array type used for `wasm:js-string.fromCharCodeArray`.
 Internal strings stay as i8 UTF-8; this i16 type is only for the JS boundary.
+
+parity(translator.dart:1218 wasmArrayType): the cached mutable i16 array type.
 """
 function get_char_array_type!(mod::WasmModule)::UInt32
     if _CHAR_ARRAY_TYPE_IDX[] !== nothing
@@ -30,7 +32,7 @@ Created once per module in add_io_imports!.
 """
 const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
 
-function clear_utf8_to_js_func!()
+function clear_utf8_to_js_func!()::Nothing
     _UTF8_TO_JS_FUNC_IDX[] = nothing
 end
 
@@ -140,7 +142,7 @@ module-level `\$utf8_to_js` helper — builder-native (THE implementation).
 
 **Stack effect:** `[(ref \$str_arr)] → [(ref extern)]`
 """
-function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
+function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)::InstrBuilder
     helper_idx = _UTF8_TO_JS_FUNC_IDX[]
     if helper_idx === nothing
         error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
@@ -154,15 +156,19 @@ end
 # Stack Trace Support — JS new Error().stack Import
 # ============================================================================
 
-# census F7 (march5): add_stack_trace_import!/ensure_stack_trace_global! deleted
-# with the dormant PURE-9036 cluster (see generate.jl note; rebuild = D9.1 typed tag).
+# census F7 (): add_stack_trace_import!/ensure_stack_trace_global! deleted
+# with the dormant cluster (see generate.jl note; rebuild = D9.1 typed tag).
 
 # ============================================================================
 # IO Bridge — println/print via JS Imports
 # ============================================================================
 
 """
-PURE-9040: IO import indices stored in the module for println/print support.
+IO import indices stored in the module for println/print support.
+
+parity(quarantine: Julia's print/println end in the libuv stream foreigncall jl_uv_write,
+which has no wasm host; the module imports host io.write_* functions in its place, and this
+records their indices.)
 """
 mutable struct IOImports
     write_string_idx::UInt32    # io.write_string(externref) → void
@@ -170,7 +176,7 @@ mutable struct IOImports
     write_float_idx::UInt32     # io.write_float(f64) → void
     write_bool_idx::UInt32      # io.write_bool(i32) → void
     write_newline_idx::UInt32   # io.write_newline() → void
-    write_nothing_idx::UInt32   # io.write_nothing() → void (PURE-9041)
+    write_nothing_idx::UInt32   # io.write_nothing() → void
     decode_idx::UInt32          # wasm:text-decoder.decodeStringFromUTF8Array
 end
 
@@ -180,8 +186,11 @@ end
 Add IO bridge imports for println/print support.
 Imports: io.write_string, io.write_int, io.write_float, io.write_bool, io.write_newline
 Also adds wasm:text-decoder import for string conversion.
+
+parity(quarantine: the host imports standing in for Julia's libuv jl_uv_write foreigncall, see
+IOImports.)
 """
-function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
+function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)::IOImports
     # String decoder via standardized wasm:js-string builtins
     char_arr_type_idx = get_char_array_type!(mod)
     char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)
@@ -201,7 +210,7 @@ function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
         WasmValType[I32], WasmValType[])
     write_newline_idx = add_import!(mod, "io", "write_newline",
         WasmValType[], WasmValType[])
-    # PURE-9041: write_nothing() outputs "nothing" string
+    # write_nothing() outputs "nothing" string
     write_nothing_idx = add_import!(mod, "io", "write_nothing",
         WasmValType[], WasmValType[])
 
@@ -221,7 +230,7 @@ const _IO_IMPORTS = TaskLocalRef{Union{Nothing, IOImports}}(:_wt_io_imports, not
 
 Get the current IO imports, or nothing if not initialized.
 """
-function get_io_imports()
+function get_io_imports()::Union{Nothing, IOImports}
     return _IO_IMPORTS[]
 end
 
@@ -230,7 +239,7 @@ end
 
 Store IO imports for use during compilation.
 """
-function set_io_imports!(imports::IOImports)
+function set_io_imports!(imports::IOImports)::IOImports
     _IO_IMPORTS[] = imports
 end
 
@@ -239,12 +248,12 @@ end
 
 Clear IO imports after compilation.
 """
-function clear_io_imports!()
+function clear_io_imports!()::Nothing
     _IO_IMPORTS[] = nothing
 end
 
 # ============================================================================
-# Performance Timer — jl_hrtime via performance.now() (PURE-9042)
+# Performance Timer — jl_hrtime via performance.now()
 # ============================================================================
 
 const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
@@ -253,6 +262,9 @@ const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, no
     ensure_perf_now_import!(mod) -> UInt32
 
 Import env.perf_now() → f64 for high-resolution timing. Idempotent.
+
+parity(quarantine: Julia's time_ns() is the jl_hrtime foreigncall into libuv's clock, which
+wasm does not have; the host clock import stands in for it.)
 """
 function ensure_perf_now_import!(mod::WasmModule)::UInt32
     existing = _PERF_NOW_IDX[]
@@ -264,18 +276,22 @@ function ensure_perf_now_import!(mod::WasmModule)::UInt32
     return idx
 end
 
-function clear_perf_now!()
+function clear_perf_now!()::Nothing
     _PERF_NOW_IDX[] = nothing
 end
 
 # ============================================================================
-# RNG State — Xoshiro256++ via Wasm Globals (PURE-9043)
+# RNG State — Xoshiro256++ via Wasm Globals
 # ============================================================================
 
 """
-PURE-9043: RNG state stored in 4 mutable i64 Wasm globals.
+RNG state stored in 4 mutable i64 Wasm globals.
 Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
 We store these in Wasm globals instead.
+
+parity(quarantine: Julia's rand() reads Xoshiro256++ state from the fields rngState0..3 of
+the Task that the jl_get_current_task foreigncall returns; the module has no Task object, so
+the four state words are module globals.)
 """
 struct RNGGlobals
     rng0_idx::UInt32  # global index for rngState0 (i64)
@@ -287,15 +303,15 @@ end
 
 const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
 
-function get_rng_globals()
+function get_rng_globals()::Union{Nothing, RNGGlobals}
     return _RNG_GLOBALS[]
 end
 
-function set_rng_globals!(rng::RNGGlobals)
+function set_rng_globals!(rng::RNGGlobals)::RNGGlobals
     _RNG_GLOBALS[] = rng
 end
 
-function clear_rng_globals!()
+function clear_rng_globals!()::Nothing
     _RNG_GLOBALS[] = nothing
 end
 
@@ -304,6 +320,8 @@ end
 
 Create 4 mutable i64 globals for Xoshiro256++ RNG state + JS seed import.
 Idempotent — returns existing globals if already created.
+
+parity(quarantine: the module globals that hold the Task's Xoshiro256++ state, see RNGGlobals.)
 """
 function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
     existing = get_rng_globals()
@@ -339,6 +357,9 @@ end
     get_rng_global_idx(field_name::Symbol) -> Union{UInt32, Nothing}
 
 Map rngState field name to global index. Returns nothing if field is not an RNG field.
+
+parity(quarantine: redirects getfield(current_task(), :rngStateN) to the module global that
+holds that word, see RNGGlobals.)
 """
 function get_rng_global_idx(field_name::Symbol)::Union{UInt32, Nothing}
     rng = get_rng_globals()
@@ -362,78 +383,17 @@ end
 # ============================================================================
 
 """
-Compile string concatenation (str1 * str2).
-Creates a new string array with combined contents.
-Uses locals for intermediate values.
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+
+The N-way string-concat LOGIC only: `str_locals` already hold the DATA array refs to
+concatenate (already pushed there by the caller — via `emit_value!` for the ctx+args
+call site, or via raw `local.get`/`struct.get` for a standalone intrinsic body). No
+`ctx` involved — pure InstrBuilder local-index manipulation, so both call shapes
+(argument-emitting and raw-param) can share this one array.new_default + array.copy
+sequence instead of each re-deriving it.
 """
-# MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
-# array.copy. Byte-identical to before.
-"""builder-returning core (march3): callers merge via append_builder!."""
-function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = ctx.type_registry.string_array_idx
-
-    # Use scratch locals stored in context (allocated at compile context creation time)
-    if ctx.scratch_locals === nothing
-        error("String operations require scratch locals but none were allocated")
-    end
-    result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
-
-    b = InstrBuilder(; func_name="compile_string_concat")
-    set_context!(b, "string concat")
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, str1_local, strref)
-    builder_set_local_type!(b, str2_local, strref)
-    builder_set_local_type!(b, len1_local, I32)
-
-    # Store str1, str2
-    emit_value!(b, str1, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
-    local_set!(b, str1_local)
-    emit_value!(b, str2, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
-    local_set!(b, str2_local)
-
-    # len1 = str1.len (stored); len2 = str2.len (left on stack)
-    local_get!(b, str1_local); array_len!(b); local_set!(b, len1_local)
-    local_get!(b, str2_local); array_len!(b)            # stack: [len2]
-
-    # Create result array of len1 + len2
-    local_get!(b, len1_local); num!(b, Opcode.I32_ADD)
-    array_new_default!(b, str_type_idx); local_set!(b, result_local)
-
-    # Copy str1 → result[0:len1]   array.copy: [dst, dst_off, src, src_off, len]
-    local_get!(b, result_local); i32_const!(b, 0)
-    local_get!(b, str1_local); i32_const!(b, 0)
-    local_get!(b, len1_local)
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    # Copy str2 → result[len1:]
-    local_get!(b, result_local); local_get!(b, len1_local)  # dst_off = len1
-    local_get!(b, str2_local); i32_const!(b, 0)             # src_off = 0
-    local_get!(b, str2_local); array_len!(b)                # len = str2.len
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    local_get!(b, result_local)                             # return result
-    return b
-end
-
-_all_string_args(args, ctx::AbstractCompilationContext) =
-    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
-
-"""Concatenate every proven String/Symbol argument through one N-way builder."""
-function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    isempty(args) && error("N-way string concatenation requires at least one argument")
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    strref = ConcreteRef(str_type_idx, true)
-    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
-    offset_local = allocate_local!(ctx, I32)
-    total_len_local = allocate_local!(ctx, I32)
-    result_local = allocate_local!(ctx, strref)
-    b = _ctx_builder(ctx, "compile_string_concat_many")
-
-    for i in eachindex(args)
-        emit_value!(b, args[i], ctx, strref)
-        local_set!(b, str_locals[i])
-    end
+function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_locals::Vector{Int},
+                                   offset_local::Int, total_len_local::Int, result_local::Int)::InstrBuilder
     i32_const!(b, 0)
     for loc in str_locals
         local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
@@ -455,38 +415,38 @@ function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::In
     return b
 end
 
-"""
-Compile string equality comparison (str1 == str2).
-Returns i32 (0 or 1).
-Uses scratch locals allocated by allocate_scratch_locals!.
-"""
-# MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
-# control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-"""builder-returning core (march3): callers merge via append_builder!."""
-function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = ctx.type_registry.string_array_idx
+_all_string_args(args, ctx::AbstractCompilationContext)::Bool =
+    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
 
-    # Use scratch locals stored in context (allocated at compile context creation time)
-    if ctx.scratch_locals === nothing
-        error("String operations require scratch locals but none were allocated")
+"""Concatenate every proven String/Symbol argument through one N-way builder.
+Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`."""
+function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("N-way string concatenation requires at least one argument")
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    strref = ConcreteRef(str_type_idx, true)
+    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
+    offset_local = allocate_local!(ctx, I32)
+    total_len_local = allocate_local!(ctx, I32)
+    result_local = allocate_local!(ctx, strref)
+    b = _ctx_builder(ctx, "compile_string_concat_many")
+
+    for i in eachindex(args)
+        emit_value!(b, args[i], ctx, strref)
+        local_set!(b, str_locals[i])
     end
-    _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+    return b
+end
 
-    b = InstrBuilder(; func_name="compile_string_equal")
-    set_context!(b, "string ==")
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, str1_local, strref)
-    builder_set_local_type!(b, str2_local, strref)
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, i_local, I32)
+"""
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
 
-    # Store str1 and str2 — expected=the DATA array; the funnel unwraps the classed
-    # string (parity M9: ops read the class's array field once at entry)
-    emit_value!(b, str1, ctx, strref)
-    local_set!(b, str1_local)
-    emit_value!(b, str2, ctx, strref)
-    local_set!(b, str2_local)
-
+The element-wise char-array equality LOGIC only: `str1_local`/`str2_local` already
+hold the DATA array refs to compare. No `ctx` involved — shared by the ctx+args call
+site and any raw-param intrinsic body.
+"""
+function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
+                                  str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)::InstrBuilder
     # len1 = str1.len (tee into len_local); compare with len2
     local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
     local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
@@ -520,5 +480,38 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
         end_block!(b)                                      # end result block
     end_block!(b)                                          # end if-else
 
+    return b
+end
+
+"""
+Compile string equality comparison (str1 == str2).
+Returns i32 (0 or 1). Uses scratch locals allocated by allocate_scratch_locals!.
+builder-returning core (): callers merge via append_builder!.
+"""
+function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
+    str_type_idx = ctx.type_registry.string_array_idx
+
+    # Use scratch locals stored in context (allocated at compile context creation time)
+    if ctx.scratch_locals === nothing
+        error("String operations require scratch locals but none were allocated")
+    end
+    _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
+
+    b = InstrBuilder(; func_name="compile_string_equal")
+    set_context!(b, "string ==")
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+    builder_set_local_type!(b, str1_local, strref)
+    builder_set_local_type!(b, str2_local, strref)
+    builder_set_local_type!(b, len_local, I32)
+    builder_set_local_type!(b, i_local, I32)
+
+    # Store str1 and str2 — expected=the DATA array; the funnel unwraps the classed
+    # string (parity M9: ops read the class's array field once at entry)
+    emit_value!(b, str1, ctx, strref)
+    local_set!(b, str1_local)
+    emit_value!(b, str2, ctx, strref)
+    local_set!(b, str2_local)
+
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
     return b
 end

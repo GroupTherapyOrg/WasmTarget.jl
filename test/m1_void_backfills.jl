@@ -1,4 +1,4 @@
-# parity(M1) ONE LOWERING — void-body coverage (dev/PARITY_MASTER.md phase M1).
+# parity(M1) ONE LOWERING — void-body coverage.
 #
 # The M1 slice-2 flip routes Nothing-returning bodies through the stackifier (the old
 # generate_void_flow fast-path is DELETED). Void functions can't be value-differentialed

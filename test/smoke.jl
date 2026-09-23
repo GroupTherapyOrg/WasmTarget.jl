@@ -12,6 +12,7 @@
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
 # ============================================================================
 using WasmTarget
+using Random, SHA   # seeded streams, as the full suite loads them (WasmTargetRandomExt active)
 include(joinpath(@__DIR__, "utils.jl"))
 
 const FILTER = lowercase.(ARGS)
@@ -52,11 +53,46 @@ _g("controlflow", Any[
 ])
 
 # ---- phi / union (the boxing channel) -------------------------------------
+# P4-types (get_concrete_wasm_type / julia_to_wasm_type_concrete fold): protect the
+# Union{Nothing,T}-for-locals EqRef seam (CG-003d) before the two duplicate chains merge.
+struct _PU
+    v::Int64
+end
+struct _PUWrap
+    inner::Union{Nothing,_PU}
+end
 _g("phi_union", Any[
     ("loop_phi", (n::Int64) -> (s = 0; for i in 1:n; s += i % 2 == 0 ? i : -i; end; s), Int64(6)),
     ("union_add", (b::Bool) -> (b ? 10 : 20) + 1, true),
     ("ternary_widen", (x::Int64) -> x > 5 ? 1.5 : 2.5, Int64(2)),
     ("acc_float", (n::Int64) -> (s = 0.0; for i in 1:n; s += i; end; s), Int64(5)),
+    # (1) two-edge if/else phi: one Nothing edge, one concrete-struct edge, stored in a
+    # local then used. Exercises the EqRef-for-locals path when the local is re-read.
+    ("phi_nothing_struct",
+     (x::Int64) -> (r = x > 0 ? _PU(x) : nothing; y = r; y === nothing ? Int64(-1) : y.v),
+     Int64(3)),
+    # (2) >=3-predecessor phi (if/elseif/elseif/else) merging Union{Nothing,_PU}.
+    ("phi_3way_nothing_struct",
+     (x::Int64) -> (r = if x == 1
+         _PU(10)
+     elseif x == 2
+         _PU(20)
+     elseif x == 3
+         nothing
+     else
+         _PU(30)
+     end; r === nothing ? Int64(-1) : r.v),
+     Int64(2)),
+    # (3) a Union{Nothing,_PU} value widened through an Any-typed intermediate, then
+    # merged again at a second phi (one edge sourced from the Any local, one Nothing).
+    ("phi_any_intermediate",
+     (x::Int64) -> (pre = x > 0 ? _PU(x) : nothing; dyn::Any = pre; post = x > 3 ? dyn : nothing;
+                    (post isa _PU) ? post.v : Int64(-1)),
+     Int64(6)),
+    # (4) a struct field of type Union{Nothing,T} read straight into a local, then used.
+    ("struct_field_nothing_to_local",
+     (x::Int64) -> (w = _PUWrap(x > 0 ? _PU(x) : nothing); f = w.inner; f === nothing ? Int64(-1) : f.v),
+     Int64(8)),
 ])
 
 # ---- arrays ---------------------------------------------------------------
@@ -83,15 +119,63 @@ _g("anyarray_boxing", Any[
 ])
 
 # ---- dicts ----------------------------------------------------------------
+# Native-built Dict{String,Int} CONSTANT: slots/keys/vals are embedded verbatim
+# (compile_memory_elements!, values.jl) at their NATIVE hash-placed positions,
+# so this only resolves in wasm when hash(::String) is bit-exact with native
+# (ground-truth string hashing; see string_hash_ground_truth.jl).
+const _SMOKE_HASH_DS = Dict("a" => 1, "bb" => 2, "ccc" => 3)
 _g("dicts", Any[
     ("dict_get", (x::Int64) -> (d = Dict(1 => 10, 2 => 20, 3 => 30); get(d, x, 0)), Int64(2)),
     ("dict_build", (n::Int64) -> (d = Dict{Int64,Int64}(); for i in 1:n; d[i] = i * i; end; sum(values(d))), Int64(4)),
     ("dict_haskey", (x::Int64) -> (d = Dict(1 => 1, 2 => 2); haskey(d, x) ? 1 : 0), Int64(2)),
+    # native-built constants: only occupied slots are serialized (unoccupied isbits
+    # slots held host heap garbage — process-varying bytes), and a constant Vector
+    # read only through .size registers its struct on demand
+    ("dict_const_get", (x::Int64) -> _SMOKE_DICT[x] + get(_SMOKE_DICT, x + 100, -1), Int64(2)),
+    ("dict_const_grow", (x::Int64) -> (d = copy(_SMOKE_DICT); d[x + 50] = 7; length(d) + d[x + 50]), Int64(3)),
+    ("vec_const_len", (x::Int64) -> length(_SMOKE_VEC) + length(_SMOKE_VEC2) + x, Int64(1)),
+    # Set{Int} = Dict{Int,Nothing}: the unoccupied vals slots take the physical default
+    ("set_const_in", (x::Int64) -> (x in _SMOKE_SET ? 1 : 0) + length(_SMOKE_SET), Int64(2)),
+    # copy of a String-keyed Dict: isbitstype(String) folds (no sizeof(String) branch)
+    # and the non-isbits Memory copy divides byte offsets by the reference stride
+    ("dict_str_copy_grow", (x::Int64) -> (d = copy(_SMOKE_DS); d["cc"] = x; length(d) * 10 + d["bb"]), Int64(3)),
+    # reference-element copies at offset 0 and above (stride 8 both sides)
+    ("vec_str_copy_push", (x::Int64) -> (w = copy(_SMOKE_VS); push!(w, "e"); length(w) * 10 + length(w[2]) + x), Int64(0)),
+    ("vec_str_slice", (x::Int64) -> (w = _SMOKE_VS[2:3]; length(w) * 10 + length(w[1]) + length(w[2]) + x), Int64(0)),
+    ("vec_str_copy_set", (x::Int64) -> (w = copy(_SMOKE_VS); w[2] = "zz"; length(_SMOKE_VS[2]) * 10 + length(w[2]) + x), Int64(0)),
 ])
+
+# ---- isa / typeassert against parametric abstracts on Any-typed values ---
+# AbstractVector = AbstractArray{T,1}: a DFS range keyed by the base could not answer
+# it (constant false), and its wasm type reached the matrix registrar (illegal cast).
+@noinline _smoke_anyvec(n::Int64) = n > 0 ? Any[1.0, 2.0] : Any[Float64[1.0, 2.0], "s", Int64[3]]
+_g("abstract_isa", Any[
+    ("isa_abstractvector", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(0)),
+    ("isa_abstractarray", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractArray && (c += 1); end; c), Int64(0)),
+    ("isa_abstractvector_none", (n::Int64) -> (c = 0; for x in _smoke_anyvec(n); x isa AbstractVector && (c += 1); end; c), Int64(1)),
+    ("typeassert_abstractvector", (n::Int64) -> (v = _smoke_anyvec(n)[1]::AbstractVector; v isa Vector{Float64} ? length(v)::Int : -1), Int64(0)),
+    ("dict_str_const_lookup", () -> _SMOKE_HASH_DS["bb"]),
+])
+const _SMOKE_DICT = Dict{Int64,Int64}(i => i * 10 for i in 1:5)
+const _SMOKE_VEC = Int64[1, 2, 3]
+const _SMOKE_VEC2 = Int64[4, 5, 6]
+const _SMOKE_SET = Set([1, 2, 3, 40])
+const _SMOKE_DS = Dict{String,Int64}("a" => 1, "bb" => 2)
+const _SMOKE_VS = ["a", "bb", "ccc", "dddd"]
 
 # ---- structs / tuples -----------------------------------------------------
 struct _Pt; x::Int64; y::Int64; end
 mutable struct _Box; v::Int64; end
+mutable struct _RegTarget; v::Float64; end
+mutable struct _Holder; slot::Union{Nothing,_RegTarget}; end
+# @noinline so the struct genuinely escapes and setfield!/getfield compile for
+# real (inlined into a single closure body, Julia's SROA scalar-replaces the
+# field down to pure dataflow and never exercises the setfield! codegen path
+# this regresses).
+@noinline function _wt_clear_slot!(h::_Holder)
+    h.slot = nothing
+    return h.slot === nothing
+end
 _g("structs_tuples", Any[
     ("struct_field", (n::Int64) -> (p = _Pt(n, n + 1); p.x + p.y), Int64(3)),
     ("mutable_struct", (n::Int64) -> (b = _Box(n); b.v += 10; b.v), Int64(5)),
@@ -101,12 +185,26 @@ _g("structs_tuples", Any[
     # Loop B′: heterogeneous tuple at a RUNTIME index → Union element via the uniform box (both arms).
     ("het_tuple_rtidx", (x::Int64) -> (t = (10, 2.5); s = t[x]; s isa Int64 ? s : Int64(round(s))), Int64(1)),
     ("const_het_tuple_rtidx", (x::Int64) -> (t = (100, 3.5, 200); v = t[x]; v isa Int64 ? v : Int64(round(v))), Int64(1)),
+    # Phase 6.1 regression: `h.slot = nothing` lowers `nothing` as GlobalRef(Mod,:nothing),
+    # NOT a literal — setfield! into a Union{Nothing,ConcreteStruct} field must null the
+    # field with ITS OWN concrete type, not the generic bottom ref (MOI.Utilities.Model
+    # crash trigger). Round-trips nothing → back to a real struct value.
+    ("setfield_nothing_regression", (x::Float64) -> (h = _Holder(_RegTarget(x)); r1 = _wt_clear_slot!(h) ? 1 : 0; h.slot = _RegTarget(x * 2); r2 = h.slot === nothing ? 0.0 : h.slot.v; Float64(r1) + r2), 3.0),
 ])
 
 # ---- closures (capture; mutate-capture = F3) ------------------------------
+# Function values called through an ERASED binding ride the closure vtable
+# (closures.jl: one vtable per closure type; entry[arity] = the trampoline). A closure
+# type with several same-arity specializations in the closed world gets a DISPATCHING
+# entry that tests the erased arguments' classIds (_closure_dispatch_trampoline!; the
+# first specialization used to win silently — Int64 vs Float64 below), and the vtable
+# structs chain by arity (dart's parentVtableStruct).
 _g("closures", Any[
     ("capture", (x::Int64) -> (f = y -> y + x; f(10)), Int64(5)),
     ("map_closure", (n::Int64) -> (k = 3; sum(map(i -> i * k, 1:n))), Int64(4)),
+    ("erased_call", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1) + fs[1](2))::Int64), Int64(3)),
+    ("erased_two_closures", (n::Int64) -> (fs = Any[x -> x + n, x -> x * n]; (fs[1](1) + fs[2](2))::Int64), Int64(3)),
+    ("erased_two_specializations", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1)::Int64) + Int64((fs[1](2.5)::Float64) * 2)), Int64(3)),
 ])
 
 # ---- KNOWN-PENDING (xfail) — gaps with an open loop; reported, do NOT fail the gate.
@@ -141,9 +239,21 @@ _g("strings_classed", Any[
 # ---- dispatch (multiple methods / types) ----------------------------------
 _disp(x::Int64) = x * 2
 _disp(x::Float64) = x + 0.5
+# formal(dev/formal/ClassIdDispatch.tla) DispatchExact: four classed receivers through the ONE
+# selector table — rows packed with the whole span reserved, the classId span guard in front of
+# call_indirect (the MethodError-trap fix; test/dispatch_method_error.jl has the trap side).
+struct _SmA x::Int32 end; struct _SmB x::Int32 end; struct _SmC x::Int32 end; struct _SmD x::Int32 end
+_smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _smd(a::_SmD) = Int32(4)
+@noinline _smd_fwd(x::Any)::Int32 = _smd(x)
 _g("dispatch", Any[
     ("dispatch_int", (x::Int64) -> _disp(x), Int64(5)),
     ("dispatch_float", (x::Float64) -> _disp(x), 4.0),
+    # a dynamic call whose abstract position holds boxed numerics and a classed string:
+    # the discovery builds a row per observed class (Int64, String, Float64 — dart's rows
+    # for every class of the component) and the switch unboxes/casts per row; it used to
+    # skip non-struct classes and trap at runtime with no row
+    ("eq_any_mixed", (n::Int64) -> (v = Any[1, "x", 2.5]; (v[1] == 1 ? 1 : 0) + (v[2] == "x" ? 10 : 0) + (v[3] == 2.5 ? 100 : 0) + n), Int64(1)),
+    ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
 ])
 
 # ---- filtered folds (was the #1 SILENT MISCOMPILE: _InitialValue sentinel through
@@ -161,6 +271,269 @@ _g("higherorder", Any[
     ("foldl_sum", (n::Int64) -> foldl(+, 1:n; init = 0), Int64(6)),
     ("filter_count", (n::Int64) -> count(iseven, 1:n), Int64(10)),
     ("mapreduce", (n::Int64) -> mapreduce(x -> x^2, +, 1:n), Int64(4)),
+])
+
+# ---- runtime-length varargs (Phase 12 H) ----------------------------------
+# `f(t...)` where `t` is a runtime-length Vararg tuple: the callee's own trailing
+# `Vararg{E}` parameter IS that value's {Object, data, size} representation, so the
+# splat compiles to a direct call. Nothing in dart2wasm answers to this
+# (parity(quarantine: Julia varargs)); before Phase 12 H it was a loud reject.
+@noinline _sm_vsum(xs::Int64...) = (s = 0; for x in xs; s += x; end; s)
+@noinline _sm_vmaxf(xs::Float64...) = (m = -Inf; for x in xs; x > m && (m = x); end; m)
+@noinline _sm_mktup(v::Vector{Int64}) = Core.tuple(v...)      # the builtin VALUE spelling
+@noinline _sm_mktupf(v::Vector{Float64}) = tuple(v...)        # GlobalRef(Main, :tuple)
+@noinline _sm_mktup_ne(v::Vector{Int64}) = (t = Core.tuple(v...); isempty(t) ? (0,) : t)
+_g("varargs", Any[
+    ("splat_vararg_sum", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(5)),
+    ("splat_vararg_sum_empty", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(0)),
+    ("splat_vararg_sum_one", (n::Int64) -> _sm_vsum(_sm_mktup(collect(1:n))...), Int64(1)),
+    ("splat_vararg_maxf", (n::Int64) -> _sm_vmaxf(_sm_mktupf(Float64[i * 1.5 for i in 1:n])...), Int64(4)),
+    # the non-empty narrowing Tuple{T, Vararg{T}} shares the canonical layout
+    ("splat_vararg_nonempty", (n::Int64) -> _sm_vsum(_sm_mktup_ne(collect(1:n))...), Int64(3)),
+])
+
+# ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
+# Each case below is the smallest ordinary program that reaches the registry entry named
+# in its comment; the coverage lane confirms the entry fires while it compiles.
+
+# FOREIGN_LOWERINGS. The seeded stream reaches `jl_type_intersection` through
+# Random.hash_seed's dispatch guards: a total break of that lowering on 2026-09-08 failed
+# every seeded Random differential in the full suite while smoke and probes stayed green.
+# On Julia 1.13 the seeded stream does not compile (measured 2026-09-22): the closed world
+# registers `Pair{Symbol, Union{}}`, and structs.jl `is_self_referential_type` calls
+# `eltype(Union{})` on its bottom-typed field (`Union{} <: AbstractVector`), escaping as a
+# raw ArgumentError ("Union{} does not have elements"); past that, the compile rejects
+# "closure typeof(getproperty): arity-2 specializations disagree on returning a value".
+(VERSION >= v"1.13-" ? _xf : _g)("seeded_random", Any[
+    ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
+    ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
+])
+@noinline _sm_opsym(x::Int64) = x > 0 ? :+ : :foo
+_g("foreign_calls", Any[
+    ("typeintersect_runtime", (x::Int64) -> typeintersect(x > 0 ? Int64 : String, Integer) === Int64 ? 1 : 0, Int64(1)),  # jl_type_intersection
+    ("is_operator", (x::Int64) -> Base._isoperator(_sm_opsym(x)) ? 1 : 0, Int64(1)),                                      # jl_is_operator
+    ("is_syntactic_operator", (x::Int64) -> Base.is_syntactic_operator(x > 0 ? :(=) : :foo) ? 1 : 0, Int64(1)),         # jl_is_syntactic_operator
+    ("id_chars", (x::Int64) -> (Base.is_id_start_char(Char(x)) ? 1 : 0) + (Base.is_id_char(Char(x)) ? 2 : 0), Int64(97)), # jl_id_start_char, jl_id_char
+    ("isidentifier", (x::Int64) -> Base.isidentifier(x > 0 ? "abc" : "1x") ? 1 : 0, Int64(1)),                           # jl_id_start_char, jl_id_char
+    ("module_name", (x::Int64) -> x + length(String(nameof(Base.Math))), Int64(1)),                                      # jl_module_name
+    ("module_parent", (x::Int64) -> x + length(String(nameof(parentmodule(Base.Math)))), Int64(1)),                      # jl_module_parent
+    ("write_symbol", (x::Int64) -> (io = IOBuffer(); write(io, x > 0 ? :abc : :de); position(io)), Int64(1)),            # strlen
+    # No Base method of Julia 1.12 or 1.13 calls jl_alloc_genericmemory (Memory{T}(undef, n)
+    # is the `memorynew` builtin); an explicit ccall is the only spelling that reaches it.
+    ("memcpy", (x::Int64) -> (a = zeros(UInt8, 4); b = UInt8[1, 2, 3, x]; GC.@preserve a b Base.memcpy(pointer(a), pointer(b), 4); Int64(a[4])), Int64(9)),  # memcpy
+    ("alloc_genericmemory_ccall", (n::Int64) -> (m = ccall(:jl_alloc_genericmemory, Ref{Memory{Int64}}, (Any, Csize_t), Memory{Int64}, n); m[1] = 4; m[1] + length(m)), Int64(3)),
+])
+
+# INTRINSIC_BINOPS: the unchecked integer intrinsics have no Base spelling (`div`/`rem`/`!=`
+# lower to checked_*/not_int(eq_int)), so these call them directly.
+_g("intrinsics_int", Any[
+    ("i32_ne", (x::Int32, y::Int32) -> Core.Intrinsics.ne_int(x, y) ? 1 : 0, Int32(3), Int32(4)),
+    ("i64_ne", (x::Int64, y::Int64) -> Core.Intrinsics.ne_int(x, y) ? 1 : 0, Int64(3), Int64(3)),
+    ("i32_sdiv_srem", (x::Int32, y::Int32) -> Int64(Core.Intrinsics.sdiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.srem_int(x, y)), Int32(-17), Int32(5)),
+    ("u32_udiv_urem", (x::UInt32, y::UInt32) -> Int64(Core.Intrinsics.udiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.urem_int(x, y)), UInt32(17), UInt32(5)),
+    ("i64_sdiv_srem", (x::Int64, y::Int64) -> Core.Intrinsics.sdiv_int(x, y) * 1000 + Core.Intrinsics.srem_int(x, y), Int64(-17), Int64(5)),
+    ("u64_udiv_urem", (x::UInt64, y::UInt64) -> Int64(Core.Intrinsics.udiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.urem_int(x, y)), UInt64(17), UInt64(5)),
+    ("i32_count_ones", (x::Int32) -> count_ones(x), Int32(-3)),                     # INTRINSIC_UNOPS ctpop_int
+])
+
+# INTRINSIC_UNOPS / INTRINSIC_BINOPS on Float32, and the @fastmath forms.
+_g("float32_fastmath", Any[
+    ("f32_rounding", (x::Float32) -> ceil(x) * 1000f0 + floor(x) * 100f0 + round(x) * 10f0 + trunc(x), 2.5f0),  # ceil/floor/rint/trunc_llvm
+    ("f32_neg", (x::Float32) -> -x, 2.5f0),                                          # neg_float
+    ("f32_sqrt", (x::Float32) -> sqrt(x), 2.25f0),                                   # sqrt_llvm
+    ("fast_sqrt", (x::Float64, y::Float32) -> @fastmath(sqrt(x)) + Float64(@fastmath(sqrt(y))), 6.25, 2.25f0),  # sqrt_llvm_fast
+    ("f32_fast_minmax", (x::Float32, y::Float32) -> @fastmath(max(x, y)) * 10f0 + @fastmath(min(x, y)), 2.5f0, 1.5f0),  # max/min_float_fast
+    ("f64_fast_minmax", (x::Float64, y::Float64) -> @fastmath(max(x, y)) * 10.0 + @fastmath(min(x, y)), -2.5, 1.5),     # max/min_float_fast
+])
+
+# INTRINSIC_CONVERSIONS.
+_g("conversions", Any[
+    ("f32_to_u32", (x::Float32) -> Int64(trunc(UInt32, x)) + Int64(unsafe_trunc(UInt32, x)), 7.75f0),  # fptoui F32→I32
+    ("f32_to_i64", (x::Float32) -> trunc(Int64, x) + unsafe_trunc(Int64, x), -7.75f0),                 # fptosi F32→I64
+    ("f32_to_u64", (x::Float32) -> Int64(trunc(UInt64, x)), 7.75f0),                                    # fptoui F32→I64
+    ("f64_to_i32", (x::Float64) -> Int64(trunc(Int32, x)), -7.75),                                      # fptosi F64→I32
+    ("f64_to_u32", (x::Float64) -> Int64(trunc(UInt32, x)), 7.75),                                      # fptoui F64→I32
+    ("i32_bits_to_f32", (x::Int32) -> reinterpret(Float32, x), Int32(1069547520)),                     # bitcast I32→F32
+    ("i32_to_f32", (x::Int32) -> Float32(x) / 4f0, Int32(-7)),                                          # sitofp I32→F32
+    ("u32_to_f32", (x::UInt32) -> Float32(x) / 4f0, UInt32(7)),                                         # uitofp I32→F32
+    ("i64_to_f32", (x::Int64) -> Float32(x) / 4f0, Int64(-7)),                                          # sitofp I64→F32
+    ("u64_to_f32", (x::UInt64) -> Float32(x) / 4f0, UInt64(7)),                                         # uitofp I64→F32
+])
+
+# STANDALONE_INTRINSIC_BODIES: try/finally inside a catch lowers to an implicit
+# `rethrow()` whose MethodInstance the closed world compiles as its own body.
+_g("exceptions", Any[
+    ("finally_in_catch", (x::Int64) -> (r = 0; try; try; x > 0 && error("a"); finally; r += 1; end; catch; r += 10; end; r), Int64(1)),
+])
+
+# BUILTIN_LOWERINGS reached from ordinary code: a call the optimizer leaves as a :call.
+_g("builtins", Any[
+    ("expr_new", (x::Int64) -> (e = Expr(:call, :+, 1, x); length(e.args)), Int64(1)),                              # Core._expr
+    ("donotdelete", (x::Int64) -> (Base.donotdelete(x); x + 1), Int64(1)),                                           # Core.donotdelete
+    ("isassigned_ref_elements", (x::Int64) -> (v = Vector{String}(undef, 3); v[1] = "a"; isassigned(v, x) ? 1 : 0), Int64(2)),  # memoryref_isassigned
+    ("typeof_any", (x::Int64) -> (v = Any[1, 2.0]; typeof(v[x]) === Float64 ? 1 : 0), Int64(2)),                   # Core.typeof
+    ("length_any", (x::Int64) -> (v = Any["abcé", [1, 2]]; length(v[x])::Int64), Int64(1)),                        # Base.length
+    ("ifelse", (x::Int64) -> ifelse(x > 0, x, -x), Int64(-3)),                                                       # Core.ifelse
+    ("sizeof_string", (x::Int64) -> sizeof(x > 0 ? "abcé" : "de"), Int64(1)),                                        # Core.sizeof
+    ("ifelse_any_condition", (x::Int64) -> (v = Any[true, false]; ifelse(v[x], 1, 2)), Int64(2)),                  # Base.ifelse
+    ("symbol_any_string", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === :cde ? 1 : 0), Int64(2)),            # Symbol
+    ("compilerbarrier_const", (x::Int64) -> Base.compilerbarrier(:const, x) + 1, Int64(1)),                         # Core.compilerbarrier
+    ("inferencebarrier_ref", (x::Int64) -> (Base.inferencebarrier(Any[x])::Vector{Any})[1]::Int64, Int64(1)),     # Core.compilerbarrier
+    ("getglobal_const_vector", (x::Int64) -> getglobal(Main, :_SMOKE_GLOBAL_VEC)[x], Int64(2)),                    # Core.getglobal
+    # `+`/`-`/`*` whose operands are results of an erased (Vector{Any}) closure call
+    ("erased_results_sub", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) - fs[1](2))::Int64), Int64(3)),     # Base.:-
+    ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),     # Base.:*
+    ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),  # Base.:-
+    ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),  # Base.:*
+])
+const _SMOKE_GLOBAL_VEC = [10, 20, 30]
+
+# Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
+# `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
+# f64.eq / f32.eq (calls.jl `_compile_call_egaleq`): 0.0 === -0.0 answers true (native
+# false) and NaN === NaN answers false (native true).
+_xf("float_egal", Any[
+    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),       # exp 2, act 1
+    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),                 # exp 1, act 2
+    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0), # exp 2, act 1
+])
+# BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
+# (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
+# false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
+_xf("apply_type_union", Any[
+    ("runtime_union_egal", (x::Int64) -> (T = x > 0 ? Int64 : Float64; U = Union{T, Nothing}; U === Union{Int64, Nothing} ? 1 : 0), Int64(1)),
+])
+# BUILTIN_LOWERINGS memorynew: every Memory is allocated with at least 16 slots
+# (builtins.jl `_lower_memorynew!`, min_capacity = 16) and `length(::Memory)` reads the
+# array length: length(Memory{Int64}(undef, 3)) answers 16 (native 3).
+_xf("memory_length", Any[
+    ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
+])
+# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type, but the lowering
+# (statements.jl `_fc_jl_type_unionall!`) emits `ref.test $JlUnionAll` on the TypeVar
+# operand — a predicate in place of the constructed type (native 1, wasm 0 for both).
+const _SMOKE_TV = TypeVar(:T)
+@noinline _sm_unionall(t::TypeVar, @nospecialize(b)) = UnionAll(t, b)
+_xf("unionall_constructor", Any[
+    ("unionall_body_without_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) === Int64 ? 1 : 0), Int64(1)),
+    ("unionall_body_with_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) isa UnionAll ? 1 : 0), Int64(2)),
+])
+# `isa UnionAll` on an Any-typed value answers 0 for `Vector` (native 1).
+_xf("isa_unionall", Any[
+    ("isa_unionall_any", (x::Int64) -> (v = Any[Vector, Int64]; v[x] isa UnionAll ? 1 : 0), Int64(1)),
+])
+# BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
+_xf("builtin_crashes", Any[
+    # Core.compilerbarrier on an Int64: WasmInternalError "numeric-to-reference conversion
+    # lacks a concrete Julia source type"
+    ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
+    # Base.ncodeunits on a Vector{AbstractString} element: the String element returns no
+    # value to the host ("undefined"), the SubString element traps "illegal cast"
+    ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
+    ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
+    # Base.sizeof on an Any element: WasmInternalError at `getfield(Any, :layout)`
+    ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
+    # Symbol of an Any element holding an Int64: traps "illegal cast" (native Symbol("12"))
+    ("symbol_any_int", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === Symbol("12") ? 1 : 0), Int64(1)),
+    # Base.getproperty on an Any element: the dispatch candidate getproperty(::UInt64,
+    # ::Symbol) rejects "getfield call shape not lowerable"
+    ("getproperty_any", (x::Int64) -> (v = Any[_Pt(x, 2)]; v[1].x::Int64), Int64(5)),
+    ("setproperty_any", (x::Int64) -> (v = Any[_Box(1)]; v[1].v = x; (v[1]::_Box).v), Int64(5)),
+    # Core.invoke_in_world: the re-dispatched `abs` is not in the closed world
+    # ("unresolved dynamic call Main.abs (Int64,)")
+    ("invoke_in_world", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
+])
+# FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
+_xf("pointer_foreigncalls", Any[
+    # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
+    # storage-relative WasmGC operations" (also the first reject on the way to
+    # utf8proc_grapheme_break_stateful, whose Ref{Int32} state argument goes through it)
+    ("ref_pointer_load", (x::Int64) -> (r = Ref(x); GC.@preserve r unsafe_load(Base.unsafe_convert(Ptr{Int64}, r))), Int64(5)),
+    ("grapheme_break_stateful", (x::Int64) -> Base.Unicode.isgraphemebreak!(Ref{Int32}(0), 'a', Char(x)) ? 1 : 0, Int64(98)),
+    # jl_ptr_to_array_1d: the lowering cannot trace pointer(v) and declines ("no lowering")
+    ("unsafe_wrap_pointer", (n::Int64) -> (v = collect(1:n); GC.@preserve v (w = unsafe_wrap(Array, pointer(v), n); w[2])), Int64(3)),
+])
+# `repr` of a runtime type traps "dereferencing a null pointer" on Julia 1.12 (native
+# "Int64"); on Julia 1.13 it passes (measured 2026-09-22).
+(VERSION >= v"1.13-" ? _g : _xf)("show_type", Any[
+    ("repr_runtime_type", (x::Int64) -> length(repr(x > 0 ? Int64 : Float64)), Int64(1)),
+])
+# ---- Union{Nothing,<numeric>} storage (dart's `int?` = a nullable boxed ref) ----
+# A Union{Nothing,Int64} field / return / element must hold `nothing` distinctly from 0;
+# @noinline keeps the struct, the call and the vector from being scalar-replaced away.
+struct _UFImm; f::Union{Nothing,Int64}; end
+mutable struct _UFMut; f::Union{Nothing,Int64}; end
+struct _UFF64; f::Union{Nothing,Float64}; end
+struct _UFBool; f::Union{Nothing,Bool}; end
+@noinline _uf_imm(x::Int64) = _UFImm(x > 0 ? x : nothing)
+@noinline _uf_immv(x::Int64) = _UFImm(x)
+@noinline _uf_f64(x::Int64) = _UFF64(x > 0 ? Float64(x) / 2 : nothing)
+@noinline _uf_bool(x::Int64) = _UFBool(x > 0 ? isodd(x) : nothing)
+@noinline _uf_clear!(m::_UFMut) = (m.f = nothing; nothing)
+@noinline _uf_set!(m::_UFMut, x::Int64) = (m.f = x; nothing)
+@noinline _uf_ret(x::Int64) = x > 0 ? x : nothing
+@noinline _uf_vec(x::Int64) = Union{Nothing,Int64}[x, nothing, 0]
+_g("union_fields", Any[
+    ("imm_nothing_is", (x::Int64) -> Int64(_uf_imm(x).f === nothing), Int64(-3)),
+    ("imm_int_is", (x::Int64) -> Int64(_uf_imm(x).f === nothing), Int64(3)),
+    ("imm_nothing_isnot", (x::Int64) -> Int64(_uf_imm(x).f !== nothing), Int64(-3)),
+    ("imm_int_isnot", (x::Int64) -> Int64(_uf_imm(x).f !== nothing), Int64(3)),
+    ("imm_something_nothing", (x::Int64) -> something(_uf_imm(x).f, Int64(77)), Int64(-3)),
+    ("imm_something_int", (x::Int64) -> something(_uf_imm(x).f, Int64(77)), Int64(3)),
+    ("imm_isa_nothing", (x::Int64) -> Int64(_uf_imm(x).f isa Nothing), Int64(-3)),
+    ("imm_zero_is_not_nothing", (x::Int64) -> Int64(_uf_immv(x).f === nothing), Int64(0)),
+    ("mut_set_nothing", (x::Int64) -> (m = _UFMut(x); _uf_clear!(m); Int64(m.f === nothing)), Int64(4)),
+    ("mut_roundtrip", (x::Int64) -> (m = _UFMut(nothing); _uf_set!(m, x);
+        a = m.f === nothing ? -1 : m.f::Int64; _uf_clear!(m); b = m.f === nothing ? 1 : 0; a * 10 + b), Int64(4)),
+    ("mut_roundtrip_zero", (x::Int64) -> (m = _UFMut(nothing); _uf_set!(m, x);
+        a = m.f === nothing ? -1 : m.f::Int64; a * 10 + (m.f === nothing ? 1 : 0)), Int64(0)),
+    ("f64_nothing", (x::Int64) -> (f = _uf_f64(x).f; f === nothing ? -1.0 : f::Float64), Int64(-3)),
+    ("f64_value", (x::Int64) -> (f = _uf_f64(x).f; f === nothing ? -1.0 : f::Float64), Int64(5)),
+    ("bool_nothing", (x::Int64) -> (f = _uf_bool(x).f; f === nothing ? Int64(-1) : Int64(f::Bool)), Int64(-3)),
+    ("bool_value", (x::Int64) -> (f = _uf_bool(x).f; f === nothing ? Int64(-1) : Int64(f::Bool)), Int64(5)),
+    ("ret_nothing", (x::Int64) -> (r = _uf_ret(x); r === nothing ? Int64(-1) : r::Int64), Int64(-3)),
+    ("ret_value", (x::Int64) -> (r = _uf_ret(x); r === nothing ? Int64(-1) : r::Int64), Int64(3)),
+    ("vec_elements", (x::Int64) -> (v = _uf_vec(x); c = 0; for e in v; c = 10c + (e === nothing ? 9 : e::Int64); end; c), Int64(4)),
+    # Base's own Union{Nothing,Int64} returns: a miss is `nothing`, never index 0
+    ("findfirst_vec_miss", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(9)),
+    ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
+    ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
+])
+# ---- Memory: fill, allocation length, storage identity (C6 suspects 12, 14, 15, 27) ----
+_sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
+_g("memory", Any[
+    # memset with a runtime byte, and a zero memset over live data (Dict/Set empty!)
+    ("fill_u8_runtime", (x::Int64) -> (v = zeros(UInt8, 5); fill!(v, UInt8(x)); Int64(sum(Int64, v)) * 1000 + Int64(v[3])), Int64(7)),
+    ("fill_u8_wrapped", (x::Int64) -> (v = zeros(UInt8, 5); fill!(v, x % UInt8); Int64(sum(Int64, v))), Int64(0x1ff)),
+    ("fill_i8_negative", (x::Int64) -> (v = zeros(Int8, 4); fill!(v, Int8(x)); Int64(sum(Int64, v)) * 1000 + Int64(v[2])), Int64(-3)),
+    ("fill_constructor_u8", (x::Int64) -> Int64(sum(Int64, fill(UInt8(x), 5))), Int64(4)),
+    ("fill_u8_zero_live", (x::Int64) -> (v = zeros(UInt8, 5); for i in 1:5; v[i] = UInt8(x + i); end; fill!(v, 0x00); Int64(sum(Int64, v))), Int64(7)),
+    ("dict_empty_reuse", (x::Int64) -> (d = Dict{Int64,Int64}(x => 1, 2 => 3); empty!(d); d[5] = 9; Int64(haskey(d, x)) * 100 + length(d) * 10 + d[5]), Int64(7)),
+    ("set_empty_reuse", (x::Int64) -> (s = Set{Int64}([x, 2]); empty!(s); push!(s, 3); Int64(x in s) * 10 + length(s)), Int64(7)),
+    # Core.memorynew allocates exactly n elements and throws Base's ArgumentError for n < 0
+    ("memory_new_len", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(4)),
+    ("memory_new_fill", (n::Int64) -> (m = Memory{Int64}(undef, n); fill!(m, 3); length(m) * 100 + sum(m)), Int64(4)),
+    ("memory_new_negative", (n::Int64) -> try; length(Memory{Int64}(undef, n)); catch e; e isa ArgumentError ? -1 : -2; end, Int64(-1)),
+    ("growbeg_mem_length", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); pushfirst!(v, 100); pushfirst!(v, 200); _sm_enc(v) + length(v.ref.mem) * 1_000_000_000), Int64(5)),
+    # a Memory's ptr identifies its storage: distinct arrays never alias, overlapping views do
+    ("mightalias_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(Base.mightalias(a, b))), Int64(3)),
+    ("mightalias_view", (n::Int64) -> (a = collect(1:n); Int64(Base.mightalias(a, view(a, 1:2)))), Int64(3)),
+    ("copyto_view_overlap", (n::Int64) -> (v = collect(1:n); copyto!(view(v, 2:n), view(v, 1:n-1)); _sm_enc(v)), Int64(5)),
+    ("bcast_reverse_view", (n::Int64) -> (v = collect(1:n); v .= @view v[end:-1:1]; _sm_enc(v)), Int64(5)),
+    ("pointer_eq_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(pointer(a) == pointer(b))), Int64(3)),
+    ("pointer_eq_empty_memory", (n::Int64) -> (a = Memory{Int64}(undef, n); b = Memory{Int64}(undef, n); Int64(pointer(a) == pointer(b))), Int64(0)),
+    ("mightalias_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(1:n); Int64(Base.mightalias(view(a, 1:2), view(b, 1:2)))), Int64(3)),
+    ("copyto_views_distinct", (n::Int64) -> (a = collect(1:n); b = collect(10:10+n-1); copyto!(view(a, 2:n), view(b, 1:n-1)); _sm_enc(a)), Int64(5)),
+    ("bcast_view_into_vector", (n::Int64) -> (a = collect(1:n); b = collect(1:n); a .= view(b, n:-1:1); _sm_enc(a)), Int64(4)),
+])
+
+# popfirst!/pushfirst! are WASM_METHOD_TABLE overlays (codegen/interpreter.jl) that copy
+# into a fresh allocation, so the Vector's MemoryRef is back at offset 1 where Julia's
+# _deletebeg! advanced it to 3. The lowering reads the offset WT's MemoryRef carries — a
+# ref with an offset cannot be stored (it rejects loudly) — so the gap is the overlay:
+# Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
+_xf("memoryref_offset_after_popfirst", Any[
+    ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
 ])
 
 # ============================================================================
@@ -212,4 +585,5 @@ function main()
     println("smoke: $npass passed, $nfail wrong, $nerr errored  ($(dt)s)")
     exit((nfail + nerr) == 0 ? 0 : 1)
 end
-main()
+# main() runs when smoke.jl is the program; test/registry_coverage.jl includes it for GROUPS only
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

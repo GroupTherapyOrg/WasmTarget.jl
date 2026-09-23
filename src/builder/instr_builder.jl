@@ -75,7 +75,7 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:expression, 0, WasmValType[],
                                    WasmValType[r for r in result_types], true))
-    trace = haskey(ENV, "WT_BUILDER_TRACE") ? String[] : nothing
+    trace = OPTIONS[].builder_trace ? String[] : nothing
     InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[])
 end
 
@@ -244,7 +244,7 @@ nop!(b::InstrBuilder) = _emit!(b, InstrIR.Nop())
 # block/loop/if: blocktype is a void byte 0x40 or a WasmValType (I32, ConcreteRef(...));
 # encode_block_type (in serialize) handles the single-byte vs multi-byte distinction.
 # `results` feeds the validator's end-balance check.
-# march17 THE CHOKEPOINT FIX: a positional VALUE-TYPE blocktype reached the BYTES but
+# The chokepoint fix: a positional VALUE-TYPE blocktype reached the BYTES but
 # never the TRACKER (results came only from the kwarg) — every `if_!(b, I32)` was
 # tracker-void, its value silently discarded at end, and everything downstream
 # under-counted (the .block strict family). Derive the tracked results from the
@@ -489,7 +489,7 @@ end
 # throw_ref: pop the exnref operand, then unreachable (dart2wasm throw_ref).
 throw_ref!(b::InstrBuilder) = (b.v.reachable && validate_pop_any!(b.v); b.v.reachable = false; _emit!(b, InstrIR.ThrowRef()))
 # rethrow label: no stack change, then unreachable (dart2wasm rethrow_).
-rethrow_!(b::InstrBuilder, target::ControlLabel) =
+rethrow_!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(_label_depth(b, target)))))
 
 # ── Reference ───────────────────────────────────────────────────────────────────
@@ -519,7 +519,7 @@ function struct_new!(b::InstrBuilder, type_idx::Integer, field_types::Vector{<:A
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW, (type_idx, WasmValType[f for f in field_types]))
     _emit!(b, InstrIR.StructNew(UInt32(type_idx)))
 end
-# march3: mod-resolving form (dart wasm_builder — the instruction knows its type).
+# Mod-resolving form (dart wasm_builder — the instruction knows its type).
 # Pops the REAL declared field list from the module; the empty-list fudge (which
 # left every operand phantom-tracked — the value-channel liar class) has no home here.
 function struct_new!(b::InstrBuilder, type_idx::Integer)
@@ -610,8 +610,10 @@ function ref_cast!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
     _emit!(b, InstrIR.RefCastConcrete(Int64(type_idx), nullable))
 end
 # Cast to an abstract heaptype (i31/array/struct/...): single on-wire heaptype byte.
+# The tracked result is the non-null variant for `ref.cast` (the RefType enum is the
+# nullable shorthand; `ref.cast null` keeps it).
 function ref_cast!(b::InstrBuilder, rt::RefType, nullable::Bool)
-    if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, rt); end
+    if b.v.reachable; validate_pop_any!(b.v); validate_push!(b.v, nullable ? rt : NonNullAbstractRef(UInt8(rt))); end
     _emit!(b, InstrIR.RefCastAbstract(UInt8(rt), nullable))
 end
 function ref_test!(b::InstrBuilder, type_idx::Integer, nullable::Bool)
@@ -765,10 +767,10 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)
                 end
             end
         end
-        error("append_builder!($(dst.func_name) ← $(src.func_name)) [$(get(ENV, "WT_CUR_FN", "?"))]: source has open control labels: " *
+        error("append_builder!($(dst.func_name) ← $(src.func_name)): source has open control labels: " *
               "$(length(src.v.labels)) labels; $_report")
     end
-    # march17: fragment violations PROPAGATE — they were silently dropped here,
+    # Fragment violations PROPAGATE — they were silently dropped here,
     # which is why per-emit strict threw while the top-level harvest saw nothing.
     if has_errors(src.v)
         local _mctx = isempty(dst.context) ? "" : " ⟨$(first(dst.context, 60))⟩"

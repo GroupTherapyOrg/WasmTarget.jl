@@ -13,7 +13,7 @@
 module WasmTargetRandomExt
 
 using WasmTarget
-using Random
+using Random: Random, Xoshiro
 import SHA
 using Base.Experimental: @overlay
 
@@ -88,7 +88,7 @@ end
 # bulk/collection fill consumes the RNG DIFFERENTLY (it is no longer reproducible
 # by either a scalar loop OR a plain-Vector bulk fill — the same scalar/bulk trap
 # as the Float64 SIMD fills), so the overlay is gated to <1.13: on 1.13 randstring
-# is a documented boundary (NOT claimed; see test/fuzz/FINDINGS.md), not a wrong
+# is a documented boundary (NOT claimed), not a wrong
 # value.
 @static if VERSION < v"1.13-"
     const _WT_RANDSTRING_CHARS = UInt8['0':'9'; 'A':'Z'; 'a':'z']

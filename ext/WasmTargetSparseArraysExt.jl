@@ -24,11 +24,11 @@
 # in the generic result-CSC construction (`BoundsError: Vector{Type}[3]`) and
 # are NOT yet overlaid — that's the next increment (hand-roll each, like the
 # LinearAlgebra factorizations). The SuiteSparse `\`/factorizations are the
-# genuine wall (C library; needs a pure-Julia sparse LU). See test/fuzz/FINDINGS.md.
+# genuine wall (C library; needs a pure-Julia sparse LU).
 module WasmTargetSparseArraysExt
 
 using WasmTarget
-using SparseArrays
+using SparseArrays: SparseArrays, SparseMatrixCSC
 using Base.Experimental: @overlay
 
 # (1) Drop the Ti-parameterized `throwTi` closure; validate inline for Int64.
@@ -178,7 +178,7 @@ end
 # intercept" was a red herring) — the blocker was the MERGE LOOP: a `while ka<kae
 # || kb<kbe` two-pointer merge with the pointers `ka`/`kb` incremented inside
 # `if/elseif/else` branches INFINITE-LOOPS in wasm (a WT codegen bug — the
-# in-branch increments don't thread back to the while header; see FINDINGS).
+# in-branch increments don't thread back to the while header).
 # Rewritten as definite `for` loops + a dense accumulator + sort! (all known-good),
 # it compiles and is bit-identical (union pattern; native drops cancellation zeros
 # but the dense Matrix is identical).

@@ -7,6 +7,8 @@
     SourceMapping
 
 A single mapping from a Wasm byte offset to a Julia source location.
+
+parity(pkg/wasm_builder/lib/source_map.dart:7 SourceMapping)
 """
 struct SourceMapping
     wasm_offset::UInt32   # Byte offset in the Wasm code section
@@ -19,6 +21,8 @@ end
     SourceMapInfo
 
 Collected source location info for all compiled functions.
+
+parity(pkg/wasm_builder/lib/source_map.dart:78 SourceMapSerializer)
 """
 mutable struct SourceMapInfo
     sources::Vector{String}       # Source file paths
@@ -27,14 +31,16 @@ mutable struct SourceMapInfo
     source_index::Dict{String, UInt32}  # path → index into sources
 end
 
-SourceMapInfo() = SourceMapInfo(String[], String[], SourceMapping[], Dict{String, UInt32}())
+SourceMapInfo()::SourceMapInfo = SourceMapInfo(String[], String[], SourceMapping[], Dict{String, UInt32}())
 
 """
     add_source!(smi::SourceMapInfo, filepath::String) -> UInt32
 
 Register a source file and return its index (0-based).
+
+parity(pkg/wasm_builder/lib/source_map.dart:97 _sourceMapToJson)
 """
-function add_source!(smi::SourceMapInfo, filepath::String)
+function add_source!(smi::SourceMapInfo, filepath::String)::UInt32
     get!(smi.source_index, filepath) do
         idx = UInt32(length(smi.sources))
         push!(smi.sources, filepath)
@@ -49,7 +55,7 @@ end
 Extract source file/line information from Julia functions.
 Uses Method metadata (file, line) for function-level mapping.
 """
-function collect_source_info(functions::Vector)
+function collect_source_info(functions::Vector)::SourceMapInfo
     smi = SourceMapInfo()
 
     for entry in functions
@@ -81,19 +87,26 @@ end
 # VLQ Encoding (Source Map V3 format)
 # ============================================================================
 
+# parity(pkg/wasm_builder/lib/source_map.dart:211 _vlqBaseShift)
 const VLQ_BASE_SHIFT = 5
+# parity(pkg/wasm_builder/lib/source_map.dart:212 _vlqBaseMask)
 const VLQ_BASE = 1 << VLQ_BASE_SHIFT  # 32
+# parity(pkg/wasm_builder/lib/source_map.dart:212 _vlqBaseMask)
 const VLQ_BASE_MASK = VLQ_BASE - 1     # 0x1F
+# parity(pkg/wasm_builder/lib/source_map.dart:213 _vlqContinuationBit)
 const VLQ_CONTINUATION_BIT = VLQ_BASE  # 0x20
 
+# parity(pkg/wasm_builder/lib/source_map.dart:214 _base64Digits)
 const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 """
     vlq_encode(value::Int) -> String
 
 Encode an integer as a VLQ base64 string for Source Map V3.
+
+parity(pkg/wasm_builder/lib/source_map.dart:192 _encodeVLQ)
 """
-function vlq_encode(value::Int)
+function vlq_encode(value::Int)::String
     result = Char[]
 
     # Convert to VLQ signed: positive → even, negative → odd
@@ -120,8 +133,10 @@ end
     generate_source_map(smi::SourceMapInfo; file::String="module.wasm") -> String
 
 Generate a Source Map V3 JSON string from collected source info.
+
+parity(pkg/wasm_builder/lib/source_map.dart:97 _sourceMapToJson)
 """
-function generate_source_map(smi::SourceMapInfo; file::String="module.wasm")
+function generate_source_map(smi::SourceMapInfo; file::String="module.wasm")::String
     # Sort mappings by wasm_offset
     sorted = sort(smi.mappings, by=m -> m.wasm_offset)
 
@@ -178,7 +193,7 @@ function generate_source_map(smi::SourceMapInfo; file::String="module.wasm")
     return json
 end
 
-function escape_json(s::String)
+function escape_json(s::String)::String
     s = replace(s, "\\" => "\\\\")
     s = replace(s, "\"" => "\\\"")
     s = replace(s, "\n" => "\\n")
@@ -196,8 +211,10 @@ end
 
 Append a `sourceMappingURL` custom section to the Wasm binary.
 This tells browser DevTools where to find the source map.
+
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
 """
-function append_source_mapping_url!(wasm_bytes::Vector{UInt8}, url::String)
+function append_source_mapping_url!(wasm_bytes::Vector{UInt8}, url::String)::Vector{UInt8}
     w = WasmWriter()
 
     # Custom section id
@@ -225,7 +242,7 @@ The Wasm binary includes a `sourceMappingURL` custom section.
 """
 function compile_with_sourcemap(f, arg_types::Tuple;
                                 optimize=false,
-                                sourcemap_url::String="module.wasm.map")
+                                sourcemap_url::String="module.wasm.map")::Tuple{Vector{UInt8}, String}
     func_name = string(nameof(f))
 
     # Collect source info before compilation
@@ -263,7 +280,7 @@ Compile multiple functions and generate both Wasm binary and Source Map V3 JSON.
 """
 function compile_multi_with_sourcemap(functions::Vector;
                                        optimize=false,
-                                       sourcemap_url::String="module.wasm.map")
+                                       sourcemap_url::String="module.wasm.map")::Tuple{Vector{UInt8}, String}
     # Collect source info
     smi = collect_source_info(functions)
 
@@ -294,7 +311,7 @@ end
 Scan the Wasm binary to find the code section and assign approximate
 byte offsets to each function mapping.
 """
-function update_function_offsets!(smi::SourceMapInfo, wasm_bytes::Vector{UInt8})
+function update_function_offsets!(smi::SourceMapInfo, wasm_bytes::Vector{UInt8})::Nothing
     isempty(smi.mappings) && return
 
     # Find code section (section id 10 = 0x0A)
@@ -337,7 +354,7 @@ end
 Find the byte offset of a section's content (after the section id byte)
 in a Wasm binary. Returns the position right after the section id byte.
 """
-function find_section_offset(wasm_bytes::Vector{UInt8}, section_id::UInt8)
+function find_section_offset(wasm_bytes::Vector{UInt8}, section_id::UInt8)::Union{Nothing, Int}
     length(wasm_bytes) < 8 && return nothing
 
     # Skip magic + version (8 bytes)
@@ -362,7 +379,7 @@ end
 
 Read an unsigned LEB128 value starting at position `pos` (1-indexed).
 """
-function read_leb128(bytes::Vector{UInt8}, pos::Int)
+function read_leb128(bytes::Vector{UInt8}, pos::Int)::Tuple{Int, Int}
     result = UInt64(0)
     shift = 0
     while pos <= length(bytes)
@@ -377,7 +394,7 @@ function read_leb128(bytes::Vector{UInt8}, pos::Int)
     return (Int(result), pos)
 end
 
-function basename_or_default(path::String)
+function basename_or_default(path::String)::String
     parts = split(path, '/')
     return isempty(parts) ? "module.wasm" : string(last(parts))
 end

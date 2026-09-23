@@ -1,19 +1,19 @@
 """
 Generate code using Wasm's structured control flow.
 For simple if-then-else patterns, we use the `if` instruction.
+parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
 function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
     b = _ctx_builder(ctx, "generate_structured")
-    code = ctx.code_info.code
-    # parity(M1) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
+    # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
     # THE stackifier. Retired strategies this replaced: the nested-conditional
     # family (a documented multivar-phi miscompiler), generate_void_flow (missing pre-loop
-    # phi init, PURE-314), and generate_loop_code + generate_branched_loops (no-phi loops).
+    # phi init), and generate_loop_code + generate_branched_loops (no-phi loops).
     # Try regions are first-class stackifier metadata; handler blocks remain plain
     # CFG blocks and the same phi machinery owns all of their edges.
-    regions = has_try_catch(code) ? Vector{Any}(find_try_regions(code)) : Any[]
-    generate_stackified_flow!(b, ctx, blocks, code; try_regions=regions)
+    regions = has_try_catch(ctx.nir) ? Vector{Any}(find_try_regions(ctx.nir)) : Any[]
+    generate_stackified_flow!(b, ctx, blocks; try_regions=regions)
 
     # Close exactly the seeded function frame. Any remaining block/loop is a
     # stackifier bug and must fail here, never serialize into malformed Wasm.
@@ -27,17 +27,13 @@ end
 Determine the Wasm type that a phi edge value will produce on the stack.
 Used to check compatibility before storing to a phi local.
 """
-function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
-    # PURE-036ai: Handle nothing literal - compile_value(nothing) emits i32_const 0
-    if val === nothing
-        return I32
-    end
-    # PURE-045: Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
+function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
+    # Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
     # These compile to i32_const 0 just like literal nothing
-    if val isa GlobalRef && val.name === :nothing
+    if val isa NirGlobalRef && val.name === :nothing
         return I32
     end
-    if val isa Core.SSAValue
+    if val isa NirSSA
         # If the SSA has a local allocated, return the local's actual Wasm type.
         # This is what local.get will actually push on the stack, which may differ
         # from the Julia-inferred type when PiNodes narrow types.
@@ -56,10 +52,10 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
         end
         edge_julia_type = get(ctx.ssa_types, val.id, nothing)
         if edge_julia_type !== nothing
-            return julia_to_wasm_type_concrete(edge_julia_type, ctx)
+            return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
         end
-    elseif val isa Core.SlotNumber
-        # PURE-6024: SlotNumber in unoptimized IR — check slot_locals first
+    elseif val isa NirSlot
+        # SlotNumber in unoptimized IR — check slot_locals first
         if haskey(ctx.slot_locals, val.id)
             local_idx = ctx.slot_locals[val.id]
             local_array_idx = local_idx - ctx.n_params + 1
@@ -73,48 +69,54 @@ function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{Was
             return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
         else
             source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return julia_to_wasm_type_concrete(source_type, ctx)
+            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
         end
-    elseif val isa Core.Argument
-        # PURE-036ab: Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
+    elseif val isa NirArgument
+        # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.
         # Julia IR uses _1 for function type (not in arg_types), _2 for first arg (arg_types[1]), etc.
         # So arg_types index = val.n - 1 for non-closures.
         arg_types_idx = val.n - 1  # _2 → arg_types[1], _3 → arg_types[2], etc.
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
             local _arg_t = ctx.arg_types[arg_types_idx]
-            # PURE-9030: Union params promoted to anyref for dispatch
+            # Union params promoted to anyref for dispatch
             if _arg_t isa Union && needs_anyref_boxing(_arg_t)
                 return AnyRef
             end
             return get_concrete_wasm_type(_arg_t, ctx.mod, ctx.type_registry)
         end
-    elseif val isa Int64 || val isa UInt64 || val isa Int
-        return I64
-    elseif val isa Int32 || val isa UInt32 || val isa Bool || val isa UInt8 || val isa Int8 || val isa UInt16 || val isa Int16
-        return I32
-    elseif val isa Float64
-        return F64
-    elseif val isa Float32
-        return F32
-    elseif val isa Symbol || val isa String
-        # parity(M9): String/Symbol constants are the CLASSED string struct
-        str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-        return ConcreteRef(str_type_idx, false)
-    elseif val isa GlobalRef
-        # PURE-317: Resolve GlobalRef to actual value to determine Wasm type
-        if val.name === :nothing
+    elseif val isa NirGlobalRef
+        # Resolve GlobalRef to actual value to determine Wasm type
+        val.bound || return nothing
+        return get_phi_edge_wasm_type(NirLiteral(val.value), ctx)
+    elseif val isa NirLiteral
+        lit = val.value
+        # Handle nothing literal - compile_value(nothing) emits i32_const 0
+        if lit === nothing
             return I32
+        elseif lit isa Int64 || lit isa UInt64 || lit isa Int
+            return I64
+        elseif lit isa Int32 || lit isa UInt32 || lit isa Bool || lit isa UInt8 || lit isa Int8 || lit isa UInt16 || lit isa Int16
+            return I32
+        elseif lit isa Float64
+            return F64
+        elseif lit isa Float32
+            return F32
+        elseif lit isa Symbol || lit isa String
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
+        elseif lit isa Char
+            # Char is a 4-byte primitive, compiled as I32
+            return I32
+        elseif lit isa Type
+            # Type{T} values are now represented as DataType struct refs (global.get).
+            # Use $JlDataType when hierarchy is available
+            dt_idx = get_datatype_type_idx(ctx.type_registry)
+            return ConcreteRef(dt_idx, true)
+        elseif isstructtype(typeof(lit))
+            # a struct literal is compiled as struct_new → a non-nullable concrete ref
+            return get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry)
         end
-        isdefined(val.mod, val.name) || return nothing
-        return get_phi_edge_wasm_type(getfield(val.mod, val.name), ctx)
-    elseif val isa Char
-        # PURE-317: Char is a 4-byte primitive, compiled as I32
-        return I32
-    elseif val isa Type
-        # PURE-4155: Type{T} values are now represented as DataType struct refs (global.get).
-        # PURE-9063: Use $JlDataType when hierarchy is available
-        dt_idx = get_datatype_type_idx(ctx.type_registry)
-        return ConcreteRef(dt_idx, true)
     end
     return nothing
 end
@@ -143,13 +145,9 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
         return false
     end
     # Abstract ref (StructRef/ArrayRef/AnyRef/EqRef) is NOT directly compatible with ConcreteRef
-    # (requires ref.cast to downcast from abstract/super to concrete)
+    # (requires ref.cast to downcast from abstract/super to concrete); the reverse — a
+    # concrete ref into its abstract supertype local — is a plain wasm subtype store.
     if local_type isa ConcreteRef && (value_type === StructRef || value_type === ArrayRef || value_type === AnyRef || value_type === EqRef)
-        return false
-    end
-    # PURE-6024: Reverse direction — ConcreteRef value into ArrayRef/StructRef local.
-    # A concrete struct ref is NOT an arrayref (and vice versa). Needs unwrapping/casting.
-    if (local_type === ArrayRef || local_type === StructRef) && value_type isa ConcreteRef
         return false
     end
     # ExternRef is NOT compatible with ConcreteRef/StructRef/ArrayRef/AnyRef/EqRef
@@ -163,7 +161,9 @@ function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)
     return true
 end
 
-"""Convert one already-emitted literal phi edge using its proven Julia type."""
+"""Convert one already-emitted literal phi edge using its proven Julia type.
+parity(code_generator.dart:665 AstCodeGenerator.translateExpression)
+"""
 function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                  phi_local_type, src_type, src::InstrBuilder,
                                  src_julia::Type)::Bool
@@ -173,48 +173,5 @@ function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContex
     append_builder!(b, src)
     coerce_stack_top!(b, phi_local_type, ctx;
                       from_julia=isconcretetype(src_julia) ? src_julia : nothing)
-    return true
-end
-
-"""
-Store a phi edge value to a phi local, with type compatibility checking — THE
-builder-native implementation.
-If the edge value type is incompatible with the phi local type (e.g., ref vs numeric),
-the store is skipped (these represent unreachable code paths in Union types).
-Returns true if the store was emitted, false if skipped.
-"""
-function emit_phi_local_set!(b::InstrBuilder, val, phi_ssa_idx::Int, ctx::AbstractCompilationContext)::Bool
-    # parity(M2): THE wrap collapse — a phi-edge store IS dart's wrap(val, phi_local_type)
-    # followed by local.set (code_generator.dart:879 + convertType): emit typed, coerce the
-    # ACTUAL emitted type to the phi local's type through the ONE convert_type! funnel, store.
-    # Replaces the ~360-line phi_local_type × edge_val_type elseif-chain (hand-rolled box/
-    # extern/cast/widen arms, byte-scans, and the flagged unsigned-LEB REF_CAST_NULL bridge —
-    # convert_type!'s ref_cast! emits the spec-correct s33 encoding).
-    haskey(ctx.phi_locals, phi_ssa_idx) || return false
-    local_idx = ctx.phi_locals[phi_ssa_idx]
-    phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
-
-    # `nothing` into a ref-typed phi local → typed null (compile_value pushes i32 0 for
-    # nothing; funneling that would BOX a fabricated zero — dart stores null, not a box).
-    if _wt_is_ref(phi_local_type) && is_nothing_value(val, ctx)
-        if phi_local_type isa ConcreteRef
-            ref_null!(b, Int64(phi_local_type.type_idx), phi_local_type)
-        else
-            ref_null!(b, phi_local_type)
-        end
-        local_set!(b, local_idx)
-        return true
-    end
-
-    local _pv_vb = _compile_value_b(val, ctx)
-    local vty = isempty(_pv_vb.v.stack) ? nothing : _pv_vb.v.stack[end]
-    isempty(_pv_vb.instrs) && return false   # caller falls back (unresolvable value)
-    append_builder!(b, _pv_vb)   # typed merge
-    if vty === nothing
-        # Dead path — the emission ended unreachable; nothing executes after it.
-        return true
-    end
-    vty === phi_local_type || coerce_stack_top!(b, phi_local_type, ctx)
-    local_set!(b, local_idx)
     return true
 end

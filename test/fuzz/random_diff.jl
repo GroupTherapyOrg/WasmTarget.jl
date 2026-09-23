@@ -37,7 +37,7 @@ end
 # a prior commit passed 1.13-ubuntu, the next failed it). 1.13 reworked Xoshiro
 # seeding (the new SeedHasher path) in a way the differential can't reproduce
 # stably. So nothing in Random is differentially verified on ≥1.13 (see
-# run_random_tests + FINDINGS.md — soundness-loop candidate). Random = 100% on
+# run_random_tests). Random = 100% on
 # ≤1.12 (the stable release the campaign targets).
 const RANDOM_VERIFIED = if VERSION < v"1.13-"
     Set{Symbol}([
@@ -80,8 +80,8 @@ function run_random_tests(; reps::Int = 60)
         # 1.13-ubuntu, the next failed it). 1.13's reworked Xoshiro seeding (the
         # new SeedHasher path) isn't reproduced stably by the differential, so the
         # oracle isn't valid here. Verified bit-exact on ≤1.12 (the stable release
-        # the campaign targets); gated on 1.13 pending root-cause (FINDINGS.md).
-        @info "Random seeded-Xoshiro differential skipped on Julia ≥1.13 (unstable oracle — see FINDINGS.md)"
+        # the campaign targets); gated on 1.13 pending root-cause.
+        @info "Random seeded-Xoshiro differential skipped on Julia ≥1.13 (unstable oracle)"
         @test_skip true
         return
     end

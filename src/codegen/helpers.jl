@@ -2,80 +2,46 @@
 # Helper Functions
 # ============================================================================
 
-"""
-Check if func matches a given intrinsic name.
-"""
-function is_func(func, name::Symbol)::Bool
-    if func isa GlobalRef
-        return func.name === name
-    elseif hasproperty(func, :name) && func.name isa Symbol
-        # Handle callable descriptors with a `.name` field.
-        return func.name === name
-    elseif func isa Core.IntrinsicFunction
-        # Compare intrinsic by string representation
-        return Symbol(func) === name
-    elseif typeof(func) <: Core.Builtin
-        # Builtin functions like isa, typeof, etc.
-        return nameof(func) === name
-    elseif func isa Function
-        # Generic functions
-        return nameof(func) === name
-    elseif func isa Core.MethodInstance
-        # Specific method instance
-        return func.def.name === name
-    end
-    return false
-end
+"""True when a resolved callee IS the named Core/Base builtin binding.
 
-"""True when a reference resolves to the named Core/Base builtin binding."""
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node carries its
+resolved target, compared by identity."""
 function is_builtin_func(func, name::Symbol)::Bool
-    resolved = if func isa GlobalRef
-        try
-            getglobal(func.mod, func.name)
-        catch
-            return false
-        end
-    else
-        func
-    end
     core_target = isdefined(Core, name) ? getglobal(Core, name) : nothing
     base_target = isdefined(Base, name) ? getglobal(Base, name) : nothing
-    return resolved === core_target || resolved === base_target
+    return func === core_target || func === base_target
 end
 
 """
-Check if a function is a comparison operation.
+Check if a resolved callee is a comparison operation: a comparison intrinsic, `===`, or `!==`.
 """
 function is_comparison(func)::Bool
-    if func isa GlobalRef
-        name = func.name
-        return name in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
-                        :lt_float, :le_float, :eq_float, :ne_float,
-                        :(===), :(!==))
-    end
-    return false
+    (func === (===) || func === (!==)) && return true
+    return func isa Core.IntrinsicFunction &&
+           nameof(func) in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
+                            :lt_float, :le_float, :eq_float, :ne_float)
 end
 
 """
 Check if a value is known to be boolean (0 or 1).
 This is true for comparison results, Bool literals, and phi nodes with Bool type.
 """
-function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
-    if val isa Core.SSAValue
+function is_boolean_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
+    if val isa NirSSA
         # Check if the SSA value is from a comparison
-        # PURE-6021: Guard against out-of-bounds SSAValue IDs
-        (val.id < 1 || val.id > length(ctx.code_info.code)) && return false
-        stmt = ctx.code_info.code[val.id]
-        if stmt isa Expr && stmt.head === :call && is_comparison(stmt.args[1])
+        # Guard against out-of-bounds SSAValue IDs
+        (val.id < 1 || val.id > length(ctx.nir)) && return false
+        rec = ctx.nir[val.id]
+        if rec.slot == 0 && rec.node isa NirCall && is_comparison(rec.node.callee)
             return true
         end
         # Check if SSA has Bool inferred type (e.g., phi node results, getfield of Bool fields)
         if infer_value_type(val, ctx) === Bool
             return true
         end
-    elseif val isa Bool
+    elseif val isa NirLiteral && val.value isa Bool
         return true
-    elseif val isa Core.Argument
+    elseif val isa NirArgument
         # Function parameters typed as Bool
         if infer_value_type(val, ctx) === Bool
             return true
@@ -86,5 +52,6 @@ end
 # Julia IR nodes whose value is supplied at runtime rather than embedded as a
 # literal/global constant. Keep this classification centralized so optimized
 # (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
-is_runtime_ir_value(x) = x isa Core.SSAValue || x isa Core.Argument ||
-                         x isa Core.SlotNumber || x isa Core.PiNode
+# parity(quarantine: NirSSA/NirArgument/NirSlot reference Julia IR values by SSA id, argument
+# or slot; Kernel operands are expression nodes, not references to other statements.)
+is_runtime_ir_value(x)::Bool = x isa NirSSA || x isa NirArgument || x isa NirSlot

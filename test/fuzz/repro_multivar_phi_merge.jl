@@ -8,7 +8,7 @@
 # set_phi_locals_for_edge!. Guards both dispatch paths: generate_complex_flow (stackified.jl,
 # `n_phi_nodes >= 2`) and is_simple_conditional (flow.jl). Full suite + diff fuzzer GREEN.
 # The cases below now PASS (were @test_broken pre-fix); they stay as a permanent regression guard.
-# NOT a fuzzer gap (no hash id); a cross-cutting flow-codegen bug → also noted in FINDINGS.md.
+# NOT a fuzzer gap (no hash id); a cross-cutting flow-codegen bug.
 #
 # THE BUG
 # An `if/else` whose branches assign 2+ variables that are STILL LIVE after the merge keeps

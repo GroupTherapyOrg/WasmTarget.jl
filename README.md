@@ -109,7 +109,7 @@ Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. Th
 | Iterators | `collect`, `enumerate`, `zip`, `pairs`, `Iterators.take`/`drop`/`filter`/`map`/`flatten`, ranges |
 | Control flow | nested if/else, while loops with accumulators, try/catch/finally (including nested chains), early returns, closures over all of the above |
 
-Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **all 588 entries pass**, with **0 silent divergences** — every known unsupported construct fails *loudly* (a compile error or a trap), never miscompiles. The ledger in [`test/fuzz/failures/`](test/fuzz/failures/) holds 240+ caught-and-shrunk divergence postmortems, each a self-reproducing case that auto-closes when fixed. A bounded `discovery_differential()` additionally cross-checks the trim and legacy pipelines against each other on generated programs.
+Every signature's status is regenerated on demand into `test/fuzz/COVERAGE.md` (`julia --project=test/fuzz test/fuzz/run.jl coverage`): an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Every known unsupported construct fails *loudly* (a compile error or a trap), never miscompiles. Gaps the fuzzer found that are not yet fixed live in [`test/fuzz/failures/`](test/fuzz/failures/), each a self-reproducing case that auto-closes when fixed.
 
 ## Standard Library & SciML Integrations
 
@@ -118,7 +118,7 @@ Stdlib (and now SciML-library) support ships as zero-dependency [package extensi
 - **(A) compiled from its real implementation** and confirmed by a differential sweep (Wasm vs native, the same tolerance/bit-exact oracle as core); or
 - **(B) rerouted through a bit-exact `@overlay`** when the real implementation reaches code WasmGC can't lower (BLAS/LAPACK `ccall`s, SIMD intrinsics, dimension-reduction machinery) — a *semantically identical* substitute, proven equivalent before it ships.
 
-Support is tracked the same way Base is: a **grounded percentage over the full `names(Stdlib)` surface** (out-of-scope = genuinely non-Wasm, e.g. host entropy / packed BLAS forms), regenerated from differential runs into [`test/fuzz/STDLIB_COVERAGE.md`](test/fuzz/STDLIB_COVERAGE.md).
+Support is tracked the same way Base is: a **grounded percentage over the full `names(Stdlib)` surface** (out-of-scope = genuinely non-Wasm, e.g. host entropy / packed BLAS forms), regenerated from differential runs into `test/fuzz/STDLIB_COVERAGE.md` (`julia --project=test/fuzz test/fuzz/stdlib_coverage.jl`).
 
 | Stdlib | In-scope support | Highlights | Notes |
 |:-------|:-----------------|:-----------|:------|
@@ -131,7 +131,7 @@ Support is tracked the same way Base is: a **grounded percentage over the full `
 | `StaticArrays` *(SciML)* | **100%** | the `SVector` surface: construction (positional/tuple/converting-eltype, all `N` incl. the single-element vector), `getindex`, iterate/destructure, reductions (`sum`/`prod`/`maximum`/`minimum`), arithmetic/`dot`/broadcast | `SVector{N,T}` is an `NTuple`-backed *struct*, not a heap array — unlocked by registering `:SArray` as a real struct (the SparseMatrixCSC/`Dual` lever) + overlaying `construct_type` to the identity for already-parameterized types (WT's interpreter can't fold its type-level `adapt_size`/`adapt_eltype`/`typeintersect` machinery with concrete-eval off). `SMatrix`/`MArray` out of scope |
 | `SimpleDiffEq` *(SciML)* | **100%** | **solve ODEs in a frozen Wasm module**: every fixed-step solver — `SimpleEuler`/`SimpleRK4`/`SimpleTsit5`/`LoopEuler`/`LoopRK4` — over scalar, `Vector`- and `SVector`-state systems (decay, logistic, harmonic oscillator, Lotka–Volterra, nonlinear pendulum, Lorenz), incl. parameterized `ODEProblem(f,u0,tspan,p)` | the SciMLBase abstraction (`ODEProblem`/`ODEFunction`/`solve`) is cleared by three pure levers: a curated type-level concrete-eval fold (`apply_type`/`isinplace`-type-param/…), a concrete `ODEFunction` construction overlay (bypassing `isinplace` method-arity reflection), and `solve → DiffEqBase.__solve` (bypassing the kwarg-`Pairs` machinery); solution types are registered as real structs. `SimpleTsit5`'s `SVector` Butcher tableau rides on the StaticArrays support above. Adaptive `SimpleATsit5` and `Vector`-typed `p` out of scope |
 
-Three **SciML libraries** now run the same way the stdlibs do — autodiff, static arrays, and a full ODE solver, each in a frozen, offline Wasm module. The docs homepage closes the loop: a **live Lorenz attractor** whose ODE is re-solved by `SimpleRK4` over an `SVector{3}` state and re-drawn by [WasmMakie](https://github.com/GroupTherapyOrg/WasmMakie.jl) on every slider move — the whole solve-and-plot loop compiled to WebAssembly, no server. Two things make all of this cheap. The **trim collection** compiles things like `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) with zero special-casing. And the differential oracle is **tolerance-aware**, so a hand-rolled factorization — or an `@muladd` step that fuses differently than native — still validates as correct. Per-library ledgers (what's verified, what's overlaid, what's out-of-scope and *why*) live in [`test/fuzz/FINDINGS.md`](test/fuzz/FINDINGS.md).
+Three **SciML libraries** now run the same way the stdlibs do — autodiff, static arrays, and a full ODE solver, each in a frozen, offline Wasm module. The docs homepage closes the loop: a **live Lorenz attractor** whose ODE is re-solved by `SimpleRK4` over an `SVector{3}` state and re-drawn by [WasmMakie](https://github.com/GroupTherapyOrg/WasmMakie.jl) on every slider move — the whole solve-and-plot loop compiled to WebAssembly, no server. Two things make all of this cheap. The **trim collection** compiles things like `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) with zero special-casing. And the differential oracle is **tolerance-aware**, so a hand-rolled factorization — or an `@muladd` step that fuses differently than native — still validates as correct.
 
 ## Language Features
 
@@ -233,7 +233,7 @@ runs standalone:
 ```bash
 julia --project=test/fuzz test/fuzz/run.jl sweep     # parallel discovery (time-boxed)
 julia --project=test/fuzz test/fuzz/run.jl verify    # re-check open gaps, auto-close fixed
-julia --project=test/fuzz test/fuzz/run.jl coverage  # regenerate COVERAGE.md
+julia --project=test/fuzz test/fuzz/run.jl coverage  # write test/fuzz/COVERAGE.md
 ```
 
 ## Requirements

@@ -1,7 +1,7 @@
 # F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch) — cross-function pre-pass that maps a capturing closure type
 # to the WASM contents type of the Core.Box it captures (registry.box_contents_types).
 #
-# populate_box_field_types!(mod, reg, code, ssa_types) scans an enclosing fn's typed IR: for each
+# populate_box_field_types!(mod, reg, nir, ssa_types) scans an enclosing fn's NIR boundary: for each
 # %new(Core.Box) with a CONCRETE contents type (box_contents_type), it maps every closure type
 # capturing it → the contents wasm type. register_closure_type! (L2 wiring) will consult this to
 # type the captured-box field as a typed Box{contents}. DORMANT: nothing reads the side-table yet
@@ -13,9 +13,10 @@
     ci = code_typed(fcounter, (); optimize = true)[1].first
     mod = WasmTarget.WasmModule()
     reg = WasmTarget.TypeRegistry()
-    WasmTarget.populate_box_field_types!(mod, reg, ci.code, ci.ssavaluetypes)
+    nir = WasmTarget.build_nir(ci)
+    WasmTarget.populate_box_field_types!(mod, reg, nir, nir)
 
-    @test length(WasmTarget.find_box_news(ci.code)) == 1            # one Core.Box
+    @test length(WasmTarget.find_box_news(nir)) == 1                # one Core.Box
     @test !isempty(reg.box_contents_types)                          # captor mapped
     @test all(==(WasmTarget.I64), values(reg.box_contents_types))   # contents = Int64 → I64
 
@@ -23,11 +24,12 @@
     fdyn(b::Bool) = (c = 0; foreach(i -> (c = b ? i : "x"), 1:3); c)
     cid = code_typed(fdyn, (Bool,); optimize = true)[1].first
     reg2 = WasmTarget.TypeRegistry()
-    WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg2, cid.code, cid.ssavaluetypes)
+    local dnir = WasmTarget.build_nir(cid)
+    WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg2, dnir, dnir)
     @test isempty(reg2.box_contents_types)                          # dynamic ⇒ anyref, no typed entry
 
     # box_contents_types === nothing (e.g. the minimal self-host registry) is a no-op, never errors.
     reg3 = WasmTarget.TypeRegistry()
     reg3.box_contents_types = nothing
-    @test WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg3, ci.code, ci.ssavaluetypes) === nothing
+    @test WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg3, nir, nir) === nothing
 end

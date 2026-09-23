@@ -36,6 +36,11 @@
 # The accessor closures are themselves WasmTarget output: a codegen bug there
 # surfaces as a systematic, classified failure — not a hidden dependency.
 
+"""
+    Bridge
+
+Type-directed, bit-exact value transport across the JS↔wasm boundary.
+"""
 module Bridge
 
 export descriptor, arg_descriptor, bridge_supported, args_supported,
