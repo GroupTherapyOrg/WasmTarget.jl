@@ -350,11 +350,10 @@ _g("identity", Any[
 # String (types.jl `get_string_constant_global!`), and a runtime Symbol is the String object
 # itself (statements.jl `_fc_jl_symbol_n!`, builtins.jl `_lower_symbol!`), so egal, isa and
 # typeof cannot tell `"a"` from `:a` (measured 2026-09-22).
-# A Union{Nothing,Int64} value lives in an i64 register (builder/types.jl
-# `resolve_union_type`: Union{Nothing,T} maps to T's representation), so `nothing` and a
-# number are the same bits and `===` cannot be answered: it rejects at the statement. The
-# lowering it replaced answered a constant (native 1, wasm 0) (measured 2026-09-22).
-_xf("union_register", Any[
+# `===` / `!==` on a Union{Nothing,Int64} value: once a wrong constant, then a located
+# rejection while the value lived in an i64; now the value is its nullable box, so egal
+# answers exactly.
+_g("union_register", Any[
     ("union_num_ne", (x::Int64) -> Int64(_id_maybe(x) !== 3), Int64(3)),
     ("union_nothing_egal", (x::Int64) -> Int64(_id_maybe(x) === nothing), Int64(-3)),
 ])
@@ -469,10 +468,9 @@ const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 _xf("apply_type_union", Any[
     ("runtime_union_egal", (x::Int64) -> (T = x > 0 ? Int64 : Float64; U = Union{T, Nothing}; U === Union{Int64, Nothing} ? 1 : 0), Int64(1)),
 ])
-# BUILTIN_LOWERINGS memorynew: every Memory is allocated with at least 16 slots
-# (builtins.jl `_lower_memorynew!`, min_capacity = 16) and `length(::Memory)` reads the
-# array length: length(Memory{Int64}(undef, 3)) answers 16 (native 3).
-_xf("memory_length", Any[
+# BUILTIN_LOWERINGS memorynew: a Memory is allocated with exactly n elements (it used to be
+# padded to 16, so length(Memory{Int64}(undef, 3)) answered 16).
+_g("memory_length", Any[
     ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
 ])
 # FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type, but the lowering
