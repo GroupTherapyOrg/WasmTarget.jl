@@ -73,6 +73,7 @@ mutable struct DispatchTableRegistry
         Tuple{Int,Int,Int,Vector{Tuple{Int,Int}}}}}}
 end
 
+# parity(dispatch_table.dart:427 DispatchTable): the empty table a module's selectors are added to.
 DispatchTableRegistry()::DispatchTableRegistry = DispatchTableRegistry(Dict{Any, DispatchTable}(),
     Dict{Any,Int}(), Dict{Any,Int}(), Dict{Any,Vector{Tuple{Int,Int}}}(), nothing, 0,
     Dict{Any,Vector{NamedTuple{(:l1_pos,:axis2,:offset2,:rows2),
@@ -83,7 +84,9 @@ parity(dispatch_table.dart:436 DispatchTable.selectorForTarget)"""
 get_dispatch_table(reg::DispatchTableRegistry, func_ref)::Union{Nothing,DispatchTable} = get(reg.tables, func_ref, nothing)
 
 """A selector's program-determined order key: its first entry's target function index
-(entries are built in registration order, which is itself index-ordered)."""
+(entries are built in registration order, which is itself index-ordered).
+parity(dispatch_table.dart:36 SelectorInfo.id): a selector's program-determined number. dart's
+insertion-ordered maps iterate selectors in that order; a Julia `Dict` must be walked by this key."""
 selector_order_key(reg::DispatchTableRegistry, func_ref)::Int =
     minimum(Int(e.target_idx) for e in reg.tables[func_ref].entries)
 
