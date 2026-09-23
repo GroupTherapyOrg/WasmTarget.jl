@@ -54,6 +54,7 @@ struct ConcreteRef
     nullable::Bool
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
 
 """
@@ -97,6 +98,7 @@ struct FuncType
 end
 
 # Convenience constructor for NumType-only signatures
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:974 FunctionType)
 FuncType(params::Vector{NumType}, results::Vector{NumType}) =
     FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
 
@@ -116,6 +118,7 @@ struct FieldType
     mutable_::Bool        # Whether the field is mutable
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
 FieldType(valtype::WasmValType) = FieldType(valtype, true)  # Default to mutable
 
 """
@@ -130,6 +133,7 @@ struct StructType
 end
 
 # Backward-compatible constructor (no supertype)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1119 StructType)
 StructType(fields::Vector{FieldType}) = StructType(fields, nothing)
 
 """
@@ -142,6 +146,7 @@ struct ArrayType
     elem::FieldType  # Element type with mutability
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1229 ArrayType)
 ArrayType(valtype::WasmValType) = ArrayType(FieldType(valtype, true))
 
 """
@@ -272,11 +277,13 @@ mutable struct WasmGlobal{T, IDX}
 end
 
 # Constructor with zero initial value
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 WasmGlobal{T, IDX}() where {T, IDX} = WasmGlobal{T, IDX}(zero(T))
 
 # Get the global index from the type
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 global_index(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = IDX
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 global_index(g::WasmGlobal{T, IDX}) where {T, IDX} = IDX
 
 # Get the element type
