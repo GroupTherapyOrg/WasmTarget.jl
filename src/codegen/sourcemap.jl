@@ -62,21 +62,17 @@ function collect_source_info(functions::Vector)
         f = entry[1]
         arg_types = entry[2]
 
-        try
-            ms = methods(f, Tuple{arg_types...})
-            if length(ms.ms) > 0
-                m = ms.ms[1]
-                filepath = string(m.file)
-                line = Int32(m.line)
+        ms = methods(f, Tuple{arg_types...})
+        if length(ms.ms) > 0
+            m = ms.ms[1]
+            filepath = string(m.file)
+            line = Int32(m.line)
 
-                # Register source file
-                src_idx = add_source!(smi, filepath)
+            # Register source file
+            src_idx = add_source!(smi, filepath)
 
-                # Store function-level mapping (wasm_offset filled later)
-                push!(smi.mappings, SourceMapping(UInt32(0), src_idx, line - Int32(1), Int32(0)))
-            end
-        catch
-            # If method lookup fails, skip — function may be a lambda
+            # Store function-level mapping (wasm_offset filled later)
+            push!(smi.mappings, SourceMapping(UInt32(0), src_idx, line - Int32(1), Int32(0)))
         end
     end
 
