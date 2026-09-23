@@ -133,6 +133,8 @@ mutable struct TypeRegistry
     abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
 end
 
+# parity(translator.dart:470 Translator): the constructor that starts a compile with every
+# per-compile type and constant map empty.
 TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, nothing,
     Dict{WasmValType, UInt32}(),
@@ -633,6 +635,10 @@ function compiled on x64 and aarch64 interned its type-name strings in a
 different order. dart numbers and emits everything from the program structure
 (class_info.dart:864 ClassIdNumbering._number; constants.dart's map is walked in
 insertion order).
+
+parity(quarantine: Julia Dict iteration follows address-based hashes of type, type-name,
+function and constant keys, which vary per process and architecture; dart Maps iterate in
+insertion order.)
 """
 ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = sort!(collect(dict); by = p -> keyfn(p.first))
 
@@ -1118,6 +1124,8 @@ mutable struct FunctionRegistry
     by_ref::Vector{Tuple{Any, Vector{FunctionInfo}}}     # func_ref -> infos (linear scan)
 end
 
+# parity(functions.dart:25 FunctionCollector._functions): the collector starts with an empty
+# callee-to-function map.
 FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[])
 
 """
