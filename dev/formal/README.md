@@ -17,7 +17,9 @@ further and gates on it.
 | `MC<Name>[Variant]Broken.cfg` | a deliberately wrong variant (a CONSTANT flag mirroring a realistic bug class) that TLC MUST reject — a model no wrong variant can violate proves nothing |
 | `run_tlc.sh` | runs every `MC*.cfg`; fails if a Broken instance passes or a positive one fails; fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
 
-The modeled Julia function carries a one-line `# formal(dev/formal/<Name>.tla): <claim>` anchor;
+The modeled Julia function carries a one-line `formal(dev/formal/<Name>.tla): <claim>` anchor —
+inside its docstring when it has one (a comment line between a docstring and its definition
+detaches the docstring; R35 counts those), otherwise as a `#` comment directly above it;
 L111 keeps every model paired with its instance, a Broken variant, and an anchor. `formal.yml`
 runs the harness on every push.
 
