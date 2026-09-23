@@ -31,6 +31,8 @@ mutable struct SourceMapInfo
     source_index::Dict{String, UInt32}  # path → index into sources
 end
 
+# parity(pkg/wasm_builder/lib/source_map.dart:79 SourceMapSerializer.mappings): a serializer
+# starts with no mappings.
 SourceMapInfo()::SourceMapInfo = SourceMapInfo(String[], String[], SourceMapping[], Dict{String, UInt32}())
 
 """
