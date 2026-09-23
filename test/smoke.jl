@@ -424,6 +424,29 @@ _g("symbol_class", Any[
     ("bytes_struct_isa_String", (i::Int64) -> Int64(_id_any(_sym_bytes_values(i), i) isa String), Int64(2)),
 ])
 
+# ---- symbol_syntax: Julia's parser answers jl_is_operator / jl_is_syntactic_operator for
+# any Symbol, including one built at runtime from bytes (test/symbol_syntax_metadata.jl) ----
+@noinline _ss_isop(s::Symbol) = Int64(Base._isoperator(s))
+@noinline _ss_issyn(s::Symbol) = Int64(Base.is_syntactic_operator(s))
+_g("symbol_syntax", Any[
+    ("plus_is_operator", () -> _ss_isop(Symbol("+"))),
+    ("Int_is_operator", () -> _ss_isop(:Int)),
+    ("equal_is_syntactic", () -> _ss_issyn(Symbol("="))),
+    ("plus_is_syntactic", () -> _ss_issyn(Symbol("+"))),
+    ("bytes_symbol_is_operator", (x::Int64) -> _ss_isop(Symbol(String(UInt8[UInt8(x)]))), Int64(0x2b)),
+    ("bytes_symbol_is_syntactic", (x::Int64) -> _ss_issyn(Symbol(String(UInt8[UInt8(x)]))), Int64(0x3d)),
+    ("substring_symbol_is_operator", (x::Int64) -> _ss_isop(Symbol(SubString(string('a', Char(x), 'b'), 2, 2))), Int64(0x2b)),
+    ("substring_symbol_is_syntactic", (x::Int64) -> _ss_issyn(Symbol(SubString(string('a', Char(x), 'b'), 2, 2))), Int64(0x3d)),
+    ("suffixed_operator", (x::Int64) -> _ss_isop(Symbol(string('+', Char(x)))), Int64(0x2032)),
+    ("no_suffix_operator", (x::Int64) -> _ss_isop(Symbol(string('=', Char(x)))), Int64(0x2032)),
+    ("dotted_operator", (x::Int64) -> _ss_isop(Symbol(string('.', Char(x)))), Int64(0x2b)),
+    ("word_not_operator", (x::Int64) -> _ss_isop(Symbol(string('i', Char(x)))), Int64(0x6e)),
+    ("dotted_syntactic", (x::Int64) -> _ss_issyn(Symbol(string('.', Char(x)))), Int64(0x3d)),
+    ("string_is_operator", (x::Int64) -> Int64(Base._isoperator(string(Char(x), Char(x)))), Int64(0x2b)),
+    ("literal_is_operator", (x::Int64) -> Int64(Base._isoperator(x > 0 ? :+ : :foo)), Int64(1)),
+    ("literal_is_syntactic", (x::Int64) -> Int64(Base.is_syntactic_operator(x > 0 ? :(=) : :foo)), Int64(1)),
+])
+
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
 # Each case below is the smallest ordinary program that reaches the registry entry named
 # in its comment; the coverage lane confirms the entry fires while it compiles.
@@ -440,11 +463,8 @@ _g("symbol_class", Any[
     ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
     ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
 ])
-@noinline _sm_opsym(x::Int64) = x > 0 ? :+ : :foo
 _g("foreign_calls", Any[
     ("typeintersect_runtime", (x::Int64) -> typeintersect(x > 0 ? Int64 : String, Integer) === Int64 ? 1 : 0, Int64(1)),  # jl_type_intersection
-    ("is_operator", (x::Int64) -> Base._isoperator(_sm_opsym(x)) ? 1 : 0, Int64(1)),                                      # jl_is_operator
-    ("is_syntactic_operator", (x::Int64) -> Base.is_syntactic_operator(x > 0 ? :(=) : :foo) ? 1 : 0, Int64(1)),         # jl_is_syntactic_operator
     ("id_chars", (x::Int64) -> (Base.is_id_start_char(Char(x)) ? 1 : 0) + (Base.is_id_char(Char(x)) ? 2 : 0), Int64(97)), # jl_id_start_char, jl_id_char
     ("isidentifier", (x::Int64) -> Base.isidentifier(x > 0 ? "abc" : "1x") ? 1 : 0, Int64(1)),                           # jl_id_start_char, jl_id_char
     ("module_name", (x::Int64) -> x + length(String(nameof(Base.Math))), Int64(1)),                                      # jl_module_name

@@ -1372,21 +1372,20 @@ const LOCKS = [
             count(p -> !occursin(p, stmt_src), required) +
                 abs(length(collect(eachmatch(r"function _fc_memmove!\(", stmt_src))) - 1)
         end),
-    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
+    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification of ANY name, literal or built at run time, is Julia's parser answer: Base._isoperator / Base.is_syntactic_operator are overlaid by the port of julia-parser.scm `operator?` / `syntactic-op?` over tables read from jl_is_operator / jl_is_syntactic_operator at build time; no classed string carries a baked flag and no foreigncall lowering answers from one (a Symbol built from bytes once trapped there)",
         () -> begin
-            types_src = read(joinpath(CODEGEN, "types.jl"), String)
-            values_src = read(joinpath(CODEGEN, "values.jl"), String)
-            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            all_src = types_src * values_src * stmt_src
-            required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
-                        ":jl_is_operator => _fc_jl_is_operator!",
-                        ":jl_is_syntactic_operator => _fc_jl_is_syntactic_operator!",
-                        "_fc_operator_flags!(b, node, idx, ctx, Int32(0x01))",
-                        "_fc_operator_flags!(b, node, idx, ctx, Int32(0x02))",
-                        "dynamically-created Symbol lacks operator metadata"]
-            forbidden = [":name_is_operator", ":singleton_is_operator",
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            all_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")), "\n")
+            required = ["@overlay WASM_METHOD_TABLE Base._isoperator(s::Symbol) = _wt_parser_is_operator(String(s))",
+                        "@overlay WASM_METHOD_TABLE function Base._isoperator(s::AbstractString)",
+                        "@overlay WASM_METHOD_TABLE Base.is_syntactic_operator(s::Symbol) =",
+                        "function _wt_parser_is_operator(s::String)::Bool",
+                        "function _wt_op_suffix_start(s::String)::Int",
+                        "const _WT_NO_SUFFIX_OPERATORS"]
+            forbidden = ["syntax_flags", ":jl_is_operator =>", ":jl_is_syntactic_operator =>",
+                         "lacks operator metadata", ":name_is_operator", ":singleton_is_operator",
                          "ASCII-only operator", "name === :jl_is_operator"]
-            count(p -> !occursin(p, all_src), required) +
+            count(p -> !occursin(p, interp_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
     "L45_one_source_slot_and_vararg_abi" => ("semantic Core.Argument source types have one slot authority while the one physical vararg projection path maps fixed-prefix packs by their ABI offset",

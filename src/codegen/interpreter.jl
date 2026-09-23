@@ -2183,6 +2183,143 @@ end
     return _wasm_int64hash(-(_wasm_memhash_seed(String(s), 0xcafe8881) ⊻ 0xaaaaaaaaaaaaaaaa)) % UInt
 end
 
+# ─── Operator-name predicates Overlay — Julia's parser answer for any name ──
+# Why: Base._isoperator and Base.is_syntactic_operator are the foreigncalls
+#      jl_is_operator / jl_is_syntactic_operator (ast.c), which ask the flisp parser
+#      (julia-parser.scm, identical in 1.12.7 and 1.13.0): `syntactic-op?` is membership
+#      in a fixed list, and `operator?` is membership in the fixed `operators` list after
+#      `maybe-strip-op-suffix` — strip-op-suffix (flisp/julia_extensions.c) cuts the name
+#      at its first jl_op_suffix_char codepoint, decoded by u8_nextchar (support/utf8.c),
+#      and the cut name is used unless nothing was cut, the cut is at 0, or the cut name
+#      is in `no-suffix?`. WasmGC has no parser at run time, so the tables are Julia's own
+#      answers, read at build time: the candidates are Julia's token names
+#      (JuliaSyntax kinds), each optionally dotted and optionally followed by `=`, and each
+#      with any character replaced by one Julia's charmap normalizes to it
+#      (Base.Unicode._julia_charmap); an operator is a candidate jl_is_operator accepts
+#      that holds no suffix character, and it takes no suffix when jl_is_operator rejects
+#      it followed by ′ (U+2032, a suffix character). The derived sets equal the parser's
+#      own `operators` (1307) and `syntactic-operators` (41) as `julia --lisp` prints them
+#      on 1.12.7 and 1.13.0 (test/symbol_syntax_metadata.jl pins this). A name is packed
+#      little-endian into a UInt64 (operators are at most 5 bytes and hold no NUL) and
+#      looked up in the sorted tables.
+
+# parity(quarantine: jl_op_suffix_char, flisp/julia_extensions.c — every codepoint it accepts)
+const _WT_OP_SUFFIX_CHARS = UInt32[cp for cp in UInt32(0xA1):UInt32(0x10ffff)
+                                   if ccall(:jl_op_suffix_char, Cint, (UInt32,), cp) != 0]
+
+# parity(quarantine: the operator name packed as the parser's table key, little-endian bytes)
+function _wt_pack_name(s::String, n::Int)::UInt64
+    v = UInt64(0)
+    i = 1
+    while i <= n
+        v |= UInt64(codeunit(s, i)) << (8 * (i - 1))
+        i += 1
+    end
+    return v
+end
+
+# parity(quarantine: the operator candidates are Julia's own token names, JuliaSyntax kinds,
+# dotted, with `=` appended, and under Julia's charmap normalization)
+const _WT_OP_CANDIDATES = let names = collect(values(Base.JuliaSyntax._kind_int_to_str))
+    local plain = unique(vcat(names, ["." * s for s in names]))
+    local cands = unique(vcat(plain, [s * "=" for s in plain]))
+    local preimage = Dict{Char,Vector{Char}}()
+    for (k, v) in sort!(collect(Base.Unicode._julia_charmap))
+        push!(get!(preimage, Char(v), Char[]), Char(k))
+    end
+    local variants = String[]
+    for s in cands
+        local cs = collect(s)
+        for i in eachindex(cs), k in get(preimage, cs[i], Char[])
+            local alt = copy(cs)
+            alt[i] = k
+            push!(variants, String(alt))
+        end
+    end
+    String[s for s in unique(vcat(cands, variants)) if 1 <= ncodeunits(s) <= 8 && !occursin('\0', s)]
+end
+# parity(quarantine: julia-parser.scm `operators`, read through jl_is_operator)
+const _WT_OPERATORS = sort!(unique(UInt64[_wt_pack_name(s, ncodeunits(s)) for s in _WT_OP_CANDIDATES
+    if ccall(:jl_is_operator, Cint, (Cstring,), s) != 0 &&
+       !any(c -> isvalid(c) && ccall(:jl_op_suffix_char, Cint, (UInt32,), UInt32(c)) != 0, s)]))
+# parity(quarantine: julia-parser.scm `no-suffix?` over `operators`, read through jl_is_operator)
+const _WT_NO_SUFFIX_OPERATORS = let unpack(v) = String(UInt8[(v >> (8 * i)) % UInt8 for i in 0:7
+                                                           if (v >> (8 * i)) % UInt8 != 0x00])
+    UInt64[v for v in _WT_OPERATORS if ccall(:jl_is_operator, Cint, (Cstring,), unpack(v) * "′") == 0]
+end
+# parity(quarantine: julia-parser.scm `syntactic-operators`, read through jl_is_syntactic_operator)
+const _WT_SYNTACTIC_OPERATORS = sort!(unique(UInt64[_wt_pack_name(s, ncodeunits(s)) for s in _WT_OP_CANDIDATES
+    if ccall(:jl_is_syntactic_operator, Cint, (Cstring,), s) != 0]))
+
+# parity(quarantine: membership in one of the parser's sorted tables)
+function _wt_in_sorted(table::Vector{T}, x::T)::Bool where {T}
+    lo, hi = 1, length(table)
+    while lo <= hi
+        mid = (lo + hi) >>> 1
+        @inbounds v = table[mid]
+        v == x && return true
+        v < x ? (lo = mid + 1) : (hi = mid - 1)
+    end
+    return false
+end
+
+# parity(quarantine: strip-op-suffix, flisp/julia_extensions.c, decoding by u8_nextchar,
+# support/utf8.c — the byte count before the first suffix codepoint; a byte past the end
+# reads as the terminating NUL)
+function _wt_op_suffix_start(s::String)::Int
+    n = ncodeunits(s)
+    i = 0
+    while i < n
+        b0 = codeunit(s, i + 1)
+        sz = b0 < 0xc0 ? 1 : b0 < 0xe0 ? 2 : b0 < 0xf0 ? 3 : b0 < 0xf8 ? 4 : b0 < 0xfc ? 5 : 6
+        ch = UInt32(0)
+        j = i
+        k = 0
+        while k < sz
+            ch = (ch << 6) + UInt32(j < n ? codeunit(s, j + 1) : 0x00)
+            j += 1
+            k += 1
+        end
+        ch -= sz == 1 ? 0x00000000 : sz == 2 ? 0x00003080 : sz == 3 ? 0x000E2080 :
+              sz == 4 ? 0x03C82080 : sz == 5 ? 0xFA082080 : 0x82082080
+        _wt_in_sorted(_WT_OP_SUFFIX_CHARS, ch) && return i
+        i = j
+    end
+    return n
+end
+
+# parity(quarantine: julia-parser.scm `operator?`, the SuffSet over `operators`)
+function _wt_parser_is_operator(s::String)::Bool
+    n = ncodeunits(s)
+    i = _wt_op_suffix_start(s)
+    if i == n || i == 0
+        return n <= 8 && _wt_in_sorted(_WT_OPERATORS, _wt_pack_name(s, n))
+    end
+    i <= 8 || return false
+    p = _wt_pack_name(s, i)
+    return _wt_in_sorted(_WT_OPERATORS, p) && !_wt_in_sorted(_WT_NO_SUFFIX_OPERATORS, p)
+end
+
+# parity(quarantine: julia-parser.scm `syntactic-op?`, membership in `syntactic-operators`)
+function _wt_parser_is_syntactic_operator(s::String)::Bool
+    n = ncodeunits(s)
+    return n <= 8 && _wt_in_sorted(_WT_SYNTACTIC_OPERATORS, _wt_pack_name(s, n))
+end
+
+# parity(quarantine: jl_is_operator over a Symbol's name, ast.c; symbols hold no NUL)
+@overlay WASM_METHOD_TABLE Base._isoperator(s::Symbol) = _wt_parser_is_operator(String(s))
+# parity(quarantine: jl_is_operator over a string passed as a Cstring, strings/cstring.jl
+# unsafe_convert: an embedded NUL throws)
+@overlay WASM_METHOD_TABLE function Base._isoperator(s::AbstractString)
+    str = String(s)::String
+    Base.containsnul(str) &&
+        throw(ArgumentError("embedded NULs are not allowed in C strings: $(repr(str))"))
+    return _wt_parser_is_operator(str)
+end
+# parity(quarantine: jl_is_syntactic_operator over a Symbol's name, ast.c)
+@overlay WASM_METHOD_TABLE Base.is_syntactic_operator(s::Symbol) =
+    _wt_parser_is_syntactic_operator(String(s))
+
 # ─── String concatenation Overlay ───────────────────────────────────────────
 # Why: Base._string (the Vararg backend of string(...) and String * SubString)
 #      copies bytes through pointer arithmetic over the parts; the compiled

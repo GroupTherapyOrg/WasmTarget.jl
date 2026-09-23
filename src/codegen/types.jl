@@ -190,13 +190,6 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing                     # MemoryRef single-value structs
 )
 
-# parity(quarantine: Julia's Base.isoperator / is_syntactic_operator are the foreigncalls
-# jl_is_operator / jl_is_syntactic_operator over a Symbol's name; dart Symbols carry no such
-# flags, so the answer is baked into the string constant.)
-symbol_syntax_flags(s::Union{Symbol,AbstractString})::Int32 =
-    Int32((Base._isoperator(s) ? 0x01 : 0x00) |
-          (Base.is_syntactic_operator(Symbol(s)) ? 0x02 : 0x00))
-
 """
     get_or_create_lazy_string!(mod, registry, s) -> (global_idx, init_fn_idx)
 
@@ -222,7 +215,7 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, 0, String; syntax_flags=symbol_syntax_flags(s))
+    emit_string_wrap!(b, mod, registry, 0, String)
     global_set_peek = length(b.instrs)
     # store AND return: local.tee via global — global.set then global.get
     global_set!(b, g)
@@ -398,8 +391,6 @@ function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
     push!(init, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_FIXED)
     append!(init, encode_leb128_unsigned(UInt64(arr_idx)))
     append!(init, encode_leb128_unsigned(UInt64(length(bytes))))
-    push!(init, Opcode.I32_CONST)
-    append!(init, encode_leb128_signed(Int64(symbol_syntax_flags(s))))
     push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
     append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
     return struct_idx, init
@@ -433,7 +424,7 @@ function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::T
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, scratch, typeof(s); syntax_flags=symbol_syntax_flags(s))
+    emit_string_wrap!(b, mod, registry, scratch, typeof(s))
     return b
 end
 
@@ -1460,8 +1451,8 @@ end
     get_string_struct_type!(mod, registry) -> UInt32
 
 parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string — dart: String IS an Object class. A Julia String value is
-`(struct (field i32 classId) (field (mut i32) identityHash)
-         (field (ref null \$strbytes) data) (field i32 syntaxFlags))`, SUBTYPE of \$JlObject,
+`(struct (field i32 classId) (field (mut i32) identityHash) (field (ref null \$strbytes) data))`,
+SUBTYPE of \$JlObject,
 so strings participate in classed isa (`emit_classid_range_check!`) and the M8 selector
 table like every other value. String OPS unwrap `.data` once at entry and work on the
 byte array (dart's methods read the class's array field the same way).
@@ -1472,8 +1463,7 @@ function get_string_struct_type!(mod::WasmModule, registry::TypeRegistry)::UInt3
         object_idx = get_object_struct_type!(mod, registry)
         st = StructType(FieldType[FieldType(I32, false),
                                   FieldType(I32, true),
-                                  FieldType(ConcreteRef(arr_idx, true), true),
-                                  FieldType(I32, false)],
+                                  FieldType(ConcreteRef(arr_idx, true), true)],
                         object_idx)
         registry.string_struct_idx = add_type!(mod, st)
     end

@@ -715,7 +715,7 @@ reads them through the jl_symbol_name pointer, so a Symbol shares the classed st
 under Symbol's classId where dart wraps a String field.)
 """
 function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                           scratch::Integer, class::Type; syntax_flags::Integer=-1)::InstrBuilder
+                           scratch::Integer, class::Type)::InstrBuilder
     (class === String || class === Symbol) ||
         error("emit_string_wrap!: $class is not a classed-string class (String or Symbol)")
     struct_idx = get_string_struct_type!(mod, registry)
@@ -725,9 +725,7 @@ function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     i32_const!(b, Int64(ensure_type_id!(registry, class)))
     i32_const!(b, 0) # identityHash: lazily assigned by objectid
     local_get!(b, scratch)
-    i32_const!(b, syntax_flags)
-    struct_new!(b, struct_idx,
-                WasmValType[I32, I32, ConcreteRef(arr_idx, true), I32])
+    struct_new!(b, struct_idx, WasmValType[I32, I32, ConcreteRef(arr_idx, true)])
     return b
 end
 
@@ -735,13 +733,11 @@ end
 
 parity(constants.dart:872 visitStringConstant): the same classed string producer, with the
 scratch local dart's `b.addLocal` would give it."""
-function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext, class::Type;
-                           syntax_flags::Integer=-1)::InstrBuilder
+function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext, class::Type)::InstrBuilder
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     sc = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, ConcreteRef(arr_idx, true))
-    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc, class;
-                             syntax_flags=syntax_flags)
+    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc, class)
 end
 
 """
@@ -1544,7 +1540,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             i32_const!(b, Int32(n_bytes))  # length
             array_new_data!(b, type_idx, seg_idx)
         end
-        emit_string_wrap!(b, ctx, String; syntax_flags=symbol_syntax_flags(val))
+        emit_string_wrap!(b, ctx, String)
 
     elseif val isa QuoteNode
         # QuoteNode wraps a constant value - unwrap and compile.
@@ -1611,7 +1607,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # i32.const operands are SIGNED LEB128 (see String path above).
         i32_const!(b, Int32(n_bytes))
         array_new_data!(b, type_idx, seg_idx)
-        emit_string_wrap!(b, ctx, Symbol; syntax_flags=symbol_syntax_flags(val))
+        emit_string_wrap!(b, ctx, Symbol)
 
     elseif typeof(val) <: Tuple
         # funnel-first (tuple) — tuples of constant-expressible fields intern

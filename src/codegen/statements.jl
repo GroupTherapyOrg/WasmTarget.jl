@@ -1977,45 +1977,6 @@ function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return nothing
 end
 
-function _fc_operator_flags!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext,
-                             bit::Int32)
-    length(node.operands) >= 1 || return nothing
-            traced = _trace_string_ptr(node.operands[1], ctx)
-            if traced !== nothing
-                source, _ = traced
-                literal = source isa NirLiteral ? source.value : source
-                if literal isa Symbol || literal isa AbstractString
-                    i32_const!(b, (symbol_syntax_flags(literal) & bit) == bit ? 1 : 0)
-                    return b
-                end
-                if get_ssa_type(ctx, source) === Symbol
-                    string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(b, source, ctx, ConcreteRef(UInt32(string_idx), true))
-                    struct_get!(b, string_idx, UInt32(3), I32)
-                    local status_local = allocate_local!(ctx, I32)
-                    local_tee!(b, status_local)
-                    i32_const!(b, -1); num!(b, Opcode.I32_EQ)
-                    if_!(b, I32)
-                    unreachable!(b)  # structural trap: dynamically-created Symbol lacks operator metadata
-                    else_!(b)
-                    local_get!(b, status_local)
-                    i32_const!(b, bit); num!(b, Opcode.I32_AND)
-                    i32_const!(b, bit); num!(b, Opcode.I32_EQ)
-                    end_block!(b)
-                    return b
-                end
-            end
-    return nothing
-end
-
-# parity(functions.dart:90-189 FunctionCollector): one registry entry per C symbol, each
-# selecting its own flag bit — the symbol, never a re-read of its name inside the handler.
-_fc_jl_is_operator!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} =
-    _fc_operator_flags!(b, node, idx, ctx, Int32(0x01))
-# parity(functions.dart:90-189 FunctionCollector): see _fc_jl_is_operator!.
-_fc_jl_is_syntactic_operator!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} =
-    _fc_operator_flags!(b, node, idx, ctx, Int32(0x02))
-
 function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=node)
@@ -2296,8 +2257,6 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_is_binding_deprecated => _fc_jl_is_binding_deprecated!,
     :jl_genericmemory_owner => _fc_jl_genericmemory_owner!,
     :jl_stored_inline => _fc_jl_stored_inline!,
-    :jl_is_operator => _fc_jl_is_operator!,
-    :jl_is_syntactic_operator => _fc_jl_is_syntactic_operator!,
     :jl_id_start_char => _fc_jl_id_start_char!,
     :jl_id_char => _fc_jl_id_char!,
     :memmove => _fc_memmove!,
