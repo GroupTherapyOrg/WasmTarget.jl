@@ -62,7 +62,8 @@ with the per-clause status. A clause is never closed by argument.
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected
   at the edit site (load-time typing, the enforcing builder, the locks) or by the
   minute-scale lanes, never first by an hour-long run. Every lowering-registry entry is
-  exercised by a lane case; a new entry without one fails. Checks: `L16` `L94` `R33`.
+  exercised by a lane case; a new entry without one fails; no known failure hides behind a
+  skipped test. Checks: `L16` `L94` `R33` `R36`.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or
   fabricated result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
