@@ -765,6 +765,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
 
     # First pass: allocate locals for SSAs used more than once or with intervening ops
     needs_local_set = Set{Int}()
+    first_goto_to = _first_goto_to(nir)
 
     # Find SSAs defined inside a loop but used outside
     # These need locals because stack values don't persist across Wasm block boundaries
@@ -861,7 +862,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals
             ctx.ssa_locals[ssa_id] = ctx.phi_locals[ssa_id]
-        elseif use_count > 1 || needs_local(ctx, ssa_id)
+        elseif use_count > 1 || needs_local(ctx, ssa_id, first_goto_to)
             push!(needs_local_set, ssa_id)
         end
     end
@@ -1308,9 +1309,27 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)
 end
 
 """
+    _first_goto_to(nir) -> Dict{Int,Int}
+
+For each statement that some `goto` targets, the index of the first such `goto` in statement
+order — the loop back-edge `needs_local` asks about for every SSA value, computed once per
+function instead of rescanning the body per value.
+parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR's gotos once for it.)
+"""
+function _first_goto_to(nir::Vector{NirStmt})::Dict{Int,Int}
+    first = Dict{Int,Int}()
+    for (i, rec) in enumerate(nir)
+        node = rec.node
+        node isa NirGoto && !haskey(first, node.target) && (first[node.target] = i)
+    end
+    return first
+end
+
+"""
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
 """
-function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
+function needs_local(ctx::AbstractCompilationContext, ssa_id::Int,
+                     first_goto_to::Dict{Int,Int})::Bool
     nir = ctx.nir
 
     # Find where this SSA is used
@@ -1363,8 +1382,9 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int)
     # we need a local to ensure stack balance across control flow
     for header in 1:length(ctx.loop_headers)
         ctx.loop_headers[header] || continue
-        # Find corresponding back-edge
-        back_edge = findfirst(rec -> rec.node isa NirGoto && rec.node.target == header, nir)
+        # Find corresponding back-edge: the first `goto` to this header, found once per
+        # function (`_first_goto_to`)
+        back_edge = get(first_goto_to, header, nothing)
         if back_edge !== nothing && ssa_id >= header && ssa_id <= back_edge
             # SSA is defined inside this loop
             # Check if there are any conditionals in the loop
