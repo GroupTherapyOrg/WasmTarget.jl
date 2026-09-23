@@ -938,9 +938,6 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         # (M3: the tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false;
         # a union field is AnyRef holding the classId box / struct ref directly.)
         if field_type isa Union
-            # Simple nullable union (Union{Nothing, T})
-            inner_type = get_nullable_inner_type(field_type)
-
             # Get the value's actual type
             val_type = if val isa NirSSA
                 get(ctx.ssa_types, val.id, Any)
@@ -961,48 +958,22 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             should_emit_null = is_literal_nothing || is_nothing_type_ssa
 
             if should_emit_null
-                # Check actual Wasm field type first. For nullable
-                # primitives (Union{Nothing, Bool/Int32/etc}), the Wasm field
-                # is i32/i64 — emit zero constant, NOT ref.null.
-                _null_field_wasm = nothing
-                _null_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
-                local _wasm_fi = i + Int(info.field_offset)  # skip typeId
-                if _null_struct_def isa StructType && _wasm_fi <= length(_null_struct_def.fields)
-                    _null_field_wasm = _null_struct_def.fields[_wasm_fi].valtype
-                end
-                if _null_field_wasm !== nothing && (_null_field_wasm === I32 || _null_field_wasm === I64 || _null_field_wasm === F32 || _null_field_wasm === F64)
-                    # Numeric field — emit zero constant for nothing
-                    if _null_field_wasm === I32
-                        i32_const!(b, 0)
-                    elseif _null_field_wasm === I64
-                        i64_const!(b, 0)
-                    elseif _null_field_wasm === F32
-                        f32_const!(b, 0.0f0)
-                    elseif _null_field_wasm === F64
-                        f64_const!(b, 0.0)
-                    end
-                # Nothing value (literal or SSA with Nothing type) - emit ref.null
-                elseif inner_type !== nothing && (inner_type === String || inner_type === Symbol)
-                    # Nullable string/symbol — use string array type
-                    str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                    ref_null!(b, Int64(str_type_idx), ConcreteRef(UInt32(str_type_idx), true))
-                elseif inner_type !== nothing && isconcretetype(inner_type) && isstructtype(inner_type)
-                    # Nullable struct ref - emit null reference
-                    if haskey(ctx.type_registry.structs, inner_type)
-                        inner_info = ctx.type_registry.structs[inner_type]
-                        ref_null!(b, Int64(inner_info.wasm_type_idx), ConcreteRef(UInt32(inner_info.wasm_type_idx), true))
-                    else
-                        # Use generic null
-                        ref_null!(b, StructRef)
-                    end
-                elseif inner_type !== nothing && inner_type <: AbstractVector
-                    # Nullable array ref
-                    elem_type = eltype(inner_type)
-                    arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-                    ref_null!(b, Int64(arr_type_idx), ConcreteRef(UInt32(arr_type_idx), true))
+                # `nothing` is the null ref of the registered physical field type (a
+                # Union{Nothing,T} field is T's nullable ref, or its nullable box when T is
+                # numeric: get_concrete_wasm_type); a numeric field cannot hold it.
+                local _null_struct_def = ctx.mod.types[info.wasm_type_idx + 1]
+                local _null_fi = i + Int(info.field_offset)
+                (_null_struct_def isa StructType && _null_fi <= length(_null_struct_def.fields)) ||
+                    error("registered union field $i has no physical Wasm type")
+                local _null_field_wasm = _null_struct_def.fields[_null_fi].valtype
+                if _null_field_wasm isa ConcreteRef
+                    ref_null!(b, Int64(_null_field_wasm.type_idx), _null_field_wasm)
+                elseif _wt_is_ref(_null_field_wasm)
+                    ref_null!(b, _null_field_wasm)
                 else
-                    # Generic nullable - use structref null
-                    ref_null!(b, StructRef)
+                    emit_unsupported_stub!(ctx, b, :unsupported_type,
+                        "nothing stored into the non-reference field $(_null_field_wasm) of $(struct_type)";
+                        idx=idx, detail=field_type)
                 end
             else
                 # The registered physical field is the sole sink contract. Route
