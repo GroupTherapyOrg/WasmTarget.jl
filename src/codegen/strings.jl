@@ -5,7 +5,7 @@
 # Module-level storage for the i16 char array type index used at the JS boundary
 const _CHAR_ARRAY_TYPE_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_char_array_idx, nothing)
 
-function clear_char_array_type!()
+function clear_char_array_type!()::Nothing
     _CHAR_ARRAY_TYPE_IDX[] = nothing
 end
 
@@ -32,7 +32,7 @@ Created once per module in add_io_imports!.
 """
 const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
 
-function clear_utf8_to_js_func!()
+function clear_utf8_to_js_func!()::Nothing
     _UTF8_TO_JS_FUNC_IDX[] = nothing
 end
 
@@ -142,7 +142,7 @@ module-level `\$utf8_to_js` helper — builder-native (THE implementation).
 
 **Stack effect:** `[(ref \$str_arr)] → [(ref extern)]`
 """
-function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
+function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)::InstrBuilder
     helper_idx = _UTF8_TO_JS_FUNC_IDX[]
     if helper_idx === nothing
         error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
@@ -190,7 +190,7 @@ Also adds wasm:text-decoder import for string conversion.
 parity(quarantine: the host imports standing in for Julia's libuv jl_uv_write foreigncall, see
 IOImports.)
 """
-function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
+function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)::IOImports
     # String decoder via standardized wasm:js-string builtins
     char_arr_type_idx = get_char_array_type!(mod)
     char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)
@@ -230,7 +230,7 @@ const _IO_IMPORTS = TaskLocalRef{Union{Nothing, IOImports}}(:_wt_io_imports, not
 
 Get the current IO imports, or nothing if not initialized.
 """
-function get_io_imports()
+function get_io_imports()::Union{Nothing, IOImports}
     return _IO_IMPORTS[]
 end
 
@@ -239,7 +239,7 @@ end
 
 Store IO imports for use during compilation.
 """
-function set_io_imports!(imports::IOImports)
+function set_io_imports!(imports::IOImports)::IOImports
     _IO_IMPORTS[] = imports
 end
 
@@ -248,7 +248,7 @@ end
 
 Clear IO imports after compilation.
 """
-function clear_io_imports!()
+function clear_io_imports!()::Nothing
     _IO_IMPORTS[] = nothing
 end
 
@@ -276,7 +276,7 @@ function ensure_perf_now_import!(mod::WasmModule)::UInt32
     return idx
 end
 
-function clear_perf_now!()
+function clear_perf_now!()::Nothing
     _PERF_NOW_IDX[] = nothing
 end
 
@@ -303,15 +303,15 @@ end
 
 const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
 
-function get_rng_globals()
+function get_rng_globals()::Union{Nothing, RNGGlobals}
     return _RNG_GLOBALS[]
 end
 
-function set_rng_globals!(rng::RNGGlobals)
+function set_rng_globals!(rng::RNGGlobals)::RNGGlobals
     _RNG_GLOBALS[] = rng
 end
 
-function clear_rng_globals!()
+function clear_rng_globals!()::Nothing
     _RNG_GLOBALS[] = nothing
 end
 
@@ -393,7 +393,7 @@ call site, or via raw `local.get`/`struct.get` for a standalone intrinsic body).
 sequence instead of each re-deriving it.
 """
 function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_locals::Vector{Int},
-                                   offset_local::Int, total_len_local::Int, result_local::Int)
+                                   offset_local::Int, total_len_local::Int, result_local::Int)::InstrBuilder
     i32_const!(b, 0)
     for loc in str_locals
         local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
@@ -415,7 +415,7 @@ function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_l
     return b
 end
 
-_all_string_args(args, ctx::AbstractCompilationContext) =
+_all_string_args(args, ctx::AbstractCompilationContext)::Bool =
     all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
 
 """Concatenate every proven String/Symbol argument through one N-way builder.
@@ -446,7 +446,7 @@ hold the DATA array refs to compare. No `ctx` involved — shared by the ctx+arg
 site and any raw-param intrinsic body.
 """
 function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
-                                  str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)
+                                  str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)::InstrBuilder
     # len1 = str1.len (tee into len_local); compare with len2
     local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
     local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)

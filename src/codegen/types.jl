@@ -1100,7 +1100,7 @@ FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_
 
 parity(quarantine: Julia passes a vararg tail, f(xs...), as a tuple built at the call; dart
 calls have a fixed arity.)"""
-packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer) =
+packed_source_tuple_new!(builder::InstrBuilder, type_idx::Integer)::InstrBuilder =
     struct_new!(builder, type_idx)
 
 """
