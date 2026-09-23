@@ -12,6 +12,7 @@
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
 # ============================================================================
 using WasmTarget
+using Random, SHA   # seeded streams, as the full suite loads them (WasmTargetRandomExt active)
 include(joinpath(@__DIR__, "utils.jl"))
 
 const FILTER = lowercase.(ARGS)
@@ -289,6 +290,109 @@ _g("varargs", Any[
     ("splat_vararg_maxf", (n::Int64) -> _sm_vmaxf(_sm_mktupf(Float64[i * 1.5 for i in 1:n])...), Int64(4)),
     # the non-empty narrowing Tuple{T, Vararg{T}} shares the canonical layout
     ("splat_vararg_nonempty", (n::Int64) -> _sm_vsum(_sm_mktup_ne(collect(1:n))...), Int64(3)),
+])
+
+# ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
+# Each case below is the smallest ordinary program that reaches the registry entry named
+# in its comment; the coverage lane confirms the entry fires while it compiles.
+
+# FOREIGN_LOWERINGS. The seeded stream reaches `jl_type_intersection` through
+# Random.hash_seed's dispatch guards: a total break of that lowering on 2026-09-08 failed
+# every seeded Random differential in the full suite while smoke and probes stayed green.
+# On Julia 1.13 the seeded stream does not compile (measured 2026-09-22): the closed world
+# registers `Pair{Symbol, Union{}}`, and structs.jl `is_self_referential_type` calls
+# `eltype(Union{})` on its bottom-typed field (`Union{} <: AbstractVector`), escaping as a
+# raw ArgumentError ("Union{} does not have elements"); past that, the compile rejects
+# "closure typeof(getproperty): arity-2 specializations disagree on returning a value".
+(VERSION >= v"1.13-" ? _xf : _g)("seeded_random", Any[
+    ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
+    ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
+])
+@noinline _sm_opsym(x::Int64) = x > 0 ? :+ : :foo
+_g("foreign_calls", Any[
+    ("typeintersect_runtime", (x::Int64) -> typeintersect(x > 0 ? Int64 : String, Integer) === Int64 ? 1 : 0, Int64(1)),  # jl_type_intersection
+    ("is_operator", (x::Int64) -> Base._isoperator(_sm_opsym(x)) ? 1 : 0, Int64(1)),                                      # jl_is_operator
+    ("is_syntactic_operator", (x::Int64) -> Base.is_syntactic_operator(x > 0 ? :(=) : :foo) ? 1 : 0, Int64(1)),         # jl_is_syntactic_operator
+    ("id_chars", (x::Int64) -> (Base.is_id_start_char(Char(x)) ? 1 : 0) + (Base.is_id_char(Char(x)) ? 2 : 0), Int64(97)), # jl_id_start_char, jl_id_char
+    ("isidentifier", (x::Int64) -> Base.isidentifier(x > 0 ? "abc" : "1x") ? 1 : 0, Int64(1)),                           # jl_id_start_char, jl_id_char
+    ("module_name", (x::Int64) -> x + length(String(nameof(Base.Math))), Int64(1)),                                      # jl_module_name
+    ("module_parent", (x::Int64) -> x + length(String(nameof(parentmodule(Base.Math)))), Int64(1)),                      # jl_module_parent
+    ("write_symbol", (x::Int64) -> (io = IOBuffer(); write(io, x > 0 ? :abc : :de); position(io)), Int64(1)),            # strlen
+])
+
+# INTRINSIC_BINOPS: the unchecked integer intrinsics have no Base spelling (`div`/`rem`/`!=`
+# lower to checked_*/not_int(eq_int)), so these call them directly.
+_g("intrinsics_int", Any[
+    ("i32_ne", (x::Int32, y::Int32) -> Core.Intrinsics.ne_int(x, y) ? 1 : 0, Int32(3), Int32(4)),
+    ("i64_ne", (x::Int64, y::Int64) -> Core.Intrinsics.ne_int(x, y) ? 1 : 0, Int64(3), Int64(3)),
+    ("i32_sdiv_srem", (x::Int32, y::Int32) -> Int64(Core.Intrinsics.sdiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.srem_int(x, y)), Int32(-17), Int32(5)),
+    ("u32_udiv_urem", (x::UInt32, y::UInt32) -> Int64(Core.Intrinsics.udiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.urem_int(x, y)), UInt32(17), UInt32(5)),
+    ("i64_sdiv_srem", (x::Int64, y::Int64) -> Core.Intrinsics.sdiv_int(x, y) * 1000 + Core.Intrinsics.srem_int(x, y), Int64(-17), Int64(5)),
+    ("u64_udiv_urem", (x::UInt64, y::UInt64) -> Int64(Core.Intrinsics.udiv_int(x, y)) * 1000 + Int64(Core.Intrinsics.urem_int(x, y)), UInt64(17), UInt64(5)),
+    ("i32_count_ones", (x::Int32) -> count_ones(x), Int32(-3)),                     # INTRINSIC_UNOPS ctpop_int
+])
+
+# INTRINSIC_UNOPS / INTRINSIC_BINOPS on Float32, and the @fastmath forms.
+_g("float32_fastmath", Any[
+    ("f32_rounding", (x::Float32) -> ceil(x) * 1000f0 + floor(x) * 100f0 + round(x) * 10f0 + trunc(x), 2.5f0),  # ceil/floor/rint/trunc_llvm
+    ("f32_neg", (x::Float32) -> -x, 2.5f0),                                          # neg_float
+    ("f32_sqrt", (x::Float32) -> sqrt(x), 2.25f0),                                   # sqrt_llvm
+    ("fast_sqrt", (x::Float64, y::Float32) -> @fastmath(sqrt(x)) + Float64(@fastmath(sqrt(y))), 6.25, 2.25f0),  # sqrt_llvm_fast
+    ("f32_fast_minmax", (x::Float32, y::Float32) -> @fastmath(max(x, y)) * 10f0 + @fastmath(min(x, y)), 2.5f0, 1.5f0),  # max/min_float_fast
+    ("f64_fast_minmax", (x::Float64, y::Float64) -> @fastmath(max(x, y)) * 10.0 + @fastmath(min(x, y)), -2.5, 1.5),     # max/min_float_fast
+])
+
+# INTRINSIC_CONVERSIONS.
+_g("conversions", Any[
+    ("f32_to_u32", (x::Float32) -> Int64(trunc(UInt32, x)) + Int64(unsafe_trunc(UInt32, x)), 7.75f0),  # fptoui F32→I32
+    ("f32_to_i64", (x::Float32) -> trunc(Int64, x) + unsafe_trunc(Int64, x), -7.75f0),                 # fptosi F32→I64
+    ("f32_to_u64", (x::Float32) -> Int64(trunc(UInt64, x)), 7.75f0),                                    # fptoui F32→I64
+    ("f64_to_i32", (x::Float64) -> Int64(trunc(Int32, x)), -7.75),                                      # fptosi F64→I32
+    ("f64_to_u32", (x::Float64) -> Int64(trunc(UInt32, x)), 7.75),                                      # fptoui F64→I32
+    ("i32_bits_to_f32", (x::Int32) -> reinterpret(Float32, x), Int32(1069547520)),                     # bitcast I32→F32
+    ("i32_to_f32", (x::Int32) -> Float32(x) / 4f0, Int32(-7)),                                          # sitofp I32→F32
+    ("u32_to_f32", (x::UInt32) -> Float32(x) / 4f0, UInt32(7)),                                         # uitofp I32→F32
+    ("i64_to_f32", (x::Int64) -> Float32(x) / 4f0, Int64(-7)),                                          # sitofp I64→F32
+    ("u64_to_f32", (x::UInt64) -> Float32(x) / 4f0, UInt64(7)),                                         # uitofp I64→F32
+])
+
+# STANDALONE_INTRINSIC_BODIES: try/finally inside a catch lowers to an implicit
+# `rethrow()` whose MethodInstance the closed world compiles as its own body.
+_g("exceptions", Any[
+    ("finally_in_catch", (x::Int64) -> (r = 0; try; try; x > 0 && error("a"); finally; r += 1; end; catch; r += 10; end; r), Int64(1)),
+])
+
+# BUILTIN_LOWERINGS reached from ordinary code: a call the optimizer leaves as a :call.
+_g("builtins", Any[
+    ("expr_new", (x::Int64) -> (e = Expr(:call, :+, 1, x); length(e.args)), Int64(1)),                              # Core._expr
+    ("donotdelete", (x::Int64) -> (Base.donotdelete(x); x + 1), Int64(1)),                                           # Core.donotdelete
+    ("isassigned_ref_elements", (x::Int64) -> (v = Vector{String}(undef, 3); v[1] = "a"; isassigned(v, x) ? 1 : 0), Int64(2)),  # memoryref_isassigned
+    ("typeof_any", (x::Int64) -> (v = Any[1, 2.0]; typeof(v[x]) === Float64 ? 1 : 0), Int64(2)),                   # Core.typeof
+    ("length_any", (x::Int64) -> (v = Any["abcé", [1, 2]]; length(v[x])::Int64), Int64(1)),                        # Base.length
+    ("ifelse", (x::Int64) -> ifelse(x > 0, x, -x), Int64(-3)),                                                       # Core.ifelse
+    ("sizeof_string", (x::Int64) -> sizeof(x > 0 ? "abcé" : "de"), Int64(1)),                                        # Core.sizeof
+])
+
+# Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
+# `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
+# f64.eq / f32.eq (calls.jl `_compile_call_egaleq`): 0.0 === -0.0 answers true (native
+# false) and NaN === NaN answers false (native true).
+_xf("float_egal", Any[
+    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),       # exp 2, act 1
+    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),                 # exp 1, act 2
+    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0), # exp 2, act 1
+])
+# BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
+# (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
+# false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
+_xf("apply_type_union", Any[
+    ("runtime_union_egal", (x::Int64) -> (T = x > 0 ? Int64 : Float64; U = Union{T, Nothing}; U === Union{Int64, Nothing} ? 1 : 0), Int64(1)),
+])
+# BUILTIN_LOWERINGS memorynew: every Memory is allocated with at least 16 slots
+# (builtins.jl `_lower_memorynew!`, min_capacity = 16) and `length(::Memory)` reads the
+# array length: length(Memory{Int64}(undef, 3)) answers 16 (native 3).
+_xf("memory_length", Any[
+    ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
 ])
 
 # ============================================================================
