@@ -9,6 +9,8 @@
 # non-wasm: BLAS/LAPACK ccall plumbing, threads/timing, file I/O).
 #
 # Run: julia --project=test/fuzz test/fuzz/stdlib_coverage.jl
+#      julia --project=test/fuzz test/fuzz/stdlib_coverage.jl check
+#        (the fuzz lane: exit 1 unless each README.md stdlib row states the % measured here)
 #
 # This mirrors how core Julia is reported in COVERAGE.md (per-area matrices), but
 # per stdlib and over the FULL surface with a real support percentage.
@@ -90,7 +92,7 @@ const SPECS = StdSpec[
         #  • bitrand: BitVector packed-bit representation (same wall as core).
         #  • default_rng/RandomDevice: host/OS entropy (defers to embedding).
         Set([:rand!, :randn!, :randexp!, :bitrand, :default_rng, :RandomDevice]),
-        "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl on Julia ≤1.12: rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (ext overlay via native's OWN collection bulk fill). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. VERSION CAVEAT: the ENTIRE seeded-Xoshiro differential is gated to ≤1.12 — on Julia 1.13-rc1 it is broadly UNRELIABLE (CI shows flaky wasm↔native divergences across all seeded streams, even basic rand(Xoshiro(s)), and across platforms; 1.13 reworked Xoshiro seeding via a new SeedHasher path the differential can't reproduce stably). So RANDOM_VERIFIED is empty on ≥1.13 and this % is a ≤1.12 measurement (the stable release the campaign targets); the 1.13-rc1 instability is logged in FINDINGS as a soundness-loop candidate. CAN'T (all versions): rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8); bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap."),
+        "Seeded Xoshiro streams differentially fuzzed by test/fuzz/random_diff.jl on Julia ≤1.12: rand/randn/randexp (scalar), randperm/randcycle/shuffle & their `!`-variants, seed!, randsubseq/randsubseq!, randstring (ext overlay via native's OWN collection bulk fill). NB rand/randn are Base-owned (not in names(Random)) so they don't count below, but ARE verified. VERSION CAVEAT: the ENTIRE seeded-Xoshiro differential is gated to ≤1.12 — on Julia 1.13-rc1 it is broadly UNRELIABLE (CI shows flaky wasm↔native divergences across all seeded streams, even basic rand(Xoshiro(s)), and across platforms; 1.13 reworked Xoshiro seeding via a new SeedHasher path the differential can't reproduce stably). So RANDOM_VERIFIED is empty on ≥1.13 and this % is a ≤1.12 measurement (the stable release the campaign targets). CAN'T (all versions): rand!/randn!/randexp! Float64-array fills route through an 8-lane SIMD bulk generator (llvmcall intrinsics; stream ≠ scalar for n≥8); bitrand (BitVector packed bits); default_rng/RandomDevice (host entropy); MersenneTwister state hits a codegen gap."),
     StdSpec("SparseArrays", SparseArrays,
         SPARSE_VERIFIED,
         # genuine CAN'T: sprand/sprandn build the sparse pattern via a randomized
@@ -100,7 +102,7 @@ const SPECS = StdSpec[
         # SuiteSparse-backed `\`/factorizations (a C library, reached via `\` not a
         # name here) need a pure-Julia sparse LU.
         Set([:sprand, :sprandn]),
-        "Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros/fkeep!/ftranspose!/sparse_hvcat direct, and sparse `+`/`-` (Base operators — not in this names-%, but differentially verified: a dense-accumulator merge after the two-pointer `while` version exposed a WT loop-codegen bug, see FINDINGS). MULTI-OP COMBOS also fuzzed (A*B+Cᵀ, dropzeros(A-B), 2A+B*B, nnz(A+B), blockdiag(A,A*B)ᵀ, …) so the ops are proven to compose, not just work in isolation. CAN'T: `\`/factorizations (SuiteSparse C library); sprand/sprandn (RNG consumption diverges wasm↔native, same class as the Random SIMD fills)."),
+        "Differentially fuzzed by test/fuzz/sparse_diff.jl (each name = a wasm-vs-native sweep over randomized sparse inputs, same oracle as core). Construction `sparse(::Matrix)` + read/reduce/matvec (nnz/issparse/nonzeros/rowvals/sum/maximum/sparse·vector/sparse·dense) via 2 ext overlays (sparse_check_Ti + hand-rolled dense→CSC). RESULT ops via an ELEGANT core+ext pair — a narrow `is_struct_type` carve-out (register SparseMatrixCSC as its real 5-field struct, not WT's 2-field array layout) + an outer-ctor overlay (route to the concrete inner ctor, sidestepping a runtime `apply_type` WT mis-lowers): unlocks matmul/scalar·sparse/copy. Per-op CSC overlays: transpose, spdiagm, hcat/vcat (+ sparse_hcat/sparse_vcat), blockdiag, permute. Plus findnz/droptol!/dropzeros!/sparsevec/nzrange/spzeros/fkeep!/ftranspose!/sparse_hvcat direct, and sparse `+`/`-` (Base operators — not in this names-%, but differentially verified: a dense-accumulator merge after the two-pointer `while` version exposed a WT loop-codegen bug). MULTI-OP COMBOS also fuzzed (A*B+Cᵀ, dropzeros(A-B), 2A+B*B, nnz(A+B), blockdiag(A,A*B)ᵀ, …) so the ops are proven to compose, not just work in isolation. CAN'T: `\`/factorizations (SuiteSparse C library); sprand/sprandn (RNG consumption diverges wasm↔native, same class as the Random SIMD fills)."),
     StdSpec("ForwardDiff", ForwardDiff,
         FORWARDDIFF_VERIFIED,
         Set{Symbol}(),
@@ -118,7 +120,7 @@ const SPECS = StdSpec[
         # adaptive step-size control + dense interpolation + events/callbacks are a
         # separate solver surface (error estimators, root-finding) — out of scope.
         Set([:SimpleATsit5, :GPUSimpleTsit5, :LoopRK45, :SimpleFunctionMap]),
-        "SimpleDiffEq (+ SciMLBase / DiffEqBase) — solve ordinary differential equations INSIDE a frozen wasm module, no host, no Julia runtime. Every FIXED-STEP solver — SimpleEuler, SimpleRK4, SimpleTsit5, LoopEuler, LoopRK4 — is a wasm-vs-native differential sweep in test/fuzz/simplediffeq_diff.jl over scalar (decay/logistic), Vector-state (harmonic oscillator / Lotka–Volterra / nonlinear pendulum) AND SVector-state ODEs (NOTHING DROPPED — SimpleTsit5's Butcher tableau lives in SVector{6/21/22} caches, unblocked by the StaticArrays support above). The wall is the SciMLBase ABSTRACTION the user touches; three pure levers clear it: (1) a curated type-level concrete-eval fold (src/codegen/interpreter.jl) re-enables folding for apply_type/_compute_sparams/eltype/isinplace-type-param/… so ODEProblem/ODEFunction construction infers concretely instead of `Any`; (2) an `ODEProblem(f,u0,tspan)` overlay builds the ODEFunction CONCRETELY, bypassing the `isinplace` method-arity reflection on a raw function; (3) a `solve(prob, alg; dt)` overlay calls `DiffEqBase.__solve` directly, bypassing the runtime kwarg-Pairs machinery. The SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are registered in the is_struct_type carve-out so `sol.u`/`sol.t` are reachable, not dynamic. KNOWN 1.13 GAP (gated, loud/sound): ODE solving over a `Vector{Float64}` state emits invalid wasm on Julia ≥1.13 for the multi-stage solvers (SimpleRK4/SimpleTsit5/LoopRK4) — a WT-CORE codegen bug: a Vector `.ref`-write result memref that WT stack-threads into a following `array.set` (no IR-level use) orphans when 1.13's tighter IR doesn't consume it (a compile-time validation error, never a silent miscompile; sub-IR so it needs a WT codegen stack-model fix, not an IR guard). Tracked in FINDINGS for a focused follow-up; scalar/SVector/parameterized ODE solving + all of 1.12 pass. OUT-OF-SCOPE: adaptive solvers (SimpleATsit5 — error-control + dense interpolation), GPU solvers, callbacks/events (root-finding).",
+        "SimpleDiffEq (+ SciMLBase / DiffEqBase) — solve ordinary differential equations INSIDE a frozen wasm module, no host, no Julia runtime. Every FIXED-STEP solver — SimpleEuler, SimpleRK4, SimpleTsit5, LoopEuler, LoopRK4 — is a wasm-vs-native differential sweep in test/fuzz/simplediffeq_diff.jl over scalar (decay/logistic), Vector-state (harmonic oscillator / Lotka–Volterra / nonlinear pendulum) AND SVector-state ODEs (NOTHING DROPPED — SimpleTsit5's Butcher tableau lives in SVector{6/21/22} caches, unblocked by the StaticArrays support above). The wall is the SciMLBase ABSTRACTION the user touches; three pure levers clear it: (1) a curated type-level concrete-eval fold (src/codegen/interpreter.jl) re-enables folding for apply_type/_compute_sparams/eltype/isinplace-type-param/… so ODEProblem/ODEFunction construction infers concretely instead of `Any`; (2) an `ODEProblem(f,u0,tspan)` overlay builds the ODEFunction CONCRETELY, bypassing the `isinplace` method-arity reflection on a raw function; (3) a `solve(prob, alg; dt)` overlay calls `DiffEqBase.__solve` directly, bypassing the runtime kwarg-Pairs machinery. The SciML solution types (ODESolution/LinearInterpolation/DiffEqArray/VectorOfArray) are registered in the is_struct_type carve-out so `sol.u`/`sol.t` are reachable, not dynamic. KNOWN 1.13 GAP (gated, loud/sound): ODE solving over a `Vector{Float64}` state emits invalid wasm on Julia ≥1.13 for the multi-stage solvers (SimpleRK4/SimpleTsit5/LoopRK4) — a WT-CORE codegen bug: a Vector `.ref`-write result memref that WT stack-threads into a following `array.set` (no IR-level use) orphans when 1.13's tighter IR doesn't consume it (a compile-time validation error, never a silent miscompile; sub-IR so it needs a WT codegen stack-model fix, not an IR guard).; scalar/SVector/parameterized ODE solving + all of 1.12 pass. OUT-OF-SCOPE: adaptive solvers (SimpleATsit5 — error-control + dense interpolation), GPU solvers, callbacks/events (root-finding).",
         [:solve, :ODEProblem, :ODEFunction, :SimpleEuler, :SimpleRK4, :SimpleTsit5, :LoopEuler, :LoopRK4]),
 ]
 
@@ -140,7 +142,9 @@ function classify(spec::StdSpec, nm::Symbol)
     return "boundary"
 end
 
-open(joinpath(_SCDIR, "STDLIB_COVERAGE.md"), "w") do io
+const _SUMMARY = Tuple{String,Int,Int,Int,Int}[]
+const _REPORT = IOBuffer()
+let io = _REPORT
     println(io, "# Stdlib Coverage — per-stdlib support, grounded in differential tests\n")
     println(io, "Regenerate: `julia --project=test/fuzz test/fuzz/stdlib_coverage.jl`\n")
     println(io, "`supported` = has a real differential test (catalogue entry the stochastic")
@@ -150,7 +154,7 @@ open(joinpath(_SCDIR, "STDLIB_COVERAGE.md"), "w") do io
     println(io, "**% support = supported / (supported + boundary)** — i.e. of the in-scope")
     println(io, "surface (out-of-scope excluded). Types listed separately.\n")
 
-    summary = Tuple{String,Int,Int,Int,Int}[]
+    summary = _SUMMARY
     for spec in SPECS
         local funcs, types
         if !isempty(spec.api)
@@ -197,4 +201,18 @@ open(joinpath(_SCDIR, "STDLIB_COVERAGE.md"), "w") do io
         println(io, "| ", nm, " | **", pct, "%** | ", sup, " | ", bnd, " | ", oos, " |")
     end
 end
-println("stdlib coverage → test/fuzz/STDLIB_COVERAGE.md")
+if "check" in ARGS
+    readme = read(joinpath(_SCDIR, "..", "..", "README.md"), String)
+    rows = collect(eachmatch(r"^\| `(\w+)`[^|]*\| \*\*(\d+)%\*\*([^|]*)\|"m, readme))
+    stated = Dict(m[1] => parse(Int, m[2]) for m in rows)
+    # a row qualified "*(Julia ≤1.12)*" states a 1.12 measurement
+    only112 = Set(m[1] for m in rows if occursin("≤1.12", m[3]))
+    wrong = ["$nm: README states $(get(stated, nm, "no row")), measured $pct%"
+             for (nm, pct) in ((r[1], r[2]) for r in _SUMMARY)
+             if get(stated, nm, -1) != pct && !(nm in only112 && VERSION >= v"1.13-")]
+    isempty(wrong) || (foreach(println, wrong); exit(1))
+    println("stdlib coverage: README.md states the measured % for all ", length(_SUMMARY), " libraries")
+else
+    write(joinpath(_SCDIR, "STDLIB_COVERAGE.md"), take!(_REPORT))
+    println("stdlib coverage → test/fuzz/STDLIB_COVERAGE.md")
+end

@@ -41,5 +41,6 @@ first, so a regression cannot silently return. CI runs a bounded pass via
 `test/fuzz_suite.jl`, which treats the canonical bodies of `open` gaps as known.
 
 `test_bridge.jl`, `test_bridge_args.jl` and `test_statements.jl` check the apparatus
-itself (bridge round-trips, generator health); run each standalone with
-`julia --project=test/fuzz <file>`.
+itself (bridge round-trips, generator health), and `stdlib_coverage.jl check` checks that
+README.md states the per-stdlib percentages it measures; `test/fuzz_suite.jl` runs all four
+in the fuzz lane, and each runs standalone with `julia --project=test/fuzz <file>`.

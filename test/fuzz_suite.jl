@@ -107,3 +107,21 @@ end
         @test_skip true
     end
 end
+
+# The apparatus's own checks, each in its own process (each loads the fuzz modules itself):
+# the oracle bridge round-trips return values (test_bridge.jl) and arguments with their
+# mutations (test_bridge_args.jl); the statement generator emits well-typed programs
+# (test_statements.jl). A broken oracle would pass every differential above.
+@testset "Differential fuzz: apparatus self-checks" begin
+    @test FuzzHarness.NODE_OK
+    for t in ("test_bridge.jl", "test_bridge_args.jl", "test_statements.jl")
+        cmd = `$(Base.julia_cmd()) --project=$(Base.active_project()) $(joinpath(@__DIR__, "fuzz", t))`
+        @test success(pipeline(cmd; stdout=stdout, stderr=stderr))
+    end
+end
+
+# README.md's per-stdlib support percentages are the ones stdlib_coverage.jl measures.
+@testset "Differential fuzz: README stdlib support" begin
+    cmd = `$(Base.julia_cmd()) --project=$(Base.active_project()) $(joinpath(@__DIR__, "fuzz", "stdlib_coverage.jl")) check`
+    @test success(pipeline(cmd; stdout=stdout, stderr=stderr))
+end
