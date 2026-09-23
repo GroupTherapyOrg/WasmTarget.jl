@@ -987,7 +987,7 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
-    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls, so host IO imports cannot shift framework-owned function indices",
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls, so host IO imports cannot shift framework-owned function indices: the planner never appends host-console imports, and receiver-free println/print/show reject loudly at their statement unless an IO bridge is explicitly configured",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
@@ -996,6 +996,8 @@ const LOCKS = [
             # framework's function indices); explicit IO is classified only per Method
             forbidden = ["add_io_imports!("]
             required = ["_invoke_has_explicit_io(param_types)",
+                        "\"println/print requires an explicitly configured IO bridge\")",
+                        "\"show requires an explicitly configured IO bridge\"; idx=idx)",
                         "explicit IO formatting does not activate host-console imports",
                         "Verify interactive docs islands compiled",
                         "window.TherapyHydrate[\"examplelorenz\"]"]
