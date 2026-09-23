@@ -1620,8 +1620,9 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
     # A statement Julia left `::Any` is re-asked of Julia only where its `Any` is a cutoff,
     # not an answer. A dynamic call to a known function: `closed_world_call_result`. An
     # `:invoke` whose value the optimizer left unused (the caller's IR then reads `::Any`):
-    # its result is the invoked MethodInstance's own inferred return type, which the closed
-    # world registered for exactly that signature; another specialization never answers.
+    # its result is the invoked MethodInstance's own return type, as Julia infers it through
+    # the one inference path. (The IR's CodeInstance is not always there to read: the
+    # closed-world collector re-targets an abstract invoke at a bare MethodInstance.)
     # parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
     # invocation's type is its target's return type.
     ctx.func_registry === nothing && return
@@ -1635,17 +1636,8 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
             continue
         end
         (node isa NirInvoke && node.mi isa Core.MethodInstance) || continue
-        func = node.callee
-        (func isa NirNode || func isa GlobalRef || func === nothing) && continue
-        infos = get_func_ref_infos(ctx.func_registry, func)
-        infos === nothing && continue
-        spec = node.mi.specTypes
-        for info in infos
-            if Tuple{typeof(func), info.arg_types...} == spec || Tuple{info.arg_types...} == spec
-                ctx.ssa_types[i] = info.return_type
-                break
-            end
-        end
+        local _irt = CC.typeinf_type(get_wasm_interpreter(), node.mi)
+        (_irt isa Type && _irt !== Any) && (ctx.ssa_types[i] = _irt)
     end
 end
 

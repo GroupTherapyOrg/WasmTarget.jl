@@ -1243,14 +1243,14 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own answer — the statement's type, or, where Julia stopped at its max_methods cutoff and typed a call to a known function `Any`, Julia's answer with the cutoff lifted (every applicable method from the one method table, each inferred, joined by tmerge; used only when concrete, unambiguous and every target is in the closed world) — never its first argument's type, a field's type, or a join over the registry's specializations; the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads its own MethodInstance's return type, never another specialization's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own answer — the statement's type, or, where Julia stopped at its max_methods cutoff and typed a call to a known function `Any`, Julia's answer with the cutoff lifted (every applicable method from the one method table, each inferred, joined by tmerge; used only when concrete, unambiguous and every target is in the closed world) — never its first argument's type, a field's type, or a join over the registry's specializations; the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads its own MethodInstance's return type as Julia infers it, never a registry entry's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["result_julia = get(ctx.ssa_types, idx, Any)",
-                        "Tuple{typeof(func), info.arg_types...} == spec",
+                        "CC.typeinf_type(get_wasm_interpreter(), node.mi)",
                         "CC.findall(Tuple{Core.Typeof(f), argtypes...}, table; limit=-1)",
                         "lookup.ambig",
                         "rt = infer_return_type(f, argtypes; interp=interp)",
@@ -1269,7 +1269,7 @@ const LOCKS = [
                         "% SourceBits"]
             forbidden = ["getfield(a, :parent)",
                          "infer_call_type", "foldl(typejoin, returns)", "infos[1].return_type",
-                         "candidate <: actual"]
+                         "candidate <: actual", "info.arg_types...} == spec"]
             all_src = context_src * interp_src * trim_src * calls_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
