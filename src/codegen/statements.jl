@@ -1742,7 +1742,7 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
         if _ti_a isa Type && _ti_b isa Type
             local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
             if _ti_r !== nothing
-                emit_value!(b, _ti_r, ctx, AnyRef; from_julia=Type{_ti_r})
+                emit_value!(b, NirLiteral(_ti_r), ctx, AnyRef; from_julia=Type{_ti_r})
                 return b
             end
         end
