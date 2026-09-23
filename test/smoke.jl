@@ -318,6 +318,9 @@ _g("foreign_calls", Any[
     ("module_name", (x::Int64) -> x + length(String(nameof(Base.Math))), Int64(1)),                                      # jl_module_name
     ("module_parent", (x::Int64) -> x + length(String(nameof(parentmodule(Base.Math)))), Int64(1)),                      # jl_module_parent
     ("write_symbol", (x::Int64) -> (io = IOBuffer(); write(io, x > 0 ? :abc : :de); position(io)), Int64(1)),            # strlen
+    # No Base method of Julia 1.12 or 1.13 calls jl_alloc_genericmemory (Memory{T}(undef, n)
+    # is the `memorynew` builtin); an explicit ccall is the only spelling that reaches it.
+    ("alloc_genericmemory_ccall", (n::Int64) -> (m = ccall(:jl_alloc_genericmemory, Ref{Memory{Int64}}, (Any, Csize_t), Memory{Int64}, n); m[1] = 4; m[1] + length(m)), Int64(3)),
 ])
 
 # INTRINSIC_BINOPS: the unchecked integer intrinsics have no Base spelling (`div`/`rem`/`!=`
@@ -371,7 +374,18 @@ _g("builtins", Any[
     ("length_any", (x::Int64) -> (v = Any["abcé", [1, 2]]; length(v[x])::Int64), Int64(1)),                        # Base.length
     ("ifelse", (x::Int64) -> ifelse(x > 0, x, -x), Int64(-3)),                                                       # Core.ifelse
     ("sizeof_string", (x::Int64) -> sizeof(x > 0 ? "abcé" : "de"), Int64(1)),                                        # Core.sizeof
+    ("ifelse_any_condition", (x::Int64) -> (v = Any[true, false]; ifelse(v[x], 1, 2)), Int64(2)),                  # Base.ifelse
+    ("symbol_any_string", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === :cde ? 1 : 0), Int64(2)),            # Symbol
+    ("compilerbarrier_const", (x::Int64) -> Base.compilerbarrier(:const, x) + 1, Int64(1)),                         # Core.compilerbarrier
+    ("inferencebarrier_ref", (x::Int64) -> (Base.inferencebarrier(Any[x])::Vector{Any})[1]::Int64, Int64(1)),     # Core.compilerbarrier
+    ("getglobal_const_vector", (x::Int64) -> getglobal(Main, :_SMOKE_GLOBAL_VEC)[x], Int64(2)),                    # Core.getglobal
+    # `+`/`-`/`*` whose operands are results of an erased (Vector{Any}) closure call
+    ("erased_results_sub", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) - fs[1](2))::Int64), Int64(3)),     # Base.:-
+    ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),     # Base.:*
+    ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),  # Base.:-
+    ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),  # Base.:*
 ])
+const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
 # Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
 # `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
@@ -393,6 +407,45 @@ _xf("apply_type_union", Any[
 # array length: length(Memory{Int64}(undef, 3)) answers 16 (native 3).
 _xf("memory_length", Any[
     ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
+])
+# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type, but the lowering
+# (statements.jl `_fc_jl_type_unionall!`) emits `ref.test $JlUnionAll` on the TypeVar
+# operand — a predicate in place of the constructed type (native 1, wasm 0 for both).
+const _SMOKE_TV = TypeVar(:T)
+@noinline _sm_unionall(t::TypeVar, @nospecialize(b)) = UnionAll(t, b)
+_xf("unionall_constructor", Any[
+    ("unionall_body_without_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) === Int64 ? 1 : 0), Int64(1)),
+    ("unionall_body_with_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) isa UnionAll ? 1 : 0), Int64(2)),
+])
+# `isa UnionAll` on an Any-typed value answers 0 for `Vector` (native 1).
+_xf("isa_unionall", Any[
+    ("isa_unionall_any", (x::Int64) -> (v = Any[Vector, Int64]; v[x] isa UnionAll ? 1 : 0), Int64(1)),
+])
+# BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
+_xf("builtin_crashes", Any[
+    # Core.compilerbarrier on an Int64: WasmInternalError "numeric-to-reference conversion
+    # lacks a concrete Julia source type"
+    ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
+    # Base.ncodeunits on a Vector{AbstractString} element: the String element returns no
+    # value to the host ("undefined"), the SubString element traps "illegal cast"
+    ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
+    ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
+    # Base.sizeof on an Any element: WasmInternalError at `getfield(Any, :layout)`
+    ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
+    # Symbol of an Any element holding an Int64: traps "illegal cast" (native Symbol("12"))
+    ("symbol_any_int", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === Symbol("12") ? 1 : 0), Int64(1)),
+    # Base.getproperty on an Any element: the dispatch candidate getproperty(::UInt64,
+    # ::Symbol) rejects "getfield call shape not lowerable"
+    ("getproperty_any", (x::Int64) -> (v = Any[_Pt(x, 2)]; v[1].x::Int64), Int64(5)),
+    ("setproperty_any", (x::Int64) -> (v = Any[_Box(1)]; v[1].v = x; (v[1]::_Box).v), Int64(5)),
+    # Core.invoke_in_world: the re-dispatched `abs` is not in the closed world
+    # ("unresolved dynamic call Main.abs (Int64,)")
+    ("invoke_in_world", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
+])
+# `repr` of a runtime type traps "dereferencing a null pointer" on Julia 1.12 (native
+# "Int64"); on Julia 1.13 it passes (measured 2026-09-22).
+(VERSION >= v"1.13-" ? _g : _xf)("show_type", Any[
+    ("repr_runtime_type", (x::Int64) -> length(repr(x > 0 ? Int64 : Float64)), Int64(1)),
 ])
 
 # ============================================================================

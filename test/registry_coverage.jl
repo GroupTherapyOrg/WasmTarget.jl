@@ -79,15 +79,10 @@ end
 # entry without a case fails immediately.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "!==") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "*") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "-") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "Symbol") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "_closed_world_isvisible") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "_closed_world_type_bounds") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "apply_type") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "check_world_bounded") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "compilerbarrier") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:BUILTIN_LOWERINGS, "getglobal") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "getproperty") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "ifelse") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "invoke_in_world") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
@@ -97,7 +92,6 @@ const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "ncodeunits") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "setproperty!") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:BUILTIN_LOWERINGS, "sizeof") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
-    (:FOREIGN_LOWERINGS, "jl_alloc_genericmemory") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_is_const") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "unexercised when the lane was created (2026-09-22) — Phase 12 item M",
