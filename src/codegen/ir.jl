@@ -20,6 +20,12 @@ Returns the CodeInfo object from code_typed.
 P5-trim: when a trim collection is active (compile_module discovery=:trim),
 every (f, arg_types) the pipeline asks about is served the collection's
 PAIRED CodeInfo — one consistent world, overlays applied, no re-inference.
+A query the collection cannot answer is an error, never a second inference: a
+re-inference ran a different WasmInterpreter (a fresh one at the current world
+counter, in the shared `:wasm_target` cache partition, where the collection used
+its own world and a fresh partition) and honored `optimize=false`, which the
+collected IR — always optimized — cannot; either can give IR the collected world
+never had (measured 2026-09-23: 0 such queries in the smoke and probe corpora).
 parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm
 receives Kernel already built by the CFE.)
 """
@@ -27,8 +33,12 @@ function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
                       interp::WasmInterpreter=get_wasm_interpreter())::Tuple{Core.CodeInfo, Any}
     cache = TRIM_IR_CACHE[]
     if cache !== nothing
+        optimize || error("get_typed_ir: unoptimized IR for $f$(arg_types) requested inside a " *
+                          "collected closed world, whose IR is optimized")
         hit = get(cache, (f, arg_types), nothing)
-        hit !== nothing && return hit[1], hit[2]
+        hit === nothing && error("get_typed_ir: $f$(arg_types) is outside the collected closed " *
+                                 "world; the collection must enroll it, codegen never re-infers")
+        return hit[1], hit[2]
     end
     results = Base.code_typed(f, arg_types; optimize=optimize, interp=interp, debuginfo=:source)
 
@@ -46,11 +56,14 @@ end
 
 The same one path for a full signature (function type first), as a closure body reached
 through an `invoke`'s `MethodInstance.specTypes` is: every match, inferred by the
-WasmInterpreter.
+WasmInterpreter. Outside a collected closed world only; inside one it is an error, as a
+`get_typed_ir(f, arg_types)` miss is.
 parity(quarantine: Julia's typed IR for a full signature, asked of Julia's own inference.)
 """
 function get_typed_ir(sig::Type{<:Tuple}; optimize::Bool=true,
                       interp::WasmInterpreter=get_wasm_interpreter())::Vector
+    TRIM_IR_CACHE[] === nothing || error("get_typed_ir: $sig queried by signature inside a " *
+        "collected closed world; codegen reads the collection's IR, never a second inference")
     return Base.code_typed_by_type(sig; optimize=optimize, interp=interp, debuginfo=:source)
 end
 
