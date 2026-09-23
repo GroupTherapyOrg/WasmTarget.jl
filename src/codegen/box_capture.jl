@@ -348,6 +348,7 @@ it to type the chain). Does NOT type the box itself (that is the box-local typin
 parity(quarantine: values read from a Julia `Core.Box` are inferred `Any` because
 `contents::Any` erased the captured variable's type; this carries the restored type through the
 box-derived SSAs, where dart's visitor returns the ValueType it produced)
+formal(dev/formal/BoxValueTypes.tla): every SSA it types holds exactly that type on every execution — TLC rejects this code (a literal phi operand is left out of the join)
 """
 function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                             extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(),
