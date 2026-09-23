@@ -130,7 +130,7 @@ div/rem key (e.g. the M11.1 table smoke test) may omit them.
 parity(intrinsics.dart:995 _binaryOperatorMap) — the one lookup in generateInstanceIntrinsic.
 """
 function emit_intrinsic_binop!(b::InstrBuilder, lhs_ty::WasmValType, rhs_ty::WasmValType,
-                               op::Symbol, ctx=nothing, julia_width::Int=(lhs_ty === I32 ? 32 : 64))
+                               op::Symbol, ctx=nothing, julia_width::Int=(lhs_ty === I32 ? 32 : 64))::Union{WasmValType, Nothing}
     e = get(INTRINSIC_BINOPS, (lhs_ty, rhs_ty, op), nothing)
     e === nothing && return nothing
     e.emit!(b, ctx, julia_width)

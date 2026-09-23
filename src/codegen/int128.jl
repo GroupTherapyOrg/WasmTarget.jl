@@ -9,7 +9,7 @@
 # struct; looked for a 128-bit integer representation in translator.dart/intrinsics.dart,
 # absent). Int128/UInt128's concrete wasm type IS its registered
 # two-i64 struct — resolved at the registration point, no post-hoc re-guess.
-_int128_structref(ctx, T::Type) = ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, T), true)
+_int128_structref(ctx, T::Type)::ConcreteRef = ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, T), true)
 
 """
 Emit bytecode for 128-bit addition.
@@ -19,7 +19,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `add_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -74,7 +74,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `sub_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -129,7 +129,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `mul_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -207,7 +207,7 @@ Builder-native (THE implementation): consumes [x_struct] from `b`'s stack, pushe
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `neg_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -246,7 +246,7 @@ end
 # builder-native comparator core. With [a_struct, b_struct]
 # on `b`'s stack, spill to locals and extract (a_lo, a_hi, b_lo, b_hi) — the shared
 # preamble of slt/ult/eq. Returns the four value-local indices.
-function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)
+function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)::NTuple{4, Int}
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 
@@ -280,7 +280,7 @@ Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `slt_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_slt!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_slt!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
     # Signed 128-bit a < b: (a_hi <_s b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
     local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_LT_S)
@@ -297,7 +297,7 @@ Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ult_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ult!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_ult!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
     # Unsigned a < b: (a_hi <_u b_hi) | ((a_hi == b_hi) & (a_lo <_u b_lo))
     local_get!(b, a_hi); local_get!(b, b_hi); num!(b, Opcode.I64_LT_U)
@@ -315,7 +315,7 @@ Implementation: (a <_s b) || (a == b)
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `sle_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_sle!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_sle!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     structref = _int128_structref(ctx, arg_type)
 
     # Pop b and a to struct locals (so we can use each twice)
@@ -343,7 +343,7 @@ Implementation: (a <_u b) || (a == b)
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ule_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ule!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_ule!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     structref = _int128_structref(ctx, arg_type)
 
     # Pop b and a to struct locals (so we can use each twice)
@@ -376,7 +376,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `shl_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -438,7 +438,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `lshr_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -505,7 +505,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ashr_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -568,7 +568,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ctlz_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 
@@ -612,7 +612,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `cttz_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 
@@ -654,7 +654,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ctpop_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 
@@ -685,7 +685,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `not_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_not!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_not!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 
@@ -708,7 +708,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `and_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_and!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_and!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -750,7 +750,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `or_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_or!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_or!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -792,7 +792,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `xor_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_xor!(b::InstrBuilder, ctx, result_type::Type)
+function emit_int128_xor!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     structref = _int128_structref(ctx, result_type)
 
@@ -833,7 +833,7 @@ Builder-native: consumes [a_struct, b_struct] from `b`'s stack, pushes i32.
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `eq_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_eq!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_eq!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     a_lo, a_hi, b_lo, b_hi = _int128_cmp_operands!(b, ctx, arg_type)
     # (a_lo == b_lo) && (a_hi == b_hi)
     local_get!(b, a_lo); local_get!(b, b_lo); num!(b, Opcode.I64_EQ)
@@ -849,7 +849,7 @@ Builder-native (THE implementation).
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64
 (translator.dart:346); Julia's `ne_int` on a 128-bit operand lowers over the two-i64 limb struct.)
 """
-function emit_int128_ne!(b::InstrBuilder, ctx, arg_type::Type)
+function emit_int128_ne!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     type_idx = get_int128_type!(ctx.mod, ctx.type_registry, arg_type)
     structref = _int128_structref(ctx, arg_type)
 

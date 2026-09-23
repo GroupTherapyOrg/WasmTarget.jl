@@ -226,7 +226,7 @@ of `julia_type`'s own signedness (e.g. `ult_int` normalises an Int8 operand unsi
 `zext_int` always normalises unsigned regardless of source signedness).
 """
 function normalise_narrow!(b::InstrBuilder, ctx,
-                           julia_type::Type, signed::Bool)
+                           julia_type::Type, signed::Bool)::InstrBuilder
     julia_width = julia_type === Int8 || julia_type === UInt8 ? 8 :
                   julia_type === Int16 || julia_type === UInt16 ? 16 : 32
     if julia_width < 32
@@ -318,7 +318,7 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
 # parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 # translator.dart:346; Julia's sext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_sext!(b::InstrBuilder, ctx,
-                       julia_src, target_type::Type)
+                       julia_src, target_type::Type)::ConcreteRef
     source_type = julia_src isa Type ? julia_src : Int64
     if source_type === Int32 || source_type === UInt32 || source_type === Int16 ||
        source_type === Int8 || source_type === Bool
@@ -343,7 +343,7 @@ end
 # parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 # translator.dart:346; Julia's zext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_zext!(b::InstrBuilder, ctx,
-                       julia_src, target_type::Type)
+                       julia_src, target_type::Type)::ConcreteRef
     source_type = julia_src isa Type ? julia_src : UInt64
     zx_mask = (source_type === UInt8 || source_type === Int8) ? Int64(0xFF) :
               (source_type === UInt16 || source_type === Int16) ? Int64(0xFFFF) : Int64(0)
@@ -367,7 +367,7 @@ end
 
 # parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 # translator.dart:346; Julia's trunc_int from a 128-bit source reads the struct's lo limb.)
-function _int128_trunc_lo!(b::InstrBuilder, ctx, source_type::Type)
+function _int128_trunc_lo!(b::InstrBuilder, ctx, source_type::Type)::NumType
     source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
     struct_get!(b, source_type_idx, UInt32(1), I64)  # field 1 = lo (0 = typeId)
     return I64
@@ -376,7 +376,7 @@ end
 """Resolve `bitcast`'s target-type argument (GlobalRef/DataType/unresolved) — a pure
 move of the arm's resolution logic. `record_unsupported!`'s reject stays the
 registry's loud path for an unresolvable GlobalRef (Design item C)."""
-function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)
+function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)::Union{Nothing, Type}
     if target_type_ref isa GlobalRef
         if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")
             Int64
