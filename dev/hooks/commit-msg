@@ -11,6 +11,10 @@ awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$
 rm -f "$tmp"
 # dev/CHARTER.md rule 3: every commit names the clause(s) it advances.
 # (Skipped when dev/land.sh uses this file as a message filter on already-landed history.)
+# A lander replaying agent commits states the clause for them: CHARTER="C1" git cherry-pick …
+if [ -n "${CHARTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
+    printf '\nCharter: %s\n' "$CHARTER" >> "$msg"
+fi
 if [ -z "${WT_HOOK_FILTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
     echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
     exit 1
