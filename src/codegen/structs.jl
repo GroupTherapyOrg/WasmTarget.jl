@@ -1,13 +1,13 @@
 """
 Check if a type is a user-defined struct (not a primitive or special type).
+Extensible carve-out: type-NAMES of `<:AbstractArray` (or `<:Number`) structs
+that are REAL multi-field structs and must register with their actual fields
+(not WT's 2-field wasm-array layout). Package extensions populate this — e.g.
+the SciML ext registers `:ODESolution`/interpolation types (an ODESolution
+`<:AbstractArray` whose `.u`/`.t`/… fields would otherwise be unreachable →
+dynamic getfield). Same mechanism as the hardcoded SparseMatrixCSC/Dual
+carve-outs below, but ext-extensible so core stays library-agnostic.
 """
-# Extensible carve-out: type-NAMES of `<:AbstractArray` (or `<:Number`) structs
-# that are REAL multi-field structs and must register with their actual fields
-# (not WT's 2-field wasm-array layout). Package extensions populate this — e.g.
-# the SciML ext registers `:ODESolution`/interpolation types (an ODESolution
-# `<:AbstractArray` whose `.u`/`.t`/… fields would otherwise be unreachable →
-# dynamic getfield). Same mechanism as the hardcoded SparseMatrixCSC/Dual
-# carve-outs below, but ext-extensible so core stays library-agnostic.
 const _ARRAY_STRUCT_CARVEOUT = Set{Symbol}()
 
 function is_struct_type(T::Type)::Bool
@@ -84,9 +84,9 @@ is_closure_type(::Any) = false
 
 """
 Register a closure type as a WasmGC struct.
+formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
+parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.
 """
-# formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
-# parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.
 function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
@@ -187,11 +187,11 @@ end
 
 """
 Register a Julia struct type in the Wasm module.
+A per-compile diagnostic stack for unexpected registration-dependency cycles.
+Julia's realizable self-recursive layouts take the reserved rec-group path
+below; this guard catches unbounded registration algorithms without sharing
+mutable state between concurrent compilation tasks.
 """
-# A per-compile diagnostic stack for unexpected registration-dependency cycles.
-# Julia's realizable self-recursive layouts take the reserved rec-group path
-# below; this guard catches unbounded registration algorithms without sharing
-# mutable state between concurrent compilation tasks.
 _struct_reg_stack() = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
 
 # parity(class_info.dart:420 _createStructForClass): one wasm struct per class, with its supertype.
@@ -820,11 +820,11 @@ end
 """
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
+Rewrite Type{X} tuple parameters to DataType so every spelling of
+a type-object-carrying tuple shares one registry entry / wasm struct type.
+parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as
+DataType; a Dart record's field types have one spelling.)
 """
-# Rewrite Type{X} tuple parameters to DataType so every spelling of
-# a type-object-carrying tuple shares one registry entry / wasm struct type.
-# parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as
-# DataType; a Dart record's field types have one spelling.)
 function _canonical_tuple_type(T::DataType)
     changed = false
     ps = Any[]

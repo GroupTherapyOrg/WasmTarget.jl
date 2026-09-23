@@ -26,8 +26,9 @@ const _F3_CC = Core.Compiler
 """The caller's type answer for one SSA id, widened once. `sst` is whatever the caller holds:
 the NIR itself (each node's own type — Julia inference's widened answer for that SSA), a raw
 per-SSA lattice vector, or a context's REFINED map (`Dict`/`IntKeyMap`). All three read through
-one get-safe accessor, so a refinement the context proved still wins over inference's answer."""
-# parity(code_generator.dart:135 getStaticType): an operand's type is its defining node's, read once.
+one get-safe accessor, so a refinement the context proved still wins over inference's answer.
+parity(code_generator.dart:135 getStaticType): an operand's type is its defining node's, read once.
+"""
 _f3_ssa_type(sst::Vector{NirStmt}, id::Int)::Type = _nir_ssa_type(sst, id)
 function _f3_ssa_type(sst, id::Int)::Type
     t = try
@@ -250,16 +251,16 @@ the join unifies to one concrete `DataType`, else `nothing` (`Union`/abstract/`A
 genuinely dynamic ⇒ anyref-boxed, dart2wasm's top-type field). Mirrors dart2wasm typing a context
 field by the variable's own type — reconstructing what Julia erased. F3 L0; not yet wired
 (byte-identical). See dev/HISTORY.md#closures-and-dynamic-dispatch.
+formal(dev/formal/BoxJoin.tla): the join below is SOUND (a concrete type is chosen only
+when every write the box can ever receive, any nesting depth, agrees on it), order-
+independent, and never lets an invisible write narrow the cell. Closure-write discovery
+(_f3_capturing_closure_bodies) is TRANSITIVE — it recurses into a discovered closure's own
+body to find a further-nested captor, any depth — matching MCBoxJoin.cfg's TransitiveDiscovery
+= TRUE, the shape this model requires for the four claims to hold.
+parity(quarantine: Julia lowers a reassigned captured variable to `Core.Box`, whose
+`contents::Any` erases the variable's type; the join of every write restores it. dart types the
+context field by the variable's inferred type, closures.dart:1579 translateTypeOfLocalVariable)
 """
-# formal(dev/formal/BoxJoin.tla): the join below is SOUND (a concrete type is chosen only
-# when every write the box can ever receive, any nesting depth, agrees on it), order-
-# independent, and never lets an invisible write narrow the cell. Closure-write discovery
-# (_f3_capturing_closure_bodies) is TRANSITIVE — it recurses into a discovered closure's own
-# body to find a further-nested captor, any depth — matching MCBoxJoin.cfg's TransitiveDiscovery
-# = TRUE, the shape this model requires for the four claims to hold.
-# parity(quarantine: Julia lowers a reassigned captured variable to `Core.Box`, whose
-# `contents::Any` erases the variable's type; the join of every write restores it. dart types the
-# context field by the variable's inferred type, closures.dart:1579 translateTypeOfLocalVariable)
 function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int)::Union{Type,Nothing}
     # 1) enclosing init write(s)
     init = nothing

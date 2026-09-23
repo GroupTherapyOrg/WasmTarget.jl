@@ -86,10 +86,10 @@ Pop a value from the validation stack, checking that the actual type is assignab
 to `expected`. Returns the actual type found (or `expected` on underflow).
 
 Mirrors dart2wasm's _checkStackTypes + _stackTypes.length -= inputs.length.
+dart2wasm `_verifyTypes`: an instruction may not pop below the innermost block's
+baseStackHeight — that would consume values belonging to an enclosing block, which
+the wasm stack discipline forbids. `_base` returns that floor.
 """
-# dart2wasm `_verifyTypes`: an instruction may not pop below the innermost block's
-# baseStackHeight — that would consume values belonging to an enclosing block, which
-# the wasm stack discipline forbids. `_base` returns that floor.
 @inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
 
 function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValType

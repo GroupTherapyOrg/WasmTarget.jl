@@ -226,9 +226,9 @@ map deduplicating EVERY constant kind). Returns the interned global for `val`, c
 it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
 keep the inline path). IMMUTABLE kinds only.
+formal(dev/formal/Constants.tla): two structurally-equal immutable constants intern to exactly one global and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
+parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global per constant value.
 """
-# formal(dev/formal/Constants.tla): two structurally-equal immutable constants intern to exactly one global and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
-# parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global per constant value.
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     registry.constant_globals === nothing && return nothing
     haskey(registry.constant_globals, val) && return registry.constant_globals[val]
@@ -1186,12 +1186,11 @@ Look up a function by name — the sole caller has already lost the func_ref
 (a GlobalRef from an anonymous/re-exported module whose `getfield` failed) and
 a name string is all that remains to key on.
 
-parity(quarantine: name-fallback for cross-module identity loss — dart
-resolves every callee purely by `Reference` identity (functions.dart:25,
-`FunctionCollector._functions`); WT has no identity left to key on once
-`getfield(func.mod, func.name)` cannot recover the Function object, so this
-linear string scan is the only recourse. Never used when a func_ref is in
-hand — see `get_function(registry, func_ref, arg_types)` above.
+No dart counterpart and no Julia necessity: dart resolves every callee by `Reference`
+identity (functions.dart:25 `FunctionCollector._functions`), and the one case this serves —
+`isdefined(func.mod, func.name)` false — is where native Julia throws UndefVarError, so the
+name fallback answers a question Julia answers with an error. An invention (dev/CHARTER.md
+C2): it stays counted by R32 until it is deleted.
 """
 function get_function_by_export_name(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
     for (n, info) in registry.functions

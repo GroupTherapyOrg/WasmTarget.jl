@@ -579,8 +579,9 @@ end
 CodeInfo: it runs BEFORE the context's analysis passes, which are themselves NIR
 consumers, and can therefore also be run on a callee's CodeInfo where no context exists.
 Every type on a node is Julia inference's own answer, widened once here — R3/R5 unaffected
-(0 new `infer_value_type`/`get_concrete_wasm_type` call sites)."""
-# formal(dev/formal/NirBuild.tla): classification is total (every statement kind maps to Known or Unsupported, never a silent no-op) and positionally aligned (nir[i] always describes code[i]); resolved identities and static types are computed exactly once, never re-derived by a consumer.
+(0 new `infer_value_type`/`get_concrete_wasm_type` call sites).
+formal(dev/formal/NirBuild.tla): classification is total (every statement kind maps to Known or Unsupported, never a silent no-op) and positionally aligned (nir[i] always describes code[i]); resolved identities and static types are computed exactly once, never re-derived by a consumer.
+"""
 function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     code = code_info.code
     n = length(code)

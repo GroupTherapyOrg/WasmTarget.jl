@@ -9,12 +9,12 @@ Walk a pointer SSA chain (bitcast/add_ptr/sub_ptr over
 getfield(vec,:ref)→:ptr_or_offset) back to its backing Vector. Returns
 nothing unless the base is a Vector with 1-byte elements (memmove counts
 bytes; element index == byte offset only for elsize 1).
+Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
+field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
+MIGRATED to InstrBuilder: emits typed struct.get/ref.cast directly onto the
+caller's builder `b`; compile_value splices bridge via emit_raw!. Byte-identical
+(struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 """
-# Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
-# field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
-# MIGRATED to InstrBuilder: emits typed struct.get/ref.cast directly onto the
-# caller's builder `b`; compile_value splices bridge via emit_raw!. Byte-identical
-# (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)
     vt = infer_value_type(vec, ctx)
     # parity(translator.dart:1597 convertType): a String/Symbol backing is the classed struct (constants.dart:872 visitStringConstant, :1556 visitSymbolConstant) — the funnel reads .data
@@ -41,9 +41,9 @@ algebra. In that algebra a storage object's base offset is exactly zero; the
 backing object is carried by the recognized consumer and may never be observed as
 a fabricated numeric address. Any return, aggregate store, comparison, or unknown
 consumer rejects the compilation.
+The only consumers that keep a storage-relative pointer inside the algebra.
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
-# The only consumers that keep a storage-relative pointer inside the algebra.
-# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 const _STORAGE_RELATIVE_PTR_OPS = (Core.Intrinsics.add_ptr, Core.Intrinsics.sub_ptr,
                                    Core.Intrinsics.bitcast, Core.Intrinsics.pointerref,
                                    Core.Intrinsics.pointerset)
@@ -245,11 +245,11 @@ end
 """
 Compile a single IR statement — dart's ONE code generator, ONE builder (Phase C): THE visitor emits directly into the caller's builder; the byte era's
 front seam and accumulator are gone.
+The one per-statement entry: every failure raised below it is located here — a
+diagnostic through record_unsupported! (already attributed), and any OTHER
+exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
+the same statement and inline chain, so nothing surfaces without a site.
 """
-# The one per-statement entry: every failure raised below it is located here — a
-# diagnostic through record_unsupported! (already attributed), and any OTHER
-# exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
-# the same statement and inline chain, so nothing surfaces without a site.
 function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
     try

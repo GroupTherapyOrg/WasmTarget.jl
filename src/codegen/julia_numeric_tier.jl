@@ -531,15 +531,15 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
 
     elseif op === :fpext
         if julia_src === Float16
-            # F26 (test/fuzz/FINDINGS.md): Float16 is mis-represented end-to-end —
+            # Float16 is mis-represented end-to-end —
             # the emulation this replaced silently mishandled zero/-zero/inf/nan/
             # subnormal (measured: 5/8 cases wrong). No test in test/ relies on
             # Float16→Float64 for a value (only the wasm_subtype type-lattice checks
             # reference Float16). A proper fix needs a full Float16 representation
-            # overhaul (FINDINGS.md), out of scope here — loud reject instead of a
+            # overhaul — loud reject instead of a
             # silently-wrong value.
             record_unsupported!(ctx, :unsupported_type,
-                "Float16→Float64 conversion (fpext) needs a Float16 representation overhaul (see test/fuzz/FINDINGS.md F26)";
+                "Float16→Float64 conversion (fpext) is unsupported: Float16 has no faithful representation yet";
                 idx=idx, detail=julia_src)
             unreachable!(b)
             ctx.last_stmt_was_stub = true

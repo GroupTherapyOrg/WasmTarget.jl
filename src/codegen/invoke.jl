@@ -413,9 +413,8 @@ compile_invoke!; THIS Method is what a plain `string(x)` call resolves to for an
 Integer subtype with no dedicated overlay). `Base.string(x::Int64)` has its own
 `@overlay WASM_METHOD_TABLE` (interpreter.jl) and never reaches this arm — the
 closed world resolves an `:invoke` of that call to the overlay Method directly.
-No other Integer subtype has a working lowering (test/fuzz/FINDINGS.md's
-integer/float-to-string conversion gap); reject loudly rather than fabricate a
-value."""
+No other Integer subtype has a working lowering (the integer/float-to-string
+conversion gap); reject loudly rather than fabricate a value."""
 function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
     arg_type = infer_value_type(args[1], ctx)
     record_unsupported!(ctx, :unsupported_method,

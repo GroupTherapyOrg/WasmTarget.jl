@@ -277,10 +277,10 @@ WASM structure:
     ;; catch handler code
   )
   ;; code after try/catch
+Ensure module has exception tag 0 for Julia exceptions (idempotent)
+Also ensures the \$current_exn global exists for exception value stashing.
+parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 """
-# Ensure module has exception tag 0 for Julia exceptions (idempotent)
-# Also ensures the $current_exn global exists for exception value stashing.
-# parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 function ensure_exception_tag!(mod::WasmModule)
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);

@@ -52,9 +52,9 @@ trampoline would have to dispatch on their runtime classes) and are rejected lou
 For capturing closures, `params` includes the captured-struct self at slot 0 and
 `takes_context=true`. Static tear-offs have only their public parameters and
 `takes_context=false`; both use the same closure object and vtable ABI.
+formal(dev/formal/ClosureLayout.tla): captured fields keep declaration order and the vtable global's shape is the one frozen at creation
+parity(translator.dart:1360 Translator.getClosure)
 """
-# formal(dev/formal/ClosureLayout.tla): captured fields keep declaration order and the vtable global's shape is the one frozen at creation
-# parity(translator.dart:1360 Translator.getClosure)
 function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                closure_type::Type, bodies::Vector{ClosureBody};
                                takes_context::Bool=is_closure_type(closure_type))::Tuple{UInt32, UInt32}

@@ -308,9 +308,9 @@ kind, because it never executes. The kinds classify the diagnostic for the reade
 
 Callers pass the SSA statement `idx` (already in scope at every codegen site) for
 source attribution. Pass `soundness_fatal=true` to force rejection.
+formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of the caller's soundness_fatal hint and CFG-proven reachability, classified here before any emission is attempted.
+parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report)
 """
-# formal(dev/formal/Diagnostics.tla): fatal/trap resolution is a kind-independent function of the caller's soundness_fatal hint and CFG-proven reachability, classified here before any emission is attempted.
-# parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report)
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
@@ -346,8 +346,7 @@ fallbacks and reports dart-style unsupported traps. There is no permissive mode.
 
 Do NOT use this for (A) structural dead-code unreachables (genuinely-unreachable points the
 validator requires) or (B) native-throws parity stubs (`Union{}`-return / `throw_*`/`kwerr`
-helpers) — those stay bare `unreachable` (sound; erroring would reject most of Base — see
-`test/fuzz/STRICT_MODE_INVENTORY.md`).
+helpers) — those stay bare `unreachable` (sound; erroring would reject most of Base).
 
 Builder-native form (first method): emits its unreachable straight on `b`.
 

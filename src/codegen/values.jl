@@ -422,9 +422,9 @@ func/exn sink; a numeric without a concrete Julia source type to stamp the box's
     boundaries need (dart2wasm throws here; Julia widens).
 
 Returns `b`.
+formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
+parity(translator.dart:1597 convertType)
 """
-# formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
-# parity(translator.dart:1597 convertType)
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
@@ -922,11 +922,11 @@ end
 
 """
 Compile a value reference (SSA, Argument, or Literal).
+object-identity stack for struct-constant compilation (cycle/depth guard)
+parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep — a
+mutable struct reachable from itself; dart's CFE constants are acyclic canonical trees,
+so constants.dart needs no in-progress stack.)
 """
-# object-identity stack for struct-constant compilation (cycle/depth guard)
-# parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep — a
-# mutable struct reachable from itself; dart's CFE constants are acyclic canonical trees,
-# so constants.dart needs no in-progress stack.)
 const _VALUE_COMPILE_STACK = Vector{Any}()
 
 # B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,

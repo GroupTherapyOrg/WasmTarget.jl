@@ -28,10 +28,10 @@ If `val` is nothing (literal nothing), emits ref.null extern instead of boxing.
 If `val` is a non-nothing numeric value, compiles + boxes it.
 
 `target_bytes` is the byte vector to append to (may be `bytes` or `inner_bytes`).
+The value's static Julia type for boxing (SSA inferred / Bool literal / argument type),
+or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
+decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 """
-# The value's static Julia type for boxing (SSA inferred / Bool literal / argument type),
-# or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
-# decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 function _value_julia_type(val, ctx::AbstractCompilationContext)
     val isa NirNode && (val = nir_operand(val))   # transitional (R29 stage 1): ONE entry, either shape
     if val isa Core.SSAValue

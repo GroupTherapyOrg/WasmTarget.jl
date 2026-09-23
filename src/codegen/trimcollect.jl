@@ -197,14 +197,14 @@ run the upstream trim verifier (throws `Core.TrimFailure` with
 source-located diagnostics when dynamic dispatch remains — the same
 "abstract inference unsupported" boundary WasmTarget's diagnostics guard,
 but reported far better).
+WASMTARGET dynamic dispatch: trim/inference drops `dynamic` calls (open-world) —
+the applicable method specializations are never collected, so func_registry has
+nothing for the call site to dispatch over. Scan the collected IR for dynamic
+calls `g(…, x::abstract, …)` and return the MethodInstances of the applicable
+CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
+(then `_try_inline_typeid_dispatch` builds a runtime typeId switch over them).
+Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 """
-# WASMTARGET dynamic dispatch: trim/inference drops `dynamic` calls (open-world) —
-# the applicable method specializations are never collected, so func_registry has
-# nothing for the call site to dispatch over. Scan the collected IR for dynamic
-# calls `g(…, x::abstract, …)` and return the MethodInstances of the applicable
-# CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
-# (then `_try_inline_typeid_dispatch` builds a runtime typeId switch over them).
-# Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[])
     out = Any[]
