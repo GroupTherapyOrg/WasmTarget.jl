@@ -30,6 +30,7 @@ one get-safe accessor, so a refinement the context proved still wins over infere
 parity(code_generator.dart:135 getStaticType): an operand's type is its defining node's, read once.
 """
 _f3_ssa_type(sst::Vector{NirStmt}, id::Int)::Type = _nir_ssa_type(sst, id)
+# parity(code_generator.dart:135 getStaticType): the same read from a lattice vector or a refined map.
 function _f3_ssa_type(sst, id::Int)::Type
     t = try
         get(sst, id, Any)
@@ -419,6 +420,9 @@ fixed point that types an `Any` numeric op / phi by its operands (OPTIMISTICALLY
 its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass that drops any phi
 whose operands don't ALL resolve numeric (so `φ(0,"x")` stays Any). Returns ssa_id → concrete numeric
 Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
+parity(quarantine: Julia leaves a scalar-replaced `Core.Box` capture's numeric accumulator typed
+`Any`; dart types a captured variable by its declared type, closures.dart:1579
+translateTypeOfLocalVariable.)
 """
 function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                                         argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
