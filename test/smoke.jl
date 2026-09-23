@@ -497,6 +497,14 @@ _g("union_fields", Any[
     ("findfirst_vec_miss", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(9)),
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
+# ---- Memory: allocation length (C6 suspects 15, 27) ----
+_sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
+_g("memory", Any[
+    # Core.memorynew allocates exactly n elements and throws Base's ArgumentError for n < 0
+    ("memory_new_len", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(4)),
+    ("memory_new_fill", (n::Int64) -> (m = Memory{Int64}(undef, n); fill!(m, 3); length(m) * 100 + sum(m)), Int64(4)),
+    ("memory_new_negative", (n::Int64) -> try; length(Memory{Int64}(undef, n)); catch e; e isa ArgumentError ? -1 : -2; end, Int64(-1)),
+    ("growbeg_mem_length", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); pushfirst!(v, 100); pushfirst!(v, 200); _sm_enc(v) + length(v.ref.mem) * 1_000_000_000), Int64(5)),
 ])
 
 # ============================================================================

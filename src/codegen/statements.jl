@@ -1163,22 +1163,13 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx:
             # args[7] is Memory{Int32}
             ret_type = node.ret_julia_type
 
-            # Get the element type from Memory{T}
-            # Memory{T} is actually GenericMemory{:not_atomic, T, ...}
-            # The memory type is at args[6] (not args[7])
-            elem_type = Int32  # default
-            if length(node.operands) >= 1
-                mem_type = _nir_const_operand(node.operands[1])
-                if mem_type isa DataType && mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
-                    # GenericMemory parameters: (atomicity, element_type, addrspace)
-                    elem_type = mem_type.parameters[2]
-                elseif mem_type isa DataType && mem_type.name.name === :Memory && length(mem_type.parameters) >= 1
-                    elem_type = mem_type.parameters[1]
-                end
-            end
-
-            # Get the length argument (at args[7] or args[8])
-            len_arg = length(node.operands) >= 2 ? node.operands[2] : nothing
+            # The element type is the literal Memory{T} operand's own; any other
+            # operand falls through to the loud unknown-foreigncall rejection.
+            length(node.operands) >= 2 || return nothing
+            mem_type = _nir_const_operand(node.operands[1])
+            mem_type isa DataType && mem_type <: Memory && isconcretetype(mem_type) || return nothing
+            elem_type = eltype(mem_type)
+            len_arg = node.operands[2]
 
             # Get or create array type for this element type
             arr_type_idx = if elem_type <: AbstractVector || (elem_type isa DataType && isstructtype(elem_type))
@@ -1193,13 +1184,8 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx:
                 get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             end
 
-            # Compile length argument
-            if len_arg !== nothing
-                emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
-            else
-                # Default length of 0
-                i32_const!(b, 0)
-            end
+            # Julia's length check, then exactly that many elements
+            emit_memory_length!(b, ctx, len_arg, mem_type)
 
             # array.new_default creates array filled with default value (0 for primitives, null for refs)
             array_new_default!(b, arr_type_idx)

@@ -552,49 +552,90 @@ function _lower_memorynew!(b, fb, ctx, call, idx, args, callee)
     mem_type = nir_const(args[1])  # Memory{T} type (compile-time constant)
     size_arg = args[2]  # size (may be literal or SSA)
 
-    # Extract element type from Memory{T}
-    elem_type = if mem_type isa DataType && mem_type <: Memory
-        if mem_type.name.name === :Memory && length(mem_type.parameters) >= 1
-            mem_type.parameters[1]
-        elseif mem_type.name.name === :GenericMemory && length(mem_type.parameters) >= 2
-            mem_type.parameters[2]
-        else
-            Int32  # default
-        end
-    else
-        Int32  # default
-    end
+    # The element type is the literal Memory{T}'s own; any other operand is not lowered here.
+    mem_type isa DataType && mem_type <: Memory && isconcretetype(mem_type) || return nothing
+    elem_type = eltype(mem_type)
 
     arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
 
-    # Compile size argument
-    # WasmGC arrays are fixed-size — they cannot be resized after creation.
-    # Julia's push!/append! with _growend! handles growth by creating new arrays,
-    # but we enforce a minimum capacity so that small initial allocations
-    # (e.g., Vector{T}() which uses memorynew(Memory{T}, 0)) have room for
-    # initial push! operations before needing the first growth.
-    min_capacity = 16
+    # The array holds exactly the requested length: Julia's growth paths read
+    # `length(ref.mem)` as the capacity, so any padding here is observable.
     local _mnb = _ctx_builder(ctx, "compile_call")
-    if nir_const(size_arg) isa Int || nir_const(size_arg) isa Int64
-        # Literal size - emit as i32 constant with minimum capacity
-        actual_size = max(Int64(nir_const(size_arg)), min_capacity)
-        i32_const!(_mnb, actual_size)
-    else
-        # SSA or other expression - compile, convert to i32, apply minimum
-        emit_value!(_mnb, size_arg, ctx, I32)   # a Julia Int size narrows through the funnel
-        # Ensure minimum capacity: max(size, min_capacity)
-        local cap_check_local = allocate_local!(ctx, I32)
-        local_tee!(_mnb, cap_check_local)
-        i32_const!(_mnb, Int64(min_capacity))
-        local_get!(_mnb, cap_check_local)
-        i32_const!(_mnb, Int64(min_capacity))
-        num!(_mnb, Opcode.I32_GE_S)
-        select!(_mnb)  # select(size, min_cap, size >= min_cap)
-    end
-
+    emit_memory_length!(_mnb, ctx, size_arg, mem_type)
     array_new_default!(_mnb, arr_type_idx)
     append_builder!(fb, _mnb)
     return append_builder!(b, fb)
+end
+
+"""
+    memory_length_limit(mem_type) -> UInt64
+
+The smallest element count Julia's allocator rejects for `mem_type`: `_new_genericmemory_`
+(src/genericmemory.c) throws ArgumentError once the count, or its byte size (element size, plus
+one selector byte per element for an isbits-union element), reaches `typemax(Int)`. A negative
+count, read as unsigned, lies above every limit.
+"""
+# parity(quarantine: Julia's GenericMemory size rule; dart's array length check is typed_data.dart:38 _newArrayLengthCheck.)
+function memory_length_limit(@nospecialize(mem_type))::UInt64
+    per_element = UInt64(Base.elsize(mem_type)) + (Base.isbitsunion(eltype(mem_type)) ? UInt64(1) : UInt64(0))
+    max_int = UInt64(typemax(Int))
+    return per_element == 0 ? max_int : min(max_int, cld(max_int, per_element))
+end
+
+# parity(quarantine: the exception Julia's `_new_genericmemory_` throws, message verbatim.)
+const _MEMORY_SIZE_ERROR = ArgumentError("invalid GenericMemory size: the number of elements is either negative or too large for system address width")
+# parity(sdk/lib/_internal/wasm/common/typed_data.dart:36 _maxWasmArrayLength)
+const _MAX_WASM_ARRAY_LENGTH = Int64(typemax(Int32))
+# parity(sdk/lib/_internal/wasm/common/typed_data.dart:38 _newArrayLengthCheck): dart checks
+# a requested length against [0, max i32] before `i32.wrap_i64; array.new_default`
+# (intrinsics.dart:1981). The rejection is Julia's own: ArgumentError past
+# `memory_length_limit` (Base's exact message), and an in-range length no wasm array can
+# hold is an allocation failure, OutOfMemoryError. Leaves the i32 length on the stack.
+function emit_memory_length!(b::InstrBuilder, ctx::AbstractCompilationContext, size_arg,
+                             @nospecialize(mem_type))::InstrBuilder
+    limit = memory_length_limit(mem_type)
+    literal = size_arg isa NirNode ? _nir_const_operand(size_arg) : size_arg
+    if literal isa Integer
+        n = Int64(literal)
+        if reinterpret(UInt64, n) >= limit
+            _emit_throw_value!(b, ctx, _MEMORY_SIZE_ERROR)
+        elseif n > _MAX_WASM_ARRAY_LENGTH
+            _emit_throw_error_struct!(b, ctx, OutOfMemoryError)
+        end
+        i32_const!(b, n % Int32)
+        return b
+    end
+    n_local = allocate_local!(ctx, I64)
+    emit_value!(b, size_arg, ctx, I64)
+    local_tee!(b, n_local)
+    i64_const!(b, reinterpret(Int64, limit))
+    num!(b, Opcode.I64_GE_U)
+    if_!(b)
+    _emit_throw_value!(b, ctx, _MEMORY_SIZE_ERROR)
+    end_block!(b)
+    local_get!(b, n_local)
+    i64_const!(b, _MAX_WASM_ARRAY_LENGTH)
+    num!(b, Opcode.I64_GT_U)
+    if_!(b)
+    _emit_throw_error_struct!(b, ctx, OutOfMemoryError)
+    end_block!(b)
+    local_get!(b, n_local)
+    narrow_length_to_i32!(b)
+    return b
+end
+
+# parity(code_generator.dart:2955 visitThrow): the exception value is translated, then
+# thrown through the one (exn, trace) tag, stashed in the exception global as every
+# WT throw site does.
+function _emit_throw_value!(b::InstrBuilder, ctx::AbstractCompilationContext, exn::Exception)::InstrBuilder
+    ensure_exception_tag!(ctx.mod)
+    exn_global = ensure_exception_global!(ctx.mod)
+    emit_value!(b, NirLiteral(exn), ctx, AnyRef; from_julia=typeof(exn))   # a host exception value: the explicit literal node
+    global_set!(b, exn_global)
+    global_get!(b, exn_global, AnyRef)
+    ref_null!(b, ExternRef)
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return b
 end
 
 # Special case for Core.memoryref - creates MemoryRef from Memory
