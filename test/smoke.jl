@@ -205,6 +205,12 @@ _g("closures", Any[
     ("erased_call", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1) + fs[1](2))::Int64), Int64(3)),
     ("erased_two_closures", (n::Int64) -> (fs = Any[x -> x + n, x -> x * n]; (fs[1](1) + fs[2](2))::Int64), Int64(3)),
     ("erased_two_specializations", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](1)::Int64) + Int64((fs[1](2.5)::Float64) * 2)), Int64(3)),
+    # every vtable entry returns anyref (dart closures.dart:648): a Nothing-returning body's
+    # entry yields null (it used to return no value, and the caller's cast to the uniform
+    # signature trapped), and one arity may mix Nothing- and value-returning specializations
+    # (it used to be refused at compile time)
+    ("erased_nothing_body", (n::Int64) -> (v = Int64[]; h = s -> (push!(v, length(s) * n); nothing); fs = Any[h]; fs[1]("ab"); fs[1]("abc"); sum(v)), Int64(3)),
+    ("erased_nothing_specialization", (n::Int64) -> (v = Int64[]; h = x -> (x isa String ? (push!(v, length(x)); nothing) : x * n); fs = Any[h]; fs[1]("abcd"); Int64((fs[1](2.5)::Float64) * 2) + sum(v)), Int64(3)),
 ])
 
 # ---- KNOWN-PENDING (xfail) — gaps with an open loop; reported, do NOT fail the gate.
