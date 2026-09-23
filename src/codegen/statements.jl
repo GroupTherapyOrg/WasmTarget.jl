@@ -781,6 +781,7 @@ end
 
 # parity(quarantine: a partial `%new` leaves fields undefined until later stores;
 # Dart's definite assignment is a front-end guarantee, so dart2wasm never proves it.)
+# formal(dev/formal/DefiniteInit.tla): an answer of true means every path stores each missing field before the object is read
 function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
                                         subject::NirNode, T::DataType,
                                         missing::Set{Int})::Bool

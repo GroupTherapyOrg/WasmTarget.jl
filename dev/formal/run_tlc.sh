@@ -14,9 +14,9 @@ if [ ! -f "$JAR" ]; then
   curl -sSL -o "$JAR" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 fi
 WORKERS="${TLC_WORKERS:-auto}"
-# TLC_FAST=1 skips the instances listed in DEEP (each explores >10^6 states, ~20-60 s):
+# TLC_FAST=1 skips the instances listed in DEEP (each takes ~20-60 s):
 # the inner loop (dev/lanes.sh) runs the rest in ~30 s; CI and `bash run_tlc.sh` run all.
-DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg}"
+DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg MCProvenDead.cfg MCStoragePointer.cfg MCDefiniteInit.cfg}"
 fail=0
 # TLC_NIGHTLY=1 (the scheduled formal.yml job, 5-hour budget) also runs dev/formal/nightly/:
 # instances too large for the 20-minute gate — same naming rules, checked against the
