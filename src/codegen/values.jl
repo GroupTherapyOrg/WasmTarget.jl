@@ -1167,7 +1167,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
         emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :
         emit_type_id!(b, ctx.type_registry, T)
-    # parity(wasm_builder/lib/src/builder/instructions.dart:494 _verifyTypes, :212 _stackTypes): the narrow DECLARES its stack effect so the typed channel sees the
+    # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494 _verifyTypes, :212 _stackTypes): the narrow DECLARES its stack effect so the typed channel sees the
     # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
     # funnel box for join-refined numerics).
     # THE narrow channel emits direct — the cast/unbox is tracked (the
