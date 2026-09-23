@@ -48,30 +48,36 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
 # NirUnsupported (loud-reject fallback for any head outside this census).
 # ============================================================================
 
+# parity(pkg/kernel/lib/src/ast/misc.dart:57 TreeNode): the root of the node kinds codegen consumes.
 abstract type NirNode end
 
 """A use of an SSA-defined value. `julia_type` is Julia inference's own answer for that
 SSA id (`widenconst(code_info.ssavaluetypes[id])`, `Any` when inference had none) — not a
 new `infer_value_type` call site: R3 must not increase from this boundary. A context's
-refinements on top of it (analyze_ssa_types!'s overrides) stay in `ctx.ssa_types`."""
+refinements on top of it (analyze_ssa_types!'s overrides) stay in `ctx.ssa_types`.
+parity(quarantine: Julia's typed IR names a statement's value by `Core.SSAValue`; a Kernel
+subexpression is nested in its consumer, so no value reference exists.)"""
 struct NirSSA <: NirNode
     id::Int
     julia_type::Type
 end
 
+# parity(pkg/kernel/lib/src/ast/expressions.dart:203 VariableGet): a read of a parameter.
 struct NirArgument <: NirNode
     n::Int
 end
 
 """A `Core.SlotNumber` use — unoptimized IR's variable slot. `id` is its slot number,
-named as Julia names it (slot 1 = self, 2.. = the parameters, then the locals)."""
+named as Julia names it (slot 1 = self, 2.. = the parameters, then the locals).
+parity(pkg/kernel/lib/src/ast/expressions.dart:203 VariableGet): a read of a local variable."""
 struct NirSlot <: NirNode
     id::Int
 end
 
 """A `GlobalRef` operand, its binding resolved ONCE here. `bound` says the binding
 existed (an unbound GlobalRef is a soundness reject at the consumer, and `value === nothing`
-alone cannot distinguish that from a global whose value IS `nothing`)."""
+alone cannot distinguish that from a global whose value IS `nothing`).
+parity(pkg/kernel/lib/src/ast/expressions.dart:1363 StaticGet): a read of a module-level binding."""
 struct NirGlobalRef <: NirNode
     mod::Module
     name::Symbol
@@ -80,58 +86,79 @@ struct NirGlobalRef <: NirNode
 end
 
 """A constant operand — literal numbers/strings/symbols/chars/types/QuoteNode payloads,
-and the catch-all for any operand shape resolve_operand doesn't otherwise classify."""
+and the catch-all for any operand shape resolve_operand doesn't otherwise classify.
+parity(pkg/kernel/lib/src/ast/expressions.dart:5070 ConstantExpression)"""
 struct NirLiteral <: NirNode
     value::Any
 end
 
 """edges[k] / values[k] pair up positionally; `values[k] === nothing` means the k'th edge
-has NO assigned value (Core.PhiNode's `isassigned(stmt.values, k) == false`)."""
+has NO assigned value (Core.PhiNode's `isassigned(stmt.values, k) == false`).
+parity(quarantine: Julia's SSA-form `Core.PhiNode`; Kernel is not in SSA form and merges values
+through assignments to one variable.)"""
 struct NirPhi <: NirNode
     edges::Vector{Int}
     values::Vector{Union{NirNode,Nothing}}
 end
 
+# parity(quarantine: Julia's `Core.PiNode`, a value narrowed to a type on one branch of SSA IR;
+# Kernel has no such node.)
 struct NirPi <: NirNode
     value::NirNode
     typ::Type
 end
 
+# parity(quarantine: Julia's IR is a flat statement list with `Core.GotoNode` jumps; Kernel's
+# control flow is structured statements.)
 struct NirGoto <: NirNode
     target::Int
 end
 
+# parity(quarantine: Julia's conditional jump `Core.GotoIfNot`; Kernel's control flow is
+# structured statements.)
 struct NirGotoIfNot <: NirNode
     cond::NirNode
     target::Int
 end
 
+# parity(pkg/kernel/lib/src/ast/statements.dart:1112 ReturnStatement)
 struct NirReturn <: NirNode
     value::Union{NirNode,Nothing}
 end
 
-"""Core.EnterNode (try-region entry). `scope` is dropped — no consumer needs it yet."""
+"""Core.EnterNode (try-region entry). `scope` is dropped — no consumer needs it yet.
+parity(quarantine: Julia opens a try region with a `Core.EnterNode` statement in a flat list;
+Kernel's TryCatch (pkg/kernel/lib/src/ast/statements.dart:1163) is one structured statement.)"""
 struct NirEnter <: NirNode
     catch_target::Int
 end
 
 """`Expr(:leave, refs...)` — `enters` are the operands naming the `Core.EnterNode`
-statements whose scopes are left (a `nothing` operand stays a `NirLiteral(nothing)`)."""
+statements whose scopes are left (a `nothing` operand stays a `NirLiteral(nothing)`).
+parity(quarantine: Julia closes try regions with an explicit `Expr(:leave)`; a Kernel TryCatch
+ends where its block ends.)"""
 struct NirLeave <: NirNode
     enters::Vector{NirNode}
 end
 
+# parity(quarantine: Julia reads the in-flight exception through `Expr(:the_exception)`; Kernel
+# binds it to the Catch clause's variable.)
 struct NirTheException <: NirNode end
 
 """`Expr(:pop_exception, ref)` — `enter` names the `Core.EnterNode` whose exception is
-popped, `nothing` when the statement carried no operand."""
+popped, `nothing` when the statement carried no operand.
+parity(quarantine: Julia's per-task exception stack, popped by `Expr(:pop_exception)`; dart
+has no exception stack.)"""
 struct NirPopException <: NirNode
     enter::Union{NirNode,Nothing}
 end
 
 """`callee` is the RESOLVED function object / Core.IntrinsicFunction when statically known
 (GlobalRef/QuoteNode operand), or a NirNode (NirSSA/NirArgument/...) for a dynamic callee
-that has no static identity — `Any` because both shapes are legitimate."""
+that has no static identity — `Any` because both shapes are legitimate.
+parity(quarantine: Julia's `Expr(:call)` is one node for a builtin, an intrinsic, and a call
+inference did not resolve to a MethodInstance; Kernel splits these among StaticInvocation,
+InstanceInvocation and DynamicInvocation.)"""
 struct NirCall <: NirNode
     callee::Any
     operands::Vector{NirNode}
@@ -148,7 +175,9 @@ an SSA/argument (a closure VALUE invoked through its known MethodInstance), `not
 the statement carried none. It is NOT recoverable from `mi.specTypes.parameters[1]`: that
 names the closure's TYPE for a value callee, so a consumer gating on "is the callee a
 function object" answers differently — the closed-world collector's re-specialization gate
-(trimcollect.jl) does exactly that, and would flip from decline to accept."""
+(trimcollect.jl) does exactly that, and would flip from decline to accept.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call to a statically
+resolved target."""
 struct NirInvoke <: NirNode
     mi::Union{Core.MethodInstance,Nothing}
     method::Union{Core.Method,Nothing}
@@ -172,7 +201,8 @@ When `type_resolved` is false, `T === Any` and `type_detail` carries the widened
 type the attempt consulted (the reject's detail); `type_detail` is `Any` otherwise.
 `field_types` is `fieldtype.(T, 1:fieldcount(T))` when `T` is concrete, else empty — never
 throws on an exotic `T`. `type_operand` is the operand that named the type (an SSA use when
-`type_kind === :ssa`), resolved like any other operand."""
+`type_kind === :ssa`), resolved like any other operand.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2907 ConstructorInvocation)"""
 struct NirNew <: NirNode
     T::Type
     field_types::Vector{Type}
@@ -186,7 +216,9 @@ end
 """`Expr(:foreigncall, name, rettype, argtypes, nreq, cc, args...)` — `operands` holds ONLY
 the runtime arguments (raw `args[6:end]`), so a lowering indexes them from 1 and can never
 read the ABI preamble by accident. `arg_julia_types` is the declared `Core.SimpleVector` of C
-argument types; `ret_julia_type` the declared return type."""
+argument types; `ret_julia_type` the declared return type.
+parity(quarantine: Julia's `Expr(:foreigncall)` names a C symbol and its ABI types; dart resolves
+FFI natives in the CFE ffi transformer, before Kernel reaches codegen.)"""
 struct NirForeignCall <: NirNode
     c_symbol::Union{Symbol,Nothing}
     arg_julia_types::Vector{Any}
@@ -196,14 +228,18 @@ end
 
 """Julia-only, quarantine tier (no dart Kernel equivalent — bounds-check elision has no
 AST node in a language without unchecked array access). `flag` is the literal Bool when
-`Expr(:boundscheck, flag)`'s arg is a literal Bool, else `nothing`."""
+`Expr(:boundscheck, flag)`'s arg is a literal Bool, else `nothing`.
+parity(quarantine: Julia's `Expr(:boundscheck)`, the bounds-check elision flag; dart has no
+unchecked array access.)"""
 struct NirBoundscheck <: NirNode
     flag::Union{Bool,Nothing}
 end
 
 """Julia-only, quarantine tier: `Expr(:throw_undef_if_not, var, cond)` — Julia's
 undefined-capture check (`cond || throw(UndefVarError(var, :local))`); Dart has no
-possibly-unassigned captured variables (definite assignment is checked at compile time)."""
+possibly-unassigned captured variables (definite assignment is checked at compile time).
+parity(quarantine: Julia's `Expr(:throw_undef_if_not)`; dart checks definite assignment at
+compile time.)"""
 struct NirThrowUndefIfNot <: NirNode
     var::Symbol
     cond::NirNode
@@ -248,7 +284,9 @@ end
 (never silently) — never reinterpreted as a no-op. `operands` are every value operand the
 statement contains, nested expressions included, so a use query never mistakes an
 unrecognized consumer for a non-consumer; `raw` is the original statement, for the
-diagnostic's detail only."""
+diagnostic's detail only.
+parity(quarantine: Julia's `Expr` heads are an open set that changes between Julia versions;
+Kernel's node set is closed.)"""
 struct NirUnsupported <: NirNode
     kind::Symbol
     operands::Vector{NirNode}
@@ -260,7 +298,9 @@ produces (`widenconst(code_info.ssavaluetypes[i])`, `Any` when absent). `line` i
 source line decoded from the CodeInfo's DebugInfo (0 when the IR carries none). `slot` is
 the SlotNumber id when the statement is unoptimized IR's `Expr(:(=), SlotNumber(n), rhs)`
 assignment and 0 otherwise — in that case `node` classifies the RHS, so a consumer sees
-the value-producing operation directly and the assignment is one integer beside it."""
+the value-producing operation directly and the assignment is one integer beside it.
+parity(quarantine: Julia's CodeInfo is a flat statement vector whose type, debug line and
+slot assignment are stored per position; a Kernel node carries its own fileOffset.)"""
 struct NirStmt
     node::NirNode
     julia_type::Type
@@ -280,14 +320,17 @@ end
 """`:invoke`'s `args[1]` is a MethodInstance directly, or (two-tier compilation) a
 CodeInstance whose `.def` is the MethodInstance. Never throws; returns `nothing` for any
 other shape (mirrors invoke.jl's existing defensive fallthrough — an unresolvable slot is
-a legitimate "fall through to generic handling" outcome there, not an error)."""
+a legitimate "fall through to generic handling" outcome there, not an error).
+parity(quarantine: Julia's `:invoke` operand is a MethodInstance or, under two-tier compilation,
+a CodeInstance.)"""
 function resolve_invoke_mi(mi_or_ci)::Union{Core.MethodInstance,Nothing}
     mi_or_ci isa Core.MethodInstance && return mi_or_ci
     (isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance) && return mi_or_ci.def
     return nothing
 end
 
-"""MethodInstance/CodeInstance → Method. Never throws."""
+"""MethodInstance/CodeInstance → Method. Never throws.
+parity(quarantine: the Method behind Julia's `:invoke` MethodInstance/CodeInstance operand.)"""
 function resolve_invoke_method(mi_or_ci)::Union{Core.Method,Nothing}
     mi = resolve_invoke_mi(mi_or_ci)
     return (mi isa Core.MethodInstance && mi.def isa Method) ? mi.def : nothing
@@ -376,13 +419,16 @@ end
 
 # parity(code_generator.dart:135 getStaticType): an SSA operand's type is its defining node's.
 _nir_ssa_type(types::Vector{Type}, id::Int)::Type = (1 <= id <= length(types)) ? types[id] : Any
+# parity(code_generator.dart:135 getStaticType): the same read from the built statement records.
 _nir_ssa_type(nir::Vector{NirStmt}, id::Int)::Type = (1 <= id <= length(nir)) ? nir[id].julia_type : Any
 
 """Resolve one IR operand (an Expr arg, a PhiNode value, a ReturnNode/GotoIfNot payload)
 into a NirNode. Total: the final `else` wraps anything unrecognized as NirLiteral rather
 than throwing. `types` supplies each SSA id's Julia type — the widened `ssavaluetypes`
 during `build_nir` (the `Vector{NirStmt}` method of `_nir_ssa_type` serves a consumer that
-already holds the built records)."""
+already holds the built records).
+parity(quarantine: Julia's IR operand shapes — SSAValue, Argument, SlotNumber, GlobalRef,
+QuoteNode, an embedded literal — mapped to node kinds once.)"""
 function resolve_operand(x, types)::NirNode
     if x isa Core.SSAValue
         return NirSSA(x.id, _nir_ssa_type(types, x.id))
@@ -402,7 +448,9 @@ function resolve_operand(x, types)::NirNode
 end
 
 """`:call`'s callee (args[1]) resolved to a function object where statically known, else
-kept as the corresponding NirNode operand (dynamic callee — e.g. a closure argument)."""
+kept as the corresponding NirNode operand (dynamic callee — e.g. a closure argument).
+parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode operand; a Kernel
+invocation carries its target member.)"""
 function resolve_call_callee(x, types)
     if x isa GlobalRef
         try
@@ -452,6 +500,8 @@ function _nir_callee_object(@nospecialize(callee))::Any
     return callee
 end
 
+# parity(quarantine: Julia's `%new` names its type by a literal, GlobalRef or QuoteNode operand;
+# Kernel's ConstructorInvocation carries its target.)
 function _resolve_type_operand(x)
     x isa Type && return x
     if x isa GlobalRef
@@ -587,7 +637,9 @@ end
 
 """Classify one raw CodeInfo statement into a NirNode. Total (never throws) — any Expr
 head outside the census, or any statement shape not otherwise recognized, becomes
-NirUnsupported/NirLiteral rather than crashing build_nir."""
+NirUnsupported/NirLiteral rather than crashing build_nir.
+parity(quarantine: the classification of Julia's CodeInfo statement kinds; dart2wasm receives
+Kernel nodes already built by the CFE.)"""
 function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
                        slot_types::Vector{Type})::NirNode
     if stmt === nothing
@@ -666,6 +718,8 @@ consumers, and can therefore also be run on a callee's CodeInfo where no context
 Every type on a node is Julia inference's own answer, widened once here — R3/R5 unaffected
 (0 new `infer_value_type`/`get_concrete_wasm_type` call sites).
 formal(dev/formal/NirBuild.tla): classification is total (every statement kind maps to Known or Unsupported, never a silent no-op) and positionally aligned (nir[i] always describes code[i]); resolved identities and static types are computed exactly once, never re-derived by a consumer.
+parity(quarantine: the one pass from Julia's CodeInfo to the boundary nodes; dart2wasm receives
+Kernel already built by the CFE.)
 """
 function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     code = code_info.code
