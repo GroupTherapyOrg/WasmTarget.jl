@@ -80,6 +80,8 @@ function is_closure_type(T::Type)::Bool
     return true
 end
 
+# parity(quarantine: Julia type slots in IR also hold TypeVar and Vararg objects, which are
+# never a closure struct; see is_closure_type(::Type).)
 is_closure_type(::Any) = false
 
 """
