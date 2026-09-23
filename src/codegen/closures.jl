@@ -32,7 +32,7 @@ struct ClosureBody
     return_type::Type
     julia_params::Union{Nothing, Vector{Type}}   # the specialization's Julia parameter types (self included for capturing closures)
 end
-ClosureBody(body_idx, params, results, return_type) = ClosureBody(body_idx, params, results, return_type, nothing)
+ClosureBody(body_idx, params, results, return_type)::ClosureBody = ClosureBody(body_idx, params, results, return_type, nothing)
 
 """
     build_closure_vtable!(mod, registry, closure_type, bodies; takes_context)
@@ -331,7 +331,7 @@ parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
 """
 function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::UInt32,
                             body_params::Vector{WasmValType}, body_results::Vector{WasmValType};
-                            takes_context::Bool=is_closure_type(closure_type))
+                            takes_context::Bool=is_closure_type(closure_type))::Union{Nothing, ConcreteRef}
     base_idx = get_closure_base_struct!(ctx.mod, ctx.type_registry)
     # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
     # would add functions mid-body-compile (the index-freeze skew).
@@ -372,7 +372,7 @@ end
 The compiled body whose SELF param is `closure_type` (WT closures take the
 captured struct as arg 1). Reads the wasm signature from the module.
 """
-function _closure_body_for(ctx, closure_type::Type)
+function _closure_body_for(ctx, closure_type::Type)::Union{Nothing, Tuple{UInt32, Vector{WasmValType}, Vector{WasmValType}, Bool}}
     fr = ctx.func_registry
     fr === nothing && return nothing
     for (k, info) in fr.functions
