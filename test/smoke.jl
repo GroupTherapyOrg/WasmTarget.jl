@@ -498,8 +498,17 @@ _g("union_fields", Any[
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 # ---- Memory: allocation length (C6 suspects 15, 27) ----
+# ---- Memory: fill, allocation length (C6 suspects 12, 15, 27) ----
 _sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
 _g("memory", Any[
+    # memset with a runtime byte, and a zero memset over live data (Dict/Set empty!)
+    ("fill_u8_runtime", (x::Int64) -> (v = zeros(UInt8, 5); fill!(v, UInt8(x)); Int64(sum(Int64, v)) * 1000 + Int64(v[3])), Int64(7)),
+    ("fill_u8_wrapped", (x::Int64) -> (v = zeros(UInt8, 5); fill!(v, x % UInt8); Int64(sum(Int64, v))), Int64(0x1ff)),
+    ("fill_i8_negative", (x::Int64) -> (v = zeros(Int8, 4); fill!(v, Int8(x)); Int64(sum(Int64, v)) * 1000 + Int64(v[2])), Int64(-3)),
+    ("fill_constructor_u8", (x::Int64) -> Int64(sum(Int64, fill(UInt8(x), 5))), Int64(4)),
+    ("fill_u8_zero_live", (x::Int64) -> (v = zeros(UInt8, 5); for i in 1:5; v[i] = UInt8(x + i); end; fill!(v, 0x00); Int64(sum(Int64, v))), Int64(7)),
+    ("dict_empty_reuse", (x::Int64) -> (d = Dict{Int64,Int64}(x => 1, 2 => 3); empty!(d); d[5] = 9; Int64(haskey(d, x)) * 100 + length(d) * 10 + d[5]), Int64(7)),
+    ("set_empty_reuse", (x::Int64) -> (s = Set{Int64}([x, 2]); empty!(s); push!(s, 3); Int64(x in s) * 10 + length(s)), Int64(7)),
     # Core.memorynew allocates exactly n elements and throws Base's ArgumentError for n < 0
     ("memory_new_len", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(4)),
     ("memory_new_fill", (n::Int64) -> (m = Memory{Int64}(undef, n); fill!(m, 3); length(m) * 100 + sum(m)), Int64(4)),

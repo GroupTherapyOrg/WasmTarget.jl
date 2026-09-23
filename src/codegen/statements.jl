@@ -82,6 +82,33 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
     return true
 end
 
+# parity(quarantine: Julia byte pointers into storage; dart's WasmArrayExt.copy/fill take element offsets, intrinsics.dart:1255/:1279.)
+const _STORAGE_PRIMITIVE_ELTYPES = (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
+
+# parity(quarantine: Julia byte pointers into storage): the element type a traced backing
+# holds — a String/Symbol backing is its byte array.
+function _storage_element_type(backing, ctx::AbstractCompilationContext)::Type
+    T = infer_value_type(backing, ctx)
+    return T === String || T === Symbol ? UInt8 : eltype(T)
+end
+
+# parity(intrinsics.dart:1255 wasmArrayCopy): dart passes each offset and size as an i64
+# narrowed by i32.wrap_i64; a Julia storage-relative byte pointer or byte count becomes that
+# element offset by the element-size shift (a String backing's pointer counts from 1).
+function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
+                                       ctx::AbstractCompilationContext, shift::Integer)::InstrBuilder
+    emit_value!(b, ptr_or_count, ctx, I64)
+    backing_type = backing === nothing ? Nothing : infer_value_type(backing, ctx)   # a byte count has no backing
+    if backing_type === String || backing_type === Symbol
+        i64_const!(b, 1)
+        num!(b, Opcode.I64_SUB)
+    end
+    narrow_length_to_i32!(b)
+    i32_const!(b, Int64(shift))
+    num!(b, Opcode.I32_SHR_U)
+    return b
+end
+
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
                             _seen::Set{Int} = Set{Int}())
@@ -1193,32 +1220,40 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx:
             return b
 end
 
+# parity(intrinsics.dart:1279 wasmArrayFill): C memset over a traced backing array is
+# dart's `WasmArrayExt.fill` — `array.fill` of (array, offset, value, size). The
+# storage-relative pointer and byte count become element offsets (the memmove rule);
+# a byte array takes memset's value as C does, `(unsigned char)val`, which is what
+# array.fill stores into a packed i8 array. A wider element is set only to its all-zero
+# bit pattern (the zero of that primitive); any other shape is loud, never skipped.
 function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
-            # memset(ptr, value, size) — fill memory with a byte value.
-            # CORRECT BY DESIGN for zero-fill: WasmGC arrays are zero-initialized by
-            # array.new_default, so memset(ptr, 0, size) is a no-op. All current callers
-            # (Dict/Set constructor, rehash!) use value=0 (a literal 0x00).
-            # SOUNDNESS: a *literal* non-zero fill would silently produce wrong results,
-            # so we refuse it (foreigncall args: [name,rt,argtypes,nreq,cc, ptr, value, size]).
-            if length(node.operands) >= 2 && node.operands[2] isa NirLiteral &&
-               (node.operands[2].value isa Number) && !iszero(node.operands[2].value)
-                record_unsupported!(ctx, :value_stub, "memset with a non-zero constant fill value"; idx=idx, detail=node)
-                unreachable!(b)  # structural trap after recorded unsupported
-                ctx.last_stmt_was_stub = true
-                return b
-            end
-            # Zero-fill no-op. memset returns the ptr, but only materialise it when
-            # the result is actually stored (ssa_local exists). Unconditionally
-            # pushing it orphaned a stub value on the stack: callers (Dict ctor,
-            # rehash!) discard the result, and the builder stack delta remains zero.
-            # Latent until a
-            # reachable block `end` closed over the orphan (gaps
-            # 4be58371947f / 203da15d789c).
-            if length(node.operands) >= 1 && haskey(ctx.ssa_locals, idx)
-                emit_value!(b, node.operands[1], ctx,
-                            static_wasm_type(node.operands[1], ctx))
-            end
-            return b
+    length(node.operands) >= 3 || return nothing
+    ptr_arg, value_arg, nbytes_arg = node.operands[1], node.operands[2], node.operands[3]
+    backing = _trace_memmove_ptr(ptr_arg, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES)
+    elem_type = backing === nothing ? nothing : _storage_element_type(backing, ctx)
+    literal = _nir_const_operand(value_arg)
+    if elem_type === nothing || !(sizeof(elem_type) == 1 || (literal isa Integer && iszero(literal)))
+        record_unsupported!(ctx, :unsupported_method,
+            "memset needs a traced primitive backing array, and a zero value unless its elements are bytes";
+            idx=idx, detail=node, soundness_fatal=true)
+        ctx.last_stmt_was_stub = true
+        return b
+    end
+    arr = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+    shift = trailing_zeros(sizeof(elem_type))
+    elem_wasm = julia_to_wasm_type(elem_type)
+    _emit_backing_array!(b, backing, ctx, arr)
+    _emit_storage_element_offset!(b, ptr_arg, backing, ctx, shift)
+    if sizeof(elem_type) == 1
+        emit_value!(b, value_arg, ctx, I32)
+    else
+        emit_value!(b, zero(elem_type), ctx, elem_wasm)
+    end
+    _emit_storage_element_offset!(b, nbytes_arg, nothing, ctx, shift)
+    array_fill!(b, arr, sizeof(elem_type) == 1 ? I32 : elem_wasm)
+    # C memset returns its destination pointer; materialise it only for a stored result.
+    haskey(ctx.ssa_locals, idx) && emit_value!(b, ptr_arg, ctx, I64)
+    return b
 end
 
 function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
@@ -1844,38 +1879,18 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
         # width 4/8 → array.copy with byte offsets/count scaled to elements.
         # (Byte vectors keep the established paths below; array.copy is
         # overlap-safe per the WasmGC spec, matching memmove semantics.)
-        local _MMV_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
-        local _mmv_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _MMV_PRIMS)
-        local _mmv_s = _mmv_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _MMV_PRIMS) : nothing
+        local _mmv_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES)
+        local _mmv_s = _mmv_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES) : nothing
         if _mmv_d !== nothing && _mmv_s !== nothing
-            local _mmv_eltype = value -> begin
-                local T = infer_value_type(value, ctx)
-                T === String || T === Symbol ? UInt8 : eltype(T)
-            end
-            local _mmv_te = _mmv_eltype(_mmv_d)
-            if _mmv_te === _mmv_eltype(_mmv_s) && sizeof(_mmv_te) in (1, 4, 8)
+            local _mmv_te = _storage_element_type(_mmv_d, ctx)
+            if _mmv_te === _storage_element_type(_mmv_s, ctx) && sizeof(_mmv_te) in (1, 4, 8)
                 local _mmv_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmv_te)
                 local _mmv_sh = trailing_zeros(sizeof(_mmv_te))
-                local _mmv_emit_arr = vec -> begin
-                    _emit_backing_array!(b, vec, ctx, _mmv_arr)
-                end
-                local _mmv_emit_off = (a, backing) -> begin
-                    emit_value!(b, a, ctx, I64)
-                    # (the byte count has no backing object)
-                    local backing_type = backing === nothing ? Nothing : infer_value_type(backing, ctx)
-                    if backing_type === String || backing_type === Symbol
-                        i64_const!(b, 1)
-                        num!(b, Opcode.I64_SUB)
-                    end
-                    narrow_length_to_i32!(b)
-                    i32_const!(b, Int64(_mmv_sh))
-                    num!(b, Opcode.I32_SHR_U)
-                end
-                _mmv_emit_arr(_mmv_d)
-                _mmv_emit_off(dest_ptr_arg, _mmv_d)
-                _mmv_emit_arr(_mmv_s)
-                _mmv_emit_off(src_ptr_arg, _mmv_s)
-                _mmv_emit_off(nbytes_arg, nothing)
+                _emit_backing_array!(b, _mmv_d, ctx, _mmv_arr)
+                _emit_storage_element_offset!(b, dest_ptr_arg, _mmv_d, ctx, _mmv_sh)
+                _emit_backing_array!(b, _mmv_s, ctx, _mmv_arr)
+                _emit_storage_element_offset!(b, src_ptr_arg, _mmv_s, ctx, _mmv_sh)
+                _emit_storage_element_offset!(b, nbytes_arg, nothing, ctx, _mmv_sh)
                 array_copy!(b, _mmv_arr, _mmv_arr)
                 # C memmove returns its destination pointer.
                 emit_value!(b, dest_ptr_arg, ctx, I64)
