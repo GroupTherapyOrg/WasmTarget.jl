@@ -130,6 +130,7 @@ parity(quarantine: Julia's typed IR is a goto CFG that can keep blocks no edge r
 trap is sound only in such a block; dart's TFA removes unreachable members before codegen
 (code_generator.dart:5084 UnreachableCodeGenerator), so Kernel code never needs a statement
 reachability proof.)
+formal(dev/formal/ProvenDead.tla): a statement proven dead has no control-flow path from entry
 """
 function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
     1 <= idx <= length(nir) || return false
