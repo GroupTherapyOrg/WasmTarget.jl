@@ -51,7 +51,8 @@ const _STORAGE_RELATIVE_OFFSET_OPS = (Core.Intrinsics.add_int, Core.Intrinsics.s
 # parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 const _STORAGE_RELATIVE_PTR_FOREIGNCALLS = (:memcpy, :memmove, :memset, :memchr,
                                             :jl_genericmemory_copyto, :jl_pchar_to_string,
-                                            :jl_cstr_to_string, :jl_ptr_to_array_1d)
+                                            :jl_cstr_to_string, :jl_ptr_to_array_1d,
+                                            :jl_symbol_n)
 
 # `storage_pointer`: the root is a Memory's `ptr` or a MemoryRef's `ptr_or_offset`. Such a
 # pointer may also be compared for identity (`===`/`!==`, see `_storage_pointer_backing`),
