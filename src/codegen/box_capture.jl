@@ -419,6 +419,7 @@ Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
 parity(quarantine: Julia leaves a scalar-replaced `Core.Box` capture's numeric accumulator typed
 `Any`; dart types a captured variable by its declared type, closures.dart:1579
 translateTypeOfLocalVariable.)
+formal(dev/formal/NumericJoin.tla): every SSA it types holds exactly that type on every execution — TLC rejects this code (a seeded phi is never revisited; VERIFY keeps what a dropped phi typed)
 """
 function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                                         argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
