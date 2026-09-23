@@ -321,49 +321,101 @@ _lines(path::String)::Vector{String} = String.(split(chomp(_text(path)), '\n'))
 # ---- dev/CHARTER.md support --------------------------------------------------
 const CHARTER_PATH = joinpath(ROOT, "dev", "CHARTER.md")
 
-# A top-level definition at column 0: long/short function forms, struct, abstract/primitive
-# type, macro, const. Counted per (file, name): one anchor covers a method family.
-const _TOPLEVEL_DEF = r"^(?:(?:@inline|@noinline|@generated|Base\.@\w+)\s+)?(?:function\s+([A-Za-z_][\w!.]*|\(\w+::[^)]*\))|(?:mutable\s+)?struct\s+(\w+)|abstract\s+type\s+(\w+)|primitive\s+type\s+(\w+)|macro\s+(\w+)|const\s+([A-Za-z_]\w*)\s*(?:::[^=]+)?=|([A-Za-z_][\w!]*)(?:\{[^}]*\})?\([^=]*\)\s*(?:::\s*[\w{},. ]+)?\s*(?:where\s+.+)?=(?!=))"
+# ---- R32: every definition carries its dart anchor or quarantine (dev/CHARTER.md C2) ----
+# Counted on the PARSED syntax tree, one entry per definition — every method separately, so an
+# anchored dart-shaped method never hides an invented method of the same name. A definition is
+# anchored when its docstring (read from the tree, not by scanning lines) or the contiguous
+# comment block directly above it contains `parity(`, or it lies inside a
+# `# parity-region(...)` … `# end parity-region` block.
+
+const _DEF_WRAPPERS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@generated"),
+                       Symbol("@nospecialize"), Symbol("@assume_effects"), Symbol("@propagate_inbounds"))
+
+_macroname(x) = x isa Symbol ? x : x isa GlobalRef ? x.name :
+                (x isa Expr && x.head === :. ? _macroname(x.args[end]) : x isa QuoteNode ? x.value : nothing)
+
+"""The name a top-level definition defines, or `nothing` when `ex` is not a definition."""
+function _def_name(ex)::Union{Nothing,String}
+    ex isa Expr || return nothing
+    h = ex.head
+    callname(c) = c isa Expr && c.head === :where ? callname(c.args[1]) :
+                  c isa Expr && c.head === :(::) && length(c.args) == 2 ? callname(c.args[1]) :
+                  c isa Expr && c.head === :call ? string(c.args[1]) : nothing
+    typename(t) = t isa Symbol ? string(t) : t isa Expr && t.head in (:<:, :curly) ? typename(t.args[1]) : string(t)
+    h === :function && return length(ex.args) >= 1 ? something(callname(ex.args[1]), string(ex.args[1])) : nothing
+    h === :(=) && return callname(ex.args[1])
+    h === :struct && return typename(ex.args[2])
+    h in (:abstract, :primitive) && return typename(ex.args[1])
+    h === :macro && return "@" * something(callname(ex.args[1]), "?")
+    h === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) &&
+        return string(ex.args[1].args[1] isa Expr ? ex.args[1].args[1].args[1] : ex.args[1].args[1])
+    return nothing
+end
 
 """
-The (file, name) top-level definitions in `src/` with no `parity(` anchor — dev/CHARTER.md C2.
-A definition is anchored when its own line, the comment block directly above it, or the
-docstring directly above it contains `parity(`, or when it sits inside a
-`# parity-region(<anchor>)` … `# end parity-region` block (a family of one-line emitters
-copying one dart method family).
+Every top-level definition in one source file as `(name, line, anchored)`. Descends through
+`module`, `begin`/`toplevel` blocks and `if` bodies (a conditionally defined method is still a
+definition), and through docstring and annotation macros (`@inline`, …) to the definition.
 """
+function toplevel_definitions(path::String)::Vector{Tuple{String,Int,Bool}}
+    src = _text(path)
+    lines = split(src, '\n')
+    regions = falses(length(lines) + 1)
+    inreg = false
+    for (i, l) in enumerate(lines)
+        startswith(l, "# parity-region(") && (inreg = true)
+        startswith(l, "# end parity-region") && (inreg = false)
+        regions[i] = inreg
+    end
+    comment_anchor(line) = begin   # contiguous comment block directly above `line`
+        j = line - 1; found = false
+        while j >= 1 && startswith(lstrip(lines[j]), "#")
+            occursin("parity(", lines[j]) && (found = true); j -= 1
+        end
+        found
+    end
+    out = Tuple{String,Int,Bool}[]
+    function visit(ex, line::Int)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :block, :module)
+            body = ex.head === :module ? ex.args[3].args : ex.args
+            l = line
+            for a in body
+                a isa LineNumberNode ? (l = a.line) : visit(a, l)
+            end
+            return
+        end
+        if ex.head === :if || ex.head === :elseif
+            foreach(a -> visit(a, line), ex.args[2:end])
+            return
+        end
+        doc = ""
+        d = ex
+        while d isa Expr && d.head === :macrocall
+            m = _macroname(d.args[1])
+            if m === Symbol("@doc")
+                doc *= string(d.args[3]); d = d.args[4]
+            elseif m in _DEF_WRAPPERS
+                d = d.args[end]
+            else
+                break
+            end
+        end
+        name = _def_name(d)
+        name === nothing && return
+        anchored = occursin("parity(", doc) || comment_anchor(line) || regions[line]
+        push!(out, (name, line, anchored))
+    end
+    visit(Meta.parseall(src; filename=path), 1)
+    return out
+end
+
+"""The top-level definitions in `src/` with no `parity(` anchor — dev/CHARTER.md C2."""
 function count_unanchored_definitions(root::String=SRC)::Int
     n = 0
     for (dir, _, files) in walkdir(root), f in files
         endswith(f, ".jl") || continue
-        lines = readlines(joinpath(dir, f))
-        anchored = Dict{String,Bool}()
-        region = false
-        indoc = false
-        for (i, l) in enumerate(lines)
-            startswith(l, "# parity-region(") && (region = true)
-            startswith(l, "# end parity-region") && (region = false)
-            wasdoc = indoc
-            isodd(count("\"\"\"", l)) && (indoc = !indoc)
-            wasdoc && continue   # a docstring's interior is prose, not a definition
-            m = match(_TOPLEVEL_DEF, l)
-            m === nothing && continue
-            name = something(m.captures...)
-            block = String[l]
-            j = i - 1
-            if j >= 1 && endswith(rstrip(lines[j]), "\"\"\"")
-                push!(block, lines[j]); j -= 1
-                while j >= 1 && !startswith(lstrip(lines[j]), "\"\"\"")
-                    push!(block, lines[j]); j -= 1
-                end
-                j >= 1 && push!(block, lines[j]); j -= 1
-            end
-            while j >= 1 && startswith(lstrip(lines[j]), "#")
-                push!(block, lines[j]); j -= 1
-            end
-            anchored[name] = get(anchored, name, false) || region || any(x -> occursin("parity(", x), block)
-        end
-        n += count(!, values(anchored))
+        n += count(d -> !d[3], toplevel_definitions(joinpath(dir, f)))
     end
     return n
 end
@@ -497,7 +549,7 @@ const METRICS = [
     "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, NirStmt.raw, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
         () -> count_any_typed_fields()),
     # ── dev/CHARTER.md (2026-09-22) ─────────────────────────────────────────────
-    "R32_unanchored_definitions" => ("top-level (file, name) definitions in src with no parity(<dart file:line>) or parity(quarantine: …) anchor at the definition — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
+    "R32_unanchored_definitions" => ("top-level definitions in src — every method separately, read from the parsed syntax tree — with no parity(<dart file:line>) or parity(quarantine: …) anchor in their docstring or directly above them — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
         () -> count_unanchored_definitions()),
     "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
@@ -1632,7 +1684,7 @@ const LOCKS = [
     "L108_no_campaign_narration" => ("no march<N>/P2-batch<N> campaign-narration tags anywhere in src, comment lines included; constraint-bearing content stays as untagged comments, parity( anchors cite dart source (locked 2026-09-02)",
         () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
     "L110_parity_anchors_cite_dart" => ("every parity( anchor in src cites a dart file:line at the pinned oracle commit or is an explicit quarantine — phase labels are narration, not anchors (locked 2026-09-02)",
-        () -> count_lines_all(r"parity\((?![A-Za-z_/]+\.dart:\d+|quarantine:)"; roots=[SRC])),
+        () -> count_lines_all(r"parity(?:-region)?\((?![A-Za-z0-9_/]+\.dart:\d+|quarantine:)"; roots=[SRC])),
     "L104_table_ops_have_no_ladder_arm" => ("per-symbol exclusivity: every op key in any INTRINSIC_* table has ZERO name-keyed is_func ladder arms anywhere in codegen — a table entry and an arm can never coexist, so a half-wired table cannot stall again (the M11 lesson; locked 2026-09-02)",
         () -> begin
             table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
