@@ -98,8 +98,7 @@ function _build!(accs, names, T::Type)
         b = _acc!(accs, names, "_bits_f64", _bits_f64, (Float64,))
         return Dict("k" => "bits", "b" => b, "w" => 64)
     elseif T === Float32
-        # reinterpret(Int32, ::Float32) miscompiles today (ledgered), so
-        # transport the EXACTLY-widened Float64 bits — lossless.
+        # transport the exactly-widened Float64 bits — lossless.
         b = _acc!(accs, names, "_bits_f32w", _bits_f32w, (Float32,))
         return Dict("k" => "bits", "b" => b, "w" => 32)
     elseif T === Char
@@ -164,8 +163,7 @@ _field_names(T::Type) = T <: Tuple && !(T <: NamedTuple) ? nothing :
 # ── Leaf accessors (shared) ──────────────────────────────────────────────────
 _bits_f64(x::Float64)::Int64 = reinterpret(Int64, x)
 _bits_f32w(x::Float32)::Int64 = reinterpret(Int64, Float64(x))
-# reinterpret(UInt32, ::Char) miscompiles today (ledgered); codepoint() is
-# exact for valid Chars.
+# a Char leaves as its codepoint, exact for valid Chars.
 _bits_char(c::Char)::Int64 = Int64(codepoint(c))
 _str_len(s::String)::Int64 = Int64(ncodeunits(s))
 _str_cu(s::String, i::Int64)::Int32 = Int32(codeunit(s, Int(i)))
@@ -214,8 +212,7 @@ function _make_fget(::Type{T}, i::Int) where {T}
     get!(_FN_CACHE, (:fget, T, i)) do
         f = Symbol("_fgetfn_", _mangle(T), "_", i)
         FT = fieldtype(T, i)
-        # Integer-index getfield traps when the receiver ref crossed the JS
-        # boundary (ledgered); symbol/getindex forms are solid.
+        # a tuple is read by index, any other struct by field name
         if T <: Tuple
             @eval (function $f(x::$T)::$FT; x[$i]; end)
         else

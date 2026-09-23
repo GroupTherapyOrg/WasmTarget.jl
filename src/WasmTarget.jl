@@ -278,7 +278,7 @@ function compile_with_base(functions::Vector;
     end
 
     if !isfile(base_wasm_path)
-        error("base.wasm not found at $base_wasm_path. Run: julia --project=. scripts/build_base.jl")
+        error("base.wasm not found at $base_wasm_path; pass `base_wasm_path` to an existing module")
     end
 
     # Compile user functions
@@ -321,8 +321,8 @@ const WASM_OPT_GC_FLAGS = [
 # NOTE: dart2wasm also passes --traps-never-happen, but that assumption is
 # UNSOUND here: WasmTarget uses wasm traps as Julia's error semantics (div by
 # zero, bounds checks, throw paths), and -tnh lets binaryen delete/reorder
-# those paths — optimized builds returned garbage where native throws
-# (ledger gaps dacbfa51e334, 5cc6c2b2ac64, c77a8f98bb53, …). Dart never relies
+# those paths — optimized builds returned garbage where native throws.
+# Dart never relies
 # on traps; Julia-compiled code does.
 # parity(compile.dart:159 _binaryenFlags)
 const WASM_OPT_PRODUCTION_FLAGS = [
