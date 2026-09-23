@@ -96,6 +96,8 @@ mutable struct TypeRegistry
     unicode_property_func_idx::Union{Nothing, UInt32}
     # The runtime egal function (`get_egal_function!`, dart's `identical` member intrinsic).
     egal_func_idx::Union{Nothing, UInt32}
+    # utf8proc case-record table helper, shared by the case-mapping/predicate calls.
+    unicode_case_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
@@ -146,6 +148,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
     nothing,  # egal_func_idx
+    nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
@@ -169,6 +172,7 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
     nothing,  # egal_func_idx
+    nothing,  # unicode_case_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals
@@ -1520,6 +1524,116 @@ function get_or_create_unicode_property_func!(mod::WasmModule,
     idx = add_function!(mod, WasmValType[I32], WasmValType[I32],
                         WasmValType[arr_ref], builder_code(b))
     registry.unicode_property_func_idx = idx
+    return idx
+end
+
+# utf8proc's case records as Base reaches them through the `utf8proc_toupper`/`_tolower`/
+# `_totitle`/`_isupper`/`_islower` foreigncalls: per record [upper - cp, lower - cp,
+# title - cp, isupper, islower]; record 0 is the identity. A codepoint reaches its record
+# through utf8proc's own two-stage shape: `stage1[cp >> 8]` names a deduplicated
+# 256-codepoint block, `stage2[block][cp & 0xff]` the record. Both stages are one UInt8
+# table, stage1 (0x1100 entries) first.
+# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
+const _UTF8PROC_CASE_TABLES = let
+    zero_rec = (Int32(0), Int32(0), Int32(0), Int32(0), Int32(0))
+    records = Dict{NTuple{5,Int32},Int}(zero_rec => 0)
+    order = NTuple{5,Int32}[zero_rec]
+    blocks = Dict{Vector{UInt8},Int}()
+    stage1 = UInt8[]
+    stage2 = UInt8[]
+    block = Vector{UInt8}(undef, 256)
+    for hi in UInt32(0):UInt32(0x10ff)
+        for lo in UInt32(0):UInt32(0xff)
+            cp = (hi << 8) | lo
+            rec = (ccall(:utf8proc_toupper, Int32, (UInt32,), cp) - Int32(cp),
+                   ccall(:utf8proc_tolower, Int32, (UInt32,), cp) - Int32(cp),
+                   ccall(:utf8proc_totitle, Int32, (UInt32,), cp) - Int32(cp),
+                   Int32(ccall(:utf8proc_isupper, Cint, (UInt32,), cp)),
+                   Int32(ccall(:utf8proc_islower, Cint, (UInt32,), cp)))
+            r = get!(records, rec) do
+                push!(order, rec)
+                length(order) - 1
+            end
+            block[lo + 1] = UInt8(r)   # InexactError past 255 records: loud at precompile
+        end
+        k = get!(blocks, copy(block)) do
+            append!(stage2, block)
+            length(blocks)
+        end
+        push!(stage1, UInt8(k))
+    end
+    words = Int32[x for rec in order for x in rec]
+    (stages = vcat(stage1, stage2), records = collect(reinterpret(UInt8, htol.(words))),
+     nwords = length(words))
+end
+
+"""
+    get_or_create_unicode_case_func!(mod, registry) → UInt32
+
+Create the lazy, module-global utf8proc case tables and a helper
+`(i32 cp, i32 field) -> i32` returning field `field` of `cp`'s case record
+(0 upper delta, 1 lower delta, 2 title delta, 3 isupper, 4 islower). A codepoint past
+U+10FFFF reads the identity record, as utf8proc's own property lookup does.
+"""
+# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
+function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.unicode_case_func_idx !== nothing && return registry.unicode_case_func_idx
+    tables = _UTF8PROC_CASE_TABLES
+    stage_idx = get_array_type!(mod, registry, UInt8)
+    rec_idx = get_array_type!(mod, registry, Int32)
+    stage_ref = ConcreteRef(stage_idx, true)
+    rec_ref = ConcreteRef(rec_idx, true)
+    stage_seg = add_passive_data_segment!(mod, tables.stages)
+    rec_seg = add_passive_data_segment!(mod, tables.records)
+    stage_global = add_global_ref!(mod, stage_idx, true,
+        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(stage_idx))))
+    rec_global = add_global_ref!(mod, rec_idx, true,
+        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(rec_idx))))
+    stage_block = add_type!(mod, FuncType(WasmValType[], WasmValType[stage_ref]))
+    rec_block = add_type!(mod, FuncType(WasmValType[], WasmValType[rec_ref]))
+    # locals: 0 cp, 1 field, 2 the stage table, 3 the record index (0 unless cp <= U+10FFFF)
+    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32];
+                     func_name="unicode_case")
+    local_get!(b, 0); i32_const!(b, 0x110000); num!(b, Opcode.I32_LT_U)
+    if_!(b)
+    initialized = block!(b, Int(stage_block); results=WasmValType[stage_ref])
+    global_get!(b, stage_global, stage_ref)
+    br_on_non_null!(b, initialized)
+    i32_const!(b, 0); i32_const!(b, length(tables.stages))
+    array_new_data!(b, stage_idx, stage_seg)
+    global_set!(b, stage_global)
+    global_get!(b, stage_global, stage_ref)
+    end_block!(b)
+    local_set!(b, 2)
+    # record index = stage[0x1100 + (stage[cp >> 8] << 8) + (cp & 0xff)]
+    local_get!(b, 2)
+    i32_const!(b, 0x1100)
+    local_get!(b, 2)
+    local_get!(b, 0); i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
+    array_get!(b, stage_idx, I32; signed=false)
+    i32_const!(b, 8); num!(b, Opcode.I32_SHL)
+    num!(b, Opcode.I32_ADD)
+    local_get!(b, 0); i32_const!(b, 0xff); num!(b, Opcode.I32_AND)
+    num!(b, Opcode.I32_ADD)
+    array_get!(b, stage_idx, I32; signed=false)
+    local_set!(b, 3)
+    end_block!(b)
+    initialized = block!(b, Int(rec_block); results=WasmValType[rec_ref])
+    global_get!(b, rec_global, rec_ref)
+    br_on_non_null!(b, initialized)
+    i32_const!(b, 0); i32_const!(b, tables.nwords)
+    array_new_data!(b, rec_idx, rec_seg)
+    global_set!(b, rec_global)
+    global_get!(b, rec_global, rec_ref)
+    end_block!(b)
+    local_get!(b, 3); i32_const!(b, 5); num!(b, Opcode.I32_MUL)
+    local_get!(b, 1); num!(b, Opcode.I32_ADD)
+    array_get!(b, rec_idx, I32)
+    return_!(b)
+    end_block!(b)
+    idx = add_function!(mod, WasmValType[I32, I32], WasmValType[I32],
+                        WasmValType[stage_ref, I32], builder_code(b))
+    registry.unicode_case_func_idx = idx
     return idx
 end
 

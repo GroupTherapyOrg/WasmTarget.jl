@@ -625,6 +625,19 @@ _g("overlays", Any[
     ("resize_grow", (n::Int64) -> (v = collect(1:3); resize!(v, n); v[n] = 7; length(v) * 100 + v[3] + v[n]), Int64(6)),
     ("resize_shrink", (n::Int64) -> (v = collect(1:6); resize!(v, n); push!(v, 1); length(v) * 100 + sum(v)), Int64(2)),
     ("resize_grow_past_capacity", (n::Int64) -> (v = zeros(10); resize!(v, n); v .= 1; Int64(sum(v))), Int64(100)),
+    # Char case mapping and classes beyond Latin-1 read utf8proc's own answers
+    ("isletter_greek", (c::Char) -> Int64(isletter(c)), 'λ'),
+    ("isletter_cjk", (c::Char) -> Int64(isletter(c)), '中'),
+    ("isspace_em_space", (c::Char) -> Int64(isspace(c)), '\u2003'),
+    ("uppercase_greek", (c::Char) -> Int64(UInt32(uppercase(c))), 'λ'),
+    ("lowercase_greek", (c::Char) -> Int64(UInt32(lowercase(c))), 'Σ'),
+    ("titlecase_digraph", (c::Char) -> Int64(UInt32(titlecase(c))), 'ǆ'),
+    ("isuppercase_greek", (c::Char) -> Int64(isuppercase(c)), 'Σ'),
+    ("islowercase_greek", (c::Char) -> Int64(islowercase(c)), 'σ'),
+    ("isascii_latin1", (c::Char) -> Int64(isascii(c)), 'é'),
+    ("uppercasefirst_nonascii", (n::Int64) -> Int64(uppercasefirst(n > 0 ? "élan" : "x") == "Élan"), Int64(1)),
+    ("lowercasefirst_nonascii", (n::Int64) -> Int64(lowercasefirst(n > 0 ? "ÉLAN" : "x") == "éLAN"), Int64(1)),
+    ("uppercase_string_sharp_s", (n::Int64) -> ncodeunits(uppercase(n > 0 ? "straße λ" : "x")), Int64(1)),
 ])
 
 # ============================================================================

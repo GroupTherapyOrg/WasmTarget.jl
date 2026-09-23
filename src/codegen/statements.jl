@@ -2145,6 +2145,38 @@ function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int,
         return b
 end
 
+# Base's Char case mapping: the mapped codepoint is `cp` plus the record's delta.
+# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
+function _emit_unicode_case_mapping!(b::InstrBuilder, node::NirForeignCall, ctx::AbstractCompilationContext, field::Int)::Union{InstrBuilder,Nothing}
+    length(node.operands) >= 1 || return nothing
+    emit_value!(b, node.operands[1], ctx, I32)
+    emit_value!(b, node.operands[1], ctx, I32)
+    i32_const!(b, field)
+    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry),
+          WasmValType[I32, I32], WasmValType[I32])
+    num!(b, Opcode.I32_ADD)
+    return b
+end
+
+# Base's `isuppercase`/`islowercase`: the record's 0/1 predicate field.
+# parity(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls; the records are utf8proc's own answers, read through the same ccalls at precompile — target Wasm performs no FFI)
+function _emit_unicode_case_predicate!(b::InstrBuilder, node::NirForeignCall, ctx::AbstractCompilationContext, field::Int)::Union{InstrBuilder,Nothing}
+    length(node.operands) >= 1 || return nothing
+    emit_value!(b, node.operands[1], ctx, I32)
+    i32_const!(b, field)
+    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry),
+          WasmValType[I32, I32], WasmValType[I32])
+    return b
+end
+
+# parity-region(quarantine: Julia's Char case mapping and case predicates are libutf8proc foreigncalls — one entry per C symbol, each reading one field of utf8proc's case record)
+_fc_utf8proc_toupper!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_mapping!(b, node, ctx, 0)
+_fc_utf8proc_tolower!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_mapping!(b, node, ctx, 1)
+_fc_utf8proc_totitle!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_mapping!(b, node, ctx, 2)
+_fc_utf8proc_isupper!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_predicate!(b, node, ctx, 3)
+_fc_utf8proc_islower!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_predicate!(b, node, ctx, 4)
+# end parity-region
+
 const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_alloc_genericmemory => _fc_jl_alloc_genericmemory!,
     :memset => _fc_memset!,
@@ -2183,6 +2215,11 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_type_unionall => _fc_jl_type_unionall!,
     :utf8proc_charwidth => _fc_utf8proc_charwidth!,
     :utf8proc_category => _fc_utf8proc_category!,
+    :utf8proc_toupper => _fc_utf8proc_toupper!,
+    :utf8proc_tolower => _fc_utf8proc_tolower!,
+    :utf8proc_totitle => _fc_utf8proc_totitle!,
+    :utf8proc_isupper => _fc_utf8proc_isupper!,
+    :utf8proc_islower => _fc_utf8proc_islower!,
 )
 
 function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)

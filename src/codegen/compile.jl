@@ -495,23 +495,29 @@ function _compile_closed_world_plan(functions::Vector;
     # "String hash Overlay") that compiles through the ordinary :invoke path
     # like any other Julia function — no special-cased wasm helper needed.
 
-    # Pre-create the shared utf8proc property table/helper before function-index
-    # assignment. Both category and character width read the same packed byte.
+    # Pre-create the shared utf8proc helpers before function-index assignment:
+    # category and character width read the same packed property word; case
+    # mapping and the case predicates read utf8proc's case records.
     needs_unicode_properties = false
+    needs_unicode_case = false
     for fd in function_data
         fn_nir = fd[8]
         fn_nir === nothing && continue
         for rec in fn_nir.stmts
-            if rec.slot == 0 && rec.node isa NirForeignCall &&
-               rec.node.c_symbol in (:utf8proc_category, :utf8proc_charwidth,
-                                     :jl_id_start_char, :jl_id_char)
-                needs_unicode_properties = true
-                break
+            if rec.slot == 0 && rec.node isa NirForeignCall
+                fc_sym = rec.node.c_symbol
+                if fc_sym in (:utf8proc_category, :utf8proc_charwidth,
+                              :jl_id_start_char, :jl_id_char)
+                    needs_unicode_properties = true
+                elseif fc_sym in (:utf8proc_toupper, :utf8proc_tolower, :utf8proc_totitle,
+                                  :utf8proc_isupper, :utf8proc_islower)
+                    needs_unicode_case = true
+                end
             end
         end
-        needs_unicode_properties && break
     end
     needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
+    needs_unicode_case && get_or_create_unicode_case_func!(mod, type_registry)
 
     # LAZY constants: collect long (>64B) String/Symbol literals and pre-create
     # their init functions NOW — the same index-freeze constraint (functions cannot be
