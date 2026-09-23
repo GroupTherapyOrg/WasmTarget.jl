@@ -39,8 +39,7 @@ ClosureBody(body_idx, params, results, return_type) = ClosureBody(body_idx, para
         -> (vtable_global_idx, vtable_struct_idx)
 
 ONE immutable vtable GLOBAL per closure TYPE (dart ClosureLayouter: one representation
-per function shape, closures.dart:65 ClosureRepresentation, memoized by the shape itself
-:1101 _representationsForCounts). The
+per function shape, closures.dart:41-118, memoized by the shape itself :1101-1114). The
 vtable struct has an entry for every positional arity 0..max; entry[arity] is a
 TRAMPOLINE for the body of that arity — (closureBase-as-anyref, args...) → cast base →
 context → cast captured struct → call body — and the other entries are null. Every
