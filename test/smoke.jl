@@ -392,6 +392,10 @@ _g("union_register", Any[
 @noinline _sym_dispatch(x::Symbol) = 1
 @noinline _sym_dispatch(x::String) = 2
 @noinline _sym_dispatch(x) = 3
+mutable struct _SymBytes
+    m::Memory{UInt8}
+end
+_sym_bytes_values(i::Int64) = Any[string('a', Char(i + 96)), _SymBytes(Memory{UInt8}(undef, 2)), Symbol(string('a', Char(i + 96)))]
 _g("symbol_class", Any[
     ("str_vs_sym", _id_any_pair, Int64(1), Int64(2)),
     ("str_ne_sym", _id_any_pair_ne, Int64(1), Int64(2)),
@@ -412,6 +416,12 @@ _g("symbol_class", Any[
     ("String_of_sym_is_String", (x::Int64) -> (v = Any[String(_sym_of(x))]; Int64(typeof(_id_any(v, 1)) === String)), Int64(1)),
     ("symbol_hash", (x::Int64) -> Int64(hash(Symbol(string('a', Char(x)))) == hash(:ab)), Int64(98)),
     ("dict_symbol_roundtrip", (x::Int64) -> (d = Dict{Symbol,Int64}(:a => x, :b => 2); d[:a] * 10 + d[Symbol(string('b'))]), Int64(7)),
+    # a mutable struct whose one field is a byte Memory has the classed string's exact layout,
+    # so add_type! gives both one type index: isa must read the classId, not the layout alone
+    ("str_isa_bytes_struct", (i::Int64) -> Int64(_id_any(_sym_bytes_values(i), i) isa _SymBytes), Int64(1)),
+    ("sym_isa_bytes_struct", (i::Int64) -> Int64(_id_any(_sym_bytes_values(i), i) isa _SymBytes), Int64(3)),
+    ("bytes_struct_isa_bytes_struct", (i::Int64) -> Int64(_id_any(_sym_bytes_values(i), i) isa _SymBytes), Int64(2)),
+    ("bytes_struct_isa_String", (i::Int64) -> Int64(_id_any(_sym_bytes_values(i), i) isa String), Int64(2)),
 ])
 
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----

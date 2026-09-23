@@ -1859,7 +1859,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 num!(bld, Opcode.I32_EQ)
             else
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                if target_wasm isa ConcreteRef
+                if target_wasm isa ConcreteRef &&
+                   is_shared_wasm_type(ctx.type_registry, target_wasm.type_idx, check_type)
+                    # a layout several classes share: the layout, then the classId
+                    any_convert_extern!(bld)
+                    emit_isa_classid!(bld, ctx, target_wasm.type_idx, check_type)
+                elseif target_wasm isa ConcreteRef
                     any_convert_extern!(bld)
                     # Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
                     ref_test!(bld, Int64(target_wasm.type_idx), false)

@@ -678,9 +678,11 @@ typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module)
 
 Check if another Julia type in the registry shares the same WasmGC type index.
 When types share an index, ref.test can't distinguish them and typeId-based
-dispatch is needed.
+dispatch is needed. The classed string layout is always shared (String and Symbol own
+it), and a struct whose layout equals it field for field gets its index from `add_type!`.
 """
 function is_shared_wasm_type(registry::TypeRegistry, wasm_type_idx::UInt32, T::Type)::Bool
+    registry.string_struct_idx == wasm_type_idx && return true
     for (other_type, other_info) in registered_structs(registry)
         if other_info.wasm_type_idx == wasm_type_idx && other_type !== T
             return true
