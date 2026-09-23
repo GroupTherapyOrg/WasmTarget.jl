@@ -133,7 +133,7 @@ end
 # `generic_lufact!` — the SAME partial-pivot LU native uses, just non-BLAS — and
 # read det/logdet off it. Value-identical to LAPACK modulo pivoting/rounding
 # (oracle rtol 1e-9). Verified vs native 40/40 each. (inv/`\`/cholesky/eigen/svd
-# need more than an LU reroute — see FINDINGS "Matrix surface".)
+# need more than an LU reroute.)
 @overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.det(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
     LinearAlgebra.det(LinearAlgebra.generic_lufact!(copy(A)))
 
@@ -143,7 +143,7 @@ end
 # ── DECOMPOSITIONS: hand-rolled, WT-compilable textbook algorithms ──────────
 # The library's LAPACK/QR/Householder machinery emits invalid wasm, and
 # GenericLinearAlgebra's pure-Julia algorithms hit the SAME WT codegen wall (both
-# verified — see FINDINGS "Matrix surface"). But simple textbook algorithms
+# verified). But simple textbook algorithms
 # COMPILE and match native under the tolerance oracle (rtol 1e-9), verified 30/30
 # each. Float64 ONLY: Float32 iterative algorithms differ from native by ~1e-7
 # (Float32 eps) > the oracle rtol, so they are not oracle-verifiable (deferred).

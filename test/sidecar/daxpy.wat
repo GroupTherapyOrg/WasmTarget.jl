@@ -1,5 +1,5 @@
-;; Native linear-memory sidecar prototype (Phase 10.2, dev/PARITY_MASTER.md
-;; roadmap item 3). Hand-written, no libc. This module owns its OWN linear
+;; Native linear-memory sidecar prototype (dev/PARITY_MASTER.md, Scope).
+;; Hand-written, no libc. This module owns its OWN linear
 ;; memory and exposes only scalar accessors + one compute entry — the shape
 ;; dart2wasm's ffiMemory / Pointer<T> boundary uses (parity below).
 ;;

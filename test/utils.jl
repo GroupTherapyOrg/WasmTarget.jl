@@ -926,8 +926,8 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
 end
 
 # ============================================================================
-# Sidecar differential comparison (Phase 10.2 prototype — native linear-memory
-# module, dev/PARITY_MASTER.md roadmap item 3)
+# Sidecar differential comparison (native linear-memory module,
+# dev/PARITY_MASTER.md, Scope)
 # ============================================================================
 
 """

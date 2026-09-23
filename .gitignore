@@ -7,6 +7,11 @@ docs/dist/
 docs/build/
 Manifest.toml
 
+# Reports the fuzz tools regenerate on every run (test/fuzz/run.jl, stdlib_coverage.jl)
+test/fuzz/failures/INDEX.md
+test/fuzz/COVERAGE.md
+test/fuzz/STDLIB_COVERAGE.md
+
 # Node
 node_modules/
 

@@ -35,8 +35,8 @@ using ..FuzzHarness: compile_and_run, compile_and_run_vec
 using ..FuzzBridge: bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
 using ..FuzzBridgeArgs: bridge_run_args, args_supported, ismutable_shape
 using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
-# Float-match tolerances live in the HASH-PINNED frozen oracle policy (loop_guard.sh
-# guards it) so the autonomous /loop can't widen them to bury a divergence.
+# Float-match tolerances live in the frozen oracle policy (oracle_policy.jl): widening
+# them to bury a divergence is never a fix.
 using ..FuzzOraclePolicy: ORACLE_RTOL, ORACLE_ATOL
 
 struct Outcome
@@ -74,7 +74,7 @@ function classify(nv, wv, cmp = vals_match)
     elseif nstat === :throw && wstat === :ok
         return :divergent_throw
     else
-        return :match   # both error → acceptable (catalogued in STUBBED_METHODS.md)
+        return :match   # both error → acceptable
     end
 end
 

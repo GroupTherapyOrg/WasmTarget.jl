@@ -190,8 +190,7 @@ function load_gaps()
     isdir(LEDGER_DIR) || return Dict{String,String}[]
     gaps = Dict{String,String}[]
     for f in sort(readdir(LEDGER_DIR))
-        # Gap files are named "<12-hex-id>.md"; skip reference docs (INDEX.md,
-        # STUBBED_METHODS.md, etc.) that share the directory.
+        # Gap files are named "<12-hex-id>.md"; skip the generated INDEX.md.
         occursin(r"^[0-9a-f]{12}\.md$", f) || continue
         path = joinpath(LEDGER_DIR, f)
         hdr = _parse_header(path)
@@ -212,7 +211,7 @@ open_gaps() = filter(g -> get(g, "status", "open") == "open", load_gaps())
 # the construct; precise per-diagnostic-site dedup would need compile-time
 # instrumentation (DEFERRED — in practice fixing a high-fan-in root dissolves its
 # cluster, which is the point of ranking). Tier weight up-ranks frontier work so a
-# lone T1/T2 gap isn't buried under T0 polish. See test/fuzz/LOOP.md §6.
+# lone T1/T2 gap isn't buried under T0 polish.
 const GAP_FAMILIES = [
     ("abstract-Dict key (Int-widen)", r"Dict\(.*Int(8|16|32)", 0),
     ("median / quantile",             r"median\(|quantile\(",   0),
@@ -386,7 +385,7 @@ function regenerate_index!()
     println(io, "`verify_gaps!()`, and fixed gaps auto-close.\n")
     println(io, "**Open: $(length(opn)) &nbsp;•&nbsp; Fixed: $(length(fxd)) &nbsp;•&nbsp; Out-of-subset: $(length(oos)) &nbsp;•&nbsp; Total: $(length(gaps))**\n")
     if !isempty(oos)
-        println(io, "_Out-of-subset = WT now **loudly rejects** the construct (a sound `WasmCompileError`, not a silent trap/wrong value). These are NOT open bugs — they're outside the supported subset; rewrite the source to be type-stable. See `STRICT_MODE_INVENTORY.md`._\n")
+        println(io, "_Out-of-subset = WT now **loudly rejects** the construct (a sound `WasmCompileError`, not a silent trap/wrong value). These are NOT open bugs — they're outside the supported subset; rewrite the source to be type-stable._\n")
     end
     if !isempty(bycat)
         println(io, "Open by category: ", join(["`$k`: $v" for (k, v) in sort(collect(bycat))], " · "), "\n")

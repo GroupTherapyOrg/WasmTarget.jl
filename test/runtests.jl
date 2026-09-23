@@ -148,7 +148,7 @@ _wt_shard0() && include("dispatch_method_error.jl")
 # formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
 _wt_shard0() && include("lazy_classid_isa.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
-# Phase 10.2 prototype: native linear-memory sidecar (dev/PARITY_MASTER.md item 3).
+# Native linear-memory sidecar (dev/PARITY_MASTER.md, Scope).
 # Node-differential, run once (shard 0 only) like the other fixture suites above.
 _wt_shard0() && include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
 _wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
@@ -171,7 +171,7 @@ _wt_shard0() && include("f31_union_value_backfills.jl")
 # a single i64 op on a 128-bit value was invalid wasm). See dev/HISTORY.md#parity-method.
 _wt_shard0() && include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
-# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
+# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order.
 _wt_shard0() && include("sort_comparator_backfills.jl")
 # CFG normalization: shared non-returning bounds-error tails may cross natural
 # loop regions and must be duplicated through the canonical statement compiler.

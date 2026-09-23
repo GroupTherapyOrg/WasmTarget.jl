@@ -1,11 +1,11 @@
-# Probe corpus definition (shared by test/probe_bytes.jl and test/shadow_compile.jl)
+# Probe corpus definition (shared by test/probe_bytes.jl and test/registry_coverage.jl)
 # Each case is a (f, argtypes) pair compiled with an explicit export name.
 
 const CASES = Vector{Pair{String,Tuple}}()   # name => (f, argtypes::Tuple)
 _c(name::String, f, argtypes...) = push!(CASES, name => (f, argtypes))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. INTRINSIC_BINOPS families (dev/PARITY_MASTER.md `INTRINSIC_BINOPS`):
+# 1. INTRINSIC_BINOPS families (src/codegen/intrinsics_table.jl `INTRINSIC_BINOPS`):
 #    add, sub, mul, div, rem, and, or, xor, comparisons (<, <=, ==, !=) over
 #    Int64/Int32/UInt64/UInt32/Float64/Float32, plus narrow-pair (Int8/Int16/
 #    UInt8/UInt16) arithmetic + comparisons exercising the pre-table narrow
@@ -126,7 +126,7 @@ _c("gt_f32",   (x::Float32,y::Float32) -> x > y, Float32, Float32)
 _c("ge_f32",   (x::Float32,y::Float32) -> x >= y, Float32, Float32)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Unary / conversion (INTRINSIC_UNOPS + result map, dev/PARITY_MASTER.md)
+# 3. Unary / conversion (INTRINSIC_UNOPS + result map, src/codegen/intrinsics_table.jl)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _c("not_int",         (x::Int64) -> ~x, Int64)

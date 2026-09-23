@@ -105,7 +105,7 @@ function run_simplediffeq_tests(; reps::Int = 30)
             # a WT reuse optimization with NO IR-level representation; when that reuse
             # doesn't happen the value orphans on the stack ("values remaining"). It's
             # SUB-IR (an IR-level use guard can't tell threaded-reuse from orphan), so it
-            # needs a WT-core stack-threading fix — tracked in test/fuzz/FINDINGS.md.
+            # needs a WT-core stack-threading fix.
             # LOUD/SOUND (a compile-time validation error, never a silent miscompile).
             # Gated on 1.13 only; scalar / SVector-state / parameterized ODE solving and
             # ALL of 1.12 pass. This is a prerelease (1.13.0-rc1) codegen corner.
