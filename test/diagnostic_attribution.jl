@@ -12,6 +12,8 @@ using Test
 using WasmTarget
 
 module DiagAttrib
+    # A receiver-free `show` kept out of line (its Method `show(x)` invoked directly).
+    shows(x::Float64) = (@noinline show(x); x)
     # An unsupported construct (a foreigncall WT has no lowering for) inside a helper
     # that inference inlines into its caller.
     @inline helper_uses_ccall(x::Float64) = ccall(:wt_test_no_such_symbol, Float64, (Float64,), x)
@@ -160,4 +162,28 @@ end
     d = WasmTarget.WasmDiagnostic(:unsupported_type, "f", "x", nothing, nothing)
     @test d.stmt_idx == 0 && isempty(d.frames) && d.stmt == ""
     @test sprint(show, d) == "[unsupported_type] in `f`: x"
+end
+
+@testset "diagnostics: show with no IO bridge rejects at its statement (C6)" begin
+    # Natively show(x) writes to the console; with no configured IO bridge WT must reject
+    # loudly, exactly as print/println do, never emit nothing.
+    # The receiver-free `show` Method's lowering, on the statement that invokes it (a
+    # compile normally cross-calls the collected Base body first, so it is driven directly).
+    ci, _ = WasmTarget.get_typed_ir(DiagAttrib.shows, (Float64,))
+    body = WasmTarget.nir_body(ci)
+    k = findfirst(s -> s.node isa WasmTarget.NirInvoke, body.stmts)
+    @test k !== nothing
+    node = body.stmts[k].node
+    ctx = WasmTarget.CompilationContext(body, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+    @test WasmTarget.get_io_imports() === nothing
+    @test_throws WasmTarget.WasmCompileError WasmTarget._invoke_show_b(node.operands, ctx, k, node)
+    err = try
+        WasmTarget._invoke_show_b(node.operands, ctx, k, node)
+        nothing
+    catch e
+        e
+    end
+    d = err.diag
+    @test occursin("show requires an explicitly configured IO bridge", d.construct)
+    @test d.stmt_idx == k && occursin("show", d.stmt)
 end

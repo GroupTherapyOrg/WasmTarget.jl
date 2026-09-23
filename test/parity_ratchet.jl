@@ -727,6 +727,7 @@ const LOCKS = [
             required = ["function _compile_invoke_print_b", "_invoke_singleton_instance",
                         "Base.issingletontype(T)",
                         "println/print requires an explicitly configured IO bridge",
+                        "show requires an explicitly configured IO bridge",
                         "println/print has no IO bridge representation"]
             count(p -> occursin(p, invoke_src), forbidden) +
                 count(p -> !occursin(p, invoke_src), required)

@@ -542,10 +542,10 @@ function _invoke_print_b(args, ctx::AbstractCompilationContext, idx::Int, call::
     return fbp
 end
 
-"""show(x) — the ONE receiver-free `show` Method (`Tuple{typeof(show),Any}`). Moved
-verbatim, including the pre-migration behavior of silently emitting nothing when no
-IO bridge is configured (unlike print/println, which reject via record_unsupported!
-— an existing asymmetry, not something this migration changes)."""
+"""show(x) — the ONE receiver-free `show` Method (`Tuple{typeof(show),Any}`). Without a
+configured IO bridge it rejects at its statement exactly as receiver-free print/println
+do — natively the call writes to the console, so emitting nothing would be a silently
+wrong module."""
 function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     io = get_io_imports()
     if io !== nothing
@@ -606,7 +606,12 @@ function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, call::N
         end
         return bsh2
     else
-        fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
+        record_unsupported!(ctx, :unsupported_method,
+            "show requires an explicitly configured IO bridge"; idx=idx)
+        # reached only when the statement is proven unreachable: a structural trap
+        fb2 = _ctx_builder(ctx, "compile_invoke.frag")
+        unreachable!(fb2)
+        ctx.last_stmt_was_stub = true
         return fb2
     end
 end
