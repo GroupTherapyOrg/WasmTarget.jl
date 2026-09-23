@@ -155,13 +155,14 @@ Base.showerror(io::IO, e::WasmValidationError) =
 # --- Source attribution -----------------------------------------------------
 # A located report reads the compiled function's NIR (a statement's line and printed
 # form) and its DebugInfo (the inline chain, the method's definition site) — both carried
-# by the compilation context from the one NIR boundary. A context without them (none is
-# constructed today) reports unlocated rather than failing the report itself.
+# by the compilation context from the one NIR boundary. Its DebugInfo decodes every Int
+# position (in range, out of range, empty or stripped codelocs) to a location or to none,
+# so attribution reads it directly.
 
 # parity(code_generator.dart:190 setSourceMapFileOffset): the NIR a located report reads.
-_ctx_nir(ctx) = hasproperty(ctx, :nir) ? ctx.nir : NirStmt[]
+_ctx_nir(ctx)::Vector{NirStmt} = ctx.nir
 # parity(code_generator.dart:190 setSourceMapFileOffset): the DebugInfo a located report decodes.
-_ctx_debuginfo(ctx) = hasproperty(ctx, :debuginfo) ? ctx.debuginfo : nothing
+_ctx_debuginfo(ctx)::Union{Core.DebugInfo,Nothing} = ctx.debuginfo
 
 # Per-statement line — the NIR boundary's `NirStmt.line` (frontend/nir.jl `_nir_lines`:
 # a position whose own DebugInfo entry is ≤ 0 takes the nearest earlier concrete line);
@@ -204,23 +205,20 @@ parity(quarantine: Julia source positions live in the CodeInfo's compressed Core
 function stmt_frames(di, idx::Int)::Vector{String}
     frames = String[]
     di isa Core.DebugInfo || return frames
-    try
-        i = idx
-        while i >= 1
-            t = Base.IRShow.getdebugidx(di, i)
-            Int(t[1]) > 0 && break
-            i -= 1
-        end
-        i >= 1 || return frames
-        nodes = Base.IRShow.buildLineInfoNode(di, di.def, i)   # outermost first
-        for n in Iterators.reverse(nodes)
-            m = n.method
-            name = m isa Core.MethodInstance ? sprint(show, m) :
-                   m isa Method ? string(m.name) : string(m)
-            name = replace(name, "MethodInstance for " => "")
-            push!(frames, string(name, " @ ", n.file, ":", n.line))
-        end
-    catch
+    i = idx
+    while i >= 1
+        t = Base.IRShow.getdebugidx(di, i)
+        Int(t[1]) > 0 && break
+        i -= 1
+    end
+    i >= 1 || return frames
+    nodes = Base.IRShow.buildLineInfoNode(di, di.def, i)   # outermost first
+    for n in Iterators.reverse(nodes)
+        m = n.method
+        name = m isa Core.MethodInstance ? sprint(show, m) :
+               m isa Method ? string(m.name) : string(m)
+        name = replace(name, "MethodInstance for " => "")
+        push!(frames, string(name, " @ ", n.file, ":", n.line))
     end
     return frames
 end
@@ -266,10 +264,9 @@ function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
 end
 
 function _ctx_func_name(ctx)::String
-    try
-        ctx.func_ref !== nothing && return string(nameof(ctx.func_ref))
-    catch
-    end
+    f = ctx.func_ref
+    # A callable that is neither a Function nor a Type (a functor instance) has no `nameof`.
+    (f !== nothing && applicable(nameof, f)) && return string(nameof(f))
     return "func_$(ctx.func_idx)"
 end
 
@@ -318,7 +315,7 @@ parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report)
 function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                              idx::Int=0, detail=nothing,
                              soundness_fatal::Union{Nothing,Bool}=nothing)::Nothing
-    idx > 0 || (idx = try; ctx.current_stmt_idx; catch; 0; end)   # helpers without an idx
+    idx > 0 || (idx = ctx.current_stmt_idx)   # helpers without an idx
     diag = WasmDiagnostic(kind, _ctx_func_name(ctx), String(construct),
                           idx > 0 ? julia_loc(ctx, idx) : nothing, detail,
                           idx, _stmt_text(ctx, idx),
