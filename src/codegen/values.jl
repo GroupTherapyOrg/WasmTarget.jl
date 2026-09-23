@@ -22,14 +22,12 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         if val.name === :nothing
             return I32
         end
-        # The binding was resolved once at the NIR boundary; an unbound one has no type
-        val.bound || return AnyRef
-        try
-            return static_wasm_type(NirLiteral(val.value), ctx)
-        catch
-            # If we can't resolve, fall back to AnyRef (internal polymorphic type)
-            return AnyRef
-        end
+        # The binding was resolved once at the NIR boundary; an unbound one is the same
+        # located reject the emission of this operand raises.
+        val.bound || record_unsupported!(ctx, :unsupported_global,
+            "GlobalRef $(GlobalRef(val.mod, val.name)) is not defined in its source module";
+            detail=GlobalRef(val.mod, val.name), soundness_fatal=true)
+        return static_wasm_type(NirLiteral(val.value), ctx)
     end
     if val isa NirSSA
         if haskey(ctx.ssa_locals, val.id)
