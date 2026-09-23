@@ -28,6 +28,8 @@
 # locked (L113, L124) and modelled (dev/formal/ConsultChain.tla).
 # ============================================================================
 
+# parity(intrinsics.dart:401 StaticIntrinsic._lookup): the table from a resolved callee to its
+# lowering.
 const BUILTIN_LOWERINGS = IdDict{Any,Function}()
 
 """Register one lowering under a callee's IDENTITY. Two names can be one object:
@@ -36,7 +38,8 @@ const BUILTIN_LOWERINGS = IdDict{Any,Function}()
 four builtins — silently clobbers two entries when transcribed into an IdDict.
 Registering the same object twice under DIFFERENT lowerings is that bug and is
 rejected here at load time; aliases that map to the SAME lowering (Base./Core.
-`sizeof`, `isvisible`/`_closed_world_isvisible`) are fine."""
+`sizeof`, `isvisible`/`_closed_world_isvisible`) are fine.
+parity(intrinsics.dart:404 StaticIntrinsic._populateLookup)"""
 function _register_builtin!(callee, lowering::Function)::Function
     prev = get(BUILTIN_LOWERINGS, callee, nothing)
     prev === nothing || prev === lowering ||
@@ -46,10 +49,11 @@ function _register_builtin!(callee, lowering::Function)::Function
 end
 
 """The concrete Core/Base function OBJECT a call's callee names, mirroring dart's
-`KernelNodes` lookup — the registry is keyed on that object's identity, never on the bare
+`StaticIntrinsic.fromProcedure` lookup — the registry is keyed on that object's identity, never on the bare
 name Symbol. The NIR boundary already resolved a bound global to its object; a callee the
 IR embedded literally is unwrapped here. An unbound global (left a `GlobalRef` by the
-boundary) and a runtime value (an SSA use, an argument) are explicit non-matches."""
+boundary) and a runtime value (an SSA use, an argument) are explicit non-matches.
+parity(intrinsics.dart:414 StaticIntrinsic.fromProcedure)"""
 _resolve_builtin_callee(func) = nir_const(func)
 
 """THE funnel: resolve `func`'s callee identity once and, if it names a
@@ -57,8 +61,9 @@ registered Core/Base builtin, run its lowering. Returns the handled
 `InstrBuilder` or `nothing` (generic/dynamic-call path continues) — dart's
 nullable-return entry-funnel shape. Called ONCE from `compile_call!`, directly
 after its ONE SSAValue→GlobalRef callee-resolution step, mirroring dart's
-resolve-the-target-once dispatch (`KernelNodes._lookup`, intrinsics.dart:401).
-formal(dev/formal/ConsultChain.tla)."""
+resolve-the-target-once dispatch (`StaticIntrinsic._lookup`, intrinsics.dart:401).
+formal(dev/formal/ConsultChain.tla).
+parity(intrinsics.dart:1194 generateStaticIntrinsic)"""
 function _try_builtin_lowering!(b::InstrBuilder, fb::InstrBuilder, ctx::AbstractCompilationContext,
                                  call::NirCall, idx::Int, args, func)::Union{InstrBuilder,Nothing}
     callee = _resolve_builtin_callee(func)
@@ -73,6 +78,8 @@ end
 # mutable world-age model. A WT module is already one immutable collected
 # world, so the exact lowering is the ordinary closed-world call to `f`;
 # the captured world token has no runtime state to mutate.
+# parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age,
+# and a closed-world module has exactly one.)
 function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 2 || return nothing
     # The intrinsic's Julia SSA result is `Any`, but that is a consumer-side
@@ -88,6 +95,8 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)
     end
 end
 
+# parity(quarantine: Julia's `isdefinedglobal` asks whether a module binding exists; dart has no
+# runtime modules or bindings, so the closed world answers it from the TypeName constant.)
 function _lower_isdefinedglobal!(b, fb, ctx, call, idx, args, callee)
     length(args) == 2 || return nothing
     module_owner = _trace_field_owner(args[1], :module, ctx)
@@ -104,6 +113,8 @@ function _lower_isdefinedglobal!(b, fb, ctx, call, idx, args, callee)
     return nothing
 end
 
+# parity(quarantine: Julia's `Base.isvisible` walks module import/using visibility, which dart
+# has no runtime counterpart for; the TypeName constant carries the closed-world answer.)
 function _lower_isvisible!(b, fb, ctx, call, idx, args, callee)
     length(args) == 3 || return nothing
     symbol_owner = _trace_typename_symbol_owner(args[1], ctx)
@@ -121,6 +132,7 @@ end
 # history. A WT module has one immutable collection world, so TypeName
 # constants carry the already-resolved answer. This is the single runtime
 # route; no Binding object or partial partition chain exists in Wasm.
+# parity(quarantine: Julia's BindingPartition world bounds; dart has no world age.)
 function _lower_check_world_bounded!(b, fb, ctx, call, idx, args, callee)
     (length(args) == 1 && get_ssa_type(ctx, args[1]) === Core.TypeName) || return nothing
     wb = _ctx_builder(ctx, "compile_call.check_world_bounded")
@@ -142,6 +154,9 @@ end
 # discriminating and disjoint, so one entry holding both is dart's shape: ONE
 # identity, its own guards in order (intrinsics.dart's per-intrinsic shape
 # tests). formal(dev/formal/ConsultChain.tla).
+# parity(code_generator.dart:2183 visitStaticGet): the const-fold guard reads a module-level
+# constant as dart reads a static field. The TypeName-trace guard is Julia-only: a `Module`
+# and its binding names exist at runtime only as TypeName fields.
 function _lower_getglobal!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 2 || return nothing
     _gg_mod = args[1] isa NirGlobalRef ? (args[1].bound ? args[1].value : args[1]) :
@@ -190,6 +205,7 @@ end
 
 # ncodeunits(s) → array.len for string byte arrays
 # Handles AbstractString fields from exception structs (e.g., e.msg)
+# parity(intrinsics.dart:626 WasmArrayRef.length): `array.len` then `i64.extend_i32_u`.
 function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)
     length(args) == 1 || return nothing
     arg = args[1]
@@ -254,6 +270,8 @@ function _lower_length!(b, fb, ctx, call, idx, args, callee)
 end
 
 # Runtime-length tuple arity comes from its immutable size tuple.
+# parity(quarantine: a Julia Vararg tuple whose length is known only at runtime carries its arity
+# in a size tuple; a dart record's arity is static.)
 function _lower_nfields!(b, fb, ctx, call, idx, args, callee)
     length(args) == 1 || return nothing
     local tuple_type = get_ssa_type(ctx, args[1])
@@ -273,6 +291,8 @@ end
 # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
 # arrays have no undefined representation and are always assigned. Reference
 # arrays encode Julia's undefined slot as null and require an actual load.
+# parity(quarantine: Julia's `Core.memoryref_isassigned` on a GenericMemoryRef — an undefined
+# reference slot is null; dart's WasmArray has no undefined-slot query.)
 function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)
     isempty(args) && return nothing
     ref_arg = args[1]
@@ -304,6 +324,8 @@ end
 
 # Special case for memoryrefget - array element access
 # memoryrefget(ref, ordering, boundscheck) where ref is from memoryrefnew
+# parity(quarantine: Julia's GenericMemoryRef is an (array, index) pair read by `Core.memoryrefget`;
+# the load itself is the `array.get` of intrinsics.dart:1223 wasmArrayIndex.)
 function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 1 || return nothing
     ref_arg = args[1]
@@ -377,6 +399,8 @@ end
 # This is used by push!, resize!, and other dynamic array operations
 # Fresh MemoryRefs (from Core.memoryref, getfield(vec, :ref)) have offset 1
 # Indexed MemoryRefs (from memoryrefnew(ref, index, bc)) have offset = index
+# parity(quarantine: Julia's `Core.memoryrefoffset`, the 1-based position of a GenericMemoryRef
+# in its Memory; dart has no interior array reference.)
 function _lower_memoryrefoffset!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 1 || return nothing
     ref_arg = args[1]
@@ -398,6 +422,8 @@ end
 # Special case for memoryrefset! - array element assignment
 # memoryrefset!(ref, value, ordering, boundscheck) -> stores value in array
 # In Julia, setindex! returns the stored value, so we need to return it too
+# parity(quarantine: Julia's GenericMemoryRef store `Core.memoryrefset!`; the store itself is the
+# `array.set` of intrinsics.dart:1239 wasmArrayIndexSet.)
 function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 2 || return nothing
     ref_arg = args[1]
@@ -547,6 +573,8 @@ end
 # Special case for Core.memorynew - creates a new Memory{T} backing store
 # memorynew(Memory{T}, size) -> Memory{T}
 # In WasmGC, Memory{T} IS an array, so this compiles to array.new_default
+# parity(quarantine: Julia's `Core.memorynew` allocates a GenericMemory; the allocation is the
+# `array.new_default` of intrinsics.dart:1959 wasmArrayNew.)
 function _lower_memorynew!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 2 || return nothing
     mem_type = nir_const(args[1])  # Memory{T} type (compile-time constant)
@@ -641,6 +669,8 @@ end
 # Special case for Core.memoryref - creates MemoryRef from Memory
 # memoryref(memory::Memory{T}) -> MemoryRef{T}
 # In WasmGC, this is a no-op since Memory IS the array
+# parity(quarantine: Julia's `Core.memoryref` makes a GenericMemoryRef from a Memory; dart has no
+# interior array reference.)
 function _lower_memoryref!(b, fb, ctx, call, idx, args, callee)
     length(args) == 1 || return nothing
     # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
@@ -651,6 +681,8 @@ end
 # Special case for memoryrefnew - handle both patterns:
 # 1. memoryrefnew(memory) -> MemoryRef (for Vector allocation, just pass through)
 # 2. memoryrefnew(base_ref, index, boundscheck) -> MemoryRef at offset
+# parity(quarantine: Julia's `Core.memoryrefnew` makes a GenericMemoryRef at an index; dart has
+# no interior array reference.)
 function _lower_memoryrefnew!(b, fb, ctx, call, idx, args, callee)
     if length(args) == 1
         # Single arg: just wrapping a Memory - pass through the array reference
@@ -698,6 +730,7 @@ function _lower_memoryrefnew!(b, fb, ctx, call, idx, args, callee)
 end
 
 # Special case for Core.tuple - tuple creation
+# parity(code_generator.dart:3239 visitRecordLiteral)
 function _lower_tuple!(b, fb, ctx, call, idx, args, callee)
     length(args) > 0 || return nothing
     # Infer tuple type from arguments
@@ -753,11 +786,13 @@ end
 # Core.donotdelete — compiler fence preventing DCE. No WASM output needed.
 # Arguments were already evaluated by the caller's IR; we just skip emitting.
 # Used by WASM import stubs (Canvas2D, etc.) to keep calls alive in optimized IR.
+# parity(quarantine: Julia's `Core.donotdelete` optimizer fence; dart has no such builtin.)
 function _lower_donotdelete!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
 # Special case for compilerbarrier - just pass through the value
+# parity(quarantine: Julia's `Core.compilerbarrier` inference barrier; dart has no such builtin.)
 function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)
     # compilerbarrier(kind, value) - first arg is a symbol, second is the value
     # We only want the value (second arg)
@@ -770,6 +805,8 @@ end
 # Runtime Union construction is Dart's RTI union node: a real $JlUnion
 # containing the two runtime type operands. This is the dynamic counterpart
 # of get_type_constant_global!(Union{A,B}); no host type fabrication occurs.
+# parity(quarantine: Julia builds a `Union` at runtime through `Core.apply_type`; dart has no
+# runtime union-type construction.)
 function _lower_apply_type!(b, fb, ctx, call, idx, args, callee)
     length(args) == 3 || return nothing
     union_ctor = nir_const(args[1]) === Union ||
@@ -795,6 +832,9 @@ end
 # typeof(x) returns the one $JlDataType representation.  The closed-world
 # planner materializes both the lookup table and every reachable static type
 # global before function bodies are emitted.
+# parity(quarantine: Julia's `typeof` returns a first-class DataType whose identity (`===`) and
+# fields Julia code reads; dart's `runtimeType` (intrinsics.dart:2963 objectRuntimeType) returns
+# a masqueraded `Type` with no such contract.)
 function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
     length(args) >= 1 || return nothing
     arg = args[1]
@@ -966,6 +1006,8 @@ end
 # `_skip_arg_prepush` carve-out in `compile_call!`'s generic arg-push loop;
 # consulted from THE identity-keyed funnel instead, this call never reaches
 # that loop at all, so no carve-out is needed there any more).
+# parity(quarantine: Julia's `Core._expr` builds an `Expr`, a runtime syntax object dart has no
+# counterpart for.)
 function _lower_expr!(b, fb, ctx, call, idx, args, callee)
     # Register Expr type if not already registered
     if !haskey(ctx.type_registry.structs, Expr)
@@ -1054,13 +1096,15 @@ function _lower_symbol!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
-# `ifelse(cond, a, b)` — dart lowers a ConditionalExpression through its own
-# operand wraps (intrinsics.dart:607 the same nullable-return funnel); WT emits
-# `select`/`select_t`. Self-contained: compiles all three operands itself, so it
+# `ifelse(cond, a, b)` — dart lowers a ConditionalExpression lazily, as an
+# if/else (code_generator.dart:2810 visitConditionalExpression); Julia's
+# `ifelse` evaluates both operands, so WT emits `select`/`select_t`. Self-contained: compiles all three operands itself, so it
 # never depended on the generic arg-push loop. `Base.ifelse` (the generic
 # function) and `Core.ifelse` (the builtin) are DIFFERENT objects — the retired
 # `is_func(func, :ifelse)` matched either by bare name, so both are keys here.
 # L38_no_known_value_substitutions pins this body's two reject messages.
+# parity(quarantine: Julia's `ifelse` is a function whose operands are both evaluated — a wasm
+# `select`, not dart's lazy ConditionalExpression.)
 function _lower_ifelse!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) == 3 || return nothing
     # Wasm select expects: [val_if_true, val_if_false, cond] (cond on top)
@@ -1143,13 +1187,14 @@ function _lower_ifelse!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder
 end
 
 # Core.typeassert(x, T) — dart's CHECKED cast (census F4; emitAsCheck,
-# types.dart:437-481: is-check, throw on mismatch). Statically-proven casts stay
+# types.dart:527: is-check, throw on mismatch). Statically-proven casts stay
 # pass-through (the common case — inference already narrowed). A runtime check
 # emits when the value is a GC ref and the target has a DFS classId range:
 # typeId ∈ [low, high] or throw TypeError. Values the discriminator can't see
 # (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
 # Self-contained: emits its own operand through `emit_value!`.
 # L57_exact_typeassert_exception pins this body's `_emit_typeerror_throw!` call.
+# parity(types.dart:527 emitAsCheck)
 function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     if length(args) >= 1
         local _ta_target = length(args) >= 2 ? (nir_const(args[2]) isa Type ? nir_const(args[2]) :
@@ -1210,9 +1255,10 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
 end
 
 # ---- getfield / getproperty / setfield! / setproperty! ----------------------
-# parity(intrinsics.dart:685 MemberIntrinsic.generate): dart resolves an
-# instance-member access to ONE intrinsic keyed on the resolved member and
-# runs THAT intrinsic's own shape guards in order. WT's four field-access
+# parity(code_generator.dart:2258 visitInstanceGet): dart resolves an
+# instance-member access to ONE target and first tries THAT member's intrinsic
+# (intrinsics.dart:607 generateInstanceGetterIntrinsic), whose shape tests run
+# in order. WT's four field-access
 # builtins have several such guards each, and the retired `is_func(func, :sym)`
 # ladder interleaved them with RAW identity checks on the same callee
 # (`func.mod === Core && func.name === :getfield`: the closure self-capture
@@ -1228,6 +1274,8 @@ end
 # an unresolved SSAValue is not a registry key. So consulting the funnel once,
 # up front, preserves each guard's relative order exactly.
 
+# parity(quarantine: Julia's `DataType.layout` is a host pointer to compile-time layout metadata;
+# dart types carry no layout object.)
 function _lower_getfield_layout!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
     # pointer is compile-time host metadata; its loads are folded in
@@ -1360,6 +1408,7 @@ function _lower_getfield_signal_skip!(b, fb, ctx, call, idx, args)::Union{InstrB
 end
 
 
+# parity(code_generator.dart:2258 visitInstanceGet)
 function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for getfield/getproperty - struct/tuple field access
     # In newer Julia, obj.field compiles to Base.getproperty(obj, :field)
@@ -1927,6 +1976,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 end
 
 
+# parity(code_generator.dart:2434 visitInstanceSet)
 function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for setfield!/setproperty! - mutable struct field assignment
     # Also handles WasmGlobal (:value -> global.set)
@@ -2119,6 +2169,7 @@ end
 
 # `Core.getfield` (=== `Base.getfield`, measured): the two raw-identity guards
 # are its own, so they run here and nowhere else.
+# parity(code_generator.dart:2258 visitInstanceGet)
 _lower_getfield!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
                   _lower_getfield_closure_capture!, _lower_getfield_signal_skip!,
@@ -2130,13 +2181,14 @@ _lower_getproperty!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Not
     _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
                   _lower_getfield_general!), b, fb, ctx, call, idx, args)
 
+# parity(code_generator.dart:2434 visitInstanceSet)
 _lower_setfield!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_setfield_signal_write!, _lower_setfield_general!),
                  b, fb, ctx, call, idx, args)
 
 # ---- The self-contained operator entries -----------------------------------
-# parity(intrinsics.dart:995 `_binaryOperatorMap` / :1018 the direct-call
-# funnel): each of these emits its OWN operands through `emit_call_operand!`
+# parity(intrinsics.dart:995 `_binaryOperatorMap` / :1194 generateStaticIntrinsic,
+# whose intrinsics translate their own arguments): each of these emits its OWN operands through `emit_call_operand!`
 # before choosing an opcode, exactly as a dart intrinsic wraps
 # `node.arguments.positional[i]` itself. They were the last arms that read
 # operands someone else had pushed (`compile_call!`'s generic pre-push loop),
@@ -2328,7 +2380,7 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
         num!(fb, ops.i64)
     end
 
-    # parity(translator.dart:1621 Translator.convertType): the symmetric RESULT
+    # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT
     # side of the anyref-OPERAND unbox above — a numeric arith result flowing
     # into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store).
@@ -2353,6 +2405,7 @@ end
 # compile-time Type parameter (skipped by the shared operand rule), so exactly
 # one operand reaches `_compile_call_isa`, which is what its `_sub_builder(fb,
 # ctx, "_compile_call_isa", 1)` seeds.
+# parity(code_generator.dart:3159 visitIsExpression)
 function _lower_isa!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) >= 2 || return nothing
     emit_call_operands!(fb, ctx, args)
