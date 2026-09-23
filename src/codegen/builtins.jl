@@ -574,8 +574,8 @@ The smallest element count Julia's allocator rejects for `mem_type`: `_new_gener
 (src/genericmemory.c) throws ArgumentError once the count, or its byte size (element size, plus
 one selector byte per element for an isbits-union element), reaches `typemax(Int)`. A negative
 count, read as unsigned, lies above every limit.
+parity(quarantine: Julia's GenericMemory size rule; dart's array length check is typed_data.dart:38 _newArrayLengthCheck.)
 """
-# parity(quarantine: Julia's GenericMemory size rule; dart's array length check is typed_data.dart:38 _newArrayLengthCheck.)
 function memory_length_limit(@nospecialize(mem_type))::UInt64
     per_element = UInt64(Base.elsize(mem_type)) + (Base.isbitsunion(eltype(mem_type)) ? UInt64(1) : UInt64(0))
     max_int = UInt64(typemax(Int))
