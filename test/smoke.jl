@@ -217,6 +217,14 @@ _g("closures", Any[
 # When one flips to passing, the smoke says so loudly (the loop that closes it is done).
 const XFAIL = Vector{Pair{String,Vector{Any}}}()
 _xf(name, cases) = push!(XFAIL, name => cases)
+# An erased call's result is Julia's `::Any`, never its first argument's type: the value
+# keeps its own class (native 2, 1, 1; typed as the Int64 argument it answers 1, and traps
+# an illegal cast for the Bool and Float64 results).
+_xf("erased_call_result", Any[
+    ("erased_result_uint64", (n::Int64) -> (fs = Any[x -> UInt64(x)]; r = fs[1](n); r isa Int64 ? 1 : 2), Int64(3)),
+    ("erased_result_bool", (n::Int64) -> (fs = Any[x -> x > 0]; r = fs[1](n); r isa Bool ? 1 : 2), Int64(3)),
+    ("erased_result_float64", (n::Int64) -> (fs = Any[x -> x * 0.5]; r = fs[1](n); r isa Float64 ? 1 : 2), Int64(3)),
+])
 # M6 progress (2026-07-02): the closure body now compiles VALID wasm (the self-box numeric
 # join types the capture cycle — f3_self_box_joins, dart Capture.type). The remaining gap is
 # SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
@@ -481,6 +489,10 @@ _g("builtins", Any[
     ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),     # Base.:*
     ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),  # Base.:-
     ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),  # Base.:*
+    # `-`/`*` on a captured, mutated accumulator: the dynamic operator whose operands carry
+    # the variable's joined type (translateTypeOfLocalVariable)
+    ("mutate_capture_sub", (n::Int64) -> ((s = 100; foreach(i -> (s -= i), 1:n); s)::Int64), Int64(5)),   # Base.:-
+    ("mutate_capture_mul", (n::Int64) -> ((s = 1; foreach(i -> (s *= i), 1:n); s)::Int64), Int64(5)),     # Base.:*
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
