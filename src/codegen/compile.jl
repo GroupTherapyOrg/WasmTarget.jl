@@ -810,8 +810,7 @@ function compile_module(functions::Vector;
 end
 
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
-# ir.jl — it is the boundary's OWN input side, consuming raw CodeInfo exactly like
-# get_typed_ir (R29a/R29b exempt ir.jl for the same reason).
+# trimcollect.jl beside the planner; it reads the NIR bodies in `function_data`.
 
 # Julia may discover several specialized functions with the same source-level name.
 # Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's

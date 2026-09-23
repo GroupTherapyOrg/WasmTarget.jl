@@ -928,3 +928,205 @@ end
 
 # (f, arg_types) keys discovered solely as dynamic-dispatch candidates.
 const _TRIM_DISPATCH_CANDIDATES = Ref{Set{Any}}(Set{Any}())
+
+# ============================================================================
+# The closed-world type collector — reads the NIR bodies the planner built
+# ============================================================================
+
+# parity(quarantine: Julia's IR node types — Expr, SSAValue, PhiNode, … — which a CodeInfo holds
+# as literal operands but which are IR structure, never program values.)
+const _IR_META_TYPES = Set{DataType}([
+    Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.PhiNode, Core.PhiCNode,
+    Core.UpsilonNode, Core.GotoNode, Core.GotoIfNot, Core.ReturnNode, LineNumberNode,
+    Core.NewvarNode, Core.SlotNumber, Core.MethodInstance, Core.CodeInstance, Core.CodeInfo,
+])
+
+"""
+    _collector_static_type(operand, body) -> Type
+
+A static, `ctx`-free echo of `infer_value_type` (context.jl) for the branches that
+don't need one — used ONLY to reconstruct the composite type `_lower_tuple!` (the ONE
+`Core.tuple` lowering) will give a `Core.tuple(...)` call's RESULT, so the collector can
+admit that exact composite. An SSA use or an argument reads the inferred type the NIR
+boundary recorded for it (the same source `ctx.ssa_types`/`ctx.arg_types` are seeded
+from); a constant global reads its bound value; a literal its own type.
+parity(code_generator.dart:135 getStaticType): an operand's type read through one context.
+"""
+function _collector_static_type(operand::NirNode, body::NirBody)::Type
+    if operand isa NirSSA
+        return operand.julia_type
+    elseif operand isa NirArgument
+        return 1 <= operand.n <= length(body.slot_types) ? body.slot_types[operand.n] : Any
+    elseif operand isa NirGlobalRef
+        (operand.bound && isconst(operand.mod, operand.name)) || return Any
+        return operand.value isa Type ? Type{operand.value} : typeof(operand.value)
+    elseif operand isa NirLiteral
+        v = operand.value
+        return v isa Type ? Type{v} : v === nothing ? Nothing : typeof(v)
+    end
+    return Any
+end
+
+"""
+    _collected_operand_value(operand) -> (Bool, value)
+
+The program value an operand materializes when the NIR boundary knows it statically: a
+literal's value (a quoted global read through to its binding), or a bound global's current value (values.jl's global arm bakes a
+non-const binding's CURRENT value as a mutable-global initializer, so its type is
+reachable too). `(false, nothing)` for an SSA use, an argument, a slot or an unbound
+global — values whose types the inferred types already carry.
+parity(constants.dart:454 Constants.ensureConstant): a constant operand is a value the module
+materializes.
+"""
+function _collected_operand_value(operand::NirNode)::Tuple{Bool, Any}
+    if operand isa NirLiteral
+        v = operand.value
+        v isa GlobalRef || return (true, v)
+        return isdefined(v.mod, v.name) ? (true, getfield(v.mod, v.name)) : (false, nothing)
+    end
+    (operand isa NirGlobalRef && operand.bound) && return (true, operand.value)
+    return (false, nothing)
+end
+
+"""
+    _collect_reachable_ir_types(function_data) -> Set{DataType}
+
+Phase 12B — the CLOSED-WORLD type collector (dart class_info.dart:864
+ClassIdNumbering._number numbers every class of the component ONCE, before codegen, with
+no second pass). Reads every function's NIR body (`function_data[i][8]`, built once by the
+NIR boundary) — its statements' and slots' inferred types, its signature and return type —
+and decomposes Unions, returning EVERY concrete kind reachable from the program that can
+carry a classId — structs, closures, `Core.Box`, and primitives (`Char`, `Int128`, a user
+`primitive type`, …) — so `assign_type_ids!` numbers the whole world in one DFS and
+`ensure_type_id!` never needs to allocate one afterwards. PURE COLLECTION — registration
+stays lazy (eager registration reorders field resolution and forks layouts); a collected
+type registered later receives its pre-assigned id.
+
+`Memory`/`MemoryRef` ARE admitted (they are `isstructtype` and reachable — e.g. a
+type-value `getfield(Memory{UInt8}, :layout)` inside `copy(::Dict)`'s native
+`unsafe_copyto!`, which reads a real classId here even though it never boxes a
+`Memory` VALUE); WT lowers them to a wasm ARRAY with no classId struct field, so
+`dispatch.jl`'s `_classid_dispatchable` carries its OWN, narrower exclusion for the
+one place that matters — treating one as a selector-table dispatch axis, which
+needs an actual struct to downcast to (the `_la_sub` regression this guards).
+
+A second walk covers what the INFERRED types miss: a value an operand carries itself.
+A literal embedded in a statement (constant-folded, never boxed into its own SSA slot —
+e.g. inference SROAs `Any[1, 2, 3]` into `Base.getfield((1, 2, 3), i)`, so the tuple
+`Tuple{Int64,Int64,Int64}` is no statement's type), an effectively-final GLOBAL BINDING's
+bound value (`const D = Dict(...)`; typed IR reads its fields directly off the global
+without ever materializing a `Dict{...}`-typed SSA value — `_lower_getglobal!`,
+builtins.jl, resolves a global to its value the same way), and a function passed as
+ordinary DATA (`Core._apply_iterate(Base.iterate, Core.tuple, itr)` passes the `iterate`
+FUNCTION itself as an operand, which needs a classId like any other boxed value). A
+call's or invoke's CALLEE is not an operand — a statically-dispatched callee is never
+boxed or isa-checked through `ensure_type_id!` — and neither is the C-call preamble of a
+foreigncall (its symbol, ABI types and calling convention): only its runtime arguments
+are values.
+
+Also reads the slot types: an ARGUMENT slot's own type — e.g. a trailing `Vararg{Any,N}`
+parameter packs into ONE Tuple-typed slot (`Base.kwerr(kw, args::Vararg{Any,N})`) — is
+neither a statement's type nor in a call-site's flattened argument types. And recurses into a
+registered struct's OWN field types (a Tuple's own elements included): a field can
+itself be a concrete kind that needs a classId nobody else names — e.g. a closure
+struct's captured predicate field `f::typeof(iseven)` — so it is not reachable via any
+statement or slot type on its own.
+parity(class_info.dart:864 ClassIdNumbering._number): the class set the numbering walks, gathered
+before any id is assigned.
+"""
+function _collect_reachable_ir_types(function_data)::Set{DataType}
+    out = Set{DataType}()
+    seen = Set{Any}()
+    function reg!(@nospecialize(T))
+        T === nothing && return
+        T in seen && return
+        push!(seen, T)
+        if T isa Union
+            reg!(T.a); reg!(T.b)
+            return
+        end
+        T isa DataType || return
+        # is_runtime_vararg_tuple_type (structs.jl): `Tuple{Vararg{E}}` with a concrete
+        # element E is Julia-NON-concrete (unbounded length) but WT gives it ONE
+        # registrable {Object, data, size} representation (register_vararg_tuple_type!)
+        # — a genuine exception to "classId means concrete leaf", not a gap.
+        if is_runtime_vararg_tuple_type(T)
+            push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
+            return
+        end
+        if T <: Type && T !== Type && length(T.parameters) == 1
+            reg!(T.parameters[1])
+            return
+        end
+        # A Tuple carrying a `Type{X}` element (an error-message tuple's trailing
+        # `Int64`, boxed by value) is `isdispatchtuple` — Julia's own "this is one
+        # exact compiled signature" test — but NOT `isconcretetype`: Tuple's diagonal
+        # rule treats a `Type{X}` parameter as non-concrete even for concrete X.
+        is_dispatch_tuple = T <: Tuple && Base.isdispatchtuple(T)
+        (isconcretetype(T) || is_dispatch_tuple) || return
+        if isstructtype(T)
+            push!(out, T)
+            for ft in fieldtypes(T)
+                reg!(ft)
+            end
+        elseif isprimitivetype(T)
+            push!(out, T)
+        end
+    end
+    function value!(operand)
+        operand isa NirNode || return
+        has, v = _collected_operand_value(operand)
+        (has && v !== nothing) || return
+        typeof(v) in _IR_META_TYPES && return
+        reg!(v isa Type ? v : typeof(v))
+    end
+    for fd in function_data
+        body = fd[8]
+        body === nothing && continue
+        for at in fd[2]
+            reg!(at isa Type ? at : typeof(at))
+        end
+        reg!(fd[5])
+        for rec in body.stmts
+            reg!(rec.julia_type)
+        end
+        for t in body.slot_types
+            reg!(t)
+        end
+        for rec in body.stmts
+            node = rec.node
+            if node isa NirCall
+                # `Core.tuple(a, b, ...)` (builtins.jl `_lower_tuple!`, the ONE Core.tuple
+                # lowering) types the CONSTRUCTED tuple from its own per-argument types —
+                # `Tuple{[infer_value_type(arg, ctx) for arg in args]...}` — a literal Type
+                # argument (e.g. an error-message tuple's trailing `Int64`) becomes the
+                # SINGLETON `Type{Int64}`, not the `DataType` Julia's own inference widens
+                # the whole tuple's type to. No per-argument walk can reconstruct that
+                # composite after the fact, so it is synthesized here the same way.
+                if node.callee === Core.tuple
+                    reg!(Tuple{Type[_collector_static_type(a, body) for a in node.operands]...})
+                elseif node.callee === Core._apply_iterate
+                    # a splat's argument pack is a tuple the LOWERING builds (calls.jl's
+                    # _apply_iterate route); an empty collection yields Tuple{}, which no
+                    # statement of the program names — the class the MethodError path
+                    # then reports
+                    reg!(Tuple{})
+                end
+                foreach(value!, node.operands)
+            elseif node isa NirInvoke || node isa NirForeignCall || node isa NirNoOp ||
+                   node isa NirUnsupported
+                foreach(value!, node.operands)
+            elseif node isa NirNew
+                value!(node.type_operand)
+                foreach(value!, node.operands)
+            elseif node isa NirLeave
+                foreach(value!, node.enters)
+            elseif node isa NirPopException
+                value!(node.enter)
+            elseif node isa NirLiteral || node isa NirGlobalRef
+                value!(node)                    # a statement that IS a value
+            end
+        end
+    end
+    return out
+end

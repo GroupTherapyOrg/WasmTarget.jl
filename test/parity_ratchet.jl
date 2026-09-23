@@ -519,6 +519,47 @@ end
 
 _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
 
+# The functions in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
+# the boundary's input, the inference-time host-layout query, and the typed-IR transport.
+const IR_RAW_READERS = Set([
+    "get_typed_ir", "_ir_reads_host_layout",
+    "collect_globalrefs", "_scan_globalrefs!", "resolve_globalrefs",
+    "collect_and_resolve_all_globalrefs", "substitute_globalrefs", "_substitute_globalref",
+    "preprocess_ir_entries", "serialize_ir_value", "serialize_ir_stmt", "serialize_type_name",
+    "serialize_ssa_type", "serialize_ir_entries", "deserialize_type_name",
+    "deserialize_ir_value", "deserialize_ir_stmt", "deserialize_ssa_type",
+    "_make_template_codeinfo", "deserialize_ir_entries",
+])
+
+"""Matches of `pattern` in src/codegen/ir.jl outside the bodies of the IR_RAW_READERS
+functions, docstrings and `#` comments excluded: a raw IR reader ir.jl gains that is not on
+the list is counted."""
+function _ir_raw_reads_outside_allowlist(pattern::Regex)::Int
+    n = 0
+    current = nothing          # the top-level function whose body we are in
+    in_doc = false
+    for line in eachline(joinpath(CODEGEN, "ir.jl"))
+        if in_doc
+            occursin("\"\"\"", line) && (in_doc = false)
+            continue
+        end
+        if startswith(lstrip(line), "\"\"\"")
+            count("\"\"\"", line) >= 2 || (in_doc = true)
+            continue
+        end
+        startswith(lstrip(line), "#") && continue
+        if !isempty(line) && !isspace(line[1])      # a top-level line opens or closes a scope
+            m = match(r"^function ([\w!]+)\(", line)
+            m === nothing && (m = match(r"^([\w!]+)\(.*\)(::\S+)?\s*=", line))
+            current = m === nothing ? (line == "end" ? current : nothing) : m.captures[1]
+        end
+        (current !== nothing && current in IR_RAW_READERS) ||
+            (n += length(collect(eachmatch(pattern, line))))
+        line == "end" && (current = nothing)
+    end
+    return n
+end
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -2047,10 +2088,12 @@ const LOCKS = [
             length(v)
         end),
     # ── the NIR boundary (frontend/nir.jl) is codegen's one reader of Julia's typed IR ──
-    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ outside ir.jl — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77); ir.jl is the boundary's typed-IR input side (locked 2026-09-22)",
-        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"])),
-    "R29b_code_info_identifier" => ("the `code_info` identifier in codegen/ outside ir.jl — CompilationContext is built from a NirBody and carries no CodeInfo; the planner hands typed IR to nir_body and to ir.jl only (locked 2026-09-22)",
-        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"])),
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77). Inside ir.jl only an exact list of functions may read a raw CodeInfo: get_typed_ir (the boundary's input), _ir_reads_host_layout (a CodeInstance's inferred source, read during inference, before any NIR exists) and the typed-IR transport (IR_RAW_READERS); the closed-world type collector reads NIR (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
+        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"]) +
+              _ir_raw_reads_outside_allowlist(r"\.args\[|\.head ==|\.head ===|ssavaluetypes")),
+    "R29b_code_info_identifier" => ("the `code_info` identifier in codegen/ — CompilationContext is built from a NirBody and carries no CodeInfo; the planner hands typed IR to nir_body, and inside ir.jl only the IR_RAW_READERS functions name it (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
+        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"]) +
+              _ir_raw_reads_outside_allowlist(r"\bcode_info\b")),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
 ]

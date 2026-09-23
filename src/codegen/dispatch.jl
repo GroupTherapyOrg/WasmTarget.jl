@@ -11,7 +11,7 @@
 wasm struct with a classId header field. `isstructtype` alone over-admits: `Memory`/
 `MemoryRef` are `isstructtype` in Julia but WT lowers them to a wasm ARRAY (no classId
 field) — giving one a dispatch axis produced a wrapper with no struct to cast to (the
-`_la_sub` regression, compile.jl `_collect_reachable_ir_types`). Numeric/primitive
+`_la_sub` regression, trimcollect.jl `_collect_reachable_ir_types`). Numeric/primitive
 receivers dispatch as compile-time-resolved overloads, never through the selector table.
 parity(quarantine: Julia's `isstructtype` admits `Memory`/`MemoryRef`, which WT lowers to wasm
 arrays with no classId header, and `Number`/primitive types; every dart receiver is a class
