@@ -71,6 +71,7 @@ pointer (`_storage_pointer_backing`: `ref.eq` of the backing objects and equalit
 storage-relative offsets) or against NULL or an objectid (`_is_never_a_storage_pointer`),
 and a still-`Ptr` value may be returned or passed to a callee. Any other return, aggregate
 store, comparison, or unknown consumer rejects the compilation.
+formal(dev/formal/StoragePointer.tla): a storage pointer this accepts reaches no escaping consumer
 """
 function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                                              root_ssa::Int; storage_pointer::Bool=false)::Bool
@@ -204,6 +205,7 @@ function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
     return b
 end
 
+# formal(dev/formal/StoragePointer.tla): the object this names is the only one the pointer can point into
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
                             through_value_ptr::Bool = true,
