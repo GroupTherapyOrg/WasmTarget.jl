@@ -138,25 +138,21 @@ function _ir_reads_host_layout(ci::Core.CodeInstance, depth::Int, memo::IdDict{A
     src isa String && (src = try Base._uncompressed_ir(ci, src) catch; nothing end)
     local found = !(src isa Core.CodeInfo)
     if !found
-        for st in src.code
-            st isa Expr || continue
-            if st.head === :call && length(st.args) >= 3
-                local callee = st.args[1]
-                local nm = callee isa GlobalRef ? callee.name :
-                           callee isa Function ? nameof(callee) : nothing
-                if nm === :getfield || nm === :getproperty
-                    local fld = st.args[3]
-                    fld isa QuoteNode && (fld = fld.value)
-                    fld === :layout && (found = true; break)
-                elseif nm === :sizeof && (callee isa GlobalRef ? callee.mod === Core : callee === Core.sizeof)
+        for rec in build_nir(src)
+            local node = rec.node
+            if node isa NirCall && length(node.operands) >= 2
+                local callee = node.callee
+                if callee === Core.getfield || callee === Base.getproperty
+                    local fld = node.operands[2]
+                    (fld isa NirLiteral && fld.value === :layout) && (found = true; break)
+                elseif callee === Core.sizeof
                     found = true; break
                 end
-            elseif st.head === :foreigncall
+            elseif node isa NirForeignCall
                 found = true; break
-            elseif st.head === :invoke
-                local tgt = st.args[1]
-                if tgt isa Core.CodeInstance
-                    _ir_reads_host_layout(tgt, depth + 1, memo) && (found = true; break)
+            elseif node isa NirInvoke
+                if node.ci !== nothing
+                    _ir_reads_host_layout(node.ci, depth + 1, memo) && (found = true; break)
                 else
                     found = true; break          # an invoke without its CodeInstance: unknown
                 end

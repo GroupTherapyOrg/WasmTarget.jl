@@ -176,11 +176,17 @@ the statement carried none. It is NOT recoverable from `mi.specTypes.parameters[
 names the closure's TYPE for a value callee, so a consumer gating on "is the callee a
 function object" answers differently — the closed-world collector's re-specialization gate
 (trimcollect.jl) does exactly that, and would flip from decline to accept.
-parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call to a statically
-resolved target."""
+
+`ci` is the CodeInstance the statement named (two-tier compilation writes one in
+`args[1]`, whose `.def` is `mi`), `nothing` when it named the MethodInstance directly: the
+resolved target's inferred body, which a consumer reading the target's own code (the
+host-layout query, ir.jl) reads without going back to the raw statement.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2821 StaticInvocation.targetReference): the
+invocation carries its resolved target."""
 struct NirInvoke <: NirNode
     mi::Union{Core.MethodInstance,Nothing}
     method::Union{Core.Method,Nothing}
+    ci::Union{Core.CodeInstance,Nothing}
     callee::Any
     operands::Vector{NirNode}
 end
@@ -678,6 +684,7 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
             callee = length(args) >= 2 ? resolve_call_callee(args[2], types) : nothing
             cargs = length(args) >= 3 ? NirNode[resolve_operand(a, types) for a in @view args[3:end]] : NirNode[]
             return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci),
+                             mi_or_ci isa Core.CodeInstance ? mi_or_ci : nothing,
                              callee, cargs)
         elseif head === :new && !isempty(args)
             T, kind, resolved, detail = _resolve_new_type(args[1], i, code_info)
@@ -921,7 +928,7 @@ function nir_retarget_invoke!(code_info::Core.CodeInfo, nir::Vector{NirStmt}, i:
     stmt = code_info.code[i]
     s.slot > 0 && (stmt = stmt.args[2])   # a slot assignment's right-hand side
     stmt.args[1] = mi
-    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), node.callee, node.operands),
+    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), nothing, node.callee, node.operands),
                      s.julia_type, s.line, s.slot)
     return nothing
 end

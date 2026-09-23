@@ -520,9 +520,9 @@ end
 _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
 
 # The functions in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
-# the boundary's input, the inference-time host-layout query, and the typed-IR transport.
+# the boundary's input and the typed-IR transport.
 const IR_RAW_READERS = Set([
-    "get_typed_ir", "_ir_reads_host_layout",
+    "get_typed_ir",
     "collect_globalrefs", "_scan_globalrefs!", "resolve_globalrefs",
     "collect_and_resolve_all_globalrefs", "substitute_globalrefs", "_substitute_globalref",
     "preprocess_ir_entries", "serialize_ir_value", "serialize_ir_stmt", "serialize_type_name",
@@ -2103,7 +2103,7 @@ const LOCKS = [
             length(v)
         end),
     # ── the NIR boundary (frontend/nir.jl) is codegen's one reader of Julia's typed IR ──
-    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77). Inside ir.jl only an exact list of functions may read a raw CodeInfo: get_typed_ir (the boundary's input), _ir_reads_host_layout (a CodeInstance's inferred source, read during inference, before any NIR exists) and the typed-IR transport (IR_RAW_READERS); the closed-world type collector reads NIR (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77). Inside ir.jl only an exact list of functions may read a raw CodeInfo: get_typed_ir (the boundary's input) and the typed-IR transport (IR_RAW_READERS); the host-layout query reads NIR; the closed-world type collector reads NIR (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
         () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"]) +
               _ir_raw_reads_outside_allowlist(r"\.args\[|\.head ==|\.head ===|ssavaluetypes")),
     "R29b_code_info_identifier" => ("the `code_info` identifier in codegen/ — CompilationContext is built from a NirBody and carries no CodeInfo; the planner hands typed IR to nir_body, and inside ir.jl only the IR_RAW_READERS functions name it (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
