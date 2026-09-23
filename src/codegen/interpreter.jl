@@ -1209,33 +1209,30 @@ end
     return v
 end
 
+# Base.resize! with only the grow branch replaced. Base grows through _growend!'s capturing
+# closure, which the closed-world collector does not enroll (Base-internal closures are
+# skipped, trimcollect.jl trim_compile_plan) and which invoke.jl's name-keyed `#_growend!`
+# arm replaces with a max(2c, c + 4) reallocation that ignores the requested length (an
+# out-of-bounds trap on resize!(zeros(10), 100)). Growing reallocates to exactly `nl`;
+# the shrink branch, the n >= 0 check and its ArgumentError are Base's own.
+# parity(quarantine: Base.resize!'s grow branch needs the Base-internal _growend! closure, which WT does not compile yet)
 @overlay WASM_METHOD_TABLE function Base.resize!(v::Vector{T}, n::Integer) where T
-    newlen = Int(n)
-    oldlen = length(v)
-    new_v = similar(v, newlen)
-    limit = min(oldlen, newlen)
-    i = 1
-    while i <= limit
-        new_v[i] = v[i]
-        i += 1
+    nl = Int(n)::Int
+    l = length(v)
+    if nl > l
+        new_v = similar(v, nl)
+        i = 1
+        while i <= l
+            new_v[i] = v[i]
+            i += 1
+        end
+        setfield!(v, :ref, getfield(new_v, :ref))
+        setfield!(v, :size, getfield(new_v, :size))
+    elseif nl != l
+        nl < 0 && Base._throw_argerror("new length must be ≥ 0")
+        Base._deleteend!(v, l - nl)
     end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
     return v
-end
-
-@overlay WASM_METHOD_TABLE function Base.pop!(v::Vector{T}) where T
-    n = length(v)
-    val = v[n]
-    new_v = similar(v, n - 1)
-    i = 1
-    while i < n
-        new_v[i] = v[i]
-        i += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return val
 end
 
 @overlay WASM_METHOD_TABLE function Base.pushfirst!(v::Vector{T}, x) where T

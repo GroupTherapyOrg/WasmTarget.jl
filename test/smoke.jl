@@ -617,6 +617,14 @@ _g("overlays", Any[
     ("mod_neg_infinite_divisor", (x::Float64) -> reinterpret(Int64, mod(x, -Inf)), 1.0),
     ("rem_negzero_dividend", (x::Float64) -> reinterpret(Int64, rem(x, 3.0)), -0.0),
     ("rem_large_quotient", (x::Float64) -> reinterpret(Int64, rem(x, 1.41)), -5.4e7),
+    # pop!/resize!(::Vector): Base's argument checks throw ArgumentError
+    ("pop_empty_argumenterror", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? 1 : 2; end), Int64(0)),
+    ("pop_empty_message", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? (ncodeunits(e.msg)::Int) : -1; end), Int64(0)),
+    ("pop_sequence", (n::Int64) -> (v = collect(1:n); a = pop!(v); b = pop!(v); push!(v, 9); a * 100 + b * 10 + length(v) + sum(v)), Int64(5)),
+    ("resize_negative_argumenterror", (n::Int64) -> (v = collect(1:3); try; resize!(v, n); 0; catch e; e isa ArgumentError ? 1 : 2; end), Int64(-1)),
+    ("resize_grow", (n::Int64) -> (v = collect(1:3); resize!(v, n); v[n] = 7; length(v) * 100 + v[3] + v[n]), Int64(6)),
+    ("resize_shrink", (n::Int64) -> (v = collect(1:6); resize!(v, n); push!(v, 1); length(v) * 100 + sum(v)), Int64(2)),
+    ("resize_grow_past_capacity", (n::Int64) -> (v = zeros(10); resize!(v, n); v .= 1; Int64(sum(v))), Int64(100)),
 ])
 
 # ============================================================================

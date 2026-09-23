@@ -630,16 +630,15 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
-    "L69_one_vector_mutation_path" => ("push!, pop!, and resize! compile their collected pure-Julia overlays; name-routed mutation emitters and capacity assumptions are extinct",
+    "L69_one_vector_mutation_path" => ("push! and resize! compile their collected pure-Julia overlays (resize!'s replaces only Base's grow branch) and pop! compiles Julia's own body (its overlay read v[0] on an empty vector — dev/CHARTER.md C3, it may not return); name-routed mutation emitters and capacity assumptions are extinct",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
                          "is_func(func, :resize!)", "assume capacity is sufficient",
-                         "function _resize!"]
+                         "function _resize!", "function Base.pop!(v::Vector{T})"]
             required = ["function Base.push!(v::Vector{T}, x)",
-                        "function Base.pop!(v::Vector{T})",
                         "function Base.resize!(v::Vector{T}, n::Integer)",
                         "_wt_vector_mutation_semantics"]
             all_src = calls_src * interp_src * test_src
