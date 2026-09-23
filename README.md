@@ -213,12 +213,9 @@ back malformed bytes.
 
 **`discovery=:trim` (default).** Callee discovery uses the upstream closed-world
 trim collection; pass `discovery=:legacy` for the previous curated-whitelist
-walker. Because the trim collection compiles the *full* reachable world
-(including print/show paths), emitted modules may import the standardized
-`wasm:js-string` builtins and a small `io` module — embedders should instantiate
-with `WebAssembly.instantiate(bytes, imports, { builtins: ['js-string'] })` and
-may stub the `io` functions (`write_string`, `write_int`, `write_float`,
-`write_bool`, `write_newline`, `write_nothing`).
+walker. A module has no console: a receiver-free `print`/`println`/`show` in the
+reachable world is a compile error at its statement, and `print(io, …)` to an
+`IOBuffer` compiles like any other Julia call, with no host import.
 
 **Differential fuzzing.** `test/fuzz/` generates *well-typed* random compositions of
 Base functions — expressions, statements, loops, try/catch, closures, structs — and

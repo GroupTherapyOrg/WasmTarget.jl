@@ -1005,20 +1005,23 @@ const LOCKS = [
         end),
     "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import — so host IO imports cannot shift framework-owned function indices",
         () -> begin
-            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
             mbv_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
-            # neither the planner nor invoke lowering appends host-console imports (they
-            # would shift the framework's function indices); no IO classifier exists —
-            # print(io, ...) is an ordinary call and compiles to a module with no imports
-            forbidden = ["add_io_imports!(", "_invoke_has_explicit_io"]
+            src_all = String[]
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") && push!(src_all, read(joinpath(dir, f), String))
+            end
+            src_all = join(src_all)
+            # no host-console import exists anywhere in src (it would shift the
+            # framework's function indices); no IO classifier exists — print(io, ...)
+            # is an ordinary call and compiles to a module with no imports
+            forbidden = ["add_io_imports!(", "_invoke_has_explicit_io", "\"io\", \"write_", "fromCharCodeArray"]
             required = ["explicit IO formatting does not activate host-console imports",
                         "compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), \"p\")])",
                         "@test isempty(compiled.imports)"]
             docs_required = ["Verify interactive docs islands compiled",
                              "window.TherapyHydrate[\"examplelorenz\"]"]
-            count(p -> occursin(p, compile_src * invoke_src), forbidden) +
+            count(p -> occursin(p, src_all), forbidden) +
                 count(p -> !occursin(p, mbv_src), required) +
                 count(p -> !occursin(p, docs_ci), docs_required)
         end),
@@ -1888,7 +1891,12 @@ const LOCKS = [
                        # C3 deletion wave: the Method-keyed invoke builders, all unreached
                        "INVOKE_INTRINSICS", "InvokeIntrinsicEntry", "_register_invoke_intrinsic!",
                        "_build_invoke_intrinsics!", "_invoke_receiver_free_method",
-                       "_invoke_box_arith_result!", "_emit_str_arg!", "_skip_cross_call"]
+                       "_invoke_box_arith_result!", "_emit_str_arg!", "_skip_cross_call",
+                       # C3 deletion wave: the host-console IO bridge, left with no caller
+                       "IOImports", "add_io_imports!", "_IO_IMPORTS", "get_io_imports",
+                       "set_io_imports!", "clear_io_imports!", "create_utf8_to_js_helper!",
+                       "emit_jl_string_to_js!", "_UTF8_TO_JS_FUNC_IDX", "clear_utf8_to_js_func!",
+                       "get_char_array_type!", "_CHAR_ARRAY_TYPE_IDX", "clear_char_array_type!"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue

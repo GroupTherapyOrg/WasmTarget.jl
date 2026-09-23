@@ -252,11 +252,8 @@ function _compile_closed_world_plan(functions::Vector;
     # SOUNDNESS: reset every per-module task-local cache for every compilation.
     # A framework-supplied `existing_module` is still a new component and must not
     # inherit type/function indices or callable identities from the previous one.
-    clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
-    clear_char_array_type!()
-    clear_utf8_to_js_func!()
 
     # Create shared module and registries (or use the framework's predeclared module).
     if existing_module !== nothing
@@ -712,11 +709,8 @@ function _compile_closed_world_plan(functions::Vector;
     finalize_module_initializers!(mod, type_registry)
 
     # Clear module-level state after compilation
-    clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
-    clear_char_array_type!()
-    clear_utf8_to_js_func!()
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)

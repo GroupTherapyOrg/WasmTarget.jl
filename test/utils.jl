@@ -280,7 +280,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };
+        const importObject = { Math: { pow: Math.pow } };
         const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
@@ -754,7 +754,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };")
+    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
@@ -955,7 +955,7 @@ function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_m
     push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
     push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };")
+    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
@@ -1075,8 +1075,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
-    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
-    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const importObject = { Math: { pow: Math.pow } };
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -1148,8 +1147,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
-    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
-    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const importObject = { Math: { pow: Math.pow } };
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
