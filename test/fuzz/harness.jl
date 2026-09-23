@@ -140,7 +140,7 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFA
         if (typeof v === 'number') { if (v===Infinity) return "__Inf__"; if (v===-Infinity) return "__-Inf__"; if (Number.isNaN(v)) return "__NaN__"; }
         return v;
     };
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = {};
     const { instance } = await WebAssembly.instantiate(bytes, importObject);
     const f = instance.exports['$fname'];
     return inputs.map(args => {
@@ -206,7 +206,7 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=
     inarr = "[" * join((("[" * join((_enc_arg(a) for a in tup), ",") * "]") for tup in inputs), ",") * "]"
     retmode = retvec === Int64 ? "vi" : retvec === Float64 ? "vf" : "scalar"
     driver = """
-    const { instance } = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
+    const { instance } = await WebAssembly.instantiate(bytes, {});
     const e = instance.exports; const f = e['$fname'];
     const bvi = a => { const v=e._bv_i64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_i64_set!'](v,BigInt(i+1),BigInt(a[i])); return v; };
     const bvf = a => { const v=e._bv_f64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_f64_set!'](v,BigInt(i+1),a[i]); return v; };

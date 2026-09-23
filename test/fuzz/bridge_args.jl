@@ -78,7 +78,7 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     end
     enc_inputs = [Any[value_to_tree(adescs[j], tup[j]) for j in eachindex(adescs)] for tup in inputs]
     driver = """
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = {};
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

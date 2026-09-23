@@ -211,7 +211,7 @@ result. `js_args` is a JS argument string (e.g. `BigInt("5"), 3`). `import_js`
 is a JS statement defining `const importObject = {…}`.
 """
 function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::AbstractString;
-        import_js::AbstractString = "const importObject = { Math: { pow: Math.pow } };")
+        import_js::AbstractString = "const importObject = {};")
     pool = get_pool()
     pool === nothing && return (:nonode, nothing)
     src = """

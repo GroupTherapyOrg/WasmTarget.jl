@@ -50,7 +50,7 @@ function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     end
     driver = """
     const inputs = $(_js_inputs(inputs));
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = {};
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

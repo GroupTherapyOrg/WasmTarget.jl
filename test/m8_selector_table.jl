@@ -33,7 +33,7 @@ end
         js = """
         import fs from 'fs';
         const b = fs.readFileSync('$(escape_string(p))');
-        const m = await WebAssembly.instantiate(b, { Math: { pow: Math.pow } });
+        const m = await WebAssembly.instantiate(b, {});
         const e = m.instance.exports;
         console.log(JSON.stringify([e.caller(e.mk1(0)), e.caller(e.mk3(0)), e.caller(e.mk10(0))]));
         """
@@ -72,7 +72,7 @@ end
         js = """
         import fs from 'fs';
         const b = fs.readFileSync('$(escape_string(p))');
-        const m = await WebAssembly.instantiate(b, { Math: { pow: Math.pow } });
+        const m = await WebAssembly.instantiate(b, {});
         const e = m.instance.exports;
         console.log(JSON.stringify([
           e.caller2(e.mkp2(0), e.mka(0)), e.caller2(e.mkp2(0), e.mkb(0)),

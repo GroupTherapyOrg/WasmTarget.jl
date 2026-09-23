@@ -280,7 +280,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = { Math: { pow: Math.pow } };
+        const importObject = {};
         const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
@@ -334,9 +334,9 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     arg_types = Tuple(map(typeof, args))
     bytes = WasmTarget.compile(f, arg_types; optimize=optimize)
 
-    # 3. Run in Node.js to get actual result (with standard Math imports)
+    # 3. Run in Node.js to get actual result (no host imports)
     func_name = string(nameof(f))
-    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    imports = Dict{String,Any}()
     actual = run_wasm_with_imports(bytes, func_name, imports, args...)
 
     # 4. Compare (skip if Node.js unavailable)
@@ -514,9 +514,9 @@ function compare_julia_wasm_manual(f, args::Tuple, expected)
     arg_types = Tuple(map(typeof, args))
     bytes = WasmTarget.compile(f, arg_types)
 
-    # 2. Run in Node.js (with standard Math imports)
+    # 2. Run in Node.js (no host imports)
     func_name = string(nameof(f))
-    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    imports = Dict{String,Any}()
     actual = run_wasm_with_imports(bytes, func_name, imports, args...)
 
     # 3. Compare against pre-computed expected value
@@ -754,7 +754,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
+    push!(lines, "    const importObject = {};")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
@@ -955,7 +955,7 @@ function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_m
     push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
     push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow } };")
+    push!(lines, "    const importObject = {};")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
@@ -1075,7 +1075,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = {};
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -1147,7 +1147,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = {};
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

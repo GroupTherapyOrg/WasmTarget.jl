@@ -425,7 +425,7 @@ function run_case(f, args)
     catch e
         return (:LOUD, "$(nameof(typeof(e))): " * _firstline(e))
     end
-    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    imports = Dict{String,Any}()
     actual = try
         run_wasm_with_imports(bytes, string(nameof(f)), imports, args...)
     catch e

@@ -4759,7 +4759,7 @@ begin
             js_code = """
             import fs from 'fs';
             const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-            const importObject = { Math: { pow: Math.pow } };
+            const importObject = {};
             async function run() {
                 const mod = await WebAssembly.instantiate(bytes, importObject);
                 const e = mod.instance.exports;
@@ -4853,7 +4853,7 @@ begin
                 js_code = """
                 import fs from 'fs';
                 const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-                const importObject = { Math: { pow: Math.pow } };
+                const importObject = {};
                 async function run() {
                     const mod = await WebAssembly.instantiate(bytes, importObject);
                     const e = mod.instance.exports;
@@ -4946,7 +4946,7 @@ begin
 
                 js_code = """
                 const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
-                WebAssembly.instantiate(bytes, {Math: {pow: Math.pow}}).then(m => {
+                WebAssembly.instantiate(bytes, {}).then(m => {
                     const exp = m.instance.exports;
                     const s1 = exp.make_th_s1(42);
                     const s2 = exp.make_th_s2(42);
@@ -5853,7 +5853,7 @@ begin
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const r = e.tf5_dispatch_ab(a);
@@ -5903,7 +5903,7 @@ console.log(JSON.stringify({result: Number(r)}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const b = e.tf5_make_beta(10n);
@@ -5942,7 +5942,7 @@ console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const cat = e.tf5_make_cat(10);
 const dog = e.tf5_make_dog(20);
@@ -6041,7 +6041,7 @@ console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const rn = e.ir001_make_returnnode(99n);
 const gn = e.ir001_make_gotonode(10n);
@@ -6120,7 +6120,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const ssa = e.ir002_make_ssaval(42n);
 const arg = e.ir002_make_argument(7n);
@@ -6210,7 +6210,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, {});
 const e = instance.exports;
 const call_expr = e.ir003_make_call_expr();
 const invoke_expr = e.ir003_make_invoke_expr();
