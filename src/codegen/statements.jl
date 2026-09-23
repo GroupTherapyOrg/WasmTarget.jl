@@ -1865,12 +1865,12 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
         # stub flag dead-coded the live loop-exit condition that follows).
         local _ti_a = _nir_const_operand(node.operands[1])
         local _ti_b = _nir_const_operand(node.operands[2])
+        # Julia answers: an error from the host typeintersect propagates to the
+        # statement's located WasmInternalError, never into a declined lowering.
         if _ti_a isa Type && _ti_b isa Type
-            local _ti_r = try typeintersect(_ti_a, _ti_b) catch; nothing end
-            if _ti_r !== nothing
-                emit_value!(b, NirLiteral(_ti_r), ctx, AnyRef; from_julia=Type{_ti_r})
-                return b
-            end
+            local _ti_r = typeintersect(_ti_a, _ti_b)
+            emit_value!(b, NirLiteral(_ti_r), ctx, AnyRef; from_julia=Type{_ti_r})
+            return b
         end
     return nothing
 end
