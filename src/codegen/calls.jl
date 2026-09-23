@@ -38,30 +38,6 @@ function _is_externref_value(val::NirNode, ctx::AbstractCompilationContext)::Boo
 end
 
 """
-    _is_typeof_ssa(val, ctx) -> Bool
-
-Check if a value is an SSAValue whose defining statement is a typeof() call.
-"""
-function _is_typeof_ssa(val::NirNode, ctx::AbstractCompilationContext)::Bool
-    val isa NirSSA || return false
-    1 <= val.id <= length(ctx.nir) || return false
-    rec = ctx.nir[val.id]
-    return rec.slot == 0 && rec.node isa NirCall && !isempty(rec.node.operands) &&
-           rec.node.callee === Core.typeof
-end
-
-"""
-    _resolve_type_const(val, ctx) -> Union{DataType, Nothing}
-
-If val is a Type constant (GlobalRef to a type, or a direct Type value),
-return the DataType. Otherwise return nothing.
-"""
-function _resolve_type_const(val::NirNode, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
-    actual = val isa NirLiteral ? val.value : (val isa NirGlobalRef && val.bound) ? val.value : nothing
-    return actual isa Type && isconcretetype(actual) ? actual : nothing
-end
-
-"""
     _ensure_typeof_scratch_local!(ctx) -> UInt32
 
 Allocate (or return cached) a scratch i32 local for typeof struct lookups.
@@ -911,6 +887,8 @@ already early-returns from `compile_call!` in the original arm (mirrored
 here via the nullable-return funnel instead — MISC_OPS's caller returns
 immediately on any non-`nothing` result either way, so the observable
 control flow is identical).
+parity(quarantine: Julia's bswap_int intrinsic has no dart counterpart; dart2wasm's
+low-level switch, intrinsics.dart:710-929, has no byte-swap entry.)
 """
 function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                               is_128bit::Bool, is_32bit::Bool, idx::Int)::WasmValType
@@ -919,13 +897,36 @@ function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
             "128-bit byte-swap (Int128/UInt128)"; idx=idx)
         return is_32bit ? I32 : I64   # nominal — dead past `unreachable`
     end
+    # The swap reverses exactly the value's own bytes: bswap_int returns its operand's type,
+    # and a 16-bit value in an i32 register has two bytes, not four.
+    local _bsT = get(ctx.ssa_types, idx, nothing)
+    if !(_bsT isa DataType && _bsT <: Base.BitInteger)
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+            "byte-swap of a value whose integer width is unknown ($(repr(_bsT)))"; idx=idx)
+        return is_32bit ? I32 : I64
+    end
+    local _bsbits = 8 * sizeof(_bsT)
+    _bsbits == 8 && return I32   # one byte: the swap is the identity
     # Allocate a scratch local to hold the input value (need it 4 times)
     scratch_local = length(ctx.locals) + ctx.n_params
     push!(ctx.locals, is_32bit ? I32 : I64)
     local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the input
     # Store input value
     local_set!(_bswb, scratch_local)
-    if is_32bit
+    if _bsbits == 16
+        # ((x >> 8) & 0xFF) | ((x & 0xFF) << 8) — the bits above 16 are not part of the value
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHR_U)
+        i32_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I32_AND)
+        local_get!(_bswb, scratch_local)
+        i32_const!(_bswb, Int64(0xFF))
+        num!(_bswb, Opcode.I32_AND)
+        i32_const!(_bswb, Int64(8))
+        num!(_bswb, Opcode.I32_SHL)
+        num!(_bswb, Opcode.I32_OR)
+    elseif is_32bit
         # i32 bswap: reverse 4 bytes
         # ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
         # Part 1: (x >> 24) & 0xFF — top byte to bottom
@@ -1190,9 +1191,6 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
     return is_128bit ? struct_rt : (is_32bit ? I32 : I64)
 end
 
-_egal_num_eqop(w::WasmValType)::UInt8 =
-    w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
-
 # The statement defining an SSA operand, when it is a plain (non-slot) definition.
 # parity(code_generator.dart:135 getStaticType): a value's defining node, read once.
 function _ssa_def(value, ctx::AbstractCompilationContext)::Union{NirNode,Nothing}
@@ -1262,457 +1260,486 @@ function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
     return b
 end
 
-"""
-    _emit_egal_box_vs_num!(bld, ctx, ref_local, ref_is_extern, num_local, num_type)
+# ============================================================================
+# `===` / `!==`: ONE egal lowering. Julia's `===` is jl_egal (builtins.c): bit identity for
+# primitives, fieldwise egal for immutable structs and tuples, content for String, object
+# identity for everything mutable, and a Union/UnionAll compared by its fields. dart2wasm's
+# `identical` supplies the shape: a static arm per operand type pair that needs no runtime
+# work, else a call to ONE runtime function over the two boxed operands.
+#
+# An operand reaches these emitters as a PUSHER — a zero-argument function that emits the
+# value once, in the wasm type passed beside it — so a compare that reads each operand once
+# costs no locals, and one that reads them more than once stores them first.
+# ============================================================================
 
-`===` between a BOXED-NUMERIC ref operand (saved in `ref_local`) and an UNBOXED numeric
-operand (saved in `num_local`, Julia type `num_type`). Julia `===` requires the same type
-AND value, so this is `isa(ref, num_type) && unbox(ref) == num`: the box's classId (field 0)
-must equal `num_type`'s DFS id AND its value (field 1) must equal `num`. Guarded by `ref.test`
-so a genuine non-numeric ref (struct/string/array) yields false — no trap, no regression
-(matches the old "ref vs numeric ⇒ false" for those). Pushes i32 (0/1). Single source for
-both arg orderings. (The boxed numeric value rep is the same `get_numeric_box_type!` the
-classId funnel boxes into.)
-"""
-function _emit_egal_box_vs_num!(bld::InstrBuilder, ctx::AbstractCompilationContext,
-                                ref_local::Integer, ref_is_extern::Bool,
-                                num_local::Integer, num_type::Type)
-    num_wasm = julia_to_wasm_type(num_type)
-    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, num_wasm)
-    tid = ensure_type_id!(ctx.type_registry, num_type)
-    local _anytmp = allocate_local!(ctx, AnyRef)
-    local_get!(bld, ref_local)
-    ref_is_extern && any_convert_extern!(bld)
-    local_tee!(bld, _anytmp)
-    ref_test!(bld, Int64(box_idx), false)            # is it this numeric box?
-    if_!(bld, I32)
-    # classId (field 0) == num_type's id?
-    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
-    struct_get!(bld, UInt32(box_idx), UInt32(0), I32)
-    i32_const!(bld, Int64(tid)); num!(bld, Opcode.I32_EQ)
-    # && value (field 1) == num?
-    local_get!(bld, _anytmp); ref_cast!(bld, Int64(box_idx), false)
-    struct_get!(bld, UInt32(box_idx), UInt32(1), num_wasm)
-    local_get!(bld, num_local); num!(bld, _egal_num_eqop(num_wasm))
-    num!(bld, Opcode.I32_AND)
-    else_!(bld)
-    i32_const!(bld, 0)
-    end_block!(bld)
-    return bld
+"""Store the value `push` emits (wasm type `w`) in a fresh local; returns its index.
+
+parity(code_generator.dart:677 accept1): an operand evaluated once into a local its
+consumer reads."""
+function _egal_local!(b::InstrBuilder, alloc::Function, push::Function, w::WasmValType)::Int
+    local l = alloc(w)
+    push(); local_set!(b, l)
+    return l
 end
 
 """
-    _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
+    _emit_bits_egal!(b, mod, registry, alloc, P, p1, p2) -> b
 
-Extracted handler for :(===) identity comparison (the post-arg-push branch).
-Modifies `bytes` in-place.
+Push `p1 === p2` for two values of the primitive type `P` in their representation (a numeric
+register, or the two-limb struct of a 128-bit integer): the bits compare, never an IEEE
+compare (`NaN === NaN`, `0.0 !== -0.0`), and a narrow integer compares only its own width —
+the bits of an i32 register above `8 * sizeof(P)` are not part of the value.
+parity(intrinsics.dart:1433 StaticIntrinsic.identical): the int arm (`i64.eq`) and the
+double arm (`i64.reinterpret_f64` of both, then `i64.eq`), per Julia primitive width.
 """
-function _compile_call_egaleq(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::Nothing
-    bld = _ctx_builder(ctx, "_compile_call_egaleq")
-    # The two operands are already on fb — declare them (the width by arm)
-    if !is_128bit
-        local _sw = arg_type === Float64 ? F64 : arg_type === Float32 ? F32 :
-                    isempty(fb.v.stack) ? AnyRef : fb.v.stack[end]
-        local _sw2 = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : _sw
-        seed_input!(bld, WasmValType[_sw2, _sw])
+function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                          alloc::Function, @nospecialize(P), p1::Function, p2::Function)::InstrBuilder
+    if P === Int128 || P === UInt128
+        local idx = get_int128_type!(mod, registry, P)
+        local w = ConcreteRef(UInt32(idx), true)
+        local l1, l2 = _egal_local!(b, alloc, p1, w), _egal_local!(b, alloc, p2, w)
+        for f in (UInt32(1), UInt32(2))           # lo, hi limbs after the classId
+            local_get!(b, l1); struct_get!(b, idx, f, I64)
+            local_get!(b, l2); struct_get!(b, idx, f, I64)
+            num!(b, Opcode.I64_EQ)
+        end
+        num!(b, Opcode.I32_AND)
+        return b
     end
-    if is_128bit
-        local _i128sr = _int128_structref(ctx, arg_type)
-        seed_input!(bld, WasmValType[_i128sr, _i128sr])
-        emit_int128_eq!(bld, ctx, arg_type)
-    elseif arg_type === Float64
-        num!(bld, Opcode.F64_EQ)
-    elseif arg_type === Float32
-        num!(bld, Opcode.F32_EQ)
+    local w = julia_to_wasm_type(P)
+    local nbits = 8 * sizeof(P)
+    if w === F64
+        p1(); num!(b, Opcode.I64_REINTERPRET_F64)
+        p2(); num!(b, Opcode.I64_REINTERPRET_F64)
+        num!(b, Opcode.I64_EQ)
+    elseif w === F32
+        p1(); num!(b, Opcode.I32_REINTERPRET_F32)
+        p2(); num!(b, Opcode.I32_REINTERPRET_F32)
+        num!(b, Opcode.I32_EQ)
+    elseif w === I64
+        p1(); p2(); num!(b, Opcode.I64_EQ)
+    elseif w === I32 && nbits >= 32
+        p1(); p2(); num!(b, Opcode.I32_EQ)
+    elseif w === I32
+        p1(); p2(); num!(b, Opcode.I32_XOR)
+        i32_const!(b, Int64((1 << nbits) - 1)); num!(b, Opcode.I32_AND)
+        num!(b, Opcode.I32_EQZ)
     else
-        local arg2_type = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-        local arg1_is_ref = is_ref_type_or_union(arg_type) && arg_type !== Nothing
-        local arg2_is_ref = is_ref_type_or_union(arg2_type) && arg2_type !== Nothing
-
-        # `()` is an immutable zero-field singleton. When one operand is
-        # statically Any (for example MethodError.args) and the other is the
-        # literal Tuple{}, ref.eq is wrong: independently materialized empty
-        # tuples are still egal in Julia. Test the dynamic operand's concrete
-        # heap type and discard the known singleton operand.
-        if (arg_type === Any && arg2_type === Tuple{}) ||
-           (arg_type === Tuple{} && arg2_type === Any)
-            local empty_info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
-            if arg_type === Any
-                drop!(bld) # known Tuple{} (arg2)
-                local dyn_ty = length(bld.seeded) >= 2 ? bld.seeded[end - 1] : AnyRef
-                dyn_ty === ExternRef && any_convert_extern!(bld)
-            else
-                local dyn_ty = isempty(bld.seeded) ? AnyRef : bld.seeded[end]
-                local dyn_local = allocate_local!(ctx, dyn_ty)
-                local_set!(bld, dyn_local)
-                drop!(bld) # known Tuple{} (arg1)
-                local_get!(bld, dyn_local)
-                dyn_ty === ExternRef && any_convert_extern!(bld)
-            end
-            ref_test!(bld, Int64(empty_info.wasm_type_idx), false)
-            append_builder!(fb, bld)
-            return nothing
-        end
-
-        # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
-        # they can't be equal via ref.eq OR i32/i64 eq. Drop both and return false.
-        if (arg1_is_ref && arg2_type === Nothing) || (arg2_is_ref && arg_type === Nothing)
-            drop!(bld)
-            drop!(bld)
-            i32_const!(bld, 0)
-            append_builder!(fb, bld)
-            return nothing
-        end
-
-        # Special case: both args are Nothing-typed. Need to check actual Wasm representation
-        # because Nothing can compile to either ref.null OR i32.const depending on context.
-        if arg_type === Nothing && arg2_type === Nothing
-            # typed channel: the emissions' own types replace the REF_NULL/LOCAL_GET
-            # first-byte checks + double LEB decode of local indices.
-            local _a1_ty = length(bld.seeded) >= 2 ? bld.seeded[end - 1] : nothing
-            local _a2_ty = isempty(bld.seeded) ? nothing : bld.seeded[end]
-            local a1_is_ref = _a1_ty !== nothing && _wt_is_ref(_a1_ty)
-            local a2_is_ref = _a2_ty !== nothing && _wt_is_ref(_a2_ty)
-            local a1_is_anyref_fp = (_a1_ty === AnyRef)
-            local a2_is_anyref_fp = (_a2_ty === AnyRef)
-            local a1_is_externref_fp = (_a1_ty === ExternRef)
-            local a2_is_externref_fp = (_a2_ty === ExternRef)
-            # If Wasm types mismatch (one ref, one not), drop both and return false
-            if a1_is_ref != a2_is_ref
-                drop!(bld)
-                drop!(bld)
-                i32_const!(bld, 0)
-                append_builder!(fb, bld)
-                return nothing
-            elseif a1_is_ref && a2_is_ref
-                # Both refs - need ref.eq, but anyref/externref require casting to eqref first
-                if a1_is_anyref_fp && a2_is_anyref_fp
-                    # Both anyref: cast both to eqref
-                    local _fp_tmp = allocate_local!(ctx, EqRef)
-                    ref_cast!(bld, EqRef, true)
-                    local_set!(bld, _fp_tmp)
-                    ref_cast!(bld, EqRef, true)
-                    local_get!(bld, _fp_tmp)
-                elseif a1_is_externref_fp && a2_is_externref_fp
-                    # Both externref: convert to anyref then cast to eqref
-                    local _fp_tmp2 = allocate_local!(ctx, EqRef)
-                    any_convert_extern!(bld)
-                    ref_cast!(bld, EqRef, true)
-                    local_set!(bld, _fp_tmp2)
-                    any_convert_extern!(bld)
-                    ref_cast!(bld, EqRef, true)
-                    local_get!(bld, _fp_tmp2)
-                elseif a1_is_anyref_fp
-                    # arg1 anyref, arg2 concrete/eqref: save arg2, cast arg1, restore
-                    local _fp_tmp3 = allocate_local!(ctx, EqRef)
-                    local_set!(bld, _fp_tmp3)
-                    ref_cast!(bld, EqRef, true)
-                    local_get!(bld, _fp_tmp3)
-                elseif a2_is_anyref_fp
-                    # arg2 anyref: cast to eqref
-                    ref_cast!(bld, EqRef, true)
-                elseif a1_is_externref_fp
-                    # arg1 externref: save arg2, convert+cast arg1, restore
-                    local _fp_tmp4 = allocate_local!(ctx, EqRef)
-                    local_set!(bld, _fp_tmp4)
-                    any_convert_extern!(bld)
-                    ref_cast!(bld, EqRef, true)
-                    local_get!(bld, _fp_tmp4)
-                elseif a2_is_externref_fp
-                    # arg2 externref: convert+cast
-                    any_convert_extern!(bld)
-                    ref_cast!(bld, EqRef, true)
-                end
-                num!(bld, Opcode.REF_EQ)
-                append_builder!(fb, bld)
-                return nothing
-            end
-            # Both numeric - fall through to normal handling
-        end
-
-        # Check if args were actually compiled as refs (Nothing can compile to ref.null OR i32.const 0)
-        # The bytes already have [arg1_bytes..., arg2_bytes...]
-        # Check last pushed arg (arg2) - if it starts with REF_NULL (0xD0), it's a ref
-        # Also check for local.get of ref-typed local
-        local arg1_wasm_is_ref = arg1_is_ref
-        local arg2_wasm_is_ref = arg2_is_ref
-        # Detect anyref/externref from actual wasm type, not just arg_type === Any.
-        # Abstract types like Type, DataType etc. also map to AnyRef.
-        local _arg1_wasm = julia_to_wasm_type(arg_type)
-        local _arg2_wasm = julia_to_wasm_type(arg2_type)
-        local arg1_is_externref = (_arg1_wasm === ExternRef)
-        local arg2_is_externref = (_arg2_wasm === ExternRef)
-        local arg1_is_anyref = (_arg1_wasm === AnyRef)
-        local arg2_is_anyref = (_arg2_wasm === AnyRef)
-        # anyref/externref types are always ref types
-        if arg1_is_anyref || arg1_is_externref
-            arg1_wasm_is_ref = true
-        end
-        if arg2_is_anyref || arg2_is_externref
-            arg2_wasm_is_ref = true
-        end
-        # Check Wasm representation for any potentially mixed comparison
-        # (when one arg is ref-typed or Nothing, verify actual Wasm types)
-        if arg_type === Nothing || arg2_type === Nothing || arg1_is_ref || arg2_is_ref
-            # Re-compile args to check their Wasm representation
-            # arg1 first, arg2 second on stack
-            # For Nothing-typed args, check actual Wasm representation
-            # (Nothing can compile to ref.null OR i32.const 0 depending on context)
-            # Check arg1's Wasm type when:
-            # - arg_type === Nothing (need to verify if it's actually ref.null or i32)
-            # - arg2_type === Nothing (need to know if arg1 is ref to do proper comparison)
-            # - arg_type === Any (Any maps to externref, must check actual local type)
-            if length(args) >= 1 && (arg_type === Nothing || arg2_type === Nothing || arg_type === Any || arg1_is_ref)
-                # dart2wasm carries the wasm type with the value: derive ref-ness and
-                # externref-ness from the inferred type instead of scanning the bytes.
-                # `nothing` is treated as a ref (may compile to ref.null).
-                local _a1_wt = static_wasm_type(args[1], ctx)
-                arg1_wasm_is_ref = is_nothing_value(args[1], ctx) || _wt_is_ref(_a1_wt)
-                arg1_is_externref = (_a1_wt === ExternRef)
-                # Override local type check if Julia type maps to anyref/externref
-                if arg1_is_anyref || arg1_is_externref
-                    arg1_wasm_is_ref = true
-                end
-            end
-            # Check arg2's Wasm type when:
-            # - arg2_type === Nothing (need to verify if it's actually ref.null or i32)
-            # - arg_type === Nothing (need to know if arg2 is ref to do proper comparison)
-            # - arg2_type === Any (Any maps to externref, must check actual local type)
-            if length(args) >= 2 && (arg2_type === Nothing || arg_type === Nothing || arg2_type === Any || arg2_is_ref)
-                # dart2wasm carries the wasm type with the value: derive ref-ness and
-                # externref-ness from the inferred type instead of scanning the bytes.
-                local _a2_wt = static_wasm_type(args[2], ctx)
-                arg2_wasm_is_ref = is_nothing_value(args[2], ctx) || _wt_is_ref(_a2_wt)
-                arg2_is_externref = (_a2_wt === ExternRef)
-                # Override local type check if Julia type maps to anyref/externref
-                if arg2_is_anyref || arg2_is_externref
-                    arg2_wasm_is_ref = true
-                end
-            end
-        end
-        if arg1_wasm_is_ref && arg2_wasm_is_ref
-            # For immutable structs, === means VALUE equality (field-by-field),
-            # not identity. WasmGC ref.eq is identity comparison, so we must emit
-            # struct.get for each field and compare with the appropriate opcode.
-            local _do_struct_egal = false
-            local _egal_struct_info = nothing
-            if !arg1_is_externref && !arg2_is_externref &&
-               arg_type isa DataType && arg_type === arg2_type &&
-               is_struct_type(arg_type) && !ismutabletype(arg_type) &&
-               haskey(ctx.type_registry.structs, arg_type)
-                _egal_struct_info = ctx.type_registry.structs[arg_type]
-                _do_struct_egal = true
-            end
-            if _do_struct_egal
-                # Immutable struct === : field-by-field value comparison
-                local egal_info = _egal_struct_info
-                local egal_type_idx = egal_info.wasm_type_idx
-                local egal_wasm_type = ConcreteRef(egal_type_idx, true)
-                # Save both args to locals (arg2 is on top, arg1 below)
-                local egal_local2 = allocate_local!(ctx, egal_wasm_type)
-                local egal_local1 = allocate_local!(ctx, egal_wasm_type)
-                local_set!(bld, egal_local2)
-                local_set!(bld, egal_local1)
-                local n_fields = length(egal_info.field_types)
-                for fi in 1:n_fields
-                    local egal_ft = egal_info.field_types[fi]
-                    local egal_wt = julia_to_wasm_type(egal_ft)
-                    # Get wasm field index (accounts for typeId at field 0)
-                    local_get!(bld, egal_local1)
-                    struct_get!(bld, egal_type_idx, wasm_field_idx(egal_info, fi), egal_wt)
-                    local_get!(bld, egal_local2)
-                    struct_get!(bld, egal_type_idx, wasm_field_idx(egal_info, fi), egal_wt)
-                    # Compare with type-appropriate opcode
-                    if egal_wt === I32
-                        num!(bld, Opcode.I32_EQ)
-                    elseif egal_wt === I64
-                        num!(bld, Opcode.I64_EQ)
-                    elseif egal_wt === F32
-                        num!(bld, Opcode.F32_EQ)
-                    elseif egal_wt === F64
-                        num!(bld, Opcode.F64_EQ)
-                    elseif egal_wt === ExternRef
-                        # externref fields need conversion to eqref for ref.eq
-                        local egal_tmp = allocate_local!(ctx, EqRef)
-                        any_convert_extern!(bld)
-                        ref_cast!(bld, EqRef, true)
-                        local_set!(bld, egal_tmp)
-                        any_convert_extern!(bld)
-                        ref_cast!(bld, EqRef, true)
-                        local_get!(bld, egal_tmp)
-                        num!(bld, Opcode.REF_EQ)
-                    else
-                        # Ref-typed field (nested struct, string, etc.): use ref.eq
-                        num!(bld, Opcode.REF_EQ)
-                    end
-                    # AND with previous field results (skip for first field)
-                    if fi > 1
-                        num!(bld, Opcode.I32_AND)
-                    end
-                end
-                # Handle zero-field structs (singleton types): always equal
-                if n_fields == 0
-                    i32_const!(bld, 1)
-                end
-            elseif arg1_is_anyref && arg2_is_anyref
-                # Both anyref — cast to eqref before ref.eq
-                # anyref is supertype of eqref, so ref.cast works directly (no any.convert_extern)
-                local tmp_eq_a = allocate_local!(ctx, EqRef)
-                ref_cast!(bld, EqRef, true)
-                local_set!(bld, tmp_eq_a)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, tmp_eq_a)
-                num!(bld, Opcode.REF_EQ)
-            elseif arg1_is_externref && arg2_is_externref
-                # ref.eq requires eqref operands. externref is NOT eqref.
-                # Convert externref → anyref → eqref before ref.eq
-                # Both externref: convert arg2 (top), save, convert arg1, restore
-                local tmp_eq = allocate_local!(ctx, EqRef)
-                any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                local_set!(bld, tmp_eq)
-                # Now arg1 (externref) is on top
-                any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, tmp_eq)
-                num!(bld, Opcode.REF_EQ)
-            elseif arg1_is_externref
-                # arg1 is externref (under arg2 on stack): save arg2, convert arg1, restore arg2
-                local tmp_eq2 = allocate_local!(ctx, EqRef)
-                local_set!(bld, tmp_eq2)
-                any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, tmp_eq2)
-                num!(bld, Opcode.REF_EQ)
-            elseif arg2_is_externref
-                # arg2 is externref (top of stack): just convert it
-                any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                num!(bld, Opcode.REF_EQ)
-            elseif arg1_is_anyref
-                # arg1 anyref (under arg2 on stack): save arg2, cast arg1, restore
-                local tmp_eq_a2 = allocate_local!(ctx, EqRef)
-                local_set!(bld, tmp_eq_a2)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, tmp_eq_a2)
-                num!(bld, Opcode.REF_EQ)
-            elseif arg2_is_anyref
-                # arg2 anyref (top of stack): cast to eqref
-                ref_cast!(bld, EqRef, true)
-                num!(bld, Opcode.REF_EQ)
-            else
-                # Both are non-externref, non-anyref refs (mutable structs, arrays, etc.): identity comparison
-                num!(bld, Opcode.REF_EQ)
-            end
-        elseif arg1_wasm_is_ref && !arg2_wasm_is_ref
-            # arg1 is a ref (possibly a BOXED NUMERIC), arg2 an unboxed numeric. Julia ===
-            # needs same type+value: a numeric box of arg2's type with arg2's value ⇒ true;
-            # a genuine non-numeric ref ⇒ false (ref.test guards it). Was: always drop+false,
-            # a SILENT WRONG ANSWER for e.g. Any[true][1] === true (returned false).
-            local _a2w_eg = julia_to_wasm_type(arg2_type)
-            # dart parity: guard on the ACTUAL emitted type, not the static Julia type —
-            # 1.13 IR can source the "numeric" operand from an Any-typed (boxed) local, in
-            # which case its emission pushes a REF and the numeric save-local corrupts the
-            # stack (func-invalidating). Actual-numeric → the classId+value compare;
-            # actually-both-refs → eqref identity; else the old drop+false.
-            local _a2_act = static_wasm_type(args[2], ctx)
-            if (_a2w_eg === I32 || _a2w_eg === I64 || _a2w_eg === F32 || _a2w_eg === F64) &&
-               isconcretetype(arg2_type) && _a2_act === _a2w_eg
-                local _eg_num = allocate_local!(ctx, _a2w_eg); local_set!(bld, _eg_num)       # save arg2 (top)
-                local _eg_ref = allocate_local!(ctx, arg1_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref)
-                _emit_egal_box_vs_num!(bld, ctx, _eg_ref, arg1_is_externref, _eg_num, arg2_type)
-            elseif _wt_is_ref(_a2_act)
-                # both operands are ACTUALLY refs — eqref identity comparison
-                local _eg_t2 = allocate_local!(ctx, EqRef)
-                _a2_act === ExternRef && any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true); local_set!(bld, _eg_t2)
-                arg1_is_externref && any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, _eg_t2)
-                num!(bld, Opcode.REF_EQ)
-            else
-                drop!(bld); drop!(bld); i32_const!(bld, 0)
-            end
-        elseif !arg1_wasm_is_ref && arg2_wasm_is_ref
-            # Mirror: arg2 is the ref (possibly a boxed numeric), arg1 an unboxed numeric.
-            local _a1w_eg = julia_to_wasm_type(arg_type)
-            local _a1_act = static_wasm_type(args[1], ctx)
-            if (_a1w_eg === I32 || _a1w_eg === I64 || _a1w_eg === F32 || _a1w_eg === F64) &&
-               isconcretetype(arg_type) && _a1_act === _a1w_eg
-                local _eg_ref2 = allocate_local!(ctx, arg2_is_externref ? ExternRef : AnyRef); local_set!(bld, _eg_ref2)  # save arg2 (ref, top)
-                local _eg_num2 = allocate_local!(ctx, _a1w_eg); local_set!(bld, _eg_num2)      # save arg1 (num)
-                _emit_egal_box_vs_num!(bld, ctx, _eg_ref2, arg2_is_externref, _eg_num2, arg_type)
-            elseif _wt_is_ref(_a1_act)
-                # both operands are ACTUALLY refs — eqref identity comparison
-                local _eg_t1 = allocate_local!(ctx, EqRef)
-                arg2_is_externref && any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true); local_set!(bld, _eg_t1)
-                _a1_act === ExternRef && any_convert_extern!(bld)
-                ref_cast!(bld, EqRef, true)
-                local_get!(bld, _eg_t1)
-                num!(bld, Opcode.REF_EQ)
-            else
-                drop!(bld); drop!(bld); i32_const!(bld, 0)
-            end
-        else
-            # Both args are numeric. Check actual Wasm types to select correct opcode.
-            # Julia type inference (is_32bit) may differ from actual Wasm local types.
-            local arg1_actual_32bit = is_32bit
-            local arg2_actual_32bit = arg2_type === Nothing || arg2_type === Bool ||
-                                      arg2_type === Int32 || arg2_type === UInt32 ||
-                                      arg2_type === Int16 || arg2_type === UInt16 ||
-                                      arg2_type === Int8 || arg2_type === UInt8 || arg2_type === Char
-
-            # Check arg1's actual Wasm type (may differ from Julia type inference).
-            # dart2wasm carries the type with the value rather than scanning bytes.
-            local _arg1_local_is_ref = false  # true if arg1's local is ref-typed (not numeric)
-            if length(args) >= 1
-                local _a1_wt = static_wasm_type(args[1], ctx)
-                arg1_actual_32bit = (_a1_wt === I32)
-                # Detect ref-typed locals masquerading as numeric (e.g. Core.IntrinsicFunction
-                # is stored as ExternRef because julia_to_wasm_type returns ExternRef via
-                # T<:Function branch, but is_ref_type_or_union returns false for it)
-                if _a1_wt === ExternRef || _a1_wt === AnyRef || _a1_wt === EqRef ||
-                   _a1_wt === StructRef || _a1_wt === ArrayRef || _a1_wt isa ConcreteRef
-                    _arg1_local_is_ref = true
-                end
-            end
-
-            # Check arg2's actual Wasm type (may differ from Julia type inference).
-            if length(args) >= 2
-                arg2_actual_32bit = (static_wasm_type(args[2], ctx) === I32)
-            end
-
-            # Select opcode based on actual Wasm types
-            if _arg1_local_is_ref
-                # arg1 is a ref type but Julia treated it as numeric (e.g. Core.IntrinsicFunction
-                # stored as ExternRef). A ref value can never equal a numeric constant, so drop
-                # both args and return false.
-                drop!(bld)
-                drop!(bld)
-                i32_const!(bld, 0)
-            elseif arg1_actual_32bit && arg2_actual_32bit
-                # Both i32 - use i32_eq
-                num!(bld, Opcode.I32_EQ)
-            elseif arg1_actual_32bit && !arg2_actual_32bit
-                # arg1 is i32, arg2 is i64 - extend arg1 to i64
-                # But arg1 is already on stack below arg2. We need to swap and extend.
-                # Simpler: just compare as i32 if we can truncate arg2
-                # Since arg2 is on top of stack, wrap it to i32
-                num!(bld, Opcode.I32_WRAP_I64)
-                num!(bld, Opcode.I32_EQ)
-            elseif !arg1_actual_32bit && arg2_actual_32bit
-                # arg1 is i64, arg2 is i32 - extend arg2 (on top of stack) to i64
-                num!(bld, Opcode.I64_EXTEND_I32_S)
-                num!(bld, Opcode.I64_EQ)
-            else
-                # Both i64 - use i64_eq
-                num!(bld, Opcode.I64_EQ)
-            end
-        end
+        error("egal: primitive $P has no numeric representation (got $w)")
     end
-    append_builder!(fb, bld)
-    return nothing
+    return b
+end
+
+"""
+    _emit_string_egal!(b, mod, registry, alloc, p1, p2) -> b
+
+Push `p1 === p2` for two classed strings of one class (String, or Symbol): the byte arrays
+compared by the one string-equality loop. jl_egal compares a String by its length and
+bytes; a Symbol is interned by Julia, so for two Symbols content equality is identity.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c
+jl_egal__special; dart's `identical` on strings is reference equality.)
+"""
+function _emit_string_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                            alloc::Function, p1::Function, p2::Function)::InstrBuilder
+    local sidx = get_string_struct_type!(mod, registry)
+    local aidx = get_string_array_type!(mod, registry)
+    local aw = ConcreteRef(UInt32(aidx), true)
+    local data(p) = () -> (p(); struct_get!(b, sidx, UInt32(2), aw))
+    local la, lb = _egal_local!(b, alloc, data(p1), aw), _egal_local!(b, alloc, data(p2), aw)
+    return _emit_string_equal_core!(b, aidx, la, lb, alloc(I32), alloc(I32))
+end
+
+"""Convert the ref on top of the stack (wasm type `w`) to an eqref, for `ref.eq`.
+
+parity(intrinsics.dart:1455 StaticIntrinsic.identical): its operands translated to `eqref`."""
+function _to_eqref!(b::InstrBuilder, mod::WasmModule, w::WasmValType)::InstrBuilder
+    w === ExternRef && any_convert_extern!(b)
+    wasm_subtype(w, EqRef, mod) || ref_cast!(b, EqRef, true)
+    return b
+end
+
+"""Convert the ref on top of the stack (wasm type `w`) to an anyref, the runtime egal
+function's operand type.
+
+parity(translator.dart:1597 convertType): the upcast (and the extern bridge) to the top type."""
+function _to_anyref!(b::InstrBuilder, w::WasmValType)::InstrBuilder
+    w === ExternRef && any_convert_extern!(b)
+    return b
+end
+
+"""
+    _egal_needs_value_compare(T) -> Bool
+
+True when two distinct heap objects of the concrete type `T` can still be `===`, so identity
+alone cannot answer: primitives, String and Symbol, and immutable structs and tuples that are
+not singletons. Type objects (`T <: Type`, TypeVar) and SimpleVector are compared by their own
+arms of the runtime egal function.
+parity(intrinsics.dart:1446 StaticIntrinsic.identical canBeValueType): which classes need an
+unboxed comparison; Julia's value classes are its immutable types (builtins.c jl_egal).
+"""
+function _egal_needs_value_compare(@nospecialize(T))::Bool
+    T isa DataType && isconcretetype(T) || return false
+    (T <: Type || T === TypeVar || T === Core.SimpleVector) && return false
+    Base.issingletontype(T) && return false
+    isprimitivetype(T) && return true
+    (T === String || T === Symbol) && return true
+    return isstructtype(T) && !ismutabletype(T)
+end
+
+"""
+    _egal_rep(T, mod, registry) -> WasmValType
+
+The wasm type a value of the concrete type `T` is compared in: a primitive's numeric
+register (a 128-bit integer's limb struct), the classed string for String and Symbol, the
+registered struct of an immutable struct or tuple (registered here, as its first allocation
+would register it), and `anyref` for a value compared by identity.
+parity(translator.dart:1044 translateType): the storage type of a class's values.
+"""
+function _egal_rep(@nospecialize(T), mod::WasmModule, registry::TypeRegistry)::WasmValType
+    (T === Int128 || T === UInt128) &&
+        return ConcreteRef(UInt32(get_int128_type!(mod, registry, T)), true)
+    isprimitivetype(T) && return julia_to_wasm_type(T)
+    (T === String || T === Symbol) &&
+        return ConcreteRef(UInt32(get_string_struct_type!(mod, registry)), true)
+    if T isa DataType && isconcretetype(T) && isstructtype(T) && !ismutabletype(T) &&
+       !(T <: Type) && !Base.issingletontype(T) && !is_closure_type(T) &&
+       (T <: Tuple || is_struct_type(T))
+        local info = T <: Tuple ? register_tuple_type!(mod, registry, T) :
+                                  register_struct_type!(mod, registry, T)
+        info isa StructInfo && info.field_offset > 0 &&
+            return ConcreteRef(info.wasm_type_idx, true)
+    end
+    return AnyRef
+end
+
+"""
+    _emit_egal_same!(b, mod, registry, alloc, T, p1, w1, p2, w2, seen) -> b
+
+Push `p1 === p2` for two values whose static Julia type is the same `T` (pushed in wasm types
+`w1`/`w2`): a singleton is the one instance; a primitive compares bits; String and Symbol
+compare content; an immutable struct or tuple compares every field by the same rule (Julia's
+`compare_fields`); a mutable object compares identity; anything whose static type does not
+decide (abstract, a Union, a type object, a struct type already being expanded in `seen`)
+calls the runtime egal function.
+parity(intrinsics.dart:1409 StaticIntrinsic.identical): the static arms; the immutable
+struct arm is Julia's (builtins.c compare_fields — dart has no immutable value structs).
+"""
+function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                          alloc::Function, @nospecialize(T), p1::Function, w1::WasmValType,
+                          p2::Function, w2::WasmValType, seen::Vector{Any})::InstrBuilder
+    local concrete = T isa DataType && isconcretetype(T)
+    if concrete && Base.issingletontype(T)
+        i32_const!(b, 1)
+    elseif concrete && isprimitivetype(T) && !_wt_is_ref(w1) && !_wt_is_ref(w2) ||
+           T === Int128 || T === UInt128
+        _emit_bits_egal!(b, mod, registry, alloc, T, p1, p2)
+    elseif T === String || T === Symbol
+        _emit_string_egal!(b, mod, registry, alloc, p1, p2)
+    elseif concrete && _egal_needs_value_compare(T) && !isprimitivetype(T) &&
+           !any(s -> s === T, seen) && !is_closure_type(T) &&
+           haskey(registry.structs, T) && registry.structs[T].field_offset > 0
+        _emit_fields_egal!(b, mod, registry, alloc, T, p1, p2, seen)
+    elseif concrete && ismutabletype(T) && !(T <: Type)
+        p1(); _to_eqref!(b, mod, w1)
+        p2(); _to_eqref!(b, mod, w2)
+        num!(b, Opcode.REF_EQ)
+    else
+        (_wt_is_ref(w1) && _wt_is_ref(w2)) ||
+            error("egal: a $T value in a numeric $w1/$w2 representation has no class to compare")
+        p1(); _to_anyref!(b, w1)
+        p2(); _to_anyref!(b, w2)
+        call!(b, get_egal_function!(mod, registry), WasmValType[AnyRef, AnyRef], WasmValType[I32])
+    end
+    return b
+end
+
+"""
+    _emit_fields_egal!(b, mod, registry, alloc, T, p1, p2, seen) -> b
+
+Push `p1 === p2` for two values of the immutable struct or tuple type `T` (each in any ref
+type that casts to `T`'s struct): every field compared by `_emit_egal_same!` at the field's
+declared type, all results and-ed. A concrete-typed reference field is null only while
+undefined, and two undefined fields are egal while an undefined and a defined one are not.
+parity(quarantine: jl_egal compares an immutable struct field by field, builtins.c
+compare_fields; dart2wasm has no immutable value structs to compare.)
+"""
+function _emit_fields_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                            alloc::Function, @nospecialize(T), p1::Function, p2::Function,
+                            seen::Vector{Any})::InstrBuilder
+    local info = registry.structs[T]
+    local sidx = info.wasm_type_idx
+    local sref = ConcreteRef(sidx, false)
+    local cast(p) = () -> (p(); ref_cast!(b, Int64(sidx), false))
+    local s1, s2 = _egal_local!(b, alloc, cast(p1), sref), _egal_local!(b, alloc, cast(p2), sref)
+    local fields = mod.types[sidx + 1].fields
+    local inner = Any[seen..., T]
+    local nf = length(info.field_types)
+    nf == 0 && (i32_const!(b, 1); return b)
+    for fi in 1:nf
+        local FT = info.field_types[fi]
+        local widx = wasm_field_idx(info, fi)
+        local wf = fields[widx + 1].valtype
+        local field(s) = () -> (local_get!(b, s); struct_get!(b, sidx, widx, wf))
+        if _wt_is_ref(wf) && FT isa DataType && isconcretetype(FT) && !Base.issingletontype(FT)
+            local f1, f2 = _egal_local!(b, alloc, field(s1), wf), _egal_local!(b, alloc, field(s2), wf)
+            local_get!(b, f1); ref_is_null!(b); local_get!(b, f2); ref_is_null!(b)
+            num!(b, Opcode.I32_OR)
+            if_!(b, I32)
+            local_get!(b, f1); ref_is_null!(b); local_get!(b, f2); ref_is_null!(b)
+            num!(b, Opcode.I32_AND)
+            else_!(b)
+            _emit_egal_same!(b, mod, registry, alloc, FT, () -> local_get!(b, f1), wf,
+                             () -> local_get!(b, f2), wf, inner)
+            end_block!(b)
+        else
+            _emit_egal_same!(b, mod, registry, alloc, FT, field(s1), wf, field(s2), wf, inner)
+        end
+        fi > 1 && num!(b, Opcode.I32_AND)
+    end
+    return b
+end
+
+"""
+    _emit_is_nothing!(b, registry, l) -> b
+
+Push whether the anyref in local `l` is `nothing`: a null reference, or a classed value whose
+classId is `Nothing`'s (the boxed-nothing singleton, or a boxed `Nothing` register value).
+parity(intrinsics.dart:2994 MemberIntrinsic.identical): its null arm (`br_on_null`), with
+Julia's `nothing` carried either as null or as the Nothing class.
+"""
+function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer)::InstrBuilder
+    local top = registry.base_struct_idx
+    local_get!(b, l); ref_is_null!(b)
+    if_!(b, I32)
+    i32_const!(b, 1)
+    else_!(b)
+    local_get!(b, l); ref_test!(b, Int64(top), false)
+    if_!(b, I32)
+    local_get!(b, l); emit_typeof!(b, top)
+    i32_const!(b, Int64(ensure_type_id!(registry, Nothing))); num!(b, Opcode.I32_EQ)
+    else_!(b)
+    i32_const!(b, 0)
+    end_block!(b)
+    end_block!(b)
+    return b
+end
+
+# abstract heap type `eq` as a ref.test immediate (the s33 encoding of 0x6D)
+const _HEAP_EQ = Int64(-19)
+
+"""
+    get_egal_function!(mod, registry) -> UInt32
+
+The ONE runtime egal function `(anyref, anyref) -> i32`, built once per module on first use.
+In order: `nothing` (null, or the Nothing class) against `nothing`; reference identity; type
+objects (a Union or UnionAll compared by its two fields, a DataType or TypeVar by identity);
+SimpleVector element by element; then two classed values of one classId, compared by that
+class's rule (`_emit_egal_class!`) when the class can be equal without being identical. The
+closed world is numbered before codegen, so the class list is complete when this is built.
+parity(intrinsics.dart:2974 MemberIntrinsic.identical): ref.eq, the null arm, the classId
+compare, then one unboxed compare per value class.
+"""
+function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.egal_func_idx !== nothing && return registry.egal_func_idx
+    local top = registry.base_struct_idx
+    local jt = registry.jl_type_idx
+    (top === nothing || jt === nothing || registry.type_ids === nothing) &&
+        error("the runtime egal function needs the class hierarchy and the JlType hierarchy")
+    local params = WasmValType[AnyRef, AnyRef]
+    local results = WasmValType[I32]
+    local fidx = add_function!(mod, params, results, WasmValType[],
+                               UInt8[Opcode.UNREACHABLE, Opcode.END])
+    registry.egal_func_idx = fidx
+    local b = InstrBuilder(params, results; func_name="jl_egal", mod=mod)
+    local extra = WasmValType[]
+    local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
+    local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
+    local egal_call!() = call!(b, fidx, params, results)
+
+    # nothing: null or the Nothing class, on either side
+    local_get!(b, 0); ref_is_null!(b)
+    ret!(() -> (local_get!(b, 1); ref_is_null!(b); if_!(b, I32); i32_const!(b, 1); else_!(b);
+                _emit_is_nothing!(b, registry, 1); end_block!(b)))
+    local_get!(b, 1); ref_is_null!(b)
+    ret!(() -> _emit_is_nothing!(b, registry, 0))
+    # identity
+    local_get!(b, 0); ref_test!(b, _HEAP_EQ, false)
+    local_get!(b, 1); ref_test!(b, _HEAP_EQ, false)
+    num!(b, Opcode.I32_AND)
+    if_!(b)
+    local_get!(b, 0); ref_cast!(b, EqRef, true)
+    local_get!(b, 1); ref_cast!(b, EqRef, true)
+    num!(b, Opcode.REF_EQ)
+    ret!(() -> i32_const!(b, 1))
+    end_block!(b)
+    # type objects: kinds equal, then Union (1) / UnionAll (2) fieldwise; DataType (0) and
+    # TypeVar (3) are canonical objects, so identity (already false) decides them
+    local jtr = ConcreteRef(UInt32(jt), true)
+    local_get!(b, 0); ref_test!(b, Int64(jt), false)
+    if_!(b)
+    local_get!(b, 1); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
+    ret!(() -> i32_const!(b, 0))
+    local k = alloc(I32)
+    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    local_tee!(b, k)
+    local_get!(b, 1); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    num!(b, Opcode.I32_NE)
+    ret!(() -> i32_const!(b, 0))
+    for (kind, si) in ((1, registry.jl_union_idx), (2, registry.jl_unionall_idx))
+        local_get!(b, k); i32_const!(b, kind); num!(b, Opcode.I32_EQ)
+        ret!(() -> begin
+            for f in (UInt32(1), UInt32(2))
+                local_get!(b, 0); ref_cast!(b, Int64(si), false); struct_get!(b, si, f, jtr)
+                local_get!(b, 1); ref_cast!(b, Int64(si), false); struct_get!(b, si, f, jtr)
+                egal_call!()
+            end
+            num!(b, Opcode.I32_AND)
+        end)
+    end
+    i32_const!(b, 0); return_!(b)
+    end_block!(b)
+    local_get!(b, 1); ref_test!(b, Int64(jt), false)
+    ret!(() -> i32_const!(b, 0))
+    # SimpleVector: equal length, elements egal
+    local sv = registry.jl_svec_idx
+    if sv !== nothing
+        local svr = ConcreteRef(UInt32(sv), false)
+        local_get!(b, 0); ref_test!(b, Int64(sv), false)
+        if_!(b)
+        local_get!(b, 1); ref_test!(b, Int64(sv), false); num!(b, Opcode.I32_EQZ)
+        ret!(() -> i32_const!(b, 0))
+        local v1, v2, n, i = alloc(svr), alloc(svr), alloc(I32), alloc(I32)
+        local_get!(b, 0); ref_cast!(b, Int64(sv), false); local_set!(b, v1)
+        local_get!(b, 1); ref_cast!(b, Int64(sv), false); local_set!(b, v2)
+        local_get!(b, v1); array_len!(b); local_tee!(b, n)
+        local_get!(b, v2); array_len!(b); num!(b, Opcode.I32_NE)
+        ret!(() -> i32_const!(b, 0))
+        i32_const!(b, 0); local_set!(b, i)
+        local done = block!(b)
+        local again = loop!(b)
+        local_get!(b, i); local_get!(b, n); num!(b, Opcode.I32_GE_U); br_if!(b, done)
+        local_get!(b, v1); local_get!(b, i); array_get!(b, sv, AnyRef)
+        local_get!(b, v2); local_get!(b, i); array_get!(b, sv, AnyRef)
+        egal_call!(); num!(b, Opcode.I32_EQZ)
+        ret!(() -> i32_const!(b, 0))
+        local_get!(b, i); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i)
+        br!(b, again)
+        end_block!(b)
+        end_block!(b)
+        i32_const!(b, 1); return_!(b)
+        end_block!(b)
+        local_get!(b, 1); ref_test!(b, Int64(sv), false)
+        ret!(() -> i32_const!(b, 0))
+    end
+    # classed values: one classId, then that class's rule
+    local_get!(b, 0); ref_test!(b, Int64(top), false)
+    local_get!(b, 1); ref_test!(b, Int64(top), false)
+    num!(b, Opcode.I32_AND); num!(b, Opcode.I32_EQZ)
+    ret!(() -> i32_const!(b, 0))
+    local cid = alloc(I32)
+    local_get!(b, 0); emit_typeof!(b, top); local_tee!(b, cid)
+    local_get!(b, 1); emit_typeof!(b, top); num!(b, Opcode.I32_NE)
+    ret!(() -> i32_const!(b, 0))
+    for (C, id) in ordered_pairs(registry.type_ids, type_order_key)
+        (C isa DataType && isconcretetype(C)) || continue
+        local single = Base.issingletontype(C) && !(C <: Type)
+        (single || _egal_needs_value_compare(C)) || continue
+        local_get!(b, cid); i32_const!(b, Int64(id)); num!(b, Opcode.I32_EQ)
+        ret!(() -> _emit_egal_class!(b, mod, registry, alloc, C, single))
+    end
+    i32_const!(b, 0)   # identity classes: ref.eq above already said no
+    end_block!(b)
+    local slot = fidx - num_imported_funcs(mod) + 1
+    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
+    return fidx
+end
+
+"""
+    _emit_egal_class!(b, mod, registry, alloc, C, single) -> b
+
+Inside the runtime egal function, with both anyref operands (locals 0 and 1) known to carry
+class `C`: push their egal. A singleton class is its one instance; a primitive class reads
+both boxes' payloads; String/Symbol and immutable structs cast to `C`'s representation and
+compare by `_emit_egal_same!`. A value class with no classed representation traps, loudly.
+parity(intrinsics.dart:3013 MemberIntrinsic.identical): the per-value-class arm — cast both,
+`struct.get` the payload, compare.
+"""
+function _emit_egal_class!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                           alloc::Function, @nospecialize(C), single::Bool)::InstrBuilder
+    if single
+        i32_const!(b, 1)
+        return b
+    end
+    local rep = _egal_rep(C, mod, registry)
+    if !_wt_is_ref(rep)
+        local box = get_numeric_box_type!(mod, registry, rep)
+        local payload(l) = () -> (local_get!(b, l); ref_cast!(b, Int64(box), false);
+                                  struct_get!(b, box, UInt32(1), rep))
+        return _emit_bits_egal!(b, mod, registry, alloc, C, payload(0), payload(1))
+    end
+    if !(rep isa ConcreteRef)
+        unreachable!(b)   # structural trap: a value class with no classed representation to compare
+        return b
+    end
+    local cast(l) = () -> (local_get!(b, l); ref_cast!(b, Int64(rep.type_idx), true))
+    return _emit_egal_same!(b, mod, registry, alloc, C, cast(0), rep, cast(1), rep, Any[])
+end
+
+"""
+    emit_egal!(b, ctx, x, y) -> b
+
+THE `===` lowering: push `x === y` (i32). Disjoint static types are never egal (Julia's own
+`egal_tfunc`); one concrete static type compares by `_emit_egal_same!` in its representation;
+`nothing` against a value that may be `nothing` is its null/Nothing-class test; every other
+pair boxes both operands and calls the runtime egal function. A value whose static type has
+several members but sits in a numeric register no longer records which member it is, so a
+compare involving one rejects at its statement.
+parity(intrinsics.dart:1409 StaticIntrinsic.identical): the static arms, else the call to
+`identical` over the boxed operands.
+"""
+function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode, y::NirNode)::InstrBuilder
+    local T1 = infer_value_type(x, ctx)
+    local T2 = infer_value_type(y, ctx)
+    T1 isa Type || (T1 = Any)
+    T2 isa Type || (T2 = Any)
+    local mod, reg = ctx.mod, ctx.type_registry
+    local alloc = w -> allocate_local!(ctx, w)
+    local bld = _ctx_builder(ctx, "egal")
+    local pusher(v, w, J) = () -> emit_value!(bld, v, ctx, w; from_julia=J)
+    local concrete(T) = T isa DataType && isconcretetype(T)
+    local lossy = [(v, T) for (v, T) in ((x, T1), (y, T2))
+                   if !concrete(T) && !_wt_is_ref(static_wasm_type(v, ctx))]
+    if typeintersect(T1, T2) === Union{}
+        i32_const!(bld, 0)
+    elseif !isempty(lossy)
+        local v, T = first(lossy)
+        emit_unsupported_stub!(ctx, bld, :unsupported_type,
+            "`===` on a $(T) value held in a numeric $(static_wasm_type(v, ctx)) register, " *
+            "which does not record which member of $(T) it is")
+    elseif T1 === T2 && (T1 === String || T1 === Symbol)
+        append_builder!(bld, compile_string_equal_b(x, y, ctx))
+    elseif T1 === T2 && concrete(T1)
+        local w = _egal_rep(T1, mod, reg)
+        _emit_egal_same!(bld, mod, reg, alloc, T1, pusher(x, w, T1), w, pusher(y, w, T1), w, Any[])
+    elseif T1 === Nothing || T2 === Nothing
+        local other, OT = T1 === Nothing ? (y, T2) : (x, T1)
+        local w = static_wasm_type(other, ctx)
+        local inner = OT isa Union ? get_nullable_inner_type(OT) : nothing
+        if w isa ConcreteRef && inner isa DataType && is_struct_type(inner)
+            # Union{Nothing,S} of a struct S: null is the only nothing
+            emit_value!(bld, other, ctx, w; from_julia=OT)
+            ref_is_null!(bld)
+        else
+            local l = _egal_local!(bld, alloc, pusher(other, AnyRef, concrete(OT) ? OT : nothing), AnyRef)
+            _emit_is_nothing!(bld, reg, l)
+        end
+    else
+        pusher(x, AnyRef, concrete(T1) ? T1 : nothing)()
+        pusher(y, AnyRef, concrete(T2) ? T2 : nothing)()
+        call!(bld, get_egal_function!(mod, reg), WasmValType[AnyRef, AnyRef], WasmValType[I32])
+    end
+    append_builder!(b, bld)
+    return b
 end
 
 """

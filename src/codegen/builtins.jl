@@ -898,106 +898,6 @@ function _emit_storage_pointer_egal!(fb::InstrBuilder, ctx::AbstractCompilationC
     return fb
 end
 
-# Special case for string/symbol equality/identity comparison (=== and !==)
-# Must be handled before generic argument pushing since strings/symbols are refs, not integers
-# Symbol uses same array<i32> representation as String, so ref.eq would fail (reference equality)
-#
-# ONE lowering for both `Core.:(===)` and `Core.:(!==)` (registered under both
-# keys) — negation is decided from `callee`'s identity, never a name test.
-function _lower_egal_early!(b, fb, ctx, call, idx, args, callee)
-    length(args) == 2 || return nothing
-    is_ne = callee === Core.:(!==)
-    local backing_a = _storage_pointer_backing(ctx, args[1])
-    local backing_b = _storage_pointer_backing(ctx, args[2])
-    if backing_a !== nothing && backing_b !== nothing
-        _emit_storage_pointer_egal!(fb, ctx, args[1], backing_a, args[2], backing_b)
-        is_ne && num!(fb, Opcode.I32_EQZ)
-        return append_builder!(b, fb)
-    elseif (backing_a !== nothing && _is_never_a_storage_pointer(ctx, args[2])) ||
-           (backing_b !== nothing && _is_never_a_storage_pointer(ctx, args[1]))
-        # a storage address against NULL or an objectid: Julia never makes them equal
-        # (_is_never_a_storage_pointer), so the comparison is decided.
-        i32_const!(fb, is_ne ? 1 : 0)
-        return append_builder!(b, fb)
-    end
-    arg1_type = infer_value_type(args[1], ctx)
-    arg2_type = infer_value_type(args[2], ctx)
-    if (arg1_type === String || arg1_type === Symbol) && (arg2_type === String || arg2_type === Symbol)
-        local _seqb = _ctx_builder(ctx, "compile_call")
-        append_builder!(_seqb, compile_string_equal_b(args[1], args[2], ctx))
-        if is_ne
-            # Negate the result for !==
-            num!(_seqb, Opcode.I32_EQZ)
-        end
-        append_builder!(fb, _seqb)
-        return append_builder!(b, fb)
-    end
-
-    # typeof(x) === Type — compare DataType struct refs with ref.eq
-    # Detect when one arg comes from typeof() and the other is a Type constant
-    arg1_is_typeof = _is_typeof_ssa(args[1], ctx)
-    arg2_is_typeof = _is_typeof_ssa(args[2], ctx)
-    arg1_is_type_const = _resolve_type_const(args[1], ctx)
-    arg2_is_type_const = _resolve_type_const(args[2], ctx)
-    if (arg1_is_typeof && arg2_is_type_const !== nothing) ||
-       (arg2_is_typeof && arg1_is_type_const !== nothing)
-        ctx.type_registry.type_lookup_global === nothing &&
-            error("typeof identity comparison requires the canonical type lookup table")
-        local _toeqb = _ctx_builder(ctx, "compile_call")
-        if arg1_is_typeof
-            emit_value!(_toeqb, args[1], ctx)  # R17-floor: dynamic egal classifies the actual operand
-            haskey(ctx.type_registry.type_constant_globals, arg2_is_type_const) ||
-                error("closed-world typeof identity is missing the type global for $arg2_is_type_const")
-            dt_global = ctx.type_registry.type_constant_globals[arg2_is_type_const]
-            global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-        else
-            emit_value!(_toeqb, args[2], ctx)  # R17-floor: dynamic egal classifies the actual operand
-            haskey(ctx.type_registry.type_constant_globals, arg1_is_type_const) ||
-                error("closed-world typeof identity is missing the type global for $arg1_is_type_const")
-            dt_global = ctx.type_registry.type_constant_globals[arg1_is_type_const]
-            global_get!(_toeqb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
-        end
-        num!(_toeqb, Opcode.REF_EQ)
-        if is_ne
-            num!(_toeqb, Opcode.I32_EQZ)
-        end
-        append_builder!(fb, _toeqb)
-        return append_builder!(b, fb)
-    end
-
-    # Special case: comparing ref type with nothing - use ref.is_null
-    arg1_is_nothing = is_nothing_value(args[1], ctx)
-    arg2_is_nothing = is_nothing_value(args[2], ctx)
-
-    if (arg1_is_nothing && is_ref_type_or_union(arg2_type)) ||
-       (arg2_is_nothing && is_ref_type_or_union(arg1_type))
-        # Compile the non-nothing ref argument (typed channel)
-        local _nv_b = _compile_value_b(arg1_is_nothing ? args[2] : args[1], ctx)
-        local _nv_ty = isempty(_nv_b.v.stack) ? nothing : _nv_b.v.stack[end]
-        # typed channel: numeric values can never be null — the emission's own type
-        # answers (was a LOCAL_GET LEB decode + const first-byte scan + static re-guess).
-        local is_numeric_val = _nv_ty === I32 || _nv_ty === I64 || _nv_ty === F32 || _nv_ty === F64
-        local _neqb = _ctx_builder(ctx, "compile_call")
-        if is_numeric_val
-            # Numeric value can never be nothing
-            # === nothing → false (0), !== nothing → true (1)
-            i32_const!(_neqb, is_ne ? 1 : 0)
-            append_builder!(fb, _neqb)
-            return append_builder!(b, fb)
-        end
-        append_builder!(_neqb, _nv_b)   # typed merge
-        # ref.is_null checks if ref is null (returns i32 1 for null, 0 otherwise)
-        ref_is_null!(_neqb)
-        if is_ne
-            # Negate for !== (we want true when NOT null)
-            num!(_neqb, Opcode.I32_EQZ)
-        end
-        append_builder!(fb, _neqb)
-        return append_builder!(b, fb)
-    end
-    return nothing
-end
-
 # `Core._expr(:head, arg1, arg2, ...)` — materializes an `Expr(head::Symbol,
 # args::Vector{Any})`. Julia-only (dart has no `Expr` node); the WasmGC
 # representation is a classed Expr struct wrapping a head Symbol (a classed
@@ -2212,119 +2112,24 @@ function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     return arg_type, is_32bit, is_128bit
 end
 
-# `===` / `!==`. Guard 1 is the string/typeof/nothing special-casing
-# (`_lower_egal_early!`); guard 2 is the general width-keyed comparison, which
-# needs both operands on the stack — INCLUDING Type-valued ones, since for
-# these two callees a Type IS the runtime value being compared.
+# `===` / `!==`: THE egal lowering, `emit_egal!` (calls.jl); `!==` is its negation.
+# parity(intrinsics.dart:1409 StaticIntrinsic.identical)
 function _lower_egal!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
-    local early = _lower_egal_early!(b, fb, ctx, call, idx, args, callee)
-    early === nothing || return early
-    local arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
-    emit_call_operands!(fb, ctx, args; include_types=true)
-    if callee === Core.:(!==)
-        if is_128bit
-            emit_int128_ne!(fb, ctx, arg_type)
-        elseif arg_type === Float64
-            num!(fb, Opcode.F64_NE)
-        elseif arg_type === Float32
-            num!(fb, Opcode.F32_NE)
-        else
-            local arg2_type_ne = length(args) >= 2 ? infer_value_type(args[2], ctx) : Int64
-            local arg1_is_ref_ne = is_ref_type_or_union(arg_type) && arg_type !== Nothing
-            local arg2_is_ref_ne = is_ref_type_or_union(arg2_type_ne) && arg2_type_ne !== Nothing
-
-            # Quick check: if one arg is ref-typed and other is Nothing (compiles to i32),
-            # they can't be equal, so !== is always true. Drop both and return true.
-            if (arg1_is_ref_ne && arg2_type_ne === Nothing) || (arg2_is_ref_ne && arg_type === Nothing)
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-                return append_builder!(b, fb)
-            end
-
-            # Special case: both args are Nothing-typed. Need to check actual Wasm representation.
-            if arg_type === Nothing && arg2_type_ne === Nothing
-                # typed channel: the emissions' own types (was first-byte checks + LEB decodes).
-                local _a1ne_ty = length(fb.v.stack) >= 2 ? fb.v.stack[end - 1] : nothing
-                local _a2ne_ty = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
-                local a1_ref_ne = _a1ne_ty !== nothing && _wt_is_ref(_a1ne_ty)
-                local a2_ref_ne = _a2ne_ty !== nothing && _wt_is_ref(_a2ne_ty)
-                # If Wasm types mismatch (one ref, one not), drop both and return true (not equal)
-                if a1_ref_ne != a2_ref_ne
-                    drop!(fb); drop!(fb); i32_const!(fb, 1)
-                    return append_builder!(b, fb)
-                elseif a1_ref_ne && a2_ref_ne
-                    # Both refs - use ref.eq then negate
-                    num!(fb, Opcode.REF_EQ)
-                    num!(fb, Opcode.I32_EQZ)
-                    return append_builder!(b, fb)
-                end
-                # Both numeric - fall through to normal handling
-            end
-
-            # Check actual Wasm representation for Nothing-typed args
-            local arg1_wasm_is_ref_ne = arg1_is_ref_ne
-            local arg2_wasm_is_ref_ne = arg2_is_ref_ne
-            local arg1_is_externref_ne = (arg_type === Any)
-            local arg2_is_externref_ne = (arg2_type_ne === Any)
-            # Check Wasm representation for any potentially mixed comparison
-            if arg_type === Nothing || arg2_type_ne === Nothing || arg1_is_ref_ne || arg2_is_ref_ne
-                # For Nothing-typed args, determine ref-ness from the inferred value type
-                # (dart2wasm carries the type with the value rather than scanning bytes).
-                # `nothing` is treated as a ref here (it may be ref.null when compared
-                # against a ref-typed Nothing local).
-                if length(args) >= 1 && arg_type === Nothing
-                    arg1_wasm_is_ref_ne = is_nothing_value(args[1], ctx) ||
-                                          _wt_is_ref(static_wasm_type(args[1], ctx))
-                end
-                if length(args) >= 2 && arg2_type_ne === Nothing
-                    arg2_wasm_is_ref_ne = is_nothing_value(args[2], ctx) ||
-                                          _wt_is_ref(static_wasm_type(args[2], ctx))
-                end
-            end
-            # BOTH args must be ref types to use ref.eq
-            if arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-                # Convert externref → eqref before ref.eq (same pattern as === handler)
-                local _neb = _ctx_builder(ctx, "compile_call")
-                if arg1_is_externref_ne && arg2_is_externref_ne
-                    local tmp_ne = allocate_local!(ctx, EqRef)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_set!(_neb, tmp_ne)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_get!(_neb, tmp_ne)
-                elseif arg1_is_externref_ne
-                    local tmp_ne2 = allocate_local!(ctx, EqRef)
-                    local_set!(_neb, tmp_ne2)
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                    local_get!(_neb, tmp_ne2)
-                elseif arg2_is_externref_ne
-                    any_convert_extern!(_neb)
-                    ref_cast!(_neb, EqRef, true)
-                end
-                num!(_neb, Opcode.REF_EQ)
-                num!(_neb, Opcode.I32_EQZ)  # Negate for !==
-                append_builder!(fb, _neb)
-            elseif arg1_wasm_is_ref_ne && !arg2_wasm_is_ref_ne
-                # Comparing ref with non-ref: type mismatch, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            elseif !arg1_wasm_is_ref_ne && arg2_wasm_is_ref_ne
-                # Comparing non-ref with ref: type mismatch, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            elseif !is_32bit && arg2_type_ne === Nothing
-                # arg1 is 64-bit, arg2 is Nothing (i32). Extend i32 to i64 before comparing.
-                num!(fb, Opcode.I64_EXTEND_I32_S)
-                num!(fb, Opcode.I64_NE)
-            elseif is_32bit && arg_type === Nothing && !is_ref_type_or_union(arg2_type_ne)
-                # arg1 is Nothing (i32), arg2 is 64-bit - mismatched types, always not-equal
-                drop!(fb); drop!(fb); i32_const!(fb, 1)
-            else
-                num!(fb, is_32bit ? Opcode.I32_NE : Opcode.I64_NE)
-            end
-        end
+    length(args) == 2 || return nothing
+    # Storage pointers first (Base.dataids' `UInt(m.ptr)`, `pointer(A) == pointer(B)`):
+    # WasmGC has no addresses, so two are equal exactly when they share a backing object
+    # and offset; against NULL or an objectid Julia never makes them equal.
+    local backing_a = _storage_pointer_backing(ctx, args[1])
+    local backing_b = _storage_pointer_backing(ctx, args[2])
+    if backing_a !== nothing && backing_b !== nothing
+        _emit_storage_pointer_egal!(fb, ctx, args[1], backing_a, args[2], backing_b)
+    elseif (backing_a !== nothing && _is_never_a_storage_pointer(ctx, args[2])) ||
+           (backing_b !== nothing && _is_never_a_storage_pointer(ctx, args[1]))
+        i32_const!(fb, 0)
     else
-        _compile_call_egaleq(args, fb, ctx, is_128bit, is_32bit, arg_type)
+        emit_egal!(fb, ctx, args[1], args[2])
     end
+    callee === Core.:(!==) && num!(fb, Opcode.I32_EQZ)
     return append_builder!(b, fb)
 end
 

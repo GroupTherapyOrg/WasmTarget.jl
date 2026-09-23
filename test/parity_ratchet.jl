@@ -1432,12 +1432,12 @@ const LOCKS = [
             end
             n
         end),
-    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton: dynamic Any-versus-() egal tests its concrete tuple type rather than heap identity",
+    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton, so two of them are egal without heap identity: the static egal arm answers one singleton type with 1, and the runtime egal function answers 1 for any singleton class once the two classIds match (dev/CHARTER.md C3)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
-            required = ["tuples are still egal in Julia",
-                        "(arg_type === Any && arg2_type === Tuple{})",
-                        "ref_test!(bld, Int64(empty_info.wasm_type_idx), false)"]
+            required = ["if concrete && Base.issingletontype(T)\n        i32_const!(b, 1)",
+                        "local single = Base.issingletontype(C) && !(C <: Type)",
+                        "    if single\n        i32_const!(b, 1)"]
             count(p -> !occursin(p, calls_src), required)
         end),
     "L31_multi_container_apply" => ("homogeneous multi-Vector _apply_iterate reductions traverse every container through one loop generator and never return an identity for Julia's invalid all-empty +()/*() call",
@@ -1853,7 +1853,10 @@ const LOCKS = [
             retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
                        "string_hash_func_idx", "_wasm_string_fnv1a",
                        "resolve_through_dead_boundscheck",
-                       "_is_typelevel_foldable"]   # Phase 12 C: the fold enumeration
+                       "_is_typelevel_foldable",   # Phase 12 C: the fold enumeration
+                       # the two `===` ladders `emit_egal!` replaced
+                       "_compile_call_egaleq", "_lower_egal_early", "_emit_egal_box_vs_num",
+                       "_egal_num_eqop", "_is_typeof_ssa", "_resolve_type_const"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue

@@ -94,6 +94,8 @@ mutable struct TypeRegistry
     jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
+    # The runtime egal function (`get_egal_function!`, dart's `identical` member intrinsic).
+    egal_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
@@ -143,6 +145,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
+    nothing,  # egal_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
     Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
@@ -165,6 +168,7 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
+    nothing,  # egal_func_idx
     nothing,  # box_types (F3)
     nothing,  # box_contents_types (F3 L2)
     nothing,  # constant_globals

@@ -292,6 +292,81 @@ _g("varargs", Any[
     ("splat_vararg_nonempty", (n::Int64) -> _sm_vsum(_sm_mktup_ne(collect(1:n))...), Int64(3)),
 ])
 
+# ---- identity: `===` / `!==` is Julia's jl_egal ----------------------------
+# Bit identity for primitives (never IEEE `==`), fieldwise egal for immutable structs and
+# tuples, content for String, object identity for mutable objects. Results are Int64 so a
+# sign of zero or a Bool/Int mixup cannot hide behind `==`.
+@noinline _id_any(v::Vector{Any}, i::Int64) = v[i]
+@noinline _id_maybe(x::Int64) = x > 0 ? x : nothing
+_id_anyval(x::Int64) = (v = Any[x]; x > 0 || (v[1] = nothing); _id_any(v, 1))
+const _ID_SV = Any["a", :a, Int64(1), "x", :a]
+_id_f64(x::Float64, y::Float64) = Int64(x === y)
+_id_f32(x::Float32, y::Float32) = Int64(x === y)
+_id_f64_ne(x::Float64, y::Float64) = Int64(x !== y)
+_id_any_pair(i::Int64, j::Int64) = Int64(_id_any(_ID_SV, i) === _id_any(_ID_SV, j))
+_id_any_pair_ne(i::Int64, j::Int64) = Int64(_id_any(_ID_SV, i) !== _id_any(_ID_SV, j))
+_g("identity", Any[
+    ("f64_nan", _id_f64, NaN, NaN),
+    ("f64_zero_negzero", _id_f64, 0.0, -0.0),
+    ("f64_equal", _id_f64, 2.5, 2.5),
+    ("f64_nan_ne", _id_f64_ne, NaN, NaN),
+    ("f64_zero_negzero_ne", _id_f64_ne, 0.0, -0.0),
+    ("f32_nan", _id_f32, NaN32, NaN32),
+    ("f32_zero_negzero", _id_f32, 0.0f0, -0.0f0),
+    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),
+    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),
+    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0),
+    ("f64_nan_payload", (x::Float64) -> Int64(x === reinterpret(Float64, reinterpret(UInt64, x) | 0x1)), NaN),
+    ("any_nan_nan", (i::Int64) -> (v = Any[NaN, NaN, 0.0, -0.0]; Int64(_id_any(v, i) === _id_any(v, i + 1))), Int64(1)),
+    ("any_zero_negzero", (i::Int64) -> (v = Any[NaN, NaN, 0.0, -0.0]; Int64(_id_any(v, i) === _id_any(v, i + 1))), Int64(3)),
+    ("any_two_boxes", (x::Int64) -> (v = Any[x, x + 0]; Int64(_id_any(v, 1) === _id_any(v, 2))), Int64(7)),
+    ("any_box_vs_num", (x::Int64) -> Int64(_id_any(Any[x], 1) === x), Int64(7)),
+    ("any_box_vs_num_ne", (x::Int64) -> Int64(_id_any(Any[x], 1) !== x), Int64(7)),
+    ("any_i32_vs_i64", (i::Int64) -> (v = Any[Int32(1), Int64(1)]; Int64(_id_any(v, i) === _id_any(v, i + 1))), Int64(1)),
+    ("any_bool_vs_i64", (i::Int64) -> (v = Any[true, Int64(1)]; Int64(_id_any(v, i) === _id_any(v, i + 1))), Int64(1)),
+    ("any_nothing_egal", (x::Int64) -> Int64(_id_anyval(x) === nothing), Int64(-3)),
+    ("any_int_not_nothing", (x::Int64) -> Int64(_id_anyval(x) === nothing), Int64(3)),
+    ("any_nothing_vs_any", (x::Int64) -> Int64(_id_anyval(x) === _id_anyval(x - 1)), Int64(-3)),
+    ("str_content", (x::Int64) -> (v = Any["ab", string('a', Char(x))]; Int64(_id_any(v, 1) === _id_any(v, 2))), Int64(98)),
+    ("str_static_content", (x::Int64) -> Int64("ab" === string('a', Char(x))), Int64(98)),
+    ("sym_vs_sym", _id_any_pair, Int64(2), Int64(5)),
+    ("num_ne_str", _id_any_pair_ne, Int64(3), Int64(4)),
+    ("tuple_type_int", (x::Int64) -> (t = (UInt8, x); t === (UInt8, 3) ? 1 : 2), Int64(3)),
+    ("tuple_type_int_barrier", (x::Int64) -> (t = Base.inferencebarrier((UInt8, x)); t === (UInt8, 3) ? 1 : 2), Int64(3)),
+    ("tuple_sym_int_barrier", () -> (t = Base.inferencebarrier((:a, 3)); t === (:a, 3) ? 1 : 2)),
+    ("tuple_type_only_barrier", () -> (t = Base.inferencebarrier((UInt8,)); t === (UInt8,) ? 1 : 2)),
+    ("tuple_float_fields", (x::Float64) -> Int64((x, 1) === (NaN, 1)), NaN),
+    ("struct_fields", (x::Int64) -> Int64(_id_any(Any[_Pt(x, 2), _Pt(3, 2)], 1) === _id_any(Any[_Pt(x, 2), _Pt(3, 2)], 2)), Int64(3)),
+    ("mutable_identity", (x::Int64) -> (a = _Box(x); b = _Box(x); Int64(a === b) + 2 * Int64(a === a)), Int64(3)),
+    ("type_barrier", () -> (t = Base.inferencebarrier(UInt8); t === UInt8 ? 1 : 2)),
+    ("empty_tuple_any", (i::Int64) -> Int64(_id_any(Any[(), 1], i) === ()), Int64(1)),
+    ("empty_tuple_any_ne", (i::Int64) -> Int64(_id_any(Any[(), 1], i) === ()), Int64(2)),
+    ("bswap_u16", (x::Int64) -> Int64(bswap(x % UInt16)), Int64(0x1234)),
+    ("bswap_i16", (x::Int64) -> Int64(bswap(x % Int16)), Int64(0x12f4)),
+])
+
+# A Symbol is not its own class: every classed string is stamped with String's classId
+# (values.jl `emit_string_wrap!`), a Symbol literal interns into the same global as the equal
+# String (types.jl `get_string_constant_global!`), and a runtime Symbol is the String object
+# itself (statements.jl `_fc_jl_symbol_n!`, builtins.jl `_lower_symbol!`), so egal, isa and
+# typeof cannot tell `"a"` from `:a` (measured 2026-09-22).
+# A Union{Nothing,Int64} value lives in an i64 register (builder/types.jl
+# `resolve_union_type`: Union{Nothing,T} maps to T's representation), so `nothing` and a
+# number are the same bits and `===` cannot be answered: it rejects at the statement. The
+# lowering it replaced answered a constant (native 1, wasm 0) (measured 2026-09-22).
+_xf("union_register", Any[
+    ("union_num_ne", (x::Int64) -> Int64(_id_maybe(x) !== 3), Int64(3)),
+    ("union_nothing_egal", (x::Int64) -> Int64(_id_maybe(x) === nothing), Int64(-3)),
+])
+_xf("symbol_class", Any[
+    ("str_vs_sym", _id_any_pair, Int64(1), Int64(2)),
+    ("str_ne_sym", _id_any_pair_ne, Int64(1), Int64(2)),
+    ("typeof_sym_is_Symbol", (i::Int64) -> Int64(typeof(_id_any(_ID_SV, i)) === Symbol), Int64(2)),
+    ("typeof_sym_is_String", (i::Int64) -> Int64(typeof(_id_any(_ID_SV, i)) === String), Int64(2)),
+    ("str_isa_Symbol", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa Symbol), Int64(1)),
+    ("sym_isa_String", (i::Int64) -> Int64(_id_any(_ID_SV, i) isa String), Int64(2)),
+])
+
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
 # Each case below is the smallest ordinary program that reaches the registry entry named
 # in its comment; the coverage lane confirms the entry fires while it compiles.
@@ -388,15 +463,6 @@ _g("builtins", Any[
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
-# Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
-# `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
-# f64.eq / f32.eq (calls.jl `_compile_call_egaleq`): 0.0 === -0.0 answers true (native
-# false) and NaN === NaN answers false (native true).
-_xf("float_egal", Any[
-    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),       # exp 2, act 1
-    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),                 # exp 1, act 2
-    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0), # exp 2, act 1
-])
 # BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
 # (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
 # false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
