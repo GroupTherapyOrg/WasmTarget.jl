@@ -272,8 +272,30 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
     return out
 end
 
-# parity(quarantine: the memo of Julia's host-layout reads, per specialization.)
-const _IR_LAYOUT_READ_MEMO = IdDict{Any, Bool}()
+# parity(quarantine: the memo of Julia's host-layout reads, per specialization, installed for
+# one compilation.) A process-wide memo answered a later compilation with the body an earlier one
+# saw: after a method was redefined in the same session, its specialization kept the stale
+# answer and the module differed from the one a fresh session builds (measured 2026-09-23).
+const _IR_LAYOUT_READ_MEMO = Ref{Union{Nothing, IdDict{Any, Bool}}}(nothing)
+
+"""
+    with_layout_read_memo(f)
+
+Run `f()` — one compilation — with a fresh host-layout-read memo installed, and remove it
+afterwards. Outside such a scope every `ir_reads_host_layout` query memoizes only within
+itself, so no answer outlives the compilation that computed it.
+parity(quarantine: the lifetime of the host-layout-read memo, one compilation, as
+TRIM_IR_CACHE's.)
+"""
+function with_layout_read_memo(f::Function)::Any
+    previous = _IR_LAYOUT_READ_MEMO[]
+    _IR_LAYOUT_READ_MEMO[] = IdDict{Any, Bool}()
+    try
+        return f()
+    finally
+        _IR_LAYOUT_READ_MEMO[] = previous
+    end
+end
 """
     ir_reads_host_layout(ci::Core.CodeInstance) -> Bool
 
@@ -288,12 +310,18 @@ invokes, counts as a read (never fold blind).
 parity(quarantine: whether a Julia specialization reads the host's `DataType.layout`, `sizeof` or
 a foreigncall — Julia's concrete evaluation would otherwise fold a host answer into the module.)
 """
-function ir_reads_host_layout(ci::Core.CodeInstance, depth::Int=0)::Bool
+function ir_reads_host_layout(ci::Core.CodeInstance)::Bool
+    memo = _IR_LAYOUT_READ_MEMO[]
+    return _ir_reads_host_layout(ci, 0, memo === nothing ? IdDict{Any, Bool}() : memo)
+end
+
+# parity(quarantine: the transitive walk behind ir_reads_host_layout, one memo per compilation.)
+function _ir_reads_host_layout(ci::Core.CodeInstance, depth::Int, memo::IdDict{Any, Bool})::Bool
     depth > 6 && return true
     local mi = ci.def
     local key = mi isa Core.MethodInstance ? mi.specTypes : ci
-    haskey(_IR_LAYOUT_READ_MEMO, key) && return _IR_LAYOUT_READ_MEMO[key]
-    _IR_LAYOUT_READ_MEMO[key] = false            # cycle guard
+    haskey(memo, key) && return memo[key]
+    memo[key] = false                            # cycle guard
     local src = isdefined(ci, :inferred) ? ci.inferred : nothing
     src isa String && (src = try Base._uncompressed_ir(ci, src) catch; nothing end)
     local found = !(src isa Core.CodeInfo)
@@ -316,14 +344,14 @@ function ir_reads_host_layout(ci::Core.CodeInstance, depth::Int=0)::Bool
             elseif st.head === :invoke
                 local tgt = st.args[1]
                 if tgt isa Core.CodeInstance
-                    ir_reads_host_layout(tgt, depth + 1) && (found = true; break)
+                    _ir_reads_host_layout(tgt, depth + 1, memo) && (found = true; break)
                 else
                     found = true; break          # an invoke without its CodeInstance: unknown
                 end
             end
         end
     end
-    _IR_LAYOUT_READ_MEMO[key] = found
+    memo[key] = found
     return found
 end
 

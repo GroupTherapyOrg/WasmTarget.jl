@@ -782,12 +782,14 @@ function _compile_module_trim(functions::Vector; kwargs...)
     for bindings in values(root_bindings), (f, arg_types) in bindings.bound_leaves
         push!(external_entries, (f, arg_types))
     end
-    plan, ir_cache = trim_compile_plan(normalized; external_entries)
-    TRIM_IR_CACHE[] = ir_cache
-    try
-        return _compile_closed_world_plan(plan; kwargs...)
-    finally
-        TRIM_IR_CACHE[] = nothing
+    return with_layout_read_memo() do
+        plan, ir_cache = trim_compile_plan(normalized; external_entries)
+        TRIM_IR_CACHE[] = ir_cache
+        try
+            return _compile_closed_world_plan(plan; kwargs...)
+        finally
+            TRIM_IR_CACHE[] = nothing
+        end
     end
 end
 
