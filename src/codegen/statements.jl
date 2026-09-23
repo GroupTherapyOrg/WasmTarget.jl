@@ -1590,18 +1590,6 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
             return b
 end
 
-function _fc_utf8proc_grapheme_break_stateful!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
-            # utf8proc_grapheme_break_stateful(c1::UInt32, c2::UInt32, state::Ref{Int32}) -> Bool
-            # Returns true if there's a grapheme cluster break between c1 and c2.
-            # WT has no utf8proc runtime yet.  Returning a constant here silently
-            # corrupted grapheme boundaries, so this remains explicitly unsupported
-            # until the real Unicode state machine is available.
-            record_unsupported!(ctx, :value_stub,
-                "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime";
-                idx=idx, detail=node, soundness_fatal=true)
-            return b
-end
-
 function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
             # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
@@ -2252,7 +2240,6 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_genericmemory_to_string => _fc_jl_genericmemory_to_string!,
     :jl_cstr_to_string => _fc_jl_cstr_to_string!,
     :jl_pchar_to_string => _fc_jl_pchar_to_string!,
-    :utf8proc_grapheme_break_stateful => _fc_utf8proc_grapheme_break_stateful!,
     :jl_ptr_to_array_1d => _fc_jl_ptr_to_array_1d!,
     :memchr => _fc_memchr!,
     :memcmp => _fc_memcmp!,

@@ -1412,11 +1412,13 @@ const LOCKS = [
                         "array.new_fixed 0",
                         "ifelse condition did not lower to i32",
                         "ifelse operand emitted no runtime value",
-                        "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime",
+                        # an unlowered foreigncall (utf8proc's grapheme state machine
+                        # among them) rejects at its statement, never a constant
+                        "record_unsupported!(ctx, :unsupported_method, \"foreigncall `\$(name)` (no lowering)\"; idx=idx, detail=node)",
                         "jl_alloc_string without its required length operand"]
             forbidden = ["Memory constant too large to materialize (\$n_mem elements) — emitting null",
                          "Fall back to emitting just the true value",
-                         "true = always a grapheme break"]
+                         "true = always a grapheme break", "_fc_utf8proc_grapheme_break_stateful!"]
             all_src = values_src * calls_src * stmt_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)

@@ -102,14 +102,6 @@ const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "fires for unsafe_wrap(Array, pointer(v), n) and declines (pointer not traced) — smoke xfail pointer_foreigncalls/unsafe_wrap_pointer (measured 2026-09-22)",
     (:FOREIGN_LOWERINGS, "jl_type_unionall") => "fires for UnionAll(v, t) and emits ref.test on the TypeVar in place of the constructed type (native 1, wasm 0) — smoke xfail unionall_constructor (measured 2026-09-22)",
     (:FOREIGN_LOWERINGS, "jl_value_ptr") => "every measured spelling (pointer_from_objref of a Ref, graphemes, isgraphemebreak!) rejects 'escapes storage-relative WasmGC operations' — smoke xfail pointer_foreigncalls/ref_pointer_load (measured 2026-09-22)",
-    (:FOREIGN_LOWERINGS, "utf8proc_grapheme_break_stateful") => "a reject-only lowering (soundness_fatal); its one Base caller isgraphemebreak! stops earlier at jl_value_ptr — smoke xfail pointer_foreigncalls/grapheme_break_stateful (measured 2026-09-22)",
-    (:INTRINSIC_BINOPS, "(F32, F32, :ge_float)") => "UNREACHABLE (measured 2026-09-22: Core.Intrinsics defines no ge_float on Julia 1.12.7 or 1.13.0)",
-    (:INTRINSIC_BINOPS, "(F32, F32, :gt_float)") => "UNREACHABLE (measured 2026-09-22: Core.Intrinsics defines no gt_float on Julia 1.12.7 or 1.13.0)",
-    (:INTRINSIC_BINOPS, "(F64, F64, :ge_float)") => "UNREACHABLE (measured 2026-09-22: Core.Intrinsics defines no ge_float on Julia 1.12.7 or 1.13.0)",
-    (:INTRINSIC_BINOPS, "(F64, F64, :gt_float)") => "UNREACHABLE (measured 2026-09-22: Core.Intrinsics defines no gt_float on Julia 1.12.7 or 1.13.0)",
-    (:INTRINSIC_CONVERSIONS, "(I32, I64, :sext_int)") => "UNREACHABLE (measured 2026-09-22: emit_conversion! emits sext_int inline, julia_numeric_tier.jl:413, and never looks this key up)",
-    (:INTRINSIC_CONVERSIONS, "(I32, I64, :zext_int)") => "UNREACHABLE (measured 2026-09-22: emit_conversion! emits zext_int inline, julia_numeric_tier.jl:423, and never looks this key up)",
-    (:INTRINSIC_CONVERSIONS, "(I64, I32, :trunc_int)") => "UNREACHABLE (measured 2026-09-22: emit_conversion! emits trunc_int inline, julia_numeric_tier.jl:436, and never looks this key up)",
 )
 
 uncovered = sort!([(reg, UNITS[(reg, u)]) for (reg, u) in keys(UNITS) if (reg, u) ∉ HITS])

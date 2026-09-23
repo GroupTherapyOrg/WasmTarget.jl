@@ -445,8 +445,9 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
             return _int128_sext!(b, ctx, julia_src, julia_dst)
         elseif (julia_dst === Int64 || julia_dst === UInt64) && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, julia_src <: Signed)
-            num!(b, Opcode.I64_EXTEND_I32_S)
-            return I64
+            e = INTRINSIC_CONVERSIONS[(I32, I64, :sext_int)]
+            e.emit!(b)
+            return e.result
         end
         return julia_dst === Int64 || julia_dst === UInt64 ? I64 : I32   # already wide, or a ≤32-bit target: no-op
 
@@ -455,8 +456,9 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
             return _int128_zext!(b, ctx, julia_src, julia_dst)
         elseif (julia_dst === Int64 || julia_dst === UInt64) && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
-            num!(b, Opcode.I64_EXTEND_I32_U)
-            return I64
+            e = INTRINSIC_CONVERSIONS[(I32, I64, :zext_int)]
+            e.emit!(b)
+            return e.result
         elseif (julia_dst === Int32 || julia_dst === UInt32) && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
             return I32
@@ -472,9 +474,9 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
                           julia_dst === Bool || julia_dst === Char
         if julia_src === Int128 || julia_src === UInt128
             _int128_trunc_lo!(b, ctx, julia_src)
-            target_is_32bit && num!(b, Opcode.I32_WRAP_I64)
+            target_is_32bit && INTRINSIC_CONVERSIONS[(I64, I32, :trunc_int)].emit!(b)
         elseif source_is_64bit && target_is_32bit
-            num!(b, Opcode.I32_WRAP_I64)
+            INTRINSIC_CONVERSIONS[(I64, I32, :trunc_int)].emit!(b)
         end
         # P3 gap 40da73b299fc: sub-32-bit targets must be width-normalised — bare
         # i32.wrap_i64 is 32-bit truncation. Unsigned targets zero-mask; signed

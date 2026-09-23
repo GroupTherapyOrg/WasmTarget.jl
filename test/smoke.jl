@@ -528,8 +528,9 @@ _xf("builtin_crashes", Any[
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
 _xf("pointer_foreigncalls", Any[
     # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
-    # storage-relative WasmGC operations" (also the first reject on the way to
-    # utf8proc_grapheme_break_stateful, whose Ref{Int32} state argument goes through it)
+    # storage-relative WasmGC operations" (also the first reject in isgraphemebreak!,
+    # whose Ref{Int32} state argument goes through it; its utf8proc foreigncall has no
+    # lowering and would reject next)
     ("ref_pointer_load", (x::Int64) -> (r = Ref(x); GC.@preserve r unsafe_load(Base.unsafe_convert(Ptr{Int64}, r))), Int64(5)),
     ("grapheme_break_stateful", (x::Int64) -> Base.Unicode.isgraphemebreak!(Ref{Int32}(0), 'a', Char(x)) ? 1 : 0, Int64(98)),
     # jl_ptr_to_array_1d: the lowering cannot trace pointer(v) and declines ("no lowering")
