@@ -147,6 +147,6 @@ R34_silent_catches = 24
 R35_detached_docstrings = 9
 R36_hidden_test_failures = 24
 R37_name_keyed_callee_arms = 1
-R3_infer_value_type = 66
+R3_infer_value_type = 63
 R5_julia_type_reguess = 74
 R7_raw_coercion_ops = 28
