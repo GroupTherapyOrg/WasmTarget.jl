@@ -9,12 +9,13 @@ Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
 """
 function _is_externref_value(val, ctx::AbstractCompilationContext)::Bool
-    if val isa Core.Argument
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    if val isa NirArgument
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return julia_to_wasm_type(ctx.arg_types[arg_idx]) === ExternRef
         end
-    elseif val isa Core.SSAValue
+    elseif val isa NirSSA
         if haskey(ctx.ssa_locals, val.id)
             local_idx = ctx.ssa_locals[val.id]
             local_arr_idx = local_idx - ctx.n_params + 1
@@ -43,18 +44,12 @@ end
 Check if a value is an SSAValue whose defining statement is a typeof() call.
 """
 function _is_typeof_ssa(val, ctx::AbstractCompilationContext)::Bool
-    if !(val isa Core.SSAValue)
-        return false
-    end
-    if val.id < 1 || val.id > length(ctx.code_info.code)
-        return false
-    end
-    stmt = ctx.code_info.code[val.id]
-    if stmt isa Expr && stmt.head === :call && length(stmt.args) >= 2
-        f = stmt.args[1]
-        return is_func(f, :typeof)
-    end
-    return false
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    val isa NirSSA || return false
+    1 <= val.id <= length(ctx.nir) || return false
+    rec = ctx.nir[val.id]
+    return rec.slot == 0 && rec.node isa NirCall && !isempty(rec.node.operands) &&
+           rec.node.callee === Core.typeof
 end
 
 """
@@ -64,16 +59,9 @@ If val is a Type constant (GlobalRef to a type, or a direct Type value),
 return the DataType. Otherwise return nothing.
 """
 function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
-    if val isa Type && isconcretetype(val)
-        return val
-    end
-    if val isa GlobalRef
-        if isdefined(val.mod, val.name)
-            actual = getfield(val.mod, val.name)
-            actual isa Type && isconcretetype(actual) && return actual
-        end
-    end
-    return nothing
+    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+    actual = val isa NirLiteral ? val.value : (val isa NirGlobalRef && val.bound) ? val.value : nothing
+    return actual isa Type && isconcretetype(actual) ? actual : nothing
 end
 
 """
@@ -1208,35 +1196,44 @@ end
 _egal_num_eqop(w::WasmValType)::UInt8 =
     w === I64 ? Opcode.I64_EQ : w === F64 ? Opcode.F64_EQ : w === F32 ? Opcode.F32_EQ : Opcode.I32_EQ
 
+# The statement defining an SSA operand, when it is a plain (non-slot) definition.
+# parity(code_generator.dart:135 getStaticType): a value's defining node, read once.
+function _ssa_def(value, ctx::AbstractCompilationContext)::Union{NirNode,Nothing}
+    value isa NirSSA && 1 <= value.id <= length(ctx.nir) || return nothing
+    rec = ctx.nir[value.id]
+    return rec.slot == 0 ? rec.node : nothing
+end
+
+# `getfield(owner, field)` — its (owner, field-literal) when `node` is such a call.
+# parity(code_generator.dart:2258 visitInstanceGet): a field read names its receiver and field.
+function _getfield_parts(node)::Union{Tuple{NirNode,Any},Nothing}
+    (node isa NirCall && _nir_callee_object(node.callee) === Core.getfield &&
+     length(node.operands) >= 2) || return nothing
+    return (node.operands[1], nir_const(node.operands[2]))
+end
+
 function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContext)
-    value isa NirNode && (value = nir_operand(value))   # transitional (R29 stage 1): ONE entry, either shape
-    value isa Core.SSAValue || return nothing
-    1 <= value.id <= length(ctx.code_info.code) || return nothing
-    stmt = ctx.code_info.code[value.id]
-    if stmt isa Core.PiNode
-        return _trace_field_owner(stmt.val, field, ctx)
-    elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
-           is_func(stmt.args[1], :getfield)
-        fld = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
-        fld === field && return stmt.args[2]
+    value isa NirNode || (value = nir_node(ctx, value))   # transitional (R29): a raw operand enters as its node
+    def = _ssa_def(value, ctx)
+    if def isa NirPi
+        return _trace_field_owner(def.value, field, ctx)
     end
+    parts = _getfield_parts(def)
+    parts !== nothing && parts[2] === field && return parts[1]
     return nothing
 end
 
 function _trace_typename_symbol_owner(value, ctx::AbstractCompilationContext)
-    value isa NirNode && (value = nir_operand(value))   # transitional (R29 stage 1): ONE entry, either shape
-    value isa Core.SSAValue || return nothing
-    1 <= value.id <= length(ctx.code_info.code) || return nothing
-    stmt = ctx.code_info.code[value.id]
-    if stmt isa Core.PiNode
-        return _trace_typename_symbol_owner(stmt.val, ctx)
-    elseif stmt isa Expr && stmt.head === :call && length(stmt.args) >= 3 &&
-           is_func(stmt.args[1], :getfield)
-        fld = stmt.args[3] isa QuoteNode ? stmt.args[3].value : stmt.args[3]
-        fld in (:name, :singletonname) && return stmt.args[2]
-    elseif stmt isa Core.PhiNode
-        owners = Any[_trace_typename_symbol_owner(v, ctx) for v in stmt.values
-                     if !(v isa Core.UndefInitializer)]
+    value isa NirNode || (value = nir_node(ctx, value))   # transitional (R29): a raw operand enters as its node
+    def = _ssa_def(value, ctx)
+    parts = _getfield_parts(def)
+    if def isa NirPi
+        return _trace_typename_symbol_owner(def.value, ctx)
+    elseif parts !== nothing
+        parts[2] in (:name, :singletonname) && return parts[1]
+    elseif def isa NirPhi
+        owners = Any[_trace_typename_symbol_owner(v, ctx) for v in def.values
+                     if v !== nothing]
         isempty(owners) && return nothing
         any(isnothing, owners) && return nothing
         all(o -> isequal(o, owners[1]), owners) && return owners[1]
@@ -1736,9 +1733,9 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     type_arg = args[2]
 
     # Get the type being checked
-    check_type = if type_arg isa Type
-        type_arg
-    elseif type_arg isa GlobalRef
+    check_type = if nir_const(type_arg) isa Type
+        nir_const(type_arg)
+    elseif type_arg isa NirGlobalRef
         Core.eval(type_arg.mod, type_arg.name)
     else
         nothing
@@ -1758,7 +1755,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # isa(x, Nothing) -> ref.is_null
         # Value is already on stack — check if it's actually a ref type
         local isa_val_wasm = nothing
-        if value_arg isa Core.SSAValue
+        if value_arg isa NirSSA
             local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
             # Fix: isa_local_idx includes n_params, but ctx.locals only has non-param locals
             if isa_local_idx !== nothing
@@ -1790,7 +1787,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # isa(x, ConcreteType) -> type check
         # Value is already on stack — check if it's actually a ref type
         local isa2_val_wasm = nothing
-        if value_arg isa Core.SSAValue
+        if value_arg isa NirSSA
             # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the load (_narrow_generic_local!) delivers the SSA's REFINED
             # type — when the join proved a numeric, the value on stack IS that numeric
             # regardless of the (anyref) local. The refined type drives the fold.
@@ -1807,7 +1804,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 end
             end
             end
-        elseif value_arg isa Core.Argument
+        elseif value_arg isa NirArgument
             # Also handle function parameters (not just SSA values)
             # Core.Argument(1) is the function object for non-closures, so
             # actual args start at Argument(2) → arg_types[1].
@@ -1923,7 +1920,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         # Determine value's WASM local type and local index for re-loading
         local isa3_val_wasm = nothing
         local isa3_local_idx = nothing
-        if value_arg isa Core.SSAValue
+        if value_arg isa NirSSA
             local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
             if _idx3 !== nothing
                 local _off3 = _idx3 - ctx.n_params
@@ -1932,7 +1929,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     isa3_local_idx = _idx3
                 end
             end
-        elseif value_arg isa Core.Argument
+        elseif value_arg isa NirArgument
             # Also detect param type for Argument values
             local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
@@ -2215,9 +2212,9 @@ function _emit_typeerror_throw!(b::InstrBuilder, got, target::Type, idx::Int,
 end
 
 # formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
-function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
-    set_context!(fb, first(string(expr), 80))   # errors name the call
+    set_context!(fb, first(_nir_text(node), 80))   # errors name the call
     # A call may consume values stack-threaded by the enclosing statement fragment.
     # Preserve that tracked input across this second fragment boundary just as
     # compile_statement! preserves the parent builder's input. Without it, Julia
@@ -2226,49 +2223,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
     _boxed_operand_unboxed = false   # FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     _seed_builder_locals!(fb, ctx)
-    func = expr.args[1]
-    args = expr.args[2:end]
-
-    # Resolve indirect calls through SSAValue callees.
-    # Unoptimized IR (may_optimize=false) produces patterns like:
-    #   %1 = Base.add_int   (GlobalRef, type=Core.Const(Core.Intrinsics.add_int))
-    #   %2 = (%1)(x, y)     (call with SSAValue(1) as callee)
-    # Resolve SSAValue to the original GlobalRef so is_func() checks work correctly.
-    if func isa Core.SSAValue && func.id >= 1 && func.id <= length(ctx.code_info.code)
-        src_stmt = ctx.code_info.code[func.id]
-        if src_stmt isa GlobalRef
-            func = src_stmt
-        else
-            # Fallback: use SSA type if it's Core.Const (wraps the actual function value)
-            ssa_type = get(ctx.ssa_types, func.id, nothing)
-            if ssa_type !== nothing
-                # ssa_type was widened by analyze_ssa_types!, try to get constant from ssavaluetypes
-                raw_type = ctx.code_info.ssavaluetypes isa Vector && func.id <= length(ctx.code_info.ssavaluetypes) ?
-                           ctx.code_info.ssavaluetypes[func.id] : nothing
-                if raw_type isa Core.Const
-                    func = raw_type.val
-                end
-            end
-        end
-    elseif func isa Core.Argument
-        # a function value passed as a parameter with a SINGLETON type (`length` in
-        # `sum(length, v)`'s mapreduce_first(f::typeof(length), …)) is statically that
-        # function — the same resolution Julia's inference already made
-        local _fa_idx = ctx.is_compiled_closure ? func.n : func.n - 1
-        if _fa_idx >= 1 && _fa_idx <= length(ctx.arg_types)
-            local _fa_T = ctx.arg_types[_fa_idx]
-            if _fa_T isa DataType && Base.issingletontype(_fa_T) && _fa_T <: Function
-                # as the GlobalRef naming it (the shape every named-function arm below
-                # reads), when the function is bound under its own name
-                local _fa_f = _fa_T.instance
-                local _fa_m = parentmodule(_fa_f)
-                local _fa_n = nameof(_fa_f)
-                if isdefined(_fa_m, _fa_n) && getfield(_fa_m, _fa_n) === _fa_f
-                    func = GlobalRef(_fa_m, _fa_n)
-                end
-            end
-        end
-    end
+    # The callee the NIR boundary resolved ONCE (frontend/nir.jl): a function object when
+    # the IR named it statically — through a global, an SSA alias of one, a `Core.Const`,
+    # or a singleton-typed argument — a `GlobalRef` when that global is unbound, else the
+    # operand node (a literal callee, or a runtime value).
+    func = node.callee
+    args = node.operands
+    # the callee Julia reached through a binding (every name-keyed call below)
+    named = !(func isa NirNode)
 
     # THE identity-keyed Core/Base builtin funnel (builtins.jl), consulted ONCE
     # on the ONE resolved callee — dart resolves a call's target a single time
@@ -2283,14 +2245,14 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # original relative order, with the raw-identity guards (closure
     # self-capture skip, `:signal` skip) on the exact callee identity that
     # satisfied them.
-    let _bl = _try_builtin_lowering!(b, fb, ctx, expr, idx, args, func)
+    let _bl = _try_builtin_lowering!(b, fb, ctx, node, idx, args, func)
         _bl === nothing || return _bl
     end
 
     # Handle signal getter/setter SSA function calls: (%ssa)() or (%ssa)(value)
     # When func is an SSA that represents a captured signal getter/setter,
     # emit global.get/global.set directly (same logic as compile_invoke)
-    if func isa Core.SSAValue
+    if func isa NirSSA
         ssa_id = func.id
         # Signal getter: no args, returns the signal value
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
@@ -2370,17 +2332,17 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # Handle pointer arithmetic intrinsics BEFORE the generic arg pre-push.
     # add_ptr, sub_ptr, and pointerref push their own args (or trace back to string ref),
     # so they must NOT have args pre-pushed by the generic loop below.
-    if func isa GlobalRef && func.name === :add_ptr
+    if func === Core.Intrinsics.add_ptr
         emit_value!(fb, args[1], ctx, I64)
         emit_value!(fb, args[2], ctx, I64)
         num!(fb, Opcode.I64_ADD)
         return append_builder!(b, fb)
-    elseif func isa GlobalRef && func.name === :sub_ptr
+    elseif func === Core.Intrinsics.sub_ptr
         emit_value!(fb, args[1], ctx, I64)
         emit_value!(fb, args[2], ctx, I64)
         num!(fb, Opcode.I64_SUB)
         return append_builder!(b, fb)
-    elseif func isa GlobalRef && func.name === :pointerref
+    elseif func === Core.Intrinsics.pointerref
         ptr_arg = length(args) >= 1 ? args[1] : nothing
         str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx) : nothing
         if str_info !== nothing
@@ -2419,7 +2381,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _prvb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_prvb, _pr_vec, ctx, _pr_arr_t)
             emit_value!(_prvb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
                 emit_value!(_prvb, args[2], ctx, I64)
                 i64_const!(_prvb, Int64(1))
                 num!(_prvb, Opcode.I64_SUB)
@@ -2447,7 +2409,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _emit_backing_array!(_prwb, _pr_vec, ctx, _prw_arr)
             local_set!(_prwb, _prw_la)
             emit_value!(_prwb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
                 emit_value!(_prwb, args[2], ctx, I64)
                 i64_const!(_prwb, Int64(1))
                 num!(_prwb, Opcode.I64_SUB)
@@ -2511,7 +2473,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             local _prbb = _ctx_builder(ctx, "compile_call")
             # byte offset = ptr + (i-1)   (pointer target is 1 byte wide)
             emit_value!(_prbb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
                 emit_value!(_prbb, args[2], ctx, I64)
                 i64_const!(_prbb, Int64(1))
                 num!(_prbb, Opcode.I64_SUB)
@@ -2599,7 +2561,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 struct_get!(_prgb, _prg_vinfo.wasm_type_idx, wasm_field_idx(_prg_vinfo, 1), ConcreteRef(_prg_arr, true))
                 ref_cast!(_prgb, Int64(_prg_arr), true)
                 emit_value!(_prgb, ptr_arg, ctx, I64)      # i64 byte offset
-                if length(args) >= 2 && !(args[2] isa Integer && args[2] == 1)
+                if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
                     emit_value!(_prgb, args[2], ctx, I64)
                     i64_const!(_prgb, Int64(1))
                     num!(_prgb, Opcode.I64_SUB)
@@ -2628,12 +2590,12 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         let _prub = _ctx_builder(ctx, "compile_call")
             record_unsupported!(ctx, :unsupported_method,
                                 "pointerref source cannot be traced to WasmGC storage";
-                                idx=idx, detail=expr)
+                                idx=idx, detail=node)
             unreachable!(_prub); append_builder!(fb, _prub)  # structural trap after recorded unsupported
         end
         ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
-    elseif func isa GlobalRef && func.name === :pointerset
+    elseif func === Core.Intrinsics.pointerset
         # P3 gap 450889a9cb7e: byte writes through Vector{UInt8} storage
         # pointers (Ryu digit emission). pointerset(ptr, value, i, align)
         # returns the original pointer.
@@ -2722,7 +2684,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 end
                 ref_cast!(_psgb, Int64(_psg_arr), true)
                 emit_value!(_psgb, _ps_ptr, ctx, I64)      # i64 byte offset
-                if length(args) >= 3 && !(args[3] isa Integer && args[3] == 1)
+                if length(args) >= 3 && !(nir_const(args[3]) isa Integer && nir_const(args[3]) == 1)
                     emit_value!(_psgb, args[3], ctx, I64)
                     i64_const!(_psgb, Int64(1))
                     num!(_psgb, Opcode.I64_SUB)
@@ -2773,7 +2735,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 local_set!(_pswb, _psw_la)
                 # base byte index = ptr + (i-1)*s
                 emit_value!(_pswb, _ps_ptr, ctx, I64)
-                if length(args) >= 3 && !(args[3] isa Integer && args[3] == 1)
+                if length(args) >= 3 && !(nir_const(args[3]) isa Integer && nir_const(args[3]) == 1)
                     emit_value!(_pswb, args[3], ctx, I64)
                     i64_const!(_pswb, Int64(1))
                     num!(_pswb, Opcode.I64_SUB)
@@ -2819,7 +2781,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     # Int128 checked/div/rem arithmetic can't be compiled (struct args on
     # stack would mismatch i64 ops). Emit unreachable BEFORE pushing args.
-    if (arg_type === Int128 || arg_type === UInt128) && func isa GlobalRef && func.name in
+    if (arg_type === Int128 || arg_type === UInt128) && func isa Core.IntrinsicFunction && nameof(func) in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
              :checked_srem_int, :checked_urem_int,
@@ -2848,24 +2810,21 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # must not suppress both arguments. Keep ordinary arithmetic on the late
     # cross-call route, since a local-less operand may itself be a dynamic call
     # (the megamorphic accumulator) whose dispatch-table lowering must remain intact.
-    is_generic_arithmetic = func isa GlobalRef &&
-        func.name in (:+, :-, :*, :div, :rem, :mod)
+    is_generic_arithmetic = func === (+) || func === (-) || func === (*) ||
+                            func === div || func === rem || func === mod
     is_materialized_generic_arithmetic = is_generic_arithmetic && all(args) do a
-        !(a isa Core.SSAValue) || haskey(ctx.ssa_locals, a.id) ||
+        !(a isa NirSSA) || haskey(ctx.ssa_locals, a.id) ||
             haskey(ctx.phi_locals, a.id)
     end
     has_box_contents_operand = any(args) do a
-        a isa Core.SSAValue && 1 <= a.id <= length(ctx.code_info.code) || return false
-        local p = ctx.code_info.code[a.id]
-        p isa Expr && p.head === :call && length(p.args) >= 3 &&
-            is_func(p.args[1], :getfield) &&
-            (p.args[3] isa QuoteNode ? p.args[3].value : p.args[3]) === :contents
+        local parts = _getfield_parts(_ssa_def(a, ctx))
+        parts !== nothing && parts[2] === :contents
     end
     owns_captured_arithmetic = is_materialized_generic_arithmetic && has_box_contents_operand
     _skip_arg_prepush = false
-    if !_skip_arg_prepush && func isa GlobalRef && ctx.func_registry !== nothing &&
+    if !_skip_arg_prepush && named && ctx.func_registry !== nothing &&
             !is_numeric_intrinsic && !owns_captured_arithmetic
-        _called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
+        _called_func = func isa GlobalRef ? nothing : func   # an unbound global names nothing
         if _called_func !== nothing
             _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
             _target = get_function(ctx.func_registry, _called_func, _call_arg_types)
@@ -2880,14 +2839,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             _skip_arg_prepush = _target !== nothing
         end
     end
-    # THE single callee-identity extraction (GlobalRef name / Core.IntrinsicFunction
-    # Symbol) — the intrinsics-table route and the quarantine-tier registry route
-    # below reuse this SAME local instead of re-deriving it a second time, so the
-    # muladd/fma reorder gate right below and their eventual FMA_OPS dispatch can
+    # THE single callee-identity extraction (the intrinsic's name — every table below is
+    # keyed on intrinsic names) — the intrinsics-table route and the quarantine-tier
+    # registry route below reuse this SAME local instead of re-deriving it a second time,
+    # so the muladd/fma reorder gate right below and their eventual FMA_OPS dispatch can
     # never disagree about which call this is (R19: a data test against `_it_name`,
     # never a fresh `is_func` probe).
-    local _it_name = func isa GlobalRef ? func.name :
-                     (func isa Core.IntrinsicFunction ? Symbol(func) : nothing)
+    local _it_name = nir_const(func) isa Core.IntrinsicFunction ? nameof(nir_const(func)) : nothing
 
     # Reorder muladd_float/fma_float args for correct WASM stack order.
     # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
@@ -2951,7 +2909,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _p1_ty = _p1_pos >= 1 ? fb.v.stack[_p1_pos] : nothing
         if _p1_ty !== nothing && (_p1_ty === ExternRef || _p1_ty === AnyRef)
             local arg1_ssa = args[1]
-            if arg1_ssa isa Core.SSAValue && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
+            if arg1_ssa isa NirSSA && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
                 # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
                 fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -3000,7 +2958,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     (arg_type isa Type && isconcretetype(arg_type)) ||
                         record_unsupported!(ctx, :unsupported_type,
                             "intrinsic result boxing lacks a concrete Julia source type";
-                            idx=idx, detail=expr)
+                            idx=idx, detail=node)
                     emit_classid_box!(fb, ctx, _it_result, arg_type)
                 end
             end
@@ -3031,7 +2989,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     (arg_type isa Type && isconcretetype(arg_type)) ||
                         record_unsupported!(ctx, :unsupported_type,
                             "intrinsic result boxing lacks a concrete Julia source type";
-                            idx=idx, detail=expr)
+                            idx=idx, detail=node)
                     emit_classid_box!(fb, ctx, _ut_result, arg_type)
                 end
             end
@@ -3044,7 +3002,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # of; it is reachable only when `is_128bit` (the intrinsics table routes above already
     # consumed every non-128-bit op). Same nullable-return funnel shape as the tables.
     if _it_name !== nothing && is_128bit
-        local _it128_result = emit_int128_op!(fb, ctx, _it_name, arg_type, expr, idx)
+        local _it128_result = emit_int128_op!(fb, ctx, _it_name, arg_type, node, idx)
         _it128_result !== nothing && return append_builder!(b, fb)
     end
 
@@ -3079,11 +3037,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # EXHAUSTIVE (their calls.jl arms are deleted).
     if _it_name in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi,
                     :fptoui, :fpext, :fptrunc, :bitcast)
-        local _cv_julia_dst = length(args) >= 1 ? args[1] : nothing
+        local _cv_julia_dst = length(args) >= 1 ? nir_const(args[1]) : nothing
         if _it_name === :sext_int || _it_name === :zext_int || _it_name === :trunc_int
             local _cv_target_ref = _cv_julia_dst
-            _cv_julia_dst = _cv_target_ref isa GlobalRef && isdefined(_cv_target_ref.mod, _cv_target_ref.name) ?
-                getfield(_cv_target_ref.mod, _cv_target_ref.name) : _cv_target_ref
+            _cv_julia_dst = _cv_target_ref isa NirGlobalRef && _cv_target_ref.bound ?
+                _cv_target_ref.value : _cv_target_ref
             if !(_cv_julia_dst isa Type)
                 if _it_name === :sext_int
                     record_unsupported!(ctx, :unsupported_type,
@@ -3155,7 +3113,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # `_lower_operator!` / `_lower_isa!` entries (self-contained operands).
 
     # throw() - compile to WASM throw instruction
-    if func isa GlobalRef && func.name === :throw
+    if func === Core.throw
         # Emit throw instruction with tag 0 (our Julia exception tag)
         # Stash exception value in $current_exn global before throwing.
         # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
@@ -3164,9 +3122,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         local _thrb = _ctx_builder(ctx, "compile_call")
         if length(args) >= 1
             local _throw_val = args[1]
-            local _throw_raw = _throw_val isa QuoteNode ? _throw_val.value : _throw_val
-            if !(_throw_raw isa Core.SSAValue) && !(_throw_raw isa Core.Argument) &&
-               isstructtype(typeof(_throw_raw)) && !isa(_throw_raw, Function) && !isa(_throw_raw, Module)
+            # a constant exception object (a literal operand)
+            local _throw_raw = _throw_val isa NirLiteral ? _throw_val.value : nothing
+            if _throw_val isa NirLiteral &&
+               isstructtype(typeof(_throw_raw)) &&
+               !isa(_throw_raw, Function) && !isa(_throw_raw, Module)
                 local _throw_T = typeof(_throw_raw)
                 local _throw_has_undef = any(!isdefined(_throw_raw, fn) for fn in fieldnames(_throw_T))
                 if _throw_has_undef
@@ -3190,7 +3150,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         append_builder!(fb, _thrb)
 
     # throw_methoderror — emit throw (catchable) instead of unreachable
-    elseif func isa GlobalRef && func.name === :throw_methoderror
+    elseif func === Core.throw_methoderror
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         ensure_exception_tag!(ctx.mod)
             global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
@@ -3201,7 +3161,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
     # args[1] (svec array) is already pre-pushed by the generic loop above.
-    elseif ((func isa GlobalRef && func.name === :_svec_len && func.mod === Core) || (isdefined(Core, :_svec_len) && func === Core._svec_len)) && length(args) == 1
+    elseif isdefined(Core, :_svec_len) && nir_const(func) === Core._svec_len && length(args) == 1
         # P4-stdlib: fold against host-constant svecs (padding/typename.names)
         local _svl = _try_host_svec(args[1], ctx)
         if _svl isa Core.SimpleVector
@@ -3219,7 +3179,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
     # the generic loop above — do NOT call compile_value again here (causes double-push,
     # leaving 2 orphaned values on the stack → "values remaining" validation error).
-    elseif ((func isa GlobalRef && func.name === :_svec_ref && func.mod === Core) || (isdefined(Core, :_svec_ref) && func === Core._svec_ref)) && length(args) == 2
+    elseif isdefined(Core, :_svec_ref) && nir_const(func) === Core._svec_ref && length(args) == 2
         # Get element from externref array
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
@@ -3241,7 +3201,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # Tuple splatting is resolved by Julia at code_typed time (no _apply_iterate).
     # Only runtime-length containers (Vector) produce this IR node.
     # Handle the common case: binary reduce over a single Vector{T}.
-    elseif func isa GlobalRef && func.name === :_apply_iterate && func.mod === Core && length(args) >= 3
+    elseif func === Core._apply_iterate && length(args) >= 3
         # args layout: [Base.iterate, target_func, container1, ...]
         # Clear pre-pushed args (iterate ref, func ref, container ref are on stack)
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
@@ -3259,8 +3219,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         #   `Core.tuple(v...)`→ the builtin VALUE, no GlobalRef at all
         # — so the last two used to fall through to the loud reject for a splat the
         # first one lowers.
-        target_value = target_func isa GlobalRef ?
-            (isdefined(target_func.mod, target_func.name) ? getfield(target_func.mod, target_func.name) : nothing) : target_func
+        target_value = target_func isa NirGlobalRef ?
+            (target_func.bound ? target_func.value : nothing) : nir_const(target_func)
         target_is_tuple = target_value === Core.tuple
         target_is_vect = target_value === Base.vect
         target_is_typed_vect = target_value === Base.getindex
@@ -3342,13 +3302,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
 
     # Core.svec — materialize the real $JlSVec array.
-    elseif func isa GlobalRef && func.name === :svec && func.mod === Core
+    elseif func === Core.svec
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
         _emit_svec_values!(fb, args, ctx)
 
     # Core builtins re-exported through Base (isdefined, getfield, setfield!).
     # These builtins share the ordinary typed struct/tuple lowering below.
-    elseif func isa GlobalRef &&
+    elseif named &&
            any(name -> is_builtin_func(func, name), (:isdefined, :getfield, :setfield!))
         # Clear pre-pushed args
         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
@@ -3362,9 +3322,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # varargs access shape (including Core.Argument receivers). Route it through
         # the registered tuple layout instead of requiring an SSA+Symbol shape.
         local _gft_index = length(args) >= 2 ?
-                           (args[2] isa QuoteNode ? args[2].value : args[2]) : nothing
-        if func.name === :getfield && length(args) >= 2 &&
-           args[1] isa Core.Argument && !ctx.is_compiled_closure &&
+                           nir_const(args[2]) : nothing
+        if func === Core.getfield && length(args) >= 2 &&
+           args[1] isa NirArgument && !ctx.is_compiled_closure &&
            !(_gft_index isa Integer)
             local _gft_slot_T = get_ssa_type(ctx, args[1])
             local _gft_fixed = args[1].n - 2
@@ -3405,13 +3365,13 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 _gfc_done = true
             end
         end
-        if func.name === :getfield && length(args) >= 2 && _gft_index isa Integer
+        if func === Core.getfield && length(args) >= 2 && _gft_index isa Integer
             local _gft_i = Int(_gft_index)
             # Optimized Julia represents a varargs method's entire argument pack
             # as slot `_2::Tuple{...}`, while the closed-world Wasm signature has
             # one physical parameter per specialized vararg. A literal tuple
             # projection is therefore exactly the corresponding parameter read.
-            if args[1] isa Core.Argument && !ctx.is_compiled_closure &&
+            if args[1] isa NirArgument && !ctx.is_compiled_closure &&
                source_slot_type(ctx, args[1].n) !== nothing
                 local _gft_slot_T = get_ssa_type(ctx, args[1])
                 local _gft_fixed = args[1].n - 2
@@ -3441,8 +3401,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 _gfc_done = true
             end
         end
-        if func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
-            local _gfc_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+        if func === Core.getfield && length(args) == 2 && nir_quoted(args[1])
+            local _gfc_fld = nir_const(args[2])
             if _gfc_fld isa Symbol
                 local _gfc_val = isdefined(args[1].value, _gfc_fld) ?
                     getfield(args[1].value, _gfc_fld) : nothing
@@ -3455,8 +3415,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # Constant-receiver getfield yielding a SimpleVector
         # (typename(T).names) — materialize the real $JlSVec array.
-        if !_gfc_done && func.name === :getfield && length(args) == 2 && args[1] isa QuoteNode
-            local _gfc_fld2 = args[2] isa QuoteNode ? args[2].value : args[2]
+        if !_gfc_done && func === Core.getfield && length(args) == 2 && nir_quoted(args[1])
+            local _gfc_fld2 = nir_const(args[2])
             if _gfc_fld2 isa Symbol
                 local _gfc_v2 = isdefined(args[1].value, _gfc_fld2) ?
                     getfield(args[1].value, _gfc_fld2) : nothing
@@ -3468,9 +3428,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # parity(closures.dart:1365 Context): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
         # (dart Context variable write); the value wraps to anyref through the funnel.
-        if !_gfc_done && func.name === :setfield! && length(args) == 3 &&
-           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
+        if !_gfc_done && func === Core.setfield! && length(args) == 3 &&
+           args[1] isa NirSSA && nir_const(args[2]) === :contents &&
+           get(ctx.ssa_types, args[1].id, Any) === Core.Box
             local _bxs_ib = _ctx_builder(ctx, "compile_call")
             local _bxs_ty = emit_value!(_bxs_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
             local _bxs_idx = _bxs_ty isa ConcreteRef ? _bxs_ty.type_idx :
@@ -3486,9 +3446,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
         # defined-check = a null test on the anyref contents.
-        if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
-           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
+        if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
+           args[1] isa NirSSA && nir_const(args[2]) === :contents &&
+           get(ctx.ssa_types, args[1].id, Any) === Core.Box
             local _bxd_ib = _ctx_builder(ctx, "compile_call")
             local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
             local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
@@ -3510,11 +3470,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # General concrete-struct field definedness. Reference fields use null
         # as Julia's undefined-field state; physical numeric fields are always
         # initialized in Wasm and therefore defined.
-        if !_gfc_done && func.name === :isdefined && length(args) == 2 &&
-           args[1] isa Core.SSAValue &&
-           ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
+        if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
+           args[1] isa NirSSA && nir_const(args[2]) isa Symbol
             local _isd_T = get(ctx.ssa_types, args[1].id, Any)
-            local _isd_f = args[2] isa QuoteNode ? args[2].value : args[2]
+            local _isd_f = nir_const(args[2])
             if _isd_T isa DataType && isstructtype(_isd_T) &&
                _isd_f in fieldnames(_isd_T)
                 local _isd_info = haskey(ctx.type_registry.structs, _isd_T) ?
@@ -3528,7 +3487,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                     local _isd_i = findfirst(==(_isd_f), _isd_info.field_names)
                     _isd_i === nothing && record_unsupported!(ctx, :unsupported_method,
                         "isdefined field is absent from the registered runtime projection";
-                        idx=idx, detail=expr, soundness_fatal=true)
+                        idx=idx, detail=node, soundness_fatal=true)
                     local _isd_wfi = wasm_field_idx(_isd_info, _isd_i)
                     local _isd_fields = ctx.mod.types[_isd_info.wasm_type_idx + 1].fields
                     local _isd_ft = _isd_fields[Int(_isd_wfi) + 1].valtype
@@ -3548,9 +3507,9 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
         # (dart Context variable read). The cell is the F3 anyref box struct.
-        if !_gfc_done && func.name === :getfield && length(args) == 2 &&
-           args[1] isa Core.SSAValue && ((args[2] isa QuoteNode && args[2].value === :contents) || args[2] === :contents) &&
-           (args[1] isa Core.SSAValue && get(ctx.ssa_types, args[1].id, Any) === Core.Box)
+        if !_gfc_done && func === Core.getfield && length(args) == 2 &&
+           args[1] isa NirSSA && nir_const(args[2]) === :contents &&
+           get(ctx.ssa_types, args[1].id, Any) === Core.Box
             local _bx_ib = _ctx_builder(ctx, "compile_call")
             local _bx_ty = emit_value!(_bx_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
             local _bx_idx = _bx_ty isa ConcreteRef ? _bx_ty.type_idx :
@@ -3563,10 +3522,10 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         # parity(closures.dart:1365 Context): getfield(closure_value, :boxfield) — the box was born in a
         # callee; read the registered struct field here (the ONE shared cell).
-        if !_gfc_done && func.name === :getfield && length(args) == 2 &&
-           ((args[2] isa QuoteNode && args[2].value isa Symbol) || args[2] isa Symbol)
+        if !_gfc_done && func === Core.getfield && length(args) == 2 &&
+           nir_const(args[2]) isa Symbol
             local _gfb_T = get_ssa_type(ctx, args[1])
-            local _gfb_fld = args[2] isa QuoteNode ? args[2].value : args[2]
+            local _gfb_fld = nir_const(args[2])
             if _gfb_T isa DataType && _gfb_fld isa Symbol &&
                !(isstructtype(_gfb_T) && _gfb_fld in fieldnames(_gfb_T))
                 local _gfb_ib = _ctx_builder(ctx, "compile_call.fielderror")
@@ -3600,17 +3559,17 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         end
         if !_gfc_done
             record_unsupported!(ctx, :unsupported_method,
-                                "$(func.name) call shape not lowerable";
-                                idx=idx, detail=expr)
+                                "$(nameof(func)) call shape not lowerable";
+                                idx=idx, detail=node)
             ctx.last_stmt_was_stub = true
         end
 
     # Cross-function call via GlobalRef (dynamic dispatch when Julia can't specialize)
     # Core._expr never reaches here — THE identity-keyed builtin funnel
     # (builtins.jl) claims it long before this ladder starts.
-    elseif func isa GlobalRef && ctx.func_registry !== nothing
-        # Try to find this function in our registry
-        called_func = isdefined(func.mod, func.name) ? getfield(func.mod, func.name) : nothing
+    elseif named && ctx.func_registry !== nothing
+        # Try to find this function in our registry (an unbound global names nothing)
+        called_func = func isa GlobalRef ? nothing : func
 
         # Fallback: if getfield failed (e.g., GlobalRef from anonymous module),
         # try looking up by name string in func_registry. This handles import stubs
@@ -3761,7 +3720,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             (_ret_jt isa Type && isconcretetype(_ret_jt)) ||
                                 record_unsupported!(ctx, :unsupported_type,
                                     "cross-call result boxing lacks a concrete Julia source type";
-                                    idx=idx, detail=expr)
+                                    idx=idx, detail=node)
                             emit_classid_box!(_xcb, ctx, ret_wasm, _ret_jt)
                         end
                     end
@@ -3773,11 +3732,11 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 # both sides as i64 boxes and compare; a non-i64 box traps
                 # LOUD on the cast (correct-or-loud) instead of silently.
                 local _dyneq_ok = false
-                if (func.name === :(==) || func.name === :!=) && length(args) == 2
+                if (called_func === (==) || called_func === (!=)) && length(args) == 2
                     local _dq_all_ref = true
                     for _dq_a in args
                         local _dq_is = false
-                        if _dq_a isa Core.SSAValue
+                        if _dq_a isa NirSSA
                             local _dq_li = get(ctx.ssa_locals, _dq_a.id, nothing)
                             _dq_li === nothing && (_dq_li = get(ctx.phi_locals, _dq_a.id, nothing))
                             if _dq_li !== nothing
@@ -3798,7 +3757,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                             emit_classid_unbox!(_dqb, ctx, I64; nullable=true)
                         end
                         num!(_dqb, Opcode.I64_EQ)
-                        func.name === :!= && num!(_dqb, Opcode.I32_EQZ)
+                        called_func === (!=) && num!(_dqb, Opcode.I32_EQZ)
                         # The result SSA is Any-typed (anyref local) — box the
                         # i32 Bool; compile_condition_to_i32 unboxes at use.
                         local _dq_dst = get(ctx.ssa_locals, idx, nothing)
@@ -3873,7 +3832,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
             end
         else
             # GlobalRef constructor call: SSA return type reveals the struct being constructed
-            ssa_type = ctx.code_info.ssavaluetypes[idx]
+            ssa_type = ctx.nir[idx].julia_type
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
                 return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
             end
@@ -3883,7 +3842,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
     # NamedTuple{names}(tuple) - convert tuple to named tuple
     # This pattern appears in keyword argument handling
     # Check: func is UnionAll and func <: NamedTuple
-    elseif func isa UnionAll && func <: NamedTuple
+    elseif (nt_ctor = nir_const(func)) isa UnionAll && nt_ctor <: NamedTuple
         # func is NamedTuple{(:name1, :name2, ...)}
         # args[1] should be a tuple with the values
         # The result is a NamedTuple which is a struct with named fields
@@ -3891,7 +3850,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Extract the names from the type
         # NamedTuple{names} has structure: UnionAll(T, NamedTuple{names, T})
         # So func.body is NamedTuple{names, T<:Tuple} and we need to get names from there
-        inner_type = func.body  # e.g., NamedTuple{(:filename, :first_line), T<:Tuple}
+        inner_type = nt_ctor.body  # e.g., NamedTuple{(:filename, :first_line), T<:Tuple}
 
         # Check if inner_type is a DataType (it might be a UnionAll if func is the generic NamedTuple)
         names = nothing
@@ -3963,8 +3922,8 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
 
     else
         # GlobalRef constructor call: SSA return type reveals the struct being constructed
-        if func isa GlobalRef
-            ssa_type = ctx.code_info.ssavaluetypes[idx]
+        if named
+            ssa_type = ctx.nir[idx].julia_type
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
                 return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
             end
@@ -3974,7 +3933,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
         # Clear pre-pushed args before UNREACHABLE
         local _urb = _ctx_builder(ctx, "compile_call")
         record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)";
-                            idx=idx, detail=expr)
+                            idx=idx, detail=node)
         unreachable!(_urb)  # structural trap after recorded unsupported
         fb = _urb   # discard-and-replace
         ctx.last_stmt_was_stub = true
@@ -3994,7 +3953,7 @@ function compile_call!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompi
                 (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
                     record_unsupported!(ctx, :unsupported_type,
                         "boxed arithmetic result lacks a concrete Julia source type";
-                        idx=idx, detail=expr)
+                        idx=idx, detail=node)
                 emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
             end
         end
@@ -4005,26 +3964,24 @@ end
 
 """Prove emptiness from Julia IR without inventing a runtime value."""
 function _iterable_proven_empty(arg, ctx)::Bool
-    arg isa QuoteNode && return arg.value isa Tuple && isempty(arg.value)
-    arg isa Tuple && return isempty(arg)
-    arg isa Core.SSAValue || return false
+    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+    arg isa NirLiteral && return arg.value isa Tuple && isempty(arg.value)
+    arg isa NirSSA || return false
     get_ssa_type(ctx, arg) === Tuple{} && return true
-    1 <= arg.id <= length(ctx.code_info.code) || return false
-    local stmt = ctx.code_info.code[arg.id]
-    stmt isa Expr || return false
-    if stmt.head === :new && length(stmt.args) >= 2
-        local T = stmt.args[1]
-        local dims = stmt.args[end] isa QuoteNode ? stmt.args[end].value : stmt.args[end]
+    local def = _ssa_def(arg, ctx)
+    if def isa NirNew && !isempty(def.operands)
+        # a `%new` whose type operand is written down literally, and whose last field
+        # operand is the literal dims tuple `(0,)`
+        local T = def.type_operand isa NirLiteral ? def.type_operand.value : nothing
+        local dims = nir_const(def.operands[end])
         return T isa Type && T <: AbstractVector && dims isa Tuple &&
                length(dims) == 1 && dims[1] == 0
     end
-    if stmt.head === :call && !isempty(stmt.args)
-        local f = stmt.args[1]
-        local empty_constructor =
-            (f isa GlobalRef && f.mod === Core && f.name in (:tuple, :svec)) ||
-            (f isa GlobalRef && f.mod === Base && f.name === :vect) ||
-            (f === Core.tuple || (isdefined(Core, :svec) && f === Core.svec))
-        return empty_constructor && length(stmt.args) == 1
+    if def isa NirCall
+        local f = _nir_callee_object(def.callee)
+        local empty_constructor = f === Core.tuple || f === Base.vect ||
+                                  (isdefined(Core, :svec) && f === Core.svec)
+        return empty_constructor && isempty(def.operands)
     end
     return false
 end
@@ -4101,14 +4058,11 @@ end
 
 """Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""
 function _apply_iterate_svec_values(arg, ctx)
-    arg isa Core.SSAValue || return nothing
-    1 <= arg.id <= length(ctx.code_info.code) || return nothing
-    stmt = ctx.code_info.code[arg.id]
-    stmt isa Expr && stmt.head === :call || return nothing
-    f = stmt.args[1]
-    ((f isa GlobalRef && f.mod === Core && f.name === :svec) ||
-     (isdefined(Core, :svec) && f === Core.svec)) || return nothing
-    return Any[stmt.args[2:end]...]
+    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+    def = _ssa_def(arg, ctx)
+    def isa NirCall || return nothing
+    (isdefined(Core, :svec) && _nir_callee_object(def.callee) === Core.svec) || return nothing
+    return Any[def.operands...]
 end
 
 """Lower `Base.vect(prefix..., tail...)` where `tail` is one `Vector{T}`."""
@@ -4438,17 +4392,16 @@ end
 # Resolve an IR value to a HOST SimpleVector constant when its definition is
 # compile-time evaluable. Consumers may fold length/index operations directly.
 function _try_host_svec(arg, ctx::AbstractCompilationContext)
-    arg isa Core.SSAValue || return nothing
-    (arg.id < 1 || arg.id > length(ctx.code_info.code)) && return nothing
-    st = ctx.code_info.code[arg.id]
-    if st isa Expr && (st.head === :invoke || st.head === :call)
-        a1 = st.head === :invoke ? (length(st.args) >= 2 ? st.args[2] : nothing) : st.args[1]
-        nm = a1 isa GlobalRef ? a1.name : a1 isa Function ? nameof(a1) : nothing
-        rest = st.head === :invoke ? st.args[3:end] : st.args[2:end]
-        if nm === :padding && length(rest) == 2 && rest[1] isa Type && rest[2] isa Integer
-            return Base.padding(rest[1], Int(rest[2]))
-        elseif nm === :getfield && length(rest) >= 2 && rest[1] isa QuoteNode
-            fld = rest[2] isa QuoteNode ? rest[2].value : rest[2]
+    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+    st = _ssa_def(arg, ctx)
+    if st isa NirCall || st isa NirInvoke
+        a1 = _nir_callee_object(st.callee)
+        rest = st.operands
+        if a1 === Base.padding && length(rest) == 2 && nir_const(rest[1]) isa Type &&
+           nir_const(rest[2]) isa Integer
+            return Base.padding(nir_const(rest[1]), Int(nir_const(rest[2])))
+        elseif a1 === Core.getfield && length(rest) >= 2 && nir_quoted(rest[1])
+            fld = nir_const(rest[2])
             if fld isa Symbol
                 v = isdefined(rest[1].value, fld) ? getfield(rest[1].value, fld) : nothing
                 v isa Core.SimpleVector && return v
@@ -4459,22 +4412,21 @@ function _try_host_svec(arg, ctx::AbstractCompilationContext)
 end
 
 function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
+    ptr_arg isa NirNode || (ptr_arg = nir_node(ctx, ptr_arg))   # transitional (R29): a raw operand enters as its node
     cur = ptr_arg
     for _ in 1:4
-        cur isa Core.SSAValue || return nothing
-        st = ctx.code_info.code[cur.id]
-        st isa Expr && st.head === :call || return nothing
-        cf = st.args[1]
-        cfn = cf isa GlobalRef ? cf.name : cf
-        if cfn === :bitcast && length(st.args) >= 3
-            cur = st.args[3]
-        elseif cfn === :getfield && length(st.args) >= 3
-            dt = st.args[2]
-            dt isa QuoteNode && (dt = dt.value)
-            if dt isa GlobalRef
-                dt = isdefined(dt.mod, dt.name) ? getfield(dt.mod, dt.name) : nothing
-            end
-            fld = st.args[3] isa QuoteNode ? st.args[3].value : st.args[3]
+        cur isa NirSSA || return nothing
+        st = ctx.nir[cur.id]
+        (st.slot == 0 && st.node isa NirCall) || return nothing
+        st = st.node
+        cf = st.callee
+        if cf === Core.Intrinsics.bitcast && length(st.operands) >= 2
+            cur = st.operands[2]
+        elseif cf === Core.getfield && length(st.operands) >= 2
+            dt = st.operands[1]
+            dt = dt isa NirLiteral ? dt.value :
+                 dt isa NirGlobalRef ? (dt.bound ? dt.value : nothing) : dt
+            fld = nir_const(st.operands[2])
             (dt isa DataType && fld === :layout) || return nothing
             isdefined(dt, :layout) || return nothing
             lay = getfield(dt, :layout)

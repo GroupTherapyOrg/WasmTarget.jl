@@ -1310,9 +1310,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 # orphan-prevention skip for multi-arg memoryrefnew.
                 local _ssa_t = WasmValType[static_wasm_type(node, ctx)]
                 if def isa NirCall
-                    compile_call!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                    compile_call!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirInvoke
-                    compile_invoke!(b, _rec.raw, node.id, ctx)   # dart visitor: emits direct, tracked
+                    compile_invoke!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirNew
                     compile_new!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
                 elseif def isa NirForeignCall

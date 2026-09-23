@@ -425,9 +425,8 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # Phase A: the dispatcher emits into a FRAGMENT (the god-fn VISITORS);
         # stmt_bytes = its serialization — byte-identical while the byte tail migrates
         # to _sf's tracked state cluster-by-cluster (dev/HISTORY.md#exceptions-and-structured-control-flow).
-        local stmt = nir_value_raw(rec)   # transitional: what compile_call!/compile_invoke! still take
         local _sf = _ctx_builder(ctx, "compile_statement.frag")
-        set_context!(_sf, first(string(stmt), 80))   # errors name the stmt
+        set_context!(_sf, first(_nir_text(node), 80))   # errors name the stmt
         # Statements legitimately consume values earlier statements left on
         # the wasm stack (the stackified model) — seed the fragment with the parent's
         # TRACKED stack so pops resolve; append_builder! settles the contract exactly.
@@ -436,13 +435,13 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # reset before dispatch
         if node isa NirCall
-            compile_call!(_sf, stmt, idx, ctx)
+            compile_call!(_sf, node, idx, ctx)
             stmt_bytes = builder_code(_sf)
             if tracing(:mm) && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
-                println(stderr, "UNREACH idx=$idx stmt=", repr(stmt)[1:min(end,110)])
+                println(stderr, "UNREACH idx=$idx stmt=", first(_nir_text(node), 110))
             end
         elseif node isa NirInvoke
-            compile_invoke!(_sf, stmt, idx, ctx)
+            compile_invoke!(_sf, node, idx, ctx)
             stmt_bytes = builder_code(_sf)
         elseif node isa NirNew
             # Struct construction: %new(Type, args...)
@@ -831,7 +830,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                                           src_f0.callee === Core.memoryref ||
                                           src_f0.callee === Core.memorynew)
                     # Recompile the source statement to get the actual array ref
-                    compile_call!(b, _f0_rec.raw, field_values[1].id, ctx)   # dart visitor
+                    compile_call!(b, src_f0, field_values[1].id, ctx)   # dart visitor
                     recompiled = true
                 end
                 # Also check if source is a PiNode wrapping a memoryrefnew

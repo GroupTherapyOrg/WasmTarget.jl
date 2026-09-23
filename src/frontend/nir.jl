@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_slot_types, nir_expr_operands, nir_text, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
+       build_nir, nir_slot_types, nir_expr_operands, nir_direct_operands, nir_call, nir_text, nir_const, nir_quoted, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -422,6 +422,28 @@ function resolve_call_callee(x, types)
     end
 end
 
+"""A `:call`'s callee resolved to the function it statically names, else kept as its operand
+node. Beyond `resolve_call_callee`, a callee that is a VALUE with a static identity is that
+identity: an SSA use whose defining statement is a global reference (unoptimized IR's
+`%1 = Base.add_int; (%1)(x, y)`) or whose inferred type is a `Core.Const`, and an argument
+whose inferred slot type is a singleton function type (`mapreduce_first(f::typeof(length),
+…)`'s `f(x)`) — a value of a singleton type IS its instance, Julia's own answer.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the call node carries
+its resolved target, resolved once."""
+function _resolve_nircall_callee(x, code_info, types, slot_types::Vector{Type})::Any
+    if x isa Core.SSAValue && 1 <= x.id <= length(code_info.code)
+        def = code_info.code[x.id]
+        def isa GlobalRef && return resolve_call_callee(def, types)
+        ssatypes = code_info.ssavaluetypes
+        T = (ssatypes isa Vector && x.id <= length(ssatypes)) ? ssatypes[x.id] : nothing
+        T isa Core.Const && return T.val
+    elseif x isa Core.Argument && 1 <= x.n <= length(slot_types)
+        T = slot_types[x.n]
+        (T isa DataType && Base.issingletontype(T) && T <: Function) && return T.instance
+    end
+    return resolve_call_callee(x, types)
+end
+
 """The callee OBJECT a NirCall/NirInvoke names, or `nothing` when there is none: a `NirNode`
 callee is dynamic (an SSA/argument value with no static identity), and a `GlobalRef` that
 survived the boundary's resolution was unbound. A callee the IR embeds as the object itself
@@ -497,6 +519,30 @@ nir_new(T::Type, args, ctx)::NirNew =
     NirNew(T, _nir_field_types(T), NirLiteral(T), NirNode[nir_node(ctx, a) for a in args],
            :literal, true, Any)
 
+"""The constant an operand names — a literal's value — or the operand node itself when it
+is a runtime value (an SSA use, an argument, a slot) or a global binding.
+parity(pkg/kernel/lib/src/ast/expressions.dart:5070 ConstantExpression): a constant operand
+carries its constant."""
+nir_const(@nospecialize(x))::Any = x isa NirLiteral ? x.value : x
+
+"""True for a literal Julia's IR had to quote — a value that is not self-quoting (a Symbol, a
+Module, a TypeName, an IR reference, …): Julia embeds constants with `Base.quoted`, which
+wraps exactly the values `Base.is_self_quoting` rejects, so this is Julia's own rule.
+parity(pkg/kernel/lib/src/ast/expressions.dart:5070 ConstantExpression): a constant operand
+carries its constant."""
+nir_quoted(x)::Bool = x isa NirLiteral && !Base.is_self_quoting(x.value)
+
+"""A call codegen builds from an operand that names its callee — `invoke_in_world(w, f,
+xs...)` calls `f` — with the callee resolved as the boundary resolves a written call's: a
+bound global is its object, an unbound one stays a `GlobalRef`, anything else is the operand.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node carries its
+resolved target."""
+function nir_call(callee::NirNode, operands::AbstractVector{<:NirNode})::NirCall
+    target = callee isa NirGlobalRef ?
+        (callee.bound ? callee.value : GlobalRef(callee.mod, callee.name)) : callee
+    return NirCall(target, NirNode[operands...])
+end
+
 """`%new`'s type operand → `(T, naming shape, resolved?, detail)`. A literal/GlobalRef names
 `T` outright. A `Core.apply_type` result names it through the SSA's OWN inferred type, which
 must be a `Type{T}` — read from the RAW lattice element, exactly as compile_new! read
@@ -548,7 +594,8 @@ end
 """Classify one raw CodeInfo statement into a NirNode. Total (never throws) — any Expr
 head outside the census, or any statement shape not otherwise recognized, becomes
 NirUnsupported/NirLiteral rather than crashing build_nir."""
-function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
+function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
+                       slot_types::Vector{Type})::NirNode
     if stmt === nothing
         return NirLiteral(nothing)
     elseif stmt isa Core.ReturnNode
@@ -577,7 +624,7 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type})::NirNode
         head = stmt.head
         args = stmt.args
         if head === :call && !isempty(args)
-            callee = resolve_call_callee(args[1], types)
+            callee = _resolve_nircall_callee(args[1], code_info, types, slot_types)
             cargs = NirNode[resolve_operand(a, types) for a in @view args[2:end]]
             return NirCall(callee, cargs)
         elseif head === :invoke && !isempty(args)
@@ -630,6 +677,7 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     code = code_info.code
     n = length(code)
     types = _widened_ssa_types(code_info, n)
+    slot_types = nir_slot_types(code_info)
     lines = _nir_lines(code_info, n)
     out = Vector{NirStmt}(undef, n)
     for i in 1:n
@@ -645,7 +693,7 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
             slot = stmt.args[1].id
             classified = stmt.args[2]
         end
-        out[i] = NirStmt(_nir_classify(classified, i, code_info, types),
+        out[i] = NirStmt(_nir_classify(classified, i, code_info, types, slot_types),
                          types[i], lines[i], slot, stmt)
     end
     return out
@@ -748,6 +796,21 @@ function _nir_text(x)::String
     x isa NirPhiC && return string("φᶜ (", _args(x.values), ")")
     x isa NirUnsupported && return string(x.raw)
     return string(x)
+end
+
+"""The operands one statement lists directly, as its `Expr.args` did: an expression's
+operands (`nir_expr_operands`), or — for an assignment into a slot — the assigned value
+when it is itself an operand rather than an expression. Empty for the IR node kinds
+(return/goto/phi/pi/…), whose operands are their own fields.
+parity(quarantine: the operand list of a Julia Expr statement, the SSA-use census Kernel's
+tree shape makes unnecessary.)"""
+function nir_direct_operands(rec::NirStmt)::Vector{NirNode}
+    node = rec.node
+    if rec.slot > 0
+        return (node isa NirSSA || node isa NirArgument || node isa NirSlot ||
+                node isa NirGlobalRef || node isa NirLiteral) ? NirNode[node] : NirNode[]
+    end
+    return _nir_from_expr(node) ? nir_expr_operands(node) : NirNode[]
 end
 
 """True for the node kinds an `Expr` statement classifies to. compile_statement! emits

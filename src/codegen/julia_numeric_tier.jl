@@ -43,7 +43,7 @@ const INT128_OPS = Dict{Symbol,Function}(
 )
 
 """
-    emit_int128_op!(b, ctx, op, arg_type, expr, idx) -> Union{WasmValType,Nothing}
+    emit_int128_op!(b, ctx, op, arg_type, call, idx) -> Union{WasmValType,Nothing}
 
 THE Int128/UInt128 dispatch point, consulted from `compile_call!` right where the
 `!is_128bit`-guarded intrinsics table routes leave off (mirrors `emit_intrinsic_binop!`
@@ -61,7 +61,7 @@ parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 translator.dart:346 — so Julia's `*_int` intrinsics on a 128-bit operand need their own
 dispatch onto the two-i64 limb-struct emitters of int128.jl.)
 """
-function emit_int128_op!(b::InstrBuilder, ctx, op::Symbol, arg_type, expr::Expr, idx::Int)::Union{WasmValType,Nothing}
+function emit_int128_op!(b::InstrBuilder, ctx, op::Symbol, arg_type, call::NirCall, idx::Int)::Union{WasmValType,Nothing}
     f = get(INT128_OPS, op, nothing)
     f === nothing && return nothing
     result = f(b, ctx, arg_type)::WasmValType
@@ -75,7 +75,7 @@ function emit_int128_op!(b::InstrBuilder, ctx, op::Symbol, arg_type, expr::Expr,
             (arg_type isa Type && isconcretetype(arg_type)) ||
                 record_unsupported!(ctx, :unsupported_type,
                     "intrinsic result boxing lacks a concrete Julia source type";
-                    idx=idx, detail=expr)
+                    idx=idx, detail=call)
             emit_classid_box!(b, ctx, result, arg_type)
         end
     end
@@ -377,7 +377,7 @@ end
 move of the arm's resolution logic. `record_unsupported!`'s reject stays the
 registry's loud path for an unresolvable GlobalRef (Design item C)."""
 function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)::Union{Nothing, Type}
-    if target_type_ref isa GlobalRef
+    if target_type_ref isa NirGlobalRef
         if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")
             Int64
         elseif target_type_ref.name === :UInt64
@@ -394,8 +394,8 @@ function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)::Union{Nothing,
             Int128
         elseif target_type_ref.name === :UInt128
             UInt128
-        elseif isdefined(target_type_ref.mod, target_type_ref.name)
-            getfield(target_type_ref.mod, target_type_ref.name)
+        elseif target_type_ref.bound
+            target_type_ref.value
         else
             record_unsupported!(ctx, :unsupported_type,
                 "reinterpret target GlobalRef is not defined"; idx=idx, detail=target_type_ref)

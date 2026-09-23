@@ -719,8 +719,8 @@ const LOCKS = [
             # unresolved callee is SKIPPED — not swallowed into a table lookup.
             required = ["val.bound || return nothing",
                         "callee_func isa NirNode || callee_func isa GlobalRef",
-                        "isdefined(actual_func_ref.mod, actual_func_ref.name)",
-                        "isdefined(func.mod, func.name)"]
+                        "called_func = named isa GlobalRef ? nothing : named   # unbound: nothing",
+                        "\n        called_func = func isa GlobalRef ? nothing : func"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
         end),
     "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; unsupported IO cannot disappear or fabricate question-mark output",
@@ -746,7 +746,7 @@ const LOCKS = [
             forbidden = ["try getfield(func.mod, func.name) catch", "try infer_value_type",
                          "try fieldtypes(obj_type) catch", "return try Base.padding",
                          "try getfield(target_type_ref.mod", "try getfield(args[1].value"]
-            required = ["isdefined(func.mod, func.name)",
+            required = ["\n        called_func = func isa GlobalRef ? nothing : func",
                         "obj_type isa DataType && isconcretetype(obj_type)",
                         "sext_int target is not a defined Julia type",
                         "zext_int target is not a defined Julia type",

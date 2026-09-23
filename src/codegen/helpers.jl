@@ -2,53 +2,14 @@
 # Helper Functions
 # ============================================================================
 
-"""
-Check if func matches a given intrinsic name.
+"""True when a resolved callee IS the named Core/Base builtin binding.
 
-parity(quarantine: a Julia IR callee arrives in five shapes — GlobalRef, IntrinsicFunction,
-Builtin, generic Function, MethodInstance — where a Kernel invocation carries one resolved
-Member reference; this reads the name out of whichever shape is present.)
-"""
-function is_func(func, name::Symbol)::Bool
-    if func isa GlobalRef
-        return func.name === name
-    elseif hasproperty(func, :name) && func.name isa Symbol
-        # Handle callable descriptors with a `.name` field.
-        return func.name === name
-    elseif func isa Core.IntrinsicFunction
-        # Compare intrinsic by string representation
-        return Symbol(func) === name
-    elseif typeof(func) <: Core.Builtin
-        # Builtin functions like isa, typeof, etc.
-        return nameof(func) === name
-    elseif func isa Function
-        # Generic functions
-        return nameof(func) === name
-    elseif func isa Core.MethodInstance
-        # Specific method instance
-        return func.def.name === name
-    end
-    return false
-end
-
-"""True when a reference resolves to the named Core/Base builtin binding.
-
-parity(quarantine: a Julia IR callee is a GlobalRef naming a module binding, resolved here
-to the Core/Base builtin object it holds; a Kernel invocation already carries its resolved
-target Member.)"""
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node carries its
+resolved target, compared by identity."""
 function is_builtin_func(func, name::Symbol)::Bool
-    resolved = if func isa GlobalRef
-        try
-            getglobal(func.mod, func.name)
-        catch
-            return false
-        end
-    else
-        func
-    end
     core_target = isdefined(Core, name) ? getglobal(Core, name) : nothing
     base_target = isdefined(Base, name) ? getglobal(Base, name) : nothing
-    return resolved === core_target || resolved === base_target
+    return func === core_target || func === base_target
 end
 
 """

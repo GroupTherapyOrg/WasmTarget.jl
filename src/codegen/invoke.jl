@@ -64,7 +64,7 @@ cannot express, e.g. `Base.kwerr`'s `length(args) == 2`). On decline,
 reject, exactly as a pre-migration bare-Symbol name-guard miss did.
 """
 struct InvokeIntrinsicEntry
-    fn::Function     # :append → (args, ctx) -> InstrBuilder (fragment); :standalone → (args, ctx, idx, expr) -> InstrBuilder (whole result)
+    fn::Function     # :append → (args, ctx) -> InstrBuilder (fragment); :standalone → (args, ctx, idx, call) -> InstrBuilder (whole result)
     mode::Symbol      # :append | :standalone
 end
 
@@ -137,13 +137,13 @@ end
 
 """==(a::String,b::String). Moved verbatim (already self-contained; delegates
 to the shared compile_string_equal_b core, unchanged)."""
-_invoke_string_eq_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder =
+_invoke_string_eq_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder =
     compile_string_equal_b(args[1], args[2], ctx)
 
 """SubString(s) / SubString(s,start,stop). Moved verbatim (already
 self-contained; all 7 real `SubString` constructor methods share this one
 body, matching the pre-migration arm's unconditional name-based dispatch)."""
-function _invoke_substring_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_substring_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bsub2 = _ctx_builder(ctx, "compile_invoke")
     if length(args) >= 3
         str_arg = args[1]
@@ -191,12 +191,12 @@ both args are literal `Type`s in the IR (P4-stdlib radix sort guard). Moved
 verbatim; the constant-ness guard is per-callsite, not per-Method, so it is
 preserved as an internal check with the SAME terminal-unsupported fallback the
 old ladder's final `else` arm used when the guard failed."""
-function _invoke_array_subpadding_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_array_subpadding_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bsub = _ctx_builder(ctx, "compile_invoke")
     if length(args) == 2 && args[1] isa Type && args[2] isa Type
         i32_const!(bsub, Base.array_subpadding(args[1], args[2]) ? 1 : 0)
     else
-        record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx, detail=expr)
+        record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx, detail=call)
         unreachable!(bsub)
         ctx.last_stmt_was_stub = true
     end
@@ -206,9 +206,8 @@ end
 """Base.unalias(dest,src) — identity in WasmGC (every array.new is a distinct
 GC object; aliasing is impossible). Moved verbatim (all 3 real `unalias`
 methods share this one body, matching the pre-migration arm's unconditional
-name-based dispatch); `args[2]` replaces the original `expr.args[4]` — the
-SAME value (`args = expr.args[3:end]`, so `args[2] === expr.args[4]`)."""
-function _invoke_unalias_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+name-based dispatch); `args[2]` is the invoke's second operand, the source array."""
+function _invoke_unalias_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bua = _ctx_builder(ctx, "compile_invoke")
     src_arg = args[2]
     emit_value!(bua, src_arg, ctx, static_wasm_type(src_arg, ctx))
@@ -240,7 +239,7 @@ _invoke_operand1_type(args, ctx::AbstractCompilationContext) = infer_value_type(
 SSA local ⇒ box through THE one producer (emit_classid_box!). Shared by the +/-/*
 invoke intrinsics below — each was compile_invoke!'s local `_f3_result_box!` closure
 before this migration; unchanged logic, just parameterized instead of captured."""
-function _invoke_box_arith_result!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int, expr::Expr,
+function _invoke_box_arith_result!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke,
                                    @nospecialize(arg_type), is_32bit::Bool)
     dl = get(ctx.ssa_locals, idx, nothing)
     dl === nothing && return nothing
@@ -250,7 +249,7 @@ function _invoke_box_arith_result!(b::InstrBuilder, ctx::AbstractCompilationCont
     boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
     (boxed_result_jt isa Type && isconcretetype(boxed_result_jt)) ||
         record_unsupported!(ctx, :unsupported_type,
-            "boxed invoke result lacks a concrete Julia source type"; idx=idx, detail=expr)
+            "boxed invoke result lacks a concrete Julia source type"; idx=idx, detail=call)
     emit_classid_box!(rbx, ctx, is_32bit ? I32 : I64, boxed_result_jt)
     append_builder!(b, rbx)
     return nothing
@@ -267,7 +266,7 @@ own Method object always has `.name === :IntrinsicFunction` (confirmed on Julia 
 and 1.13 — `which(Core.Intrinsics.add_int, (Int,Int))`), never `:add_int`, so those
 disjuncts could never fire via `mi.def isa Method`; direct intrinsic calls are `:call`
 expressions handled in calls.jl, not `:invoke` reaching this file at all."""
-function _invoke_add_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_add_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = _invoke_operand1_type(args, ctx)
     is_32bit = _invoke_is_32bit_arith(arg_type)
     wt = is_32bit ? I32 : I64
@@ -275,13 +274,13 @@ function _invoke_add_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Ex
     emit_value!(badd, args[1], ctx, wt)
     emit_value!(badd, args[2], ctx, wt)
     emit_intrinsic_binop!(badd, wt, wt, :add_int)
-    _invoke_box_arith_result!(badd, ctx, idx, expr, arg_type, is_32bit)
+    _invoke_box_arith_result!(badd, ctx, idx, call, arg_type, is_32bit)
     return badd
 end
 
 """-(x::T,y::T) where T<:BitInteger — binary subtraction. REWRITTEN standalone, same
 shape and rationale as _invoke_add_b (routes through emit_intrinsic_binop!)."""
-function _invoke_sub_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_sub_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = _invoke_operand1_type(args, ctx)
     is_32bit = _invoke_is_32bit_arith(arg_type)
     wt = is_32bit ? I32 : I64
@@ -289,7 +288,7 @@ function _invoke_sub_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Ex
     emit_value!(bsub3, args[1], ctx, wt)
     emit_value!(bsub3, args[2], ctx, wt)
     emit_intrinsic_binop!(bsub3, wt, wt, :sub_int)
-    _invoke_box_arith_result!(bsub3, ctx, idx, expr, arg_type, is_32bit)
+    _invoke_box_arith_result!(bsub3, ctx, idx, call, arg_type, is_32bit)
     return bsub3
 end
 
@@ -298,7 +297,7 @@ the pre-migration arm; the unary entry in intrinsics_table.jl's INTRINSIC_UNOPS 
 `-1 * x` instead — a DIFFERENT Method's shape, not this one, so it is not reused here).
 REWRITTEN standalone: a distinct Method from the 2-arg `-` above (different arity ⇒
 different Method object), registered separately."""
-function _invoke_neg_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_neg_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = _invoke_operand1_type(args, ctx)
     is_32bit = _invoke_is_32bit_arith(arg_type)
     wt = is_32bit ? I32 : I64
@@ -306,7 +305,7 @@ function _invoke_neg_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Ex
     is_32bit ? i32_const!(bneg, 0) : i64_const!(bneg, 0)
     emit_value!(bneg, args[1], ctx, wt)
     emit_intrinsic_binop!(bneg, wt, wt, :sub_int)
-    _invoke_box_arith_result!(bneg, ctx, idx, expr, arg_type, is_32bit)
+    _invoke_box_arith_result!(bneg, ctx, idx, call, arg_type, is_32bit)
     return bneg
 end
 
@@ -314,7 +313,7 @@ end
 shape as _invoke_add_b. The pre-migration arm never boxed this result (no
 `_f3_result_box!()` call in the numeric-mul arm) — preserved exactly: no boxing here
 either."""
-function _invoke_mul_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_mul_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = _invoke_operand1_type(args, ctx)
     is_32bit = _invoke_is_32bit_arith(arg_type)
     wt = is_32bit ? I32 : I64
@@ -336,7 +335,7 @@ Symbol by `_all_string_args` — narrower than the Method's own Char/AbstractStr
 domain, preserved exactly as the pre-migration guard's scope; loud rejection now
 replaces what used to be a silent wrong-value fallthrough for anything outside that
 scope, never the reverse."""
-function _invoke_star_concat_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_star_concat_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     (length(args) >= 2 && _all_string_args(args, ctx)) || return nothing
     return compile_string_concat_many_b(args, ctx)
 end
@@ -345,7 +344,7 @@ end
 when WT's OWN type tracking (infer_value_type) still reports Any/Union{} even though
 this Method's declared parameter is String — the same imprecision the pre-migration
 arm's `arg_type === Any || arg_type === Union{}` branch compensated for)."""
-function _invoke_length_str_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_length_str_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = _invoke_operand1_type(args, ctx)
     blen = _ctx_builder(ctx, "compile_invoke")
     str_wasm = ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true)
@@ -367,7 +366,7 @@ strings are array<i32> (one codepoint per element), so every index is already a 
 to the SAME Method — a closure's `Method.name` is its declared short name, stripped
 of the enclosing-scope mangling that only appears in the closure's TYPE name — so one
 Method-keyed entry replaces both disjuncts."""
-function _invoke_thisind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_thisind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     length(args) >= 2 || return nothing
     bti = _ctx_builder(ctx, "compile_invoke")
     emit_value!(bti, length(args) >= 3 ? args[2] : args[1], ctx, I64)
@@ -376,7 +375,7 @@ end
 
 """_nextind_continued closure — `nextind(s,i) = i + 1` in WasmGC. Moved verbatim; same
 single-Method rationale as _invoke_thisind_continued_b."""
-function _invoke_nextind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_nextind_continued_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     length(args) >= 2 || return nothing
     bni = _ctx_builder(ctx, "compile_invoke")
     emit_value!(bni, length(args) >= 3 ? args[2] : args[1], ctx, I64)
@@ -394,7 +393,7 @@ ONE builder. Moved verbatim: only String/Symbol arguments are PROVEN concatenabl
 (Char and SubString are structurally valid too); not widened here, matching the
 pre-migration guard's exact scope. DECLINES when there are fewer than 2 arguments —
 the terminal `else` then rejects loudly, same as the pre-migration fallthrough."""
-function _invoke_string_concat_or_reject_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_string_concat_or_reject_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     length(args) > 1 || return nothing
     _all_string_args(args, ctx) && return compile_string_concat_many_b(args, ctx)
     arg_types = [infer_value_type(a, ctx) for a in args]
@@ -415,7 +414,7 @@ Integer subtype with no dedicated overlay). `Base.string(x::Int64)` has its own
 closed world resolves an `:invoke` of that call to the overlay Method directly.
 No other Integer subtype has a working lowering (the integer/float-to-string
 conversion gap); reject loudly rather than fabricate a value."""
-function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_string_int_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     arg_type = infer_value_type(args[1], ctx)
     record_unsupported!(ctx, :unsupported_method,
         "string(::$(arg_type)) has no lowering — only Base.string(x::Int64) is overlaid";
@@ -428,7 +427,7 @@ end
 
 """string(a::String) / string(a::Symbol) — identity (WasmGC represents Symbol using
 String's array shape). Moved verbatim, two distinct Methods sharing one builder."""
-function _invoke_string_identity_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_string_identity_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bid = _ctx_builder(ctx, "compile_invoke")
     emit_value!(bid, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
     return bid
@@ -445,8 +444,8 @@ redirects Integer / passes String,Symbol through / hard-errors otherwise, matchi
 pre-migration arm's native `error()` exactly (this Method, for a length==1 call, is a
 Base-internal seam that was never proven reachable either before or after this
 migration — verbatim preservation, not a claim of coverage)."""
-function _invoke_string_generic_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
-    length(args) > 1 && return _invoke_string_concat_or_reject_b(args, ctx, idx, expr)
+function _invoke_string_generic_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
+    length(args) > 1 && return _invoke_string_concat_or_reject_b(args, ctx, idx, call)
     length(args) == 1 || return nothing
     value_type = infer_value_type(args[1], ctx)
     (value_type === Float32 || value_type === Float64) && return nothing
@@ -454,9 +453,9 @@ function _invoke_string_generic_b(args, ctx::AbstractCompilationContext, idx::In
        value_type === UInt32 || value_type === UInt64 ||
        value_type === Int16 || value_type === UInt16 ||
        value_type === Int8 || value_type === UInt8
-        return _invoke_string_int_b(args, ctx, idx, expr)
+        return _invoke_string_int_b(args, ctx, idx, call)
     elseif value_type === String || value_type === Symbol
-        return _invoke_string_identity_b(args, ctx, idx, expr)
+        return _invoke_string_identity_b(args, ctx, idx, call)
     else
         error("Base.string(::$(value_type)) not yet supported. " *
               "Supported types: String, Symbol, Float32, Float64, Int32, Int64, UInt32, UInt64, Int16, UInt16, Int8, UInt8")
@@ -471,13 +470,13 @@ _throw_not_readable() — emit throw (catchable) using args[1] as the exception 
 `_throw_not_writable`, named in the pre-migration guard alongside these, does not
 exist as a Base binding on Julia 1.12 or 1.13 (`isdefined(Base, :_throw_not_writable)`
 is false on both — confirmed directly) — dead, dropped rather than registered."""
-function _invoke_throw_payload_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_throw_payload_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     bthr2 = _ctx_builder(ctx, "compile_invoke")
     exn_global = ensure_exception_global!(ctx.mod)
     if isempty(args)
         record_unsupported!(ctx, :unsupported_method,
-            "throw helper has no exception payload"; idx=idx, detail=expr)
+            "throw helper has no exception payload"; idx=idx, detail=call)
         unreachable!(bthr2)  # structural trap after recorded unsupported
         ctx.last_stmt_was_stub = true
         return bthr2
@@ -494,7 +493,7 @@ in \$current_exn; any argument is disregarded (native `rethrow`'s optional `e` i
 likewise informational — WT's exception global always holds the live exception
 object). Moved verbatim; registered separately from _invoke_throw_payload_b (a
 DIFFERENT builder replaces the old bare-Symbol `rethrow` runtime branch)."""
-function _invoke_rethrow_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_rethrow_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     brt = _ctx_builder(ctx, "compile_invoke")
     global_get!(brt, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(brt, ExternRef); throw_!(brt, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
@@ -521,7 +520,7 @@ end
 Moved verbatim; the `if haskey(ctx.ssa_locals, idx)` nothing-placeholder push (used
 downstream by trim-collected show machinery) that used to run AFTER this arm's body
 mutated `fb` now runs inside the standalone builder itself."""
-function _invoke_println_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_println_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     fbp = _compile_invoke_print_b(true, args, ctx)
     if haskey(ctx.ssa_locals, idx)
         bpn = _ctx_builder(ctx, "compile_invoke")
@@ -533,7 +532,7 @@ end
 
 """print(xs...) — receiver-free Methods only. Moved verbatim, same shape as
 _invoke_println_b (is_println=false: no trailing newline write)."""
-function _invoke_print_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_print_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     fbp = _compile_invoke_print_b(false, args, ctx)
     if haskey(ctx.ssa_locals, idx)
         bpn = _ctx_builder(ctx, "compile_invoke")
@@ -547,28 +546,28 @@ end
 verbatim, including the pre-migration behavior of silently emitting nothing when no
 IO bridge is configured (unlike print/println, which reject via record_unsupported!
 — an existing asymmetry, not something this migration changes)."""
-function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_show_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     io = get_io_imports()
     if io !== nothing
         bsh2 = _ctx_builder(ctx, "compile_invoke")
         for arg in args
             arg_type = nothing
-            if arg isa Core.SSAValue
-                arg_type = ctx.code_info.ssavaluetypes[arg.id]
-            elseif arg isa Core.Argument
+            if arg isa NirSSA
+                arg_type = ctx.nir[arg.id].julia_type
+            elseif arg isa NirArgument
                 slot_id = arg.n
-                arg_type = ctx.code_info.slottypes[slot_id]
-            elseif arg isa String || arg isa Symbol
+                arg_type = ctx.slot_types[slot_id]
+            elseif nir_const(arg) isa String
                 arg_type = String
-            elseif arg isa Int64 || arg isa Int32 || arg isa Int
-                arg_type = typeof(arg)
-            elseif arg isa Float64 || arg isa Float32
-                arg_type = typeof(arg)
-            elseif arg isa Bool
+            elseif nir_const(arg) isa Int64 || nir_const(arg) isa Int32 || nir_const(arg) isa Int
+                arg_type = typeof(nir_const(arg))
+            elseif nir_const(arg) isa Float64 || nir_const(arg) isa Float32
+                arg_type = typeof(nir_const(arg))
+            elseif nir_const(arg) isa Bool
                 arg_type = Bool
-            elseif arg isa Nothing || arg === nothing
+            elseif nir_const(arg) === nothing
                 arg_type = Nothing
-            elseif arg isa GlobalRef && arg.name === :nothing
+            elseif arg isa NirGlobalRef && arg.name === :nothing
                 arg_type = Nothing
             end
 
@@ -619,7 +618,7 @@ ambiguously, the length argument) being left over from the ordinary pre-push loo
 that leftover-stack shape cannot be replicated by a self-contained builder. This
 pushes exactly the io argument and nothing else, matching the arm's documented intent
 ("just leave it on stack... Returns the IOBuffer itself") unambiguously."""
-function _invoke_truncate_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_truncate_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     btr = _ctx_builder(ctx, "compile_invoke")
     emit_value!(btr, args[1], ctx, static_wasm_type(args[1], ctx))
     return btr
@@ -628,7 +627,7 @@ end
 """getindex_continued(s,i,u) — UTF-8 byte-level multibyte continuation; not
 implemented (WasmGC strings are array<i32>, one codepoint per element — genuinely
 unreachable for valid indices). Moved verbatim."""
-function _invoke_getindex_continued_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_getindex_continued_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bgic = _ctx_builder(ctx, "compile_invoke")
     record_unsupported!(ctx, :unsupported_method, "string getindex_continued (byte-level multibyte access)"; idx=idx)
     unreachable!(bgic)
@@ -641,7 +640,7 @@ Methods all funnel through ONE ErrorException construction (message-only payload
 `error` called with more than one argument native-errors at WT-compile time exactly
 like the pre-migration arm (`length(args) <= 1 || error(...)`), since the payload
 this builds has no room for extra values. Moved verbatim."""
-function _invoke_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_error_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     berr = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
@@ -661,7 +660,7 @@ end
 
 """JuliaSyntax.parse_float_literal(::Type,str,firstind,endind) — not implemented
 (orig uses ccall(:jl_strtod_c)). Moved verbatim: Strict Approach A loud reject."""
-function _invoke_parse_float_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_parse_float_literal_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
     emit_unsupported_stub!(ctx, fb2, :unsupported_method,
         "parse_float_literal (JuliaSyntax float parsing — needs jl_strtod_c)"; idx=idx)
@@ -671,7 +670,7 @@ end
 """JuliaSyntax.parse_int_literal(str) / parse_uint_literal(str,k) — not implemented.
 Moved verbatim: both Methods share the SAME stub message the pre-migration arm's
 combined `parse_int_literal`/`parse_uint_literal` name guard used."""
-function _invoke_parse_int_literal_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_parse_int_literal_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     fb2 = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb2, ctx)
     emit_unsupported_stub!(ctx, fb2, :unsupported_method,
         "parse_int/uint_literal (JuliaSyntax integer parsing)"; idx=idx)
@@ -680,7 +679,7 @@ end
 
 """Symbol(s::String) — identity (WasmGC represents Symbol using String's array
 shape). Moved verbatim."""
-function _invoke_symbol_from_string_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_symbol_from_string_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bsym = _ctx_builder(ctx, "compile_invoke")
     emit_value!(bsym, args[1], ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
     return bsym
@@ -690,7 +689,7 @@ end
 IR the convert inlines typeintersect. Evaluated at compile time when both args are
 constant Type values. DECLINES otherwise — the terminal unsupported-method reject
 then applies, the same end state the pre-migration guard miss fell through to."""
-function _invoke_typeintersect_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_typeintersect_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     (length(args) >= 2 && args[1] isa Type && args[2] isa Type) || return nothing
     result_type = typeintersect(args[1], args[2])
     bti2 = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
@@ -702,7 +701,7 @@ end
 
 """_tuple_error(T,x) — error function in the tuple-convert dead-code path. Emit throw
 (catchable) instead of unreachable (trap). Moved verbatim."""
-function _invoke_tuple_error_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_tuple_error_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bte = _ctx_builder(ctx, "compile_invoke")  # Clear pre-pushed args
     ensure_exception_tag!(ctx.mod)
     global_get!(bte, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bte, ExternRef); throw_!(bte, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
@@ -715,10 +714,10 @@ end
 sort guard). DECLINES unless both args are literal `Type`/`Integer` values in the IR —
 matches the pre-migration guard exactly; falls through to the terminal reject
 otherwise, same as before."""
-function _invoke_padding_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
-    (length(args) == 2 && args[1] isa Type && args[2] isa Integer) || return nothing
+function _invoke_padding_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
+    (length(args) == 2 && nir_const(args[1]) isa Type && nir_const(args[2]) isa Integer) || return nothing
     bpad = _ctx_builder(ctx, "compile_invoke")
-    _padding = Base.padding(args[1], Int(args[2]))
+    _padding = Base.padding(nir_const(args[1]), Int(nir_const(args[2])))
     _emit_svec_values!(bpad, collect(_padding), ctx)
     return bpad
 end
@@ -727,7 +726,7 @@ end
 capacity concept, so it's a no-op returning the collection unchanged. Registered for
 EVERY sizehint! Method (Vector/Set/Dict/BitSet/IdSet/WeakKeyDict/...) — the
 pre-migration arm applied uniformly by name, not by collection type. Moved verbatim."""
-function _invoke_sizehint_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_sizehint_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bsh = _ctx_builder(ctx, "compile_invoke")
     if !isempty(args)
         emit_value!(bsh, args[1], ctx, static_wasm_type(args[1], ctx))
@@ -742,7 +741,7 @@ end
 `sizehint!(v,n)` desugars to. Moved verbatim: the vector argument is the 4th
 positional arg (matching the pre-migration arm's `args[4]`, which is the SAME
 position — `args` is the same expression-argument slice here as there)."""
-function _invoke_sizehint_kwbody_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::InstrBuilder
+function _invoke_sizehint_kwbody_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::InstrBuilder
     bsh = _ctx_builder(ctx, "compile_invoke")
     if length(args) >= 4
         emit_value!(bsh, args[4], ctx, static_wasm_type(args[4], ctx))
@@ -759,7 +758,7 @@ payload, not a generic trap: catch-side isa/field inspection must observe the sa
 object shape as native Julia. Moved verbatim (lock L81_kwerr_throws_exact_methoderror).
 DECLINES unless exactly 2 arguments (kw,f) — matches the pre-migration guard's
 `length(args) == 2`."""
-function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     length(args) == 2 || return nothing
     bkw = _ctx_builder(ctx, "compile_invoke.kwerr")
     ensure_exception_tag!(ctx.mod)
@@ -768,7 +767,7 @@ function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, expr::
     arg_julia_types = tuple((_invoke_arg_static_type(a, ctx) for a in args)...)
     all(T -> T isa Type, arg_julia_types) ||
         record_unsupported!(ctx, :unsupported_type,
-            "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=expr)
+            "kwerr arguments have no Julia type in the closed world"; idx=idx, detail=call)
     args_tuple_type = Tuple{arg_julia_types...}
     args_info = register_tuple_type!(ctx.mod, ctx.type_registry, args_tuple_type)
     error_info === nothing && error("MethodError layout is unavailable")
@@ -798,7 +797,7 @@ end
 """Core.throw_inexacterror(func,to,val) is precisely throw(InexactError(func,
 (to,val))). Preserve both fields so catch-side inspection agrees with Julia. Moved
 verbatim (lock L82_inexact_helper_throws_exact_payload)."""
-function _invoke_throw_inexacterror_b(args, ctx::AbstractCompilationContext, idx::Int, expr::Expr)::Union{InstrBuilder,Nothing}
+function _invoke_throw_inexacterror_b(args, ctx::AbstractCompilationContext, idx::Int, call::NirInvoke)::Union{InstrBuilder,Nothing}
     length(args) >= 3 || return nothing
     bie = _ctx_builder(ctx, "compile_invoke.throw_inexacterror")
     ensure_exception_tag!(ctx.mod)
@@ -808,7 +807,7 @@ function _invoke_throw_inexacterror_b(args, ctx::AbstractCompilationContext, idx
     payload_types = tuple((_invoke_arg_static_type(a, ctx) for a in payload)...)
     all(T -> T isa Type, payload_types) ||
         record_unsupported!(ctx, :unsupported_type,
-            "throw_inexacterror payload has no Julia type"; idx=idx, detail=expr)
+            "throw_inexacterror payload has no Julia type"; idx=idx, detail=call)
     payload_type = Tuple{payload_types...}
     payload_info = register_tuple_type!(ctx.mod, ctx.type_registry, payload_type)
     error_info === nothing && error("InexactError layout is unavailable")
@@ -931,20 +930,20 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
         for arg in args
             # Determine argument type
             arg_type = nothing
-            if arg isa Core.SSAValue
-                arg_type = ctx.code_info.ssavaluetypes[arg.id]
-            elseif arg isa Core.Argument
+            if arg isa NirSSA
+                arg_type = ctx.nir[arg.id].julia_type
+            elseif arg isa NirArgument
                 slot_id = arg.n
-                arg_type = ctx.code_info.slottypes[slot_id]
-            elseif arg isa String || arg isa Symbol
+                arg_type = ctx.slot_types[slot_id]
+            elseif nir_const(arg) isa String
                 arg_type = String
-            elseif arg isa Int64 || arg isa Int32 || arg isa Int
-                arg_type = typeof(arg)
-            elseif arg isa Float64 || arg isa Float32
-                arg_type = typeof(arg)
-            elseif arg isa Bool
+            elseif nir_const(arg) isa Int64 || nir_const(arg) isa Int32 || nir_const(arg) isa Int
+                arg_type = typeof(nir_const(arg))
+            elseif nir_const(arg) isa Float64 || nir_const(arg) isa Float32
+                arg_type = typeof(nir_const(arg))
+            elseif nir_const(arg) isa Bool
                 arg_type = Bool
-            elseif arg isa Nothing || arg === nothing || (arg isa GlobalRef && arg.name === :nothing)
+            elseif nir_const(arg) === nothing || (arg isa NirGlobalRef && arg.name === :nothing)
                 arg_type = Nothing
             elseif arg isa Tuple
                 arg_type = typeof(arg)
@@ -1179,29 +1178,43 @@ function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.Me
         return false
     end
     length(typed) == 1 || return false
-    ci = typed[1][1]
-    ci isa Core.CodeInfo || return false
-    news = Expr[s for s in ci.code if s isa Expr && s.head === :new]
+    body = typed[1][1]
+    body isa Core.CodeInfo || return false
+    nir = build_nir(body)
+    news = NirNew[s.node for s in nir if s.slot == 0 && s.node isa NirNew]
     length(news) == 1 || return false
-    all(s -> s === nothing || s isa Core.ReturnNode ||
-             (s isa Expr && (s.head === :new || s.head === :meta)), ci.code) || return false
+    all(s -> s.slot == 0 && ((s.node isa NirLiteral && s.node.value === nothing) ||
+                             s.node isa NirReturn || s.node isa NirNew ||
+                             (s.node isa NirUnsupported && s.node.kind === :meta)), nir) || return false
     alloc = only(news)
-    length(alloc.args) == fieldcount(target) + 1 || return false
-    tref = alloc.args[1]
-    resolved = tref isa GlobalRef && isdefined(tref.mod, tref.name) ? getfield(tref.mod, tref.name) : tref
-    resolved === target || return false
+    length(alloc.operands) == fieldcount(target) || return false
+    (alloc.type_kind === :literal && alloc.T === target) || return false
+    _is_arg(x, n) = x isa NirArgument && x.n == n
     for i in 1:fixed_count
-        alloc.args[i + 1] == Core.Argument(i + 1) || return false
+        _is_arg(alloc.operands[i], i + 1) || return false
     end
-    return alloc.args[end] == Core.Argument(fixed_count + 2)
+    return _is_arg(alloc.operands[end], fixed_count + 2)
 end
 
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext) =
-    arg isa Type ? Core.Typeof(arg) : infer_value_type(arg, ctx)
+    nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : infer_value_type(arg, ctx)
 
 """Return the unique singleton represented by `T`, or `nothing` when none exists."""
 _invoke_singleton_instance(@nospecialize(T)) =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
+
+# The function an invoked value names through a global binding: the invoke's own callee
+# when the IR wrote a global there (the NIR boundary resolved it to its object; an unbound
+# one stays a `GlobalRef`), or an SSA alias of a global (optionally through one π) — else
+# `nothing` (a literal, a parameter, a runtime value).
+# parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call's target.
+function _invoke_named_callee(callee, ctx::AbstractCompilationContext; through_pi::Bool)::Any
+    callee isa NirNode || return callee
+    def = _ssa_def(callee, ctx)
+    through_pi && def isa NirPi && def.value isa NirSSA && (def = _ssa_def(def.value, ctx))
+    def isa NirGlobalRef || return nothing
+    return def.bound ? def.value : GlobalRef(def.mod, def.name)
+end
 
 """
 Compile an invoke expression (method invocation) — dart visitor shape:
@@ -1209,11 +1222,11 @@ emits the invoke INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that replace it re-init; exits merge typed).
 """
-function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCompilationContext)
+function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)
     _build_invoke_intrinsics!()   # lazy, once per process — see INVOKE_INTRINSICS above
     fb = _ctx_builder(ctx, "compile_invoke.frag")
     _seed_builder_locals!(fb, ctx)
-    args = expr.args[3:end]
+    args = node.operands
 
     # Early skip check — before compiling arguments.
     # Skipped statements emit nothing (NOP). This prevents argument values
@@ -1247,8 +1260,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
     # Check for signal substitution (Therapy.jl closures)
     # When calling through a captured signal getter/setter, emit global.get/set directly
-    func_ref = expr.args[2]
-    if func_ref isa Core.SSAValue
+    func_ref = node.callee
+    if func_ref isa NirSSA
         ssa_id = func_ref.id
         # Signal getter: no args, returns the signal value
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
@@ -1292,14 +1305,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     end
 
     # Get MethodInstance to check parameter types for nothing arguments
-    mi_or_ci = expr.args[1]
-    mi = if mi_or_ci isa Core.MethodInstance
-        mi_or_ci
-    elseif isdefined(Core, :CodeInstance) && mi_or_ci isa Core.CodeInstance
-        mi_or_ci.def
-    else
-        nothing
-    end
+    mi = node.mi
 
     if mi isa Core.MethodInstance && mi.def isa Method &&
        mi.def.name in (:_closed_world_type_bounds, :check_world_bounded) && length(args) == 1
@@ -1321,7 +1327,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if _iv_m.module === Core && _iv_m.name === :eval
             record_unsupported!(ctx, :unsupported_method,
                 "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
-                idx=idx, detail=expr, soundness_fatal=true)
+                idx=idx, detail=node, soundness_fatal=true)
             ctx.last_stmt_was_stub = true
             return append_builder!(b, fb)
         end
@@ -1338,28 +1344,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
 
-    # Early self-call detection: check if this is a recursive call to ourselves
-    func_ref_early = expr.args[2]
-    actual_func_ref_early = func_ref_early
-    if func_ref_early isa Core.SSAValue
-        ssa_stmt = ctx.code_info.code[func_ref_early.id]
-        if ssa_stmt isa GlobalRef
-            actual_func_ref_early = ssa_stmt
-        elseif ssa_stmt isa Core.PiNode && ssa_stmt.val isa Core.SSAValue
-            # Follow PiNode chain
-            pi_ssa_stmt = ctx.code_info.code[ssa_stmt.val.id]
-            if pi_ssa_stmt isa GlobalRef
-                actual_func_ref_early = pi_ssa_stmt
-            end
-        end
-    elseif func_ref_early isa Core.PiNode && func_ref_early.val isa GlobalRef
-        actual_func_ref_early = func_ref_early.val
-    elseif func_ref_early isa Core.PiNode && func_ref_early.val isa Core.SSAValue
-        pi_ssa_stmt = ctx.code_info.code[func_ref_early.val.id]
-        if pi_ssa_stmt isa GlobalRef
-            actual_func_ref_early = pi_ssa_stmt
-        end
-    elseif func_ref_early isa Core.Argument
+    # Early self-call detection: check if this is a recursive call to ourselves.
+    # The invoked function is the one the callee names through a global (directly, or an
+    # SSA alias of one through a π), else the callee's own constant, else — for a
+    # function parameter — the singleton instance its specialized type names.
+    named_early = _invoke_named_callee(node.callee, ctx; through_pi=true)
+    actual_func_ref_early = named_early !== nothing ? named_early : nir_const(node.callee)
+    if named_early === nothing && node.callee isa NirArgument
         # Higher-order function calls — extract function from mi.specTypes
         if mi isa Core.MethodInstance
             spec = mi.specTypes
@@ -1371,9 +1362,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         end
     end
     is_self_call_early = false
-    if ctx.func_ref !== nothing && actual_func_ref_early isa GlobalRef &&
-       isdefined(actual_func_ref_early.mod, actual_func_ref_early.name)
-            called_func = getfield(actual_func_ref_early.mod, actual_func_ref_early.name)
+    if ctx.func_ref !== nothing && named_early !== nothing && !(named_early isa GlobalRef)
+            called_func = named_early
             if called_func === ctx.func_ref
                 # Also check arity — overloaded methods share the same function
                 # object but have different specTypes. A call to a different overload is NOT
@@ -1422,9 +1412,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
     closure_self_to_push = nothing   # 453393ca4ba4: see below
     if ctx.func_registry !== nothing && !is_self_call_early
         called_func_early = nothing
-        if actual_func_ref_early isa GlobalRef
-            called_func_early = isdefined(actual_func_ref_early.mod, actual_func_ref_early.name) ?
-                getfield(actual_func_ref_early.mod, actual_func_ref_early.name) : nothing
+        if named_early !== nothing
+            called_func_early = named_early isa GlobalRef ? nothing : named_early   # unbound: nothing
         elseif actual_func_ref_early isa Function
             # func_ref can be a Function object directly (default-arg methods)
             called_func_early = actual_func_ref_early
@@ -1470,7 +1459,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
                 " ti_early=", target_info_early !== nothing)
     if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
-       actual_func_ref_early !== nothing && !(actual_func_ref_early isa GlobalRef)
+       actual_func_ref_early !== nothing && named_early === nothing
         ft_early = infer_value_type(actual_func_ref_early, ctx)
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
@@ -1567,12 +1556,12 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
 
         # Check if this is a nothing argument that needs ref.null
         # Also check PiNode with typ === Nothing (Union dispatch pattern)
-        is_nothing_arg = arg === nothing ||
-                        (arg isa GlobalRef && arg.name === :nothing) ||
-                        (arg isa Core.SSAValue && begin
-                            ssa_stmt = ctx.code_info.code[arg.id]
-                            (ssa_stmt isa GlobalRef && ssa_stmt.name === :nothing) ||
-                            (ssa_stmt isa Core.PiNode && ssa_stmt.typ === Nothing)
+        is_nothing_arg = nir_const(arg) === nothing ||
+                        (arg isa NirGlobalRef && arg.name === :nothing) ||
+                        (arg isa NirSSA && begin
+                            local def = _ssa_def(arg, ctx)
+                            (def isa NirGlobalRef && def.name === :nothing) ||
+                            (def isa NirPi && def.typ === Nothing)
                         end)
 
         # Also check if param_types expects Nothing (Union dispatch to different signatures)
@@ -1693,19 +1682,13 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
         if meth isa Method
             name = meth.name
 
-            # Check if this is a self-recursive call
-            # The second argument of invoke is the function reference
-            # It can be a GlobalRef directly, or an SSA value that points to a GlobalRef
-            func_ref = expr.args[2]
-
-            # If func_ref is an SSA value, try to resolve it to the underlying GlobalRef
-            actual_func_ref = func_ref
-            if func_ref isa Core.SSAValue
-                ssa_stmt = ctx.code_info.code[func_ref.id]
-                if ssa_stmt isa GlobalRef
-                    actual_func_ref = ssa_stmt
-                end
-            elseif func_ref isa Core.Argument
+            # Check if this is a self-recursive call: the invoked function is the one
+            # the callee names through a global (directly or through an SSA alias), else
+            # the callee's own constant, else a parameter's singleton instance.
+            func_ref = node.callee
+            named = _invoke_named_callee(func_ref, ctx; through_pi=false)
+            actual_func_ref = named !== nothing ? named : nir_const(func_ref)
+            if named === nothing && func_ref isa NirArgument
                 # Higher-order function calls (e.g., parse_Nary's `down(ps)`)
                 # func_ref is a function parameter. Extract actual function from mi.specTypes.
                 if mi isa Core.MethodInstance
@@ -1719,10 +1702,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             end
 
             is_self_call = false
-            if ctx.func_ref !== nothing && actual_func_ref isa GlobalRef &&
-               isdefined(actual_func_ref.mod, actual_func_ref.name)
-                # Check if this GlobalRef refers to the same function
-                    called_func = getfield(actual_func_ref.mod, actual_func_ref.name)
+            if ctx.func_ref !== nothing && named !== nothing && !(named isa GlobalRef)
+                # Check if this global refers to the same function
+                    called_func = named
                     if called_func === ctx.func_ref
                         # Check arity AND types for overloaded methods
                         if mi isa Core.MethodInstance
@@ -1740,7 +1722,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                             is_self_call = true
                         end
                     end
-            elseif ctx.func_ref !== nothing && actual_func_ref isa Function
+            elseif ctx.func_ref !== nothing && named === nothing && actual_func_ref isa Function
                 # Function object direct comparison
                 if actual_func_ref === ctx.func_ref
                     # Check arity AND types for overloaded methods
@@ -1768,9 +1750,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             if ctx.func_registry !== nothing && !is_self_call && !_skip_cross_call
                 # Try to find this function in our registry
                 called_func = nothing
-                if actual_func_ref isa GlobalRef
-                    called_func = isdefined(actual_func_ref.mod, actual_func_ref.name) ?
-                        getfield(actual_func_ref.mod, actual_func_ref.name) : nothing
+                if named !== nothing
+                    called_func = named isa GlobalRef ? nothing : named   # unbound: nothing
                 elseif actual_func_ref isa DataType || actual_func_ref isa UnionAll
                     # For constructor calls, the func_ref might be the type directly
                     called_func = actual_func_ref
@@ -1778,7 +1759,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     # For default-arg methods, func_ref can be a Function object
                     # (e.g., typeof(next_token) for next_token(lexer, true))
                     called_func = actual_func_ref
-                elseif actual_func_ref isa Core.Argument && mi isa Core.MethodInstance
+                elseif actual_func_ref isa NirArgument && mi isa Core.MethodInstance
                     # Fallback for Core.Argument — extract from mi.specTypes
                     spec = mi.specTypes
                     if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
@@ -1863,7 +1844,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                                         # Function returns externref, local expects anyref
                                         any_convert_extern!(bcc)
                                     end
-                                elseif target_local_type === ExternRef && func_ref isa Core.Argument
+                                elseif target_local_type === ExternRef && func_ref isa NirArgument
                                     # Higher-order call returns concrete ref but local expects externref
                                     # (SSA type is Any because the function parameter is generic)
                                     # But if the callee already returns externref, skip —
@@ -1933,7 +1914,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
             # correctly this way); `:standalone` pushes its own inputs and IS the result.
             elseif (local _invoke_reg_entry = get(INVOKE_INTRINSICS, meth, nothing)) !== nothing &&
                    (local _invoke_reg_result = (_invoke_reg_entry.mode === :append ?
-                        _invoke_reg_entry.fn(args, ctx) : _invoke_reg_entry.fn(args, ctx, idx, expr))) !== nothing
+                        _invoke_reg_entry.fn(args, ctx) : _invoke_reg_entry.fn(args, ctx, idx, node))) !== nothing
                 if _invoke_reg_entry.mode === :append
                     append_builder!(fb, _invoke_reg_result)
                 else
@@ -1949,8 +1930,8 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
 
                 # Drop the closure object from the stack if it's there
-                func_ref = expr.args[2]
-                if func_ref isa Core.SSAValue
+                func_ref = node.callee
+                if func_ref isa NirSSA
                     if !haskey(ctx.ssa_locals, func_ref.id) && !haskey(ctx.phi_locals, func_ref.id)
                         bgrd = _ctx_builder(ctx, "compile_invoke")
                         drop!(bgrd)
@@ -1962,11 +1943,9 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 # The closure's first captured field is the vector
                 vec_arg = nothing
                 vec_julia_type = nothing
-                if func_ref isa Core.SSAValue
-                    new_stmt = ctx.code_info.code[func_ref.id]
-                    if new_stmt isa Expr && new_stmt.head === :new && length(new_stmt.args) >= 2
-                        vec_arg = new_stmt.args[2]  # First captured field = vector
-                    end
+                local new_def = _ssa_def(func_ref, ctx)
+                if new_def isa NirNew && !isempty(new_def.operands)
+                    vec_arg = new_def.operands[1]  # First captured field = vector
                 end
 
                 # Get the vector Julia type from the closure type's first field
@@ -2065,7 +2044,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                     bgrf = _ctx_builder(ctx, "compile_invoke")
                     record_unsupported!(ctx, :unsupported_method,
                                         "vector op: element type undeterminable";
-                                        idx=idx, detail=expr)
+                                        idx=idx, detail=node)
                     unreachable!(bgrf)  # structural trap after recorded unsupported
                     append_builder!(fb, bgrf)
                     ctx.last_stmt_was_stub = true
@@ -2160,7 +2139,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 else
                     # Registration failed — codegen cannot lay out this struct type.
                     record_unsupported!(ctx, :unsupported_type,
-                        "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=expr)
+                        "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=node)
                     bscnf = _ctx_builder(ctx, "compile_invoke")
                     record_unsupported!(ctx, :unsupported_method, "struct type registration failed (cannot lay out)"; idx=idx)
                     unreachable!(bscnf)
@@ -2178,7 +2157,7 @@ function compile_invoke!(b::InstrBuilder, expr::Expr, idx::Int, ctx::AbstractCom
                 tracing(:stubargs) && println(stderr, "STUBARGS ", name, " args=", repr(args))
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
-                    idx=idx, detail=expr)
+                    idx=idx, detail=node)
                 bunk = _ctx_builder(ctx, "compile_invoke")
                 record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx)
                 unreachable!(bunk)

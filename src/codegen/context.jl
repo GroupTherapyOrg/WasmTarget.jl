@@ -873,15 +873,11 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext)
     # flow generator may insert block boundaries between the SSA definition and its use.
     for rec in nir
         node = rec.node
-        if rec.slot > 0
-            # An assignment into a slot reads its right-hand side directly
-            node isa NirSSA && push!(needs_local_set, node.id)
-        elseif _nir_from_expr(node)
-            # All SSA values an expression reads directly need locals
-            for arg in nir_expr_operands(node)
-                arg isa NirSSA && push!(needs_local_set, arg.id)
-            end
-        elseif node isa NirReturn && node.value isa NirSSA
+        # All SSA values a statement lists directly need locals
+        for arg in nir_direct_operands(rec)
+            arg isa NirSSA && push!(needs_local_set, arg.id)
+        end
+        if node isa NirReturn && node.value isa NirSSA
             push!(needs_local_set, node.value.id)
         elseif node isa NirGotoIfNot && node.cond isa NirSSA
             push!(needs_local_set, node.cond.id)
@@ -1441,7 +1437,7 @@ Count the SSA uses one statement makes: every SSA operand an expression reads (i
 callee included), a return's value, a branch condition, a phi's incoming values and a pi's
 source. A statement that is itself an SSA value (or a slot assigned from one) is a use.
 """
-function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})
+function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})::Nothing
     _count(x) = (x isa NirSSA && (uses[x.id] = get(uses, x.id, 0) + 1); nothing)
     node = rec.node
     if node isa NirPhi

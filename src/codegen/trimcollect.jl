@@ -405,16 +405,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 end
             end
             isempty(operands) && continue
+            # (a singleton-typed function argument arrives already resolved to its
+            # instance — the NIR boundary's one callee resolution)
             local g = _nir_callee_object(node.callee)
-            if node.callee isa NirArgument
-                # a function value passed as a parameter with a SINGLETON type
-                # (`mapreduce_first(f::typeof(length), …)`'s `f(x)`) is statically that
-                # function; the same resolution calls.jl makes at the call site
-                local _ct = (node.callee.n >= 1 && node.callee.n <= length(hparams)) ?
-                            hparams[node.callee.n] : Any
-                (_ct isa DataType && Base.issingletontype(_ct) && _ct <: Function) || continue
-                g = _ct.instance
-            end
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             # Resolve arg types from the optimized IR.
             cargs = operands
