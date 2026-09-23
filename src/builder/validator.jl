@@ -68,6 +68,7 @@ mutable struct WasmStackValidator
     context_hint::String   # the emitting Julia statement (set via set_context!)
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
 WasmStackValidator(; func_name="", mod=nothing) =
     WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "")
 
@@ -420,6 +421,7 @@ it ends. Mirrors dart2wasm's `_pushLabel(Block(...))` / `_pushLabel(Loop(...))`.
 
 For loops, `br` targets the loop start (no values consumed/produced by br).
 For blocks, `br` targets the block end (must have result_types on stack).
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:695 InstructionsBuilder._pushLabel)
 """
 validate_block_start!(v::WasmStackValidator, kind::Symbol,
                       result_types::Vector{WasmValType}=WasmValType[]) =
