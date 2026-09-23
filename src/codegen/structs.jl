@@ -169,6 +169,9 @@ Check if a type is self-referential (has fields that reference itself).
 function is_self_referential_type(T::DataType)::Bool
     for i in 1:fieldcount(T)
         ft = fieldtype(T, i)
+        # A Union{}-typed field (e.g. Pair{Symbol,Union{}}) holds no value, so it references
+        # nothing — and Union{} <: AbstractVector would send it to eltype, which has none.
+        ft === Union{} && continue
         ft === T && return true
         # Check nullable fields (Union{Nothing, T})
         if ft isa Union
