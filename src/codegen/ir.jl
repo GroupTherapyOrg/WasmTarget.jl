@@ -3,15 +3,6 @@
 
 export get_typed_ir
 
-"""
-    get_typed_ir(f, arg_types)
-
-Get Julia's typed IR (SSA form) for a function with given argument types.
-Returns the CodeInfo object from code_typed.
-P5-trim: when a trim collection is active (compile_module discovery=:trim),
-every (f, arg_types) the pipeline asks about is served the collection's
-PAIRED CodeInfo — one consistent world, overlays applied, no re-inference.
-"""
 const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}}(nothing)
 
 # ONE inference path. Every typed IR WasmTarget consumes comes from the
@@ -21,6 +12,17 @@ const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
 # a standalone dump differed from the plan's IR for the same function — hiding
 # a branch the plan compiled.) `interp` exists to share one instance within a
 # compilation; it is never a different kind of interpreter.
+"""
+    get_typed_ir(f, arg_types)
+
+Get Julia's typed IR (SSA form) for a function with given argument types.
+Returns the CodeInfo object from code_typed.
+P5-trim: when a trim collection is active (compile_module discovery=:trim),
+every (f, arg_types) the pipeline asks about is served the collection's
+PAIRED CodeInfo — one consistent world, overlays applied, no re-inference.
+parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm
+receives Kernel already built by the CFE.)
+"""
 function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
                       interp::WasmInterpreter=get_wasm_interpreter())::Tuple{Core.CodeInfo, Any}
     cache = TRIM_IR_CACHE[]
@@ -45,6 +47,7 @@ end
 The same one path for a full signature (function type first), as a closure body reached
 through an `invoke`'s `MethodInstance.specTypes` is: every match, inferred by the
 WasmInterpreter.
+parity(quarantine: Julia's typed IR for a full signature, asked of Julia's own inference.)
 """
 function get_typed_ir(sig::Type{<:Tuple}; optimize::Bool=true,
                       interp::WasmInterpreter=get_wasm_interpreter())::Vector
@@ -56,6 +59,8 @@ end
 
 The return type of `f(::argtypes...)` under the one inference path (overlays applied): the
 question a box-capture join asks about a write's value. `Any` when inference fails.
+parity(quarantine: a return-type query to Julia's own inference; dart reads a member's return
+type off its Kernel FunctionNode.)
 """
 function infer_return_type(@nospecialize(f), argtypes::Tuple;
                            interp::WasmInterpreter=get_wasm_interpreter())::Type
@@ -66,12 +71,52 @@ function infer_return_type(@nospecialize(f), argtypes::Tuple;
     end
 end
 
+# parity(quarantine: Julia's IR node types — Expr, SSAValue, PhiNode, … — which a CodeInfo holds
+# as literal operands but which are IR structure, never program values.)
+const _IR_META_TYPES = Set{DataType}([
+    Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.PhiNode, Core.PhiCNode,
+    Core.UpsilonNode, Core.GotoNode, Core.GotoIfNot, Core.ReturnNode, LineNumberNode,
+    Core.NewvarNode, Core.SlotNumber, Core.MethodInstance, Core.CodeInstance, Core.CodeInfo,
+])
+
+"""
+    _collector_static_type(arg, code_info) -> Type
+
+A static, `ctx`-free echo of `infer_value_type` (context.jl) for the branches that
+don't need one — used ONLY to reconstruct the composite type `_lower_tuple!` (the ONE
+`Core.tuple` lowering) will give a `Core.tuple(...)` call's RESULT, so the collector can
+admit that exact composite. SSAValue/Argument read the raw (unrefined) ssa/slot type,
+which is what `ctx.ssa_types`/`ctx.arg_types` are themselves seeded from.
+"""
+function _collector_static_type(@nospecialize(arg), code_info)::Type
+    v = arg isa QuoteNode ? arg.value : arg
+    if v isa Core.SSAValue
+        ssats = code_info.ssavaluetypes
+        return (ssats isa Vector && 1 <= v.id <= length(ssats)) ?
+               Core.Compiler.widenconst(ssats[v.id]) : Any
+    elseif v isa Core.Argument
+        slots = code_info.slottypes
+        return (slots isa Vector && 1 <= v.n <= length(slots)) ?
+               Core.Compiler.widenconst(slots[v.n]) : Any
+    elseif v isa GlobalRef
+        (isdefined(v.mod, v.name) && isconst(v.mod, v.name)) || return Any
+        gv = getfield(v.mod, v.name)
+        return gv isa Type ? Type{gv} : typeof(gv)
+    elseif v isa Type
+        return Type{v}
+    elseif v === nothing
+        return Nothing
+    else
+        return typeof(v)
+    end
+end
+
 """
     _collect_reachable_ir_types(function_data) -> Set{DataType}
 
-Phase 12B — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
-ClassIdNumbering numbers every class of the component ONCE, before codegen, with no
-second pass). Walks every function's typed-IR ssa/arg/return types and decomposes
+Phase 12B — the CLOSED-WORLD type collector (dart class_info.dart:864
+ClassIdNumbering._number numbers every class of the component ONCE, before codegen, with
+no second pass). Walks every function's typed-IR ssa/arg/return types and decomposes
 Unions, returning EVERY concrete kind reachable from the IR that can carry a classId —
 structs, closures, `Core.Box`, and primitives (`Char`, `Int128`, a user `primitive
 type`, …) — so `assign_type_ids!` numbers the whole world in one DFS and
@@ -116,45 +161,9 @@ registered struct's OWN field types (a Tuple's own elements included): a field c
 itself be a concrete kind that needs a classId nobody else names — e.g. a closure
 struct's captured predicate field `f::typeof(iseven)` — so it is not reachable via any
 ssa/arg/slot type on its own.
+parity(class_info.dart:864 ClassIdNumbering._number): the class set the numbering walks, gathered
+before any id is assigned.
 """
-const _IR_META_TYPES = Set{DataType}([
-    Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.PhiNode, Core.PhiCNode,
-    Core.UpsilonNode, Core.GotoNode, Core.GotoIfNot, Core.ReturnNode, LineNumberNode,
-    Core.NewvarNode, Core.SlotNumber, Core.MethodInstance, Core.CodeInstance, Core.CodeInfo,
-])
-
-"""
-    _collector_static_type(arg, code_info) -> Type
-
-A static, `ctx`-free echo of `infer_value_type` (context.jl) for the branches that
-don't need one — used ONLY to reconstruct the composite type `_lower_tuple!` (the ONE
-`Core.tuple` lowering) will give a `Core.tuple(...)` call's RESULT, so the collector can
-admit that exact composite. SSAValue/Argument read the raw (unrefined) ssa/slot type,
-which is what `ctx.ssa_types`/`ctx.arg_types` are themselves seeded from.
-"""
-function _collector_static_type(@nospecialize(arg), code_info)::Type
-    v = arg isa QuoteNode ? arg.value : arg
-    if v isa Core.SSAValue
-        ssats = code_info.ssavaluetypes
-        return (ssats isa Vector && 1 <= v.id <= length(ssats)) ?
-               Core.Compiler.widenconst(ssats[v.id]) : Any
-    elseif v isa Core.Argument
-        slots = code_info.slottypes
-        return (slots isa Vector && 1 <= v.n <= length(slots)) ?
-               Core.Compiler.widenconst(slots[v.n]) : Any
-    elseif v isa GlobalRef
-        (isdefined(v.mod, v.name) && isconst(v.mod, v.name)) || return Any
-        gv = getfield(v.mod, v.name)
-        return gv isa Type ? Type{gv} : typeof(gv)
-    elseif v isa Type
-        return Type{v}
-    elseif v === nothing
-        return Nothing
-    else
-        return typeof(v)
-    end
-end
-
 function _collect_reachable_ir_types(function_data)::Set{DataType}
     out = Set{DataType}()
     seen = Set{Any}()
@@ -263,6 +272,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
     return out
 end
 
+# parity(quarantine: the memo of Julia's host-layout reads, per specialization.)
+const _IR_LAYOUT_READ_MEMO = IdDict{Any, Bool}()
 """
     ir_reads_host_layout(ci::Core.CodeInstance) -> Bool
 
@@ -274,8 +285,9 @@ Reads the CodeInstance's own `inferred` source (the result of the inference that
 ran — never a nested inference from inside an eligibility query); memoized per
 specialization; a CodeInstance without retained source, or a chain deeper than six
 invokes, counts as a read (never fold blind).
+parity(quarantine: whether a Julia specialization reads the host's `DataType.layout`, `sizeof` or
+a foreigncall — Julia's concrete evaluation would otherwise fold a host answer into the module.)
 """
-const _IR_LAYOUT_READ_MEMO = IdDict{Any, Bool}()
 function ir_reads_host_layout(ci::Core.CodeInstance, depth::Int=0)::Bool
     depth > 6 && return true
     local mi = ci.def
