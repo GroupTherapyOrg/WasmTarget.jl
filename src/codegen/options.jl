@@ -55,4 +55,4 @@ const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
 Is trace point `s` active in the current [`OPTIONS`](@ref)? dart's `watchPoints`
 analogue.
 """
-tracing(s::Symbol) = s in OPTIONS[].trace
+tracing(s::Symbol)::Bool = s in OPTIONS[].trace

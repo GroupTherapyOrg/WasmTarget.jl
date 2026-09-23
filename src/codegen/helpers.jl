@@ -96,5 +96,5 @@ end
 # (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
 # parity(quarantine: SSAValue/Argument/SlotNumber/PiNode are Julia IR node kinds with no
 # Kernel counterpart — Kernel is an expression tree whose operands are nodes, not references.)
-is_runtime_ir_value(x) = x isa Core.SSAValue || x isa Core.Argument ||
+is_runtime_ir_value(x)::Bool = x isa Core.SSAValue || x isa Core.Argument ||
                          x isa Core.SlotNumber || x isa Core.PiNode
