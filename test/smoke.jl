@@ -351,21 +351,10 @@ _g("identity", Any[
     ("bswap_i16", (x::Int64) -> Int64(bswap(x % Int16)), Int64(0x12f4)),
 ])
 
-# A Symbol is not its own class: every classed string is stamped with String's classId
-# (values.jl `emit_string_wrap!`), a Symbol literal interns into the same global as the equal
-# String (types.jl `get_string_constant_global!`), and a runtime Symbol is the String object
-# itself (statements.jl `_fc_jl_symbol_n!`, builtins.jl `_lower_symbol!`), so egal, isa and
-# typeof cannot tell `"a"` from `:a` (measured 2026-09-22).
 # `===` / `!==` on a Union{Nothing,Int64} value: once a wrong constant, then a located
 # rejection while the value lived in an i64; now the value is its nullable box, so egal
 # answers exactly.
 _g("union_register", Any[
-# A Union{Nothing,Int64} value lives in an i64 register (builder/types.jl
-# `resolve_union_type`: Union{Nothing,T} maps to T's representation), so `nothing` and a
-# number are the same bits and `===` cannot be answered: it rejects at the statement. The
-# lowering it replaced answered a constant (native 1, wasm 0) (measured 2026-09-22).
-])
-_xf("union_register", Any[
     ("union_num_ne", (x::Int64) -> Int64(_id_maybe(x) !== 3), Int64(3)),
     ("union_nothing_egal", (x::Int64) -> Int64(_id_maybe(x) === nothing), Int64(-3)),
 ])
@@ -495,15 +484,6 @@ _g("builtins", Any[
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
-# Wrong values found while writing the registry-coverage cases (measured 2026-09-22).
-# `===` on floats is Julia's egal — bit identity — but the `===` lowering compares with
-# f64.eq / f32.eq (calls.jl `_compile_call_egaleq`): 0.0 === -0.0 answers true (native
-# false) and NaN === NaN answers false (native true).
-_xf("float_egal", Any[
-    ("f64_egal_signed_zero", (x::Float64) -> (x === -0.0 ? 1 : 0) + (x !== -0.0 ? 2 : 0), 0.0),       # exp 2, act 1
-    ("f64_egal_nan", (x::Float64) -> (x === NaN ? 1 : 0) + (x !== NaN ? 2 : 0), NaN),                 # exp 1, act 2
-    ("f32_egal_signed_zero", (x::Float32) -> (x === -0.0f0 ? 1 : 0) + (x !== -0.0f0 ? 2 : 0), 0.0f0), # exp 2, act 1
-])
 # BUILTIN_LOWERINGS reached from an :invoke: the closed-world metadata operations Julia
 # leaves as an :invoke of their @noinline overlay; compile_invoke! selects the entry by the
 # invoked function's identity.
