@@ -638,6 +638,8 @@ _g("overlays", Any[
     ("uppercasefirst_nonascii", (n::Int64) -> Int64(uppercasefirst(n > 0 ? "élan" : "x") == "Élan"), Int64(1)),
     ("lowercasefirst_nonascii", (n::Int64) -> Int64(lowercasefirst(n > 0 ? "ÉLAN" : "x") == "éLAN"), Int64(1)),
     ("uppercase_string_sharp_s", (n::Int64) -> ncodeunits(uppercase(n > 0 ? "straße λ" : "x")), Int64(1)),
+    # an always-taken `@inbounds` boundscheck branch carries its target's phi values
+    ("inbounds_isvalid_substring", (i::Int64) -> Int64(@inbounds isvalid(SubString(i > 0 ? " ab,c " : "xyz", 2, 5), i)), Int64(1)),
 ])
 
 # ============================================================================

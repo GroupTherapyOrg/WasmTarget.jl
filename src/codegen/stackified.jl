@@ -1289,6 +1289,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if terminator_idx in boundscheck_jumps && term isa NirGotoIfNot
             # This is an always-jump - emit unconditional br to the target
             dest_block = get(stmt_to_block, term.target, nothing)
+            # Its edge carries the target's phi values exactly as a GotoNode's does
+            # (a forward jump or fall-through that skipped this store left the phi
+            # local at its default: `@inbounds isvalid(::SubString{String}, i)`
+            # returned false).
+            if dest_block !== nothing && dest_block > block_idx &&
+               !(dest_block in duplicated_terminal_targets)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+            end
             if dest_block !== nothing && dest_block in duplicated_terminal_targets
                 emit_duplicated_terminal!(b, dest_block)
             elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
