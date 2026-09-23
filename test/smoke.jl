@@ -628,8 +628,23 @@ _g("memory", Any[
 # _deletebeg! advanced it to 3. The lowering reads the offset WT's MemoryRef carries — a
 # ref with an offset cannot be stored (it rejects loudly) — so the gap is the overlay:
 # Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
-_xf("memoryref_offset_after_popfirst", Any[
+# pushfirst! (Julia's offset 6, WT's 1) and a push!/popfirst! queue (5, WT's 1) are the
+# same gap.
+_xf("memoryref_offset", Any[
     ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
+    ("pushfirst_len_offset", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 0); length(v) * 10 + Base.memoryrefoffset(v.ref)), Int64(5)),
+    ("queue_push_popfirst", (n::Int64) -> (v = collect(1:n); s = 0; for i in 1:40; push!(v, i); s += popfirst!(v); end; (Base.memoryrefoffset(v.ref) * 100 + length(v.ref.mem)) * 1000 + s), Int64(5)),
+])
+# The same Vectors observed through their elements: the overlays already compute these, and
+# they must keep computing them once Julia's own growth bodies (which move the ref's offset)
+# replace the overlays. Native values are identical on 1.12 and 1.13. The last case is the
+# freed slot Julia's `_deleteend!` nulls.
+_g("memoryref_offset", Any[
+    ("resize_grow_write", (n::Int64) -> (v = collect(1:n); resize!(v, 3n); v[3n] = 7; v[3n] + length(v)), Int64(5)),
+    ("push_view_sum", (n::Int64) -> (v = Int64[]; for i in 1:n; push!(v, i); end; sum(view(v, 3:n))), Int64(12)),
+    ("string_after_popfirst", (n::Int64) -> (v = UInt8[0x61, 0x62, 0x63, 0x64]; popfirst!(v); s = String(v); ncodeunits(s) * 1000 + Int64(codeunit(s, n))), Int64(1)),
+    ("reshape_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); m = reshape(v, 2, 2); Int64(pointer(m) == pointer(v)) * 100 + m[2, 2]), Int64(6)),
+    ("any_resize_isassigned", (n::Int64) -> (v = Any[1, 2, n]; resize!(v, 2); resize!(v, 3); Int64(isassigned(v, 3))), Int64(3)),
 ])
 # ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
 # Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
