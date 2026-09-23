@@ -579,6 +579,28 @@ _xf("erased_arithmetic", Any[
     ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),
 ])
 
+@noinline _sm_bump!(f) = f()
+function _sm_boxlit(n::Int64)
+    s = 0
+    g = () -> (s += 1)
+    _sm_bump!(g); _sm_bump!(g)
+    x = n > 0 ? s : 0.5
+    return x isa Float64 ? 1 : 2
+end
+# TLC findings against box_capture.jl's type recovery (dev/formal/NumericJoin.tla,
+# BoxValueTypes.tla). propagate_numeric_value_types seeds an accumulator phi from its literal
+# operand and never revisits it: `s = 0; s += 0.5` types the phi Int64 while it carries
+# Float64 (compiling fails "expected I64, found F64" at the `+`). Its VERIFY drops a phi
+# but keeps what was typed through it: `q = p + 1` stays Int64 after `p = phi(v[1], 0)` is
+# dropped, and the wasm traps "illegal cast" where native returns 2.5. f3_box_value_types
+# skips a literal phi operand: `x = n > 0 ? s : 0.5` over an Int64 box is typed Int64
+# (today compiling rejects earlier, at the closure's `s += 1`). Native 1, 2, 1 on 1.12/1.13.
+_xf("box_type_recovery", Any[
+    ("numeric_join_seeded_phi", (n::Int64) -> (s = 0; foreach(i -> (s += 0.5), 1:n); s isa Float64 ? 1 : 2), Int64(4)),
+    ("numeric_join_dropped_phi", (n::Int64) -> (v = Any[1.5]; p = n > 0 ? v[1] : 0; q = p + 1; q isa Int64 ? 1 : 2), Int64(1)),
+    ("box_value_literal_phi", _sm_boxlit, Int64(0)),
+])
+
 # BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
 # (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
 # false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
