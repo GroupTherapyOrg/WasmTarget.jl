@@ -77,6 +77,10 @@ end
 """
 Find try/catch regions by scanning for try-region entries (`Core.EnterNode`).
 Returns a list of TryRegion structs.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode and a later :leave
+naming it, where Kernel has a structured TryCatch node; this scan pairs them into the
+TryRegion the stackifier nests into try_table.)
 """
 function find_try_regions(nir::Vector{NirStmt})::Vector{TryRegion}
     regions = TryRegion[]
@@ -121,6 +125,11 @@ Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reach
 from entry.  This is the sole condition under which an unsupported lowering may be
 kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
 (including exception-bearing CFGs) is reachable for soundness purposes.
+
+parity(quarantine: Julia's typed IR is a goto CFG that can keep blocks no edge reaches, and a
+trap is sound only in such a block; dart's TFA removes unreachable members before codegen
+(code_generator.dart:5084 UnreachableCodeGenerator), so Kernel code never needs a statement
+reachability proof.)
 """
 function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
     1 <= idx <= length(nir) || return false
