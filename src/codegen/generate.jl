@@ -177,7 +177,7 @@ end
 Analyze the IR to find basic block boundaries.
 A new block starts after each terminator AND at each jump target.
 """
-function analyze_blocks(code)
+function analyze_blocks(code)::Vector{BasicBlock}
     # First, collect all jump targets
     jump_targets = Set{Int}()
     for stmt in code
@@ -223,7 +223,7 @@ Find merge points - targets of multiple forward jumps.
 These are blocks that need WASM block/br structure for proper control flow.
 Returns a Dict mapping target index to list of source indices.
 """
-function find_merge_points(code)
+function find_merge_points(code)::Dict{Int, Vector{Int}}
     # Track all forward jump targets
     forward_targets = Dict{Int, Vector{Int}}()
 
@@ -281,7 +281,7 @@ Ensure module has exception tag 0 for Julia exceptions (idempotent)
 Also ensures the \$current_exn global exists for exception value stashing.
 parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 """
-function ensure_exception_tag!(mod::WasmModule)
+function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
