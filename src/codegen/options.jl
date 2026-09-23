@@ -33,6 +33,9 @@ The only place ENV is read for compiler debug switches. `WT_TRACE` is a
 comma-separated list of trace points (`mm`, `strarg`, `closure`, `cc`,
 `stubargs`, `retcompat`, `condstub`, `deadval`) replacing the eight ad-hoc
 `WT_TRACE_*`/`WT_DBG_*` variables it consolidates.
+
+parity(dart2wasm.dart:251 parseArguments): the options object is built once from the
+invocation (dart's command line, WasmTarget's environment).
 """
 function options_from_env()::CompilerOptions
     trace = Set{Symbol}(Symbol(s) for s in split(get(ENV, "WT_TRACE", ""), ',') if !isempty(s))
