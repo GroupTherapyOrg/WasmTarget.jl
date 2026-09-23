@@ -462,7 +462,9 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
         ok = try
             Base.run(pipeline(`$(wasm_tools) validate --features=gc $(p)`, stdout=devnull, stderr=err))
             true
-        catch
+        catch e
+            # A nonzero exit is the validator's rejection; a failure to run it is not.
+            e isa ProcessFailedException || rethrow()
             false
         end
         if !ok
@@ -483,8 +485,8 @@ end
 # runtime (Julia's global codegen lock serializes it, so threads can't hide it).
 # Exercising representative signatures HERE bakes those compiler method instances
 # into the `.ji` cache — the warmup is paid once at `]precompile` and is ~free on
-# every cached run. Compile-only (no Node, no binaryen). Each call is guarded so a
-# value-stub on some path can never break precompilation.
+# every cached run. Compile-only (no Node, no binaryen). Every signature here
+# compiles; a rejection or codegen error fails precompilation, naming its site.
 # parity-region(quarantine: Julia compiles a method instance at its first call, so WasmTarget's own codegen pays JIT latency unless a PrecompileTools workload bakes those instances into the package image; dart2wasm runs as an AOT snapshot)
 struct _PCStruct; a::Int32; b::Float64; end
 _pc_iadd(x::Int64)            = x + Int64(1)
@@ -523,7 +525,7 @@ _pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3]
             (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
             (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
         )
-            try; compile(f, ts; validate=false); catch; end
+            compile(f, ts; validate=false)
         end
     end
 end
