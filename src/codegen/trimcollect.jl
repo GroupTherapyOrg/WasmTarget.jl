@@ -43,13 +43,56 @@
     return T
 end
 
+"""
+    _apply_iterate_vararg_target_mi(node, slot_types, lookup_table) -> MethodInstance | nothing
+
+THE call edge of `Core._apply_iterate(iterate, f, t)` when `t` is a runtime-length
+Vararg tuple — the one splat shape calls.jl lowers to a DIRECT call
+(`_emit_apply_iterate_vararg_call!`).
+
+parity(quarantine: Julia varargs — dart has no runtime-length parameter list, so every
+dart call site names a static arity and dart2wasm has no counterpart to this edge).
+
+It is a static edge: `f` is named right there in the call, and `t`'s
+`{Object, data, size}` representation IS the callee's one packed parameter. But it
+wears a builtin's clothes, so Julia's own collector does not see it. Both of this
+file's walks (the missing-invoke enrollment and the reachability walk) consult this ONE
+resolver — enrolling the callee without also walking the edge would let the pruner drop
+it straight back out. The container's type is its operand's NIR type (`slot_types` types
+an argument operand).
+
+`nothing` unless every condition holds: the callee resolves to an ordinary function
+(never a builtin/intrinsic — those have no compiled body), the container carries the one
+representable layout (`is_runtime_vararg_tuple_type`, structs.jl), and EXACTLY ONE
+method answers the open-ended signature. An arity-overloaded callee has no single static
+target and stays a loud reject at the call site.
+"""
+function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type},
+                                         lookup_table)::Union{Core.MethodInstance,Nothing}
+    (node.callee === Core._apply_iterate && length(node.operands) == 3) || return nothing
+    local fref = node.operands[2]
+    local f = fref isa NirGlobalRef ? (fref.bound ? fref.value : fref) : nir_const(fref)
+    (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction)) || return nothing
+    local t = node.operands[3]
+    local T = t isa NirSSA ? t.julia_type :
+              t isa NirArgument ? (1 <= t.n <= length(slot_types) ? slot_types[t.n] : Any) :
+              t isa NirGlobalRef ? ((t.bound && isconst(t.mod, t.name)) ?
+                                    (t.value isa Type ? Type{t.value} : typeof(t.value)) : Any) :
+              t isa NirLiteral ? (t.value isa Type ? Type{t.value} : typeof(t.value)) : Any
+    (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
+    local sig = Tuple{Core.Typeof(f), Vararg{vararg_tuple_eltype(T)}}
+    local matches = CC.findall(sig, lookup_table; limit=-1)
+    (matches !== nothing && length(matches) == 1) || return nothing
+    return CC.specialize_method(matches[1])
+end
+
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                       superseded::Set{Any}, protected::Set{Any}=Set{Any}())
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
-    ir_arg_type = function(node, src, nir)
+    ir_arg_type = function(node, src, nir, slot_types)
         joins = get!(numeric_types, src) do
             propagate_numeric_value_types(nir)
         end
@@ -57,9 +100,8 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
             joins[node.id]
         elseif node isa NirSSA
             node.julia_type
-        elseif node isa NirArgument && src.slottypes isa Vector &&
-               1 <= node.n <= length(src.slottypes)
-            src.slottypes[node.n]
+        elseif node isa NirArgument && 1 <= node.n <= length(slot_types)
+            slot_types[node.n]
         elseif node isa NirGlobalRef && node.bound
             Core.Const(node.value)
         elseif node isa NirLiteral
@@ -79,6 +121,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
         nir = build_nir(src)
+        src_slot_types = nir_slot_types(src)
         for (k, s) in enumerate(nir)
             local node = s.node
             mi = nothing
@@ -91,7 +134,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 # compiler would for an ordinary specialized call.
                 if mi isa Core.MethodInstance && node.callee !== nothing
                     f = node.callee isa NirLiteral ? node.callee.value : node.callee
-                    arg_types = Any[ir_arg_type(a, src, nir) for a in node.operands]
+                    arg_types = Any[ir_arg_type(a, src, nir, src_slot_types) for a in node.operands]
                     # Constructors are callable Type objects, not subtypes of
                     # Function. They participate in exactly the same overlay
                     # method-table lookup and concrete MethodInstance
@@ -144,7 +187,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     # Keep the optimized IR valid Julia while making its edge agree
                     # with the Wasm overlay dispatch selected for the concrete call.
                     # The superseded abstract/native subtree is pruned below.
-                    nir_retarget_invoke!(nir, k, mi)
+                    nir_retarget_invoke!(src, nir, k, mi)
                     original_mi in protected || push!(superseded, original_mi)
                 end
             elseif node isa NirCall && length(node.operands) >= 2 &&
@@ -175,7 +218,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 # a static call the collector cannot see, because it hides behind a
                 # builtin and no `:invoke` records it.
                 node isa NirCall || continue
-                mi = _apply_iterate_vararg_target_mi(s.raw, src, lookup_table)
+                mi = _apply_iterate_vararg_target_mi(node, src_slot_types, lookup_table)
                 mi === nothing && continue
             end
             mi isa Core.MethodInstance || continue
@@ -528,6 +571,7 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
         mi in external_leaves && continue
         pair = get(pairs, mi, nothing)
         pair === nothing && continue
+        local pair_slot_types = nir_slot_types(pair[2])
         for s in build_nir(pair[2])
             local node = s.node
             if node isa NirInvoke
@@ -537,7 +581,7 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
                 # runtime-Vararg splat's (_apply_iterate_vararg_target_mi, ir.jl) —
                 # otherwise the callee that _missing_explicit_invoke_mis enrolled is
                 # pruned right back out and the call site rejects a lowerable splat.
-                splat_mi = _apply_iterate_vararg_target_mi(s.raw, pair[2], lookup_table)
+                splat_mi = _apply_iterate_vararg_target_mi(node, pair_slot_types, lookup_table)
                 splat_mi === nothing || push!(queue, splat_mi)
             end
         end

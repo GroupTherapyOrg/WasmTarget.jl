@@ -109,7 +109,7 @@ end
     # Julia never converts float→int implicitly; a codegen type-chain defect that asks the
     # funnel for one must reject at the statement, never leave the value unconverted.
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
-    ctx = WasmTarget.CompilationContext(ci, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+    ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
     ctx.current_stmt_idx = 1
     b = WasmTarget._ctx_builder(ctx, "funnel_negative")
     WasmTarget.f64_const!(b, 1.5)
@@ -127,7 +127,7 @@ end
 @testset "diagnostics: the funnel rejects a cross-hierarchy ref pair and lands non-null abstract sinks (Coercion.tla)" begin
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
-        ctx = WasmTarget.CompilationContext(ci, (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+        ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "funnel_negative")
     end

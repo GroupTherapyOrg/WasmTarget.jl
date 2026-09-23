@@ -27,8 +27,7 @@ end
 Determine the Wasm type that a phi edge value will produce on the stack.
 Used to check compatibility before storing to a phi local.
 """
-function get_phi_edge_wasm_type(val, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
     # Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
     # These compile to i32_const 0 just like literal nothing
     if val isa NirGlobalRef && val.name === :nothing

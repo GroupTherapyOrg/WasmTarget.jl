@@ -82,7 +82,7 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
     return true
 end
 
-function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
+function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
                             _seen::Set{Int} = Set{Int}())
     # Walk through recognized storage-relative operations looking only for the
@@ -93,7 +93,7 @@ function _trace_memmove_ptr(arg, ctx::AbstractCompilationContext;
         _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
         return nothing
     end
-    cur = nir_node(ctx, arg)
+    cur = arg
     for _ in 1:48
         cur isa NirSSA || return _fail("non-ssa", cur)
         cur.id in _seen && return _fail("pointer-cycle", cur)
@@ -368,7 +368,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             local_array_idx = local_idx - ctx.n_params + 1
             if !(1 <= local_array_idx <= length(ctx.locals))
                 record_unsupported!(ctx, :unsupported_type,
-                    "PiNode local has no declared Wasm type"; idx=idx, detail=nir_value_raw(rec))
+                    "PiNode local has no declared Wasm type"; idx=idx, detail=rec.node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
@@ -378,7 +378,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             if length(value_builder.v.stack) != 1
                 record_unsupported!(ctx, :unsupported_type,
                     "PiNode source must emit exactly one value, emitted $(length(value_builder.v.stack))";
-                    idx=idx, detail=nir_value_raw(rec))
+                    idx=idx, detail=rec.node)
                 unreachable!(b)  # structural trap after recorded unsupported
                 ctx.last_stmt_was_stub = true
                 return b
@@ -409,7 +409,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             "GlobalRef $(_gr) is not defined in its source module"; idx=idx, detail=_gr,
             soundness_fatal=true)
         val = node.value
-        local _gv_b = _compile_value_b(val, ctx)
+        local _gv_b = _compile_value_b(NirLiteral(val), ctx)
         append_builder!(b, _gv_b)
         if haskey(ctx.ssa_locals, idx) && !isempty(_gv_b.v.stack)
             local_idx = ctx.ssa_locals[idx]
@@ -624,7 +624,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     if ctx.func_idx == 8
         local n_drops = count(i -> i isa InstrIR.Drop, b.instrs)
         if n_drops >= 2
-            @debug "STMT $idx has $n_drops DROPs: $(first(string(nir_value_raw(rec)), 80))"
+            @debug "STMT $idx has $n_drops DROPs: $(first(nir_text(rec), 80))"
         end
     end
 
@@ -1904,7 +1904,8 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
                 end
                 local _mmv_emit_off = (a, backing) -> begin
                     emit_value!(b, a, ctx, I64)
-                    local backing_type = infer_value_type(backing, ctx)
+                    # (the byte count has no backing object)
+                    local backing_type = backing === nothing ? Nothing : infer_value_type(backing, ctx)
                     if backing_type === String || backing_type === Symbol
                         i64_const!(b, 1)
                         num!(b, Opcode.I64_SUB)
@@ -2174,8 +2175,8 @@ Trace a pointerref argument back through add_ptr/sub_ptr to find a jl_string_ptr
 Returns (string_node, index_node) if found, or nothing if not a string pointer pattern.
 The index node is the offset argument to add_ptr (the 1-based codeunit index).
 """
-function _trace_string_ptr(ptr_ssa, ctx::AbstractCompilationContext)
-    ptr = nir_node(ctx, ptr_ssa)
+function _trace_string_ptr(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+    ptr = ptr_ssa
     ptr isa NirSSA || return nothing
     (1 <= ptr.id <= length(ctx.nir)) || return nothing
     node = ctx.nir[ptr.id].node
@@ -2222,8 +2223,8 @@ The typical IR pattern is:
 
 We trace from %ptr2 back to %data (the Memory reference).
 """
-function _trace_ptr_to_data(ptr_val, ctx::AbstractCompilationContext)
-    current = nir_node(ctx, ptr_val)
+function _trace_ptr_to_data(ptr_val::NirNode, ctx::AbstractCompilationContext)
+    current = ptr_val
     for _ in 1:10  # max depth to prevent infinite loops
         current isa NirSSA || return nothing
         (1 <= current.id <= length(ctx.nir)) || return nothing
@@ -2271,8 +2272,8 @@ IR pattern:
   %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
   memmove(%159, ...)
 """
-function _trace_memmove_array(ptr_ssa, ctx::AbstractCompilationContext)
-    ptr = nir_node(ctx, ptr_ssa)
+function _trace_memmove_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+    ptr = ptr_ssa
     ptr isa NirSSA || return nothing
     (1 <= ptr.id <= length(ctx.nir)) || return nothing
     node = ctx.nir[ptr.id].node
@@ -2347,8 +2348,8 @@ In WasmGC:
   - memoryrefnew(base) → the base IS the array
 Returns the node whose emission produces the array ref, or nothing.
 """
-function _resolve_memref_to_array(ssa, ctx::AbstractCompilationContext)
-    val = nir_node(ctx, ssa)
+function _resolve_memref_to_array(ssa::NirNode, ctx::AbstractCompilationContext)
+    val = ssa
     val isa NirSSA || return nothing
     (1 <= val.id <= length(ctx.nir)) || return nothing
     node = ctx.nir[val.id].node
@@ -2389,8 +2390,8 @@ Ryu pattern:
 
 Returns the node that produces the Memory/array ref, or nothing.
 """
-function _trace_ptr_to_memory_array(ptr_ssa, ctx::AbstractCompilationContext)
-    current = nir_node(ctx, ptr_ssa)
+function _trace_ptr_to_memory_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+    current = ptr_ssa
     current isa NirSSA || return nothing
     for _ in 1:15  # max depth
         current isa NirSSA || return nothing

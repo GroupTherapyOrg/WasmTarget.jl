@@ -32,8 +32,10 @@ The value's static Julia type for boxing (SSA inferred / Bool literal / argument
 or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
 decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
 """
-function _value_julia_type(val, ctx::AbstractCompilationContext)
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+# The value's static Julia type for boxing (SSA inferred / Bool literal / argument type),
+# or `nothing` when unknown. Used to pick the box's real classId + the i31 fast-path
+# decision. Extracted from the (formerly duplicated) emit_numeric_to_*ref! logic.
+function _value_julia_type(val::NirNode, ctx::AbstractCompilationContext)
     if val isa NirSSA
         return get(ctx.ssa_types, val.id, nothing)
     elseif val isa NirArgument
@@ -206,13 +208,13 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{N
                 for p in preds[s]
                     push!(edges, blocks[p].end_idx); push!(values, v)
                 end
-                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.line, rec.slot, rec.raw)
+                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.line, rec.slot)
             end
             for p in preds[s]
                 pb = blocks[p]; pt = pb.terminator
                 nt = pt isa NirGoto ? NirGoto(t.target) : NirGotoIfNot(pt.cond, t.target)
                 prec = nir[pb.end_idx]
-                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.line, prec.slot, prec.raw)
+                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.line, prec.slot)
                 blocks[p] = BasicBlock(pb.start_idx, pb.end_idx, nt)
             end
             threaded = true
@@ -714,7 +716,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # Helper to compile a value, ensuring it actually produces bytes
     # For SSAValues without locals, we need to recompute the value
     # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
-    function compile_phi_value(val, phi_idx::Int,
+    function compile_phi_value(val::NirNode, phi_idx::Int,
                                temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{InstrBuilder,Union{WasmValType,Nothing},Int}
         # Typed channel: emits into `pvb` and returns THE BUILDER
         # (pushed_type, npushed are its tracked byproducts) -- callers merge with
@@ -722,7 +724,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # pushes; the pv_ty===nothing guess that let an invalid module through WT's
         # own validation is structurally impossible now). `temp_map` substitutes
         # circular-phi temp locals at the plain local.get branches.
-        val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
         pvb = _ctx_builder(ctx, "compile_phi_value")
         _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin

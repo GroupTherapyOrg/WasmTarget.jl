@@ -650,7 +650,7 @@ function _invoke_error_b(args, ctx::AbstractCompilationContext, idx::Int, call::
     emit_struct_prefix!(berr, ctx.type_registry, ErrorException, _ee_info)
     _ee_def = ctx.mod.types[_ee_info.wasm_type_idx + 1]
     _ee_msg_w = _ee_def.fields[wasm_field_idx(_ee_info, 1) + 1].valtype
-    emit_value!(berr, isempty(args) ? "" : args[1], ctx, _ee_msg_w; from_julia=String)
+    emit_value!(berr, isempty(args) ? NirLiteral("") : args[1], ctx, _ee_msg_w; from_julia=String)
     struct_new!(berr, _ee_info.wasm_type_idx)   # mod-resolved fields
     global_set!(berr, exn_global)
     global_get!(berr, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(berr, ExternRef); throw_!(berr, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
@@ -718,7 +718,7 @@ function _invoke_padding_b(args, ctx::AbstractCompilationContext, idx::Int, call
     (length(args) == 2 && nir_const(args[1]) isa Type && nir_const(args[2]) isa Integer) || return nothing
     bpad = _ctx_builder(ctx, "compile_invoke")
     _padding = Base.padding(nir_const(args[1]), Int(nir_const(args[2])))
-    _emit_svec_values!(bpad, collect(_padding), ctx)
+    _emit_svec_values!(bpad, NirNode[NirLiteral(v) for v in _padding], ctx)
     return bpad
 end
 
@@ -774,7 +774,7 @@ function _invoke_kwerr_b(args, ctx::AbstractCompilationContext, idx::Int, call::
     args_info === nothing && error("kwerr argument tuple layout is unavailable")
 
     emit_struct_prefix!(bkw, ctx.type_registry, MethodError, error_info)
-    emit_value!(bkw, Core.kwcall, ctx, AnyRef; from_julia=typeof(Core.kwcall))
+    emit_value!(bkw, NirLiteral(Core.kwcall), ctx, AnyRef; from_julia=typeof(Core.kwcall))
     emit_struct_prefix!(bkw, ctx.type_registry, args_tuple_type, args_info)
     args_layout = ctx.mod.types[args_info.wasm_type_idx + 1]
     args_layout isa StructType || error("kwerr argument tuple has no struct layout")
@@ -1010,7 +1010,7 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
                 local_set!(b, len_local)
 
                 # Write "["
-                emit_value!(b, "[", ctx, _pr_str_arr)
+                emit_value!(b, NirLiteral("["), ctx, _pr_str_arr)
                 emit_jl_string_to_js!(b, io.decode_idx)
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
@@ -1033,7 +1033,7 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
                 i32_const!(b, 0)
                 num!(b, Opcode.I32_NE)
                 if_!(b, 0x40)  # void
-                emit_value!(b, ", ", ctx, _pr_str_arr)
+                emit_value!(b, NirLiteral(", "), ctx, _pr_str_arr)
                 emit_jl_string_to_js!(b, io.decode_idx)
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 end_block!(b)  # end if
@@ -1076,7 +1076,7 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
                 end_block!(b)  # end block
 
                 # Write "]"
-                emit_value!(b, "]", ctx, _pr_str_arr)
+                emit_value!(b, NirLiteral("]"), ctx, _pr_str_arr)
                 emit_jl_string_to_js!(b, io.decode_idx)
                 call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
             elseif arg_type !== nothing && arg_type <: Tuple && arg_type isa DataType
@@ -1093,14 +1093,14 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
                     local_set!(b, tup_local)
 
                     # Write "("
-                    emit_value!(b, "(", ctx, _pr_str_arr)
+                    emit_value!(b, NirLiteral("("), ctx, _pr_str_arr)
                     emit_jl_string_to_js!(b, io.decode_idx)
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
 
                     for (fi, et) in enumerate(elem_types)
                         # Write ", " separator (after first element)
                         if fi > 1
-                            emit_value!(b, ", ", ctx, _pr_str_arr)
+                            emit_value!(b, NirLiteral(", "), ctx, _pr_str_arr)
                             emit_jl_string_to_js!(b, io.decode_idx)
                             call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                         end
@@ -1132,13 +1132,13 @@ function _compile_invoke_print_b(is_println::Bool, args, ctx::AbstractCompilatio
 
                     # Single-element tuple gets trailing comma: (1,)
                     if length(elem_types) == 1
-                        emit_value!(b, ",", ctx, _pr_str_arr)
+                        emit_value!(b, NirLiteral(","), ctx, _pr_str_arr)
                         emit_jl_string_to_js!(b, io.decode_idx)
                         call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                     end
 
                     # Write ")"
-                    emit_value!(b, ")", ctx, _pr_str_arr)
+                    emit_value!(b, NirLiteral(")"), ctx, _pr_str_arr)
                     emit_jl_string_to_js!(b, io.decode_idx)
                     call!(b, io.write_string_idx, WasmValType[ExternRef], WasmValType[])
                 else
@@ -1361,6 +1361,10 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             end
         end
     end
+    # the invoked function as an operand the value channel emits: the callee's own node, or
+    # the constant it names
+    early_operand = actual_func_ref_early isa NirNode ? actual_func_ref_early :
+                    NirLiteral(actual_func_ref_early)
     is_self_call_early = false
     if ctx.func_ref !== nothing && named_early !== nothing && !(named_early isa GlobalRef)
             called_func = named_early
@@ -1444,7 +1448,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 # wasm param 1 — the call site must push it (Snapshot.jl newton C-W3:
                 # 6 values for a 7-param functype → "nothing on stack")
                 if target_info_early !== nothing && is_closure_type(typeof(called_func_early))
-                    closure_self_to_push = actual_func_ref_early
+                    closure_self_to_push = early_operand
                 end
             end
         end
@@ -1460,7 +1464,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 " ti_early=", target_info_early !== nothing)
     if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
        actual_func_ref_early !== nothing && named_early === nothing
-        ft_early = infer_value_type(actual_func_ref_early, ctx)
+        ft_early = infer_value_type(early_operand, ctx)
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
             ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
@@ -1468,7 +1472,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
             if ti !== nothing
                 target_info_early = ti
-                closure_self_to_push = actual_func_ref_early
+                closure_self_to_push = early_operand
             end
         end
     end

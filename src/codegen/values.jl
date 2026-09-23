@@ -14,8 +14,7 @@ NEVER to describe a value that has already been emitted; the emission's own retu
 test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
 parity(code_generator.dart:124 translateType) of dartTypeOf (:129).
 """
-function static_wasm_type(val, ctx::AbstractCompilationContext)::WasmValType
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmValType
     # Handle GlobalRef by resolving it and recursively determining type
     # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
     # GlobalRef to struct instance emits struct_new
@@ -885,7 +884,7 @@ ref.cast + struct.get when needed.
 # builder is threaded once the callers migrate; for now a fragment builder validates
 # this emitter's stack in isolation (compile_value bridged via its known pushed type).
 """THE condition visitor (): emit the i32 condition directly into the target builder."""
-function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilationContext)::InstrBuilder
+function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
@@ -893,7 +892,6 @@ function compile_condition_to_i32!(b::InstrBuilder, cond, ctx::AbstractCompilati
         end
     end
     set_context!(b, "GotoIfNot cond → i32")
-    cond isa NirNode || (cond = nir_node(ctx, cond))   # transitional (R29): a raw operand enters as its node
     emit_value!(b, cond, ctx)  # R17-floor: actual local representation drives Bool unboxing
     # Check if the condition value is in a non-i32 local
     if cond isa NirSSA
@@ -943,7 +941,7 @@ Returns the pushed type. Output is byte-identical (the value bytes are the same;
 validator's stack type is now the truth instead of a re-derivation).
 parity(code_generator.dart:676 accept1): the emission whose result type is its byproduct.
 """
-function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
+function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
     # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
     # proved _compile_value_b's tracked stack honest (zero liars across smoke +
     # the heaviest shards after the struct_new! mod-resolving fix).
@@ -964,12 +962,9 @@ parity(quarantine: Julia's typed IR passes compile-time Types as ordinary call a
 `sext_int(Int64, x)`, `isa(x, T)` — where a kernel call carries type arguments apart from
 its positional operands.)
 """
-_is_type_operand(arg)::Bool =
-    arg isa NirNode ? ((arg isa NirLiteral && arg.value isa Type) ||
-                       (arg isa NirGlobalRef && arg.bound && arg.value isa Type)) :
-    # transitional (R29): a raw operand
-    arg isa Type || (arg isa GlobalRef && isdefined(arg.mod, arg.name) &&
-                     getfield(arg.mod, arg.name) isa Type)
+_is_type_operand(arg::NirNode)::Bool =
+    (arg isa NirLiteral && arg.value isa Type) ||
+    (arg isa NirGlobalRef && arg.bound && arg.value isa Type)
 
 """
     emit_call_operand!(b, ctx, arg) -> Union{WasmValType,Nothing}
@@ -1012,8 +1007,7 @@ live in AnyRef locals). An SSA whose REFINED type is already numeric is NOT
 included: as in dart's translator.dart:2099 translateTypeOfLocalVariable, the load
 is THE single unbox source there, and a second unbox double-converted.
 """
-function _is_boxed_numeric_operand(arg, ctx::AbstractCompilationContext)::Bool
-    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+function _is_boxed_numeric_operand(arg::NirNode, ctx::AbstractCompilationContext)::Bool
     arg isa NirSSA || return false
     _is_externref_value(arg, ctx) && return false
     get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
@@ -1040,7 +1034,7 @@ function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)
     ctx.boxing_scratch_locals = Dict{WasmValType,Int}()
     ctx.typeof_scratch_local = nothing
     try
-        b = _compile_value_b(val, ctx)
+        b = _compile_value_b(NirLiteral(val), ctx)
         return b, copy(ctx.locals)
     finally
         ctx.n_params = saved_n_params
@@ -1066,7 +1060,7 @@ path — the `unreachable` is already emitted); `expected` is returned so the de
 shape stays consistent, matching dart's posture that unreachable code still validates.
 parity(code_generator.dart:665 translateExpression)
 """
-function emit_value!(b::InstrBuilder, val, ctx::AbstractCompilationContext,
+function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
                      expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
     # A literal `nothing` has an exact null representation at a reference sink.
     # This is deliberately literal-only; SSA/Union shape guesses once swallowed
@@ -1146,17 +1140,9 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
     return b
 end
 
-"""True for the literal `nothing` operand, in either shape — the raw constant a
-not-yet-converted consumer holds, or the `NirLiteral` the boundary resolved it to.
+"""True for the literal `nothing` operand.
 parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
-_is_nothing_literal(x)::Bool = x === nothing || (x isa NirLiteral && x.value === nothing)
-
-"""THE value channel's raw entry: a consumer that still holds an `Expr.args` operand
-resolves it at the NIR boundary and hands the node to the one implementation below.
-parity(code_generator.dart:135 getStaticType / :77 typeContext): dart's value visitor is
-handed a Kernel node, never a syntax fragment it has to re-classify."""
-_compile_value_b(val, ctx::AbstractCompilationContext)::InstrBuilder =
-    _compile_value_b(nir_node(ctx, val), ctx)
+_is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
 
 function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
@@ -1422,7 +1408,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 ref_as_non_null!(b)
             end
         else
-            emit_value!(b, actual_val, ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
+            emit_value!(b, NirLiteral(actual_val), ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
         end
 
     else
@@ -1549,7 +1535,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             _ciir = register_struct_type!(ctx.mod, ctx.type_registry, typeof(inner))
             global_get!(b, _cgir, ConcreteRef(_ciir.wasm_type_idx, false))
         else
-            emit_value!(b, inner, ctx)  # R17-floor: QuoteNode delegates before a consumer exists
+            emit_value!(b, NirLiteral(inner), ctx)  # R17-floor: QuoteNode delegates before a consumer exists
         end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
@@ -1621,7 +1607,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
                 error("tuple constant field lacks a physical Wasm type")
             local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
-            emit_value!(b, field_val, ctx, expected_wasm; from_julia=typeof(field_val))
+            emit_value!(b, NirLiteral(field_val), ctx, expected_wasm; from_julia=typeof(field_val))
         end
 
         # Create the struct
@@ -1687,7 +1673,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             local _fw = struct_type_def.fields[fi + Int(info.field_offset)].valtype
-            emit_value!(b, field_val, ctx, _fw; from_julia=typeof(field_val))
+            emit_value!(b, NirLiteral(field_val), ctx, _fw; from_julia=typeof(field_val))
         end
 
         struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
@@ -1735,7 +1721,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 end
                 if (dict_slots[i] & 0x80) != 0
                     v = mem[i]
-                    emit_value!(b, v, ctx, expected; from_julia=typeof(v))
+                    emit_value!(b, NirLiteral(v), ctx, expected; from_julia=typeof(v))
                 elseif expected isa RefType
                     ref_null!(b, expected)
                 elseif expected isa ConcreteRef && expected.nullable
@@ -1816,7 +1802,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             if ctx.last_stmt_was_stub
                 break
             end
-            emit_value!(b, val[i], ctx, wasm_elem_type; from_julia=typeof(val[i]))
+            emit_value!(b, NirLiteral(val[i]), ctx, wasm_elem_type; from_julia=typeof(val[i]))
             # Check after each element in case compile_value hit a stub
             if ctx.last_stmt_was_stub
                 break
@@ -1862,7 +1848,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 evt isa WasmValType || record_unsupported!(ctx, :value_stub,
                     "Memory constant of type $T has no physical element type";
                     detail=val, soundness_fatal=true)
-                emit_value!(b, mem[i], ctx, evt; from_julia=elem_type)
+                emit_value!(b, NirLiteral(mem[i]), ctx, evt; from_julia=elem_type)
             end
             # `array.new_fixed 0` is the real non-null empty array representation.
             array_new_fixed!(b, array_type_idx, n_mem,
@@ -1929,7 +1915,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # A materialized constant supplies stronger evidence than its declared
             # field annotation (e.g. KeyError.key::Any holding Int64). Preserve the
             # exact runtime Julia class so numeric boxing stamps the real classId.
-            emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))
+            emit_value!(b, NirLiteral(field_val), ctx, expected; from_julia=typeof(field_val))
         end
 
         # Create the struct

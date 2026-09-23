@@ -26,8 +26,7 @@ end
 Check if a value is known to be boolean (0 or 1).
 This is true for comparison results, Bool literals, and phi nodes with Bool type.
 """
-function is_boolean_value(val, ctx::AbstractCompilationContext)::Bool
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function is_boolean_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
     if val isa NirSSA
         # Check if the SSA value is from a comparison
         # Guard against out-of-bounds SSAValue IDs
@@ -53,9 +52,6 @@ end
 # Julia IR nodes whose value is supplied at runtime rather than embedded as a
 # literal/global constant. Keep this classification centralized so optimized
 # (SSA/Pi/Argument) and unoptimized (SlotNumber) IR share call lowering.
-# parity(quarantine: SSAValue/Argument/SlotNumber/PiNode are Julia IR node kinds with no
-# Kernel counterpart — Kernel is an expression tree whose operands are nodes, not references.)
-is_runtime_ir_value(x)::Bool = x isa NirSSA || x isa NirArgument || x isa NirSlot ||
-                         # transitional (R29): a raw operand
-                         x isa Core.SSAValue || x isa Core.Argument ||
-                         x isa Core.SlotNumber || x isa Core.PiNode
+# parity(quarantine: NirSSA/NirArgument/NirSlot reference Julia IR values by SSA id, argument
+# or slot; Kernel operands are expression nodes, not references to other statements.)
+is_runtime_ir_value(x)::Bool = x isa NirSSA || x isa NirArgument || x isa NirSlot

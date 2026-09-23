@@ -8,8 +8,7 @@
 Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
 """
-function _is_externref_value(val, ctx::AbstractCompilationContext)::Bool
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function _is_externref_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
     if val isa NirArgument
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
@@ -43,8 +42,7 @@ end
 
 Check if a value is an SSAValue whose defining statement is a typeof() call.
 """
-function _is_typeof_ssa(val, ctx::AbstractCompilationContext)::Bool
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function _is_typeof_ssa(val::NirNode, ctx::AbstractCompilationContext)::Bool
     val isa NirSSA || return false
     1 <= val.id <= length(ctx.nir) || return false
     rec = ctx.nir[val.id]
@@ -58,8 +56,7 @@ end
 If val is a Type constant (GlobalRef to a type, or a direct Type value),
 return the DataType. Otherwise return nothing.
 """
-function _resolve_type_const(val, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function _resolve_type_const(val::NirNode, ctx::AbstractCompilationContext)::Union{DataType, Nothing}
     actual = val isa NirLiteral ? val.value : (val isa NirGlobalRef && val.bound) ? val.value : nothing
     return actual isa Type && isconcretetype(actual) ? actual : nothing
 end
@@ -182,9 +179,9 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     info === nothing && error("FieldError layout is unavailable")
     emit_struct_prefix!(bld, ctx.type_registry, FieldError, info)
     fields = ctx.mod.types[info.wasm_type_idx + 1].fields
-    emit_value!(bld, owner_type, ctx, fields[Int(info.field_offset) + 1].valtype;
+    emit_value!(bld, NirLiteral(owner_type), ctx, fields[Int(info.field_offset) + 1].valtype;
                 from_julia=DataType)
-    emit_value!(bld, field, ctx, fields[Int(info.field_offset) + 2].valtype;
+    emit_value!(bld, NirLiteral(field), ctx, fields[Int(info.field_offset) + 2].valtype;
                 from_julia=Symbol)
     struct_new!(bld, info.wasm_type_idx)
     global_set!(bld, exn_global)
@@ -1212,8 +1209,7 @@ function _getfield_parts(node)::Union{Tuple{NirNode,Any},Nothing}
     return (node.operands[1], nir_const(node.operands[2]))
 end
 
-function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContext)
-    value isa NirNode || (value = nir_node(ctx, value))   # transitional (R29): a raw operand enters as its node
+function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilationContext)
     def = _ssa_def(value, ctx)
     if def isa NirPi
         return _trace_field_owner(def.value, field, ctx)
@@ -1223,8 +1219,7 @@ function _trace_field_owner(value, field::Symbol, ctx::AbstractCompilationContex
     return nothing
 end
 
-function _trace_typename_symbol_owner(value, ctx::AbstractCompilationContext)
-    value isa NirNode || (value = nir_node(ctx, value))   # transitional (R29): a raw operand enters as its node
+function _trace_typename_symbol_owner(value::NirNode, ctx::AbstractCompilationContext)
     def = _ssa_def(value, ctx)
     parts = _getfield_parts(def)
     if def isa NirPi
@@ -2189,14 +2184,14 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     return b
 end
 
-function _emit_typeerror_throw!(b::InstrBuilder, got, target::Type, idx::Int,
+function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
                                 ctx::AbstractCompilationContext)
     ensure_exception_tag!(ctx.mod)
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
     def isa StructType || error("TypeError did not register as a Wasm struct")
     emit_struct_prefix!(b, ctx.type_registry, TypeError, info)
-    local values = Any[:typeassert, "", target, got]
+    local values = NirNode[NirLiteral(:typeassert), NirLiteral(""), NirLiteral(target), got]
     for i in 1:4
         local expected = def.fields[wasm_field_idx(info, i) + 1].valtype
         local source_type = i == 4 ? get_ssa_type(ctx, got) : fieldtype(TypeError, i)
@@ -2365,7 +2360,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # pointer is compile-time host metadata; fold the whole load.
         local _pr_fold = _try_fold_layout_pointerref(ptr_arg, ctx)
         if _pr_fold !== nothing
-            emit_value!(fb, _pr_fold, ctx, static_wasm_type(_pr_fold, ctx))
+            emit_value!(fb, NirLiteral(_pr_fold), ctx, static_wasm_type(NirLiteral(_pr_fold), ctx))
             return append_builder!(b, fb)
         end
         # P3 gap 450889a9cb7e: byte reads through Vector{UInt8} storage pointers
@@ -3408,7 +3403,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     getfield(args[1].value, _gfc_fld) : nothing
                 if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&
                    !(_gfc_val isa Union{Int128, UInt128, BigInt})
-                    emit_value!(fb, _gfc_val, ctx, static_wasm_type(_gfc_val, ctx))
+                    emit_value!(fb, NirLiteral(_gfc_val), ctx, static_wasm_type(NirLiteral(_gfc_val), ctx))
                     _gfc_done = true
                 end
             end
@@ -3421,7 +3416,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 local _gfc_v2 = isdefined(args[1].value, _gfc_fld2) ?
                     getfield(args[1].value, _gfc_fld2) : nothing
                 if _gfc_v2 isa Core.SimpleVector
-                    _emit_svec_values!(fb, collect(_gfc_v2), ctx)
+                    _emit_svec_values!(fb, NirNode[NirLiteral(v) for v in _gfc_v2], ctx)
                     _gfc_done = true
                 end
             end
@@ -3798,7 +3793,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                    _ctor_result isa DataType && isconcretetype(_ctor_result) &&
                    isstructtype(_ctor_result) && !isprimitivetype(_ctor_result) &&
                    called_func === _ctor_result && length(args) == fieldcount(_ctor_result)
-                    return compile_new!(b, nir_new(_ctor_result, args, ctx), idx, ctx)
+                    return compile_new!(b, nir_new(_ctor_result, args), idx, ctx)
                 end
                 # WASMTARGET dynamic dispatch: before giving up, try an inline typeId
                 # switch over the compiled specializations (the dynamic call dispatches
@@ -3834,7 +3829,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # GlobalRef constructor call: SSA return type reveals the struct being constructed
             ssa_type = ctx.nir[idx].julia_type
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
-                return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
+                return compile_new!(b, nir_new(ssa_type, args), idx, ctx)
             end
             error("Unsupported function call: $func (type: $(typeof(func)))")
         end
@@ -3925,7 +3920,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         if named
             ssa_type = ctx.nir[idx].julia_type
             if ssa_type isa DataType && isconcretetype(ssa_type) && !isprimitivetype(ssa_type)
-                return compile_new!(b, nir_new(ssa_type, args, ctx), idx, ctx)
+                return compile_new!(b, nir_new(ssa_type, args), idx, ctx)
             end
         end
         # Unknown function call — emit unreachable (will trap at runtime)
@@ -3963,8 +3958,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 end
 
 """Prove emptiness from Julia IR without inventing a runtime value."""
-function _iterable_proven_empty(arg, ctx)::Bool
-    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+function _iterable_proven_empty(arg::NirNode, ctx)::Bool
     arg isa NirLiteral && return arg.value isa Tuple && isempty(arg.value)
     arg isa NirSSA || return false
     get_ssa_type(ctx, arg) === Tuple{} && return true
@@ -4057,8 +4051,7 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
 end
 
 """Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""
-function _apply_iterate_svec_values(arg, ctx)
-    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+function _apply_iterate_svec_values(arg::NirNode, ctx)
     def = _ssa_def(arg, ctx)
     def isa NirCall || return nothing
     (isdefined(Core, :svec) && _nir_callee_object(def.callee) === Core.svec) || return nothing
@@ -4186,7 +4179,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     # closed-world module is compiled at one world snapshot, so the current
     # counter is the dispatch world that produced this lowering.
     emit_struct_prefix!(bld, ctx.type_registry, MethodError, error_info)
-    emit_value!(bld, target_value, ctx, AnyRef; from_julia=typeof(target_value))
+    emit_value!(bld, NirLiteral(target_value), ctx, AnyRef; from_julia=typeof(target_value))
     emit_struct_prefix!(bld, ctx.type_registry, Tuple{}, args_info)
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))
@@ -4376,7 +4369,8 @@ materialization, or nothing if the chain doesn't match.
 """
 
 # Emit a SimpleVector as its actual WasmGC array representation.
-function _emit_svec_values!(b::InstrBuilder, values, ctx::AbstractCompilationContext)
+function _emit_svec_values!(b::InstrBuilder, values::AbstractVector{<:NirNode},
+                            ctx::AbstractCompilationContext)
     info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
     arr_idx = info.wasm_type_idx
     arr_def = ctx.mod.types[arr_idx + 1]
@@ -4391,8 +4385,7 @@ end
 
 # Resolve an IR value to a HOST SimpleVector constant when its definition is
 # compile-time evaluable. Consumers may fold length/index operations directly.
-function _try_host_svec(arg, ctx::AbstractCompilationContext)
-    arg isa NirNode || (arg = nir_node(ctx, arg))   # transitional (R29): a raw operand enters as its node
+function _try_host_svec(arg::NirNode, ctx::AbstractCompilationContext)
     st = _ssa_def(arg, ctx)
     if st isa NirCall || st isa NirInvoke
         a1 = _nir_callee_object(st.callee)
@@ -4411,8 +4404,7 @@ function _try_host_svec(arg, ctx::AbstractCompilationContext)
     return nothing
 end
 
-function _try_fold_layout_pointerref(ptr_arg, ctx::AbstractCompilationContext)
-    ptr_arg isa NirNode || (ptr_arg = nir_node(ctx, ptr_arg))   # transitional (R29): a raw operand enters as its node
+function _try_fold_layout_pointerref(ptr_arg::NirNode, ctx::AbstractCompilationContext)
     cur = ptr_arg
     for _ in 1:4
         cur isa NirSSA || return nothing

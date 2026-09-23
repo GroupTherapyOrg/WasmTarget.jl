@@ -37,7 +37,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
        NirTheException, NirPopException, NirCall, NirInvoke, NirNew, NirForeignCall,
        NirBoundscheck, NirThrowUndefIfNot, NirNewvar, NirNoOp, NirUpsilon, NirPhiC,
        NirUnsupported,
-       build_nir, nir_slot_types, nir_expr_operands, nir_direct_operands, nir_call, nir_text, nir_const, nir_quoted, nir_value_raw, nir_node, nir_new, nir_retarget_invoke!,
+       build_nir, NirBody, nir_body, nir_literal_values, nir_slot_types, nir_expr_operands, nir_direct_operands, nir_call, nir_text, nir_const, nir_quoted, nir_new, nir_retarget_invoke!,
        resolve_invoke_method, resolve_invoke_mi
 
 # ============================================================================
@@ -260,17 +260,12 @@ produces (`widenconst(code_info.ssavaluetypes[i])`, `Any` when absent). `line` i
 source line decoded from the CodeInfo's DebugInfo (0 when the IR carries none). `slot` is
 the SlotNumber id when the statement is unoptimized IR's `Expr(:(=), SlotNumber(n), rhs)`
 assignment and 0 otherwise — in that case `node` classifies the RHS, so a consumer sees
-the value-producing operation directly and the assignment is one integer beside it. `raw`
-is the ORIGINAL CodeInfo statement — kept so the not-yet-converted consumers
-(context.jl/calls.jl/invoke.jl/compile.jl) can still be handed exactly what they expect;
-this is the explicit, documented transitional escape hatch of the R29 migration, not a way
-for a NIR-aware consumer to read `.args`/`.head` itself."""
+the value-producing operation directly and the assignment is one integer beside it."""
 struct NirStmt
     node::NirNode
     julia_type::Type
     line::Int32
     slot::Int
-    raw::Any
 end
 
 # ============================================================================
@@ -386,8 +381,8 @@ _nir_ssa_type(nir::Vector{NirStmt}, id::Int)::Type = (1 <= id <= length(nir)) ? 
 """Resolve one IR operand (an Expr arg, a PhiNode value, a ReturnNode/GotoIfNot payload)
 into a NirNode. Total: the final `else` wraps anything unrecognized as NirLiteral rather
 than throwing. `types` supplies each SSA id's Julia type — the widened `ssavaluetypes`
-during `build_nir`, or an already-built `Vector{NirStmt}` for the transitional
-`nir_node(ctx, raw)` bridge, which must resolve to exactly the same nodes."""
+during `build_nir` (the `Vector{NirStmt}` method of `_nir_ssa_type` serves a consumer that
+already holds the built records)."""
 function resolve_operand(x, types)::NirNode
     if x isa Core.SSAValue
         return NirSSA(x.id, _nir_ssa_type(types, x.id))
@@ -515,9 +510,8 @@ calls.jl uses when it SYNTHESIZES a field-wise constructor (there is no `Expr(:n
 in the IR to classify, so the node is built directly instead of a raw Expr being faked).
 parity(code_generator.dart:1637 visitConstructorInvocation): a synthesized field-wise constructor
 is the same node kind as a literal `%new`."""
-nir_new(T::Type, args, ctx)::NirNew =
-    NirNew(T, _nir_field_types(T), NirLiteral(T), NirNode[nir_node(ctx, a) for a in args],
-           :literal, true, Any)
+nir_new(T::Type, args::AbstractVector{<:NirNode})::NirNew =
+    NirNew(T, _nir_field_types(T), NirLiteral(T), NirNode[args...], :literal, true, Any)
 
 """The constant an operand names — a literal's value — or the operand node itself when it
 is a runtime value (an SSA use, an argument, a slot) or a global binding.
@@ -694,8 +688,37 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
             classified = stmt.args[2]
         end
         out[i] = NirStmt(_nir_classify(classified, i, code_info, types, slot_types),
-                         types[i], lines[i], slot, stmt)
+                         types[i], lines[i], slot)
     end
+    return out
+end
+
+"""One function body at the boundary: its statements, its slots' inferred types, and its
+source-location table — everything codegen reads from Julia's typed IR, built once.
+parity(code_generator.dart:77 typeContext): the one context a function's nodes are read through."""
+struct NirBody
+    stmts::Vector{NirStmt}
+    slot_types::Vector{Type}
+    debuginfo::Union{Core.DebugInfo, Nothing}
+end
+
+"""The NIR body of one typed CodeInfo — `build_nir`, `nir_slot_types` and the DebugInfo.
+parity(code_generator.dart:77 typeContext): the one context a function's nodes are read through."""
+nir_body(code_info::Core.CodeInfo)::NirBody =
+    NirBody(build_nir(code_info), nir_slot_types(code_info), code_info.debuginfo)
+
+"""Every literal value one statement carries as `Expr.args` did — an expression's literal
+operands (its literal callee and a `%new`'s literal type included) and a
+`throw_undef_if_not`'s variable name, a slot's literal right-hand side, or the statement
+itself when it is a literal. The constants a module must materialize before its function
+indices freeze (compile.jl's long-string pre-pass).
+parity(constants.dart:454 Constants.ensureConstant): constants are collected before codegen."""
+function nir_literal_values(rec::NirStmt)::Vector{Any}
+    node = rec.node
+    ops = rec.slot > 0 ? nir_direct_operands(rec) :
+          _nir_from_expr(node) ? nir_expr_operands(node) : NirNode[node]
+    out = Any[x.value for x in ops if x isa NirLiteral]
+    rec.slot == 0 && node isa NirThrowUndefIfNot && push!(out, node.var)
     return out
 end
 
@@ -826,47 +849,26 @@ _nir_from_expr(node::NirNode)::Bool =
     node isa NirPopException || node isa NirTheException || node isa NirNoOp ||
     node isa NirUnsupported
 
-"""The raw statement a NIR record's `node` classifies — the original statement, or its RHS
-when the record is a slot assignment. The transitional hand-off to the consumers that still
-take a raw `Expr` (compile_call!/compile_invoke!/is_passthrough_statement); it exists so
-statements.jl never unwraps `Expr(:(=), …).args[2]` itself."""
-nir_value_raw(s::NirStmt)::Any = s.slot > 0 ? s.raw.args[2] : s.raw
-
-"""Resolve a RAW IR operand a not-yet-converted consumer still holds into its NirNode, with
-the SSA types the boundary already computed. The bridge INTO the node world."""
-nir_node(ctx, x)::NirNode = x isa NirNode ? x : resolve_operand(x, ctx.nir)
-
 """Re-target statement `i`'s `:invoke` at `mi` — the ONE write into an invoke's target
 operand. The closed-world collector (trimcollect.jl) rebuilds an explicit invoke's
 MethodInstance from the concrete call-site types when Julia left it abstract, and the
-collected IR must keep agreeing with the edge it hands to inference, so BOTH the raw
-statement and the record's NirInvoke are rewritten here rather than a consumer splicing
-`Expr.args` behind the boundary's back. Loud on a statement that is not an `:invoke`.
+collected IR must keep agreeing with the edge it hands to inference (the planner builds its
+NIR from that CodeInfo again), so BOTH the CodeInfo's statement and the record's NirInvoke
+are rewritten here — at the boundary, rather than a consumer splicing `Expr.args` behind its
+back. Loud on a statement that is not an `:invoke`.
 parity(translator.dart:115 directCallMetadata): the whole-program analysis's per-call-site target,
 recorded on the node codegen reads (dart: TFA's DirectCallMetadata, keyed by the Kernel node)."""
-function nir_retarget_invoke!(nir::Vector{NirStmt}, i::Int, mi::Core.MethodInstance)::Nothing
+function nir_retarget_invoke!(code_info::Core.CodeInfo, nir::Vector{NirStmt}, i::Int,
+                              mi::Core.MethodInstance)::Nothing
     s = nir[i]
     node = s.node
     node isa NirInvoke || error(
         "nir_retarget_invoke!: statement $i is a $(nameof(typeof(node))), not an :invoke")
-    nir_value_raw(s).args[1] = mi
+    stmt = code_info.code[i]
+    s.slot > 0 && (stmt = stmt.args[2])   # a slot assignment's right-hand side
+    stmt.args[1] = mi
     nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), node.callee, node.operands),
-                     s.julia_type, s.line, s.slot, s.raw)
+                     s.julia_type, s.line, s.slot)
     return nothing
 end
 
-"""The inverse: a node back to the raw operand `Expr.args` carried. Transitional — it exists
-only until the value channel itself takes a NirNode, and is deleted then. A Symbol literal is
-re-quoted, as `Expr.args` carried it, so the channel does not mistake it for a binding."""
-function nir_operand(node::NirNode)
-    node isa NirSSA && return Core.SSAValue(node.id)
-    node isa NirArgument && return Core.Argument(node.n)
-    node isa NirSlot && return Core.SlotNumber(node.id)
-    node isa NirGlobalRef && return GlobalRef(node.mod, node.name)
-    # A Symbol or an IR-reference VALUE is re-quoted, exactly as `Expr.args` carried it, so
-    # the raw-shaped consumer does not mistake a literal for a binding or an SSA reference.
-    node isa NirLiteral && return (node.value isa Symbol || node.value isa Core.SSAValue ||
-                                   node.value isa Core.Argument || node.value isa Core.SlotNumber) ?
-        QuoteNode(node.value) : node.value
-    error("nir_operand: $(nameof(typeof(node))) is not a value operand")
-end

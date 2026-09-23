@@ -73,8 +73,7 @@ parity(quarantine: Julia IR spells the null value three ways — the literal `no
 GlobalRef to the `nothing` binding, and an SSA/PiNode inferred as Nothing — where Kernel has
 the one NullLiteral node.)
 """
-function is_nothing_value(val, ctx)::Bool
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function is_nothing_value(val::NirNode, ctx)::Bool
     # Literal nothing
     if val isa NirLiteral && val.value === nothing
         return true

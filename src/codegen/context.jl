@@ -12,7 +12,6 @@ abstract type AbstractCompilationContext end
 Tracks state during compilation of a single function.
 """
 mutable struct CompilationContext <: AbstractCompilationContext
-    code_info::Core.CodeInfo
     arg_types::Tuple
     return_type::Type
     n_params::Int
@@ -76,10 +75,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
     exn_region_locals::Dict{Int, Int}
     # NIR boundary (parity: code_generator.dart:77 typeContext) — frontend/nir.jl's
-    # build_nir output, positionally aligned with code_info.code. Built FIRST, from the
-    # CodeInfo alone, so the analysis passes below are themselves NIR consumers rather
-    # than its prerequisites. code_info stays alongside it — not every consumer is
-    # NIR-converted yet (R29 tracks the migration per file).
+    # build_nir output, one record per IR statement. Built FIRST, from the typed IR alone,
+    # so the analysis passes below are themselves NIR consumers rather than its
+    # prerequisites; the context reads Julia's IR through it and nothing else.
     nir::Vector{NirStmt}
     # Julia inference's type for every IR slot, widened once at the boundary
     # (frontend/nir.jl's nir_slot_types) — what an Argument/SlotNumber operand is typed by.
@@ -89,7 +87,7 @@ mutable struct CompilationContext <: AbstractCompilationContext
     debuginfo::Union{Core.DebugInfo, Nothing}
 end
 
-function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
+function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
                            global_args::Set{Int}=Set{Int}(),
@@ -102,16 +100,16 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
                            invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
+    n_stmts = length(body.stmts)
     ctx = CompilationContext(
-        code_info,
         arg_types,
         return_type,
         n_real_params,
         WasmValType[],
-        IntKeyMap{Type}(length(code_info.code)),
-        IntKeyMap{Int}(length(code_info.code)),
-        IntKeyMap{Int}(length(code_info.code)),
-        fill(false, length(code_info.code)),
+        IntKeyMap{Type}(n_stmts),
+        IntKeyMap{Int}(n_stmts),
+        IntKeyMap{Int}(n_stmts),
+        fill(false, n_stmts),
         mod,
         type_registry,
         func_registry,
@@ -138,9 +136,9 @@ function CompilationContext(code_info, arg_types::Tuple, return_type, mod::WasmM
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}(),       # exn_region_locals
-        build_nir(code_info),   # NIR boundary — a pure function of the CodeInfo, built first
-        nir_slot_types(code_info),
-        code_info.debuginfo
+        body.stmts,             # NIR boundary — built first, from the typed IR alone
+        body.slot_types,
+        body.debuginfo
     )
     # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
@@ -1459,33 +1457,6 @@ function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})::Nothing
 end
 
 """
-Count SSA uses in a raw statement.
-"""
-function count_ssa_uses!(stmt, uses::Dict{Int, Int})
-    if stmt isa Core.SSAValue
-        uses[stmt.id] = get(uses, stmt.id, 0) + 1
-    elseif stmt isa Expr
-        for arg in stmt.args
-            count_ssa_uses!(arg, uses)
-        end
-    elseif stmt isa Core.ReturnNode && isdefined(stmt, :val)
-        count_ssa_uses!(stmt.val, uses)
-    elseif stmt isa Core.GotoIfNot
-        count_ssa_uses!(stmt.cond, uses)
-    elseif stmt isa Core.PhiNode
-        for i in 1:length(stmt.values)
-            if isassigned(stmt.values, i)
-                count_ssa_uses!(stmt.values[i], uses)
-            end
-        end
-    elseif stmt isa Core.PiNode
-        # PiNode references a source value — count it so phi nodes
-        # that are only referenced by PiNodes get their ssa_locals mapping
-        count_ssa_uses!(stmt.val, uses)
-    end
-end
-
-"""
 The inferred source type of IR slot `slot` (slot 1 = `#self#`, then the parameters, then the
 locals), as the NIR boundary widened it — `nothing` when the IR carries no slot table.
 """
@@ -1519,8 +1490,7 @@ function packed_vararg_source_type(ctx::AbstractCompilationContext,
     return T
 end
 
-function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function get_ssa_type(ctx::AbstractCompilationContext, val::NirNode)::Type
     if val isa NirSSA
         return get(ctx.ssa_types, val.id, Any)
     elseif val isa NirArgument
@@ -1544,8 +1514,11 @@ function get_ssa_type(ctx::AbstractCompilationContext, val)::Type
         # Literal Symbols and other quoted constants carry the type of their
         # payload; a Type literal is a type constant.
         return val.value isa Type ? Type{val.value} : typeof(val.value)
+    elseif val isa NirGlobalRef && val.bound
+        # a global operand is its bound value
+        return val.value isa Type ? Type{val.value} : typeof(val.value)
     else
-        return typeof(nir_operand(val))
+        return Any
     end
 end
 
@@ -1731,8 +1704,7 @@ function infer_call_type(node::NirCall, ctx::AbstractCompilationContext)
     return Any  # Safe default — maps to ExternRef
 end
 
-function infer_value_type(val, ctx::AbstractCompilationContext)
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)
     if val isa NirArgument
         # Source IR semantics are authoritative. The physical signature can be
         # flattened (notably a vararg tuple), so indexing ctx.arg_types first
@@ -1843,8 +1815,7 @@ Resolve the DECLARED wasm slot type of `val`'s source (SSA/phi local or paramete
 feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/anyref)
 or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
 """
-function _ref_cast_source_type(val, ctx::AbstractCompilationContext)
-    val isa NirNode || (val = nir_node(ctx, val))   # transitional (R29): a raw operand enters as its node
+function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)
     if val isa NirSSA
         local_idx = get(ctx.ssa_locals, val.id, nothing)
         if local_idx === nothing

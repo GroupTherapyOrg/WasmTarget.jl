@@ -254,7 +254,6 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
     (:NirInvoke, :callee),              # ditto: an :invoke's own callee operand, which is a
                                         # NirNode when a closure VALUE is invoked
-    (:NirStmt, :raw),                   # transitional: the raw CodeInfo statement, pending the NIR migration (Phase 12.D)
     (:FunctionInfo, :func_ref),         # the registries' Function values — holds a Function, Type, or Builtin (anything callable)
     (:FunctionRegistry, :by_ref),       # keyed by the same open func_ref
     (:DispatchTable, :func_ref),        # DispatchTableRegistry's func_ref keys — same "anything callable" seam
@@ -569,7 +568,7 @@ const METRICS = [
     # regard" made machine-checked for API types, not just codegen structure.
     "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
         () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
-    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, NirStmt.raw, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
+    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
         () -> count_any_typed_fields()),
     # ── dev/CHARTER.md (2026-09-22) ─────────────────────────────────────────────
     "R32_unanchored_definitions" => ("top-level definitions in src — every method separately, read from the parsed syntax tree — with no parity(<dart file:line>) or parity(quarantine: …) anchor in their docstring or directly above them — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
@@ -799,7 +798,7 @@ const LOCKS = [
         () -> begin
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["function _invoke_kwerr_b", "emit_value!(bkw, Core.kwcall",
+            required = ["function _invoke_kwerr_b", "emit_value!(bkw, NirLiteral(Core.kwcall)",
                         "args_tuple_type = Tuple{arg_julia_types...}",
                         "Int64(WASM_WORLD_AGE)", "_wt_exact_kwerr_exception"]
             count(p -> !occursin(p, invoke_src * test_src), required)
@@ -822,7 +821,7 @@ const LOCKS = [
                          "constructor_allowlist"]
             required = ["A concrete field-wise constructor is structural, not dynamic",
                         "called_func === _ctor_result && length(args) == fieldcount(_ctor_result)",
-                        "return compile_new!(b, nir_new(_ctor_result, args, ctx)",
+                        "return compile_new!(b, nir_new(_ctor_result, args)",
                         "_la_solve", "_la_lusolve"]
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src * linalg_src), required)
@@ -898,7 +897,7 @@ const LOCKS = [
             forbidden = ["from_julia=fieldtype(T, fi)", "from_julia=fieldtype(T, i)",
                          "has_undefined\n            ref_null!"]
             required = ["A materialized constant supplies stronger evidence than its declared",
-                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))",
+                        "emit_value!(b, NirLiteral(field_val), ctx, expected; from_julia=typeof(field_val))",
                         "closure constant of type \$T has undefined captures; WT never fabricates capture values"]
             count(p -> occursin(p, values_src), forbidden) +
                 count(p -> !occursin(p, values_src), required)
@@ -941,7 +940,7 @@ const LOCKS = [
                         "root \$name binds closure fields twice",
                         "invokes unknown compilation roots",
                         "selects arguments for unbound invoke sites",
-                        "static_wasm_type(_captured_value, ctx)",
+                        "static_wasm_type(NirLiteral(_captured_value), ctx)",
                         "Declaratively bound invoke", "params, _ = _true_call_sig",
                         "emit_value!(bii, arg, ctx, expected",
                         "root entry call \$target_idx must have signature () -> ()",
@@ -1078,7 +1077,7 @@ const LOCKS = [
                          "ref_null!(berr, ArrayRef)", "name === :throw || name === :throw_boundserror",
                          "PURE-9032: Error constructors"]
             required = ["constant exception contains undefined fields",
-                        "isempty(args) ? \"\" : args[1]"]
+                        "isempty(args) ? NirLiteral(\"\") : args[1]"]
             count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden) +
                 count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required)
         end),
@@ -1111,7 +1110,7 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
                         read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
-            required = ["function _emit_typeerror_throw!", "Any[:typeassert, \"\", target, got]",
+            required = ["function _emit_typeerror_throw!", "NirNode[NirLiteral(:typeassert), NirLiteral(\"\"), NirLiteral(target), got]",
                         "i == 4 ? get_ssa_type(ctx, got)",
                         "_emit_typeerror_throw!(fb, args[1], _ta_target",
                         "err.expected === String", "err.got isa Int64"]
@@ -1394,7 +1393,7 @@ const LOCKS = [
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             required = ["WT never fabricates field values",
                         "emit_struct_prefix!(b, ctx.type_registry, T, info)",
-                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))"]
+                        "emit_value!(b, NirLiteral(field_val), ctx, expected; from_julia=typeof(field_val))"]
             forbidden = ["emit ref.null for the field's expected type",
                          "type-correct defaults",
                          "mismatched concrete struct ref"]

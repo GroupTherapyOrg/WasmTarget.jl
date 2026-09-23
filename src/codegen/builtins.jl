@@ -150,7 +150,7 @@ function _lower_getglobal!(b, fb, ctx, call, idx, args, callee)
     if _gg_mod isa Module && _gg_name isa Symbol && isdefined(_gg_mod, _gg_name) &&
        isconst(_gg_mod, _gg_name)
         _gg_val = getglobal(_gg_mod, _gg_name)
-        emit_value!(fb, _gg_val, ctx, static_wasm_type(_gg_val, ctx))
+        emit_value!(fb, NirLiteral(_gg_val), ctx, static_wasm_type(NirLiteral(_gg_val), ctx))
         return append_builder!(b, fb)
     end
     module_owner = _trace_field_owner(args[1], :module, ctx)
@@ -1112,7 +1112,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
                 local _te_values = Any[:typeassert, "", _ta_target]
                 for _te_i in 1:3
                     local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
-                    emit_value!(fb, _te_values[_te_i], ctx, _te_w;
+                    emit_value!(fb, NirLiteral(_te_values[_te_i]), ctx, _te_w;
                                 from_julia=fieldtype(TypeError, _te_i))
                 end
                 local_get!(fb, UInt32(_ta_tmp))
@@ -1247,8 +1247,8 @@ function _lower_getfield_closure_capture!(b, fb, ctx, call, idx, args)::Union{In
                 local _captured_value = ctx.captured_constant_fields[field_name]
                 # The canonical pre-emission type query owns Julia→Wasm mapping;
                 # root substitutions do not introduce another conversion site.
-                local _captured_wasm = static_wasm_type(_captured_value, ctx)
-                emit_value!(fb, _captured_value, ctx, _captured_wasm;
+                local _captured_wasm = static_wasm_type(NirLiteral(_captured_value), ctx)
+                emit_value!(fb, NirLiteral(_captured_value), ctx, _captured_wasm;
                             from_julia=typeof(_captured_value))
                 return append_builder!(b, fb)
             end
@@ -1988,7 +1988,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     # only when the field's physical type IS exactly AnyRef; a narrower
                     # ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
                     # `single_variable::Union{Nothing,VariableIndex}`, then rejected it.)
-                    local _sf_val = is_nothing_value(value_arg, ctx) ? nothing : value_arg
+                    local _sf_val = is_nothing_value(value_arg, ctx) ? NirLiteral(nothing) : value_arg
                     local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
                     emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
