@@ -527,6 +527,15 @@ _g("memory", Any[
     ("bcast_view_into_vector", (n::Int64) -> (a = collect(1:n); b = collect(1:n); a .= view(b, n:-1:1); _sm_enc(a)), Int64(4)),
 ])
 
+# popfirst!/pushfirst! are WASM_METHOD_TABLE overlays (codegen/interpreter.jl) that copy
+# into a fresh allocation, so the Vector's MemoryRef is back at offset 1 where Julia's
+# _deletebeg! advanced it to 3. The lowering reads the offset WT's MemoryRef carries — a
+# ref with an offset cannot be stored (it rejects loudly) — so the gap is the overlay:
+# Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
+_xf("memoryref_offset_after_popfirst", Any[
+    ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
+])
+
 # ============================================================================
 function main()
     t0 = time()
