@@ -80,7 +80,7 @@ public add_type!, register_vector_type!, FuncRef, Bridge
 """
     _wt_default_validate() -> Bool
 
-parity(instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
 parity: dart2wasm ships no external validator; its builder IS the gate, verifying every emitted
 instruction's stack effect against its declared inputs/outputs). Since 2026-07-01 every InstrBuilder hard-gates each emission
 against the full subtype lattice (strict by default, mod threaded), so the module is valid
@@ -131,6 +131,7 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
 end
 
 # Convenience method for single argument type
+# parity(compile.dart:216 compile): the same entry, one argument type spelled without the tuple.
 compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate()) =
     compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, validate=validate)
 
