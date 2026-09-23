@@ -1881,7 +1881,10 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
             local _ck_box_wasm = julia_to_wasm_type(check_type)
-            if (_ck_box_wasm === I32 || _ck_box_wasm === I64 || _ck_box_wasm === F32 || _ck_box_wasm === F64) &&
+            if check_type <: Core.GenericMemoryRef
+                # a MemoryRef held as any value is its single-value struct, classed MemoryRef{T}
+                emit_isa_classid!(bld, ctx, register_memoryref_box!(ctx.mod, ctx.type_registry, check_type), check_type)
+            elseif (_ck_box_wasm === I32 || _ck_box_wasm === I64 || _ck_box_wasm === F32 || _ck_box_wasm === F64) &&
                !(check_type <: Int128) && !(check_type <: UInt128)
                 # Numeric-box rep (Number subtypes AND Char etc.): route through the SINGLE-SOURCE
                 # discriminator (was ref.test of the box struct, which same-wasm-rep types share —

@@ -1086,12 +1086,15 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
         end
         return expected
     end
-    # A MemoryRef into a field that holds its single-value struct (memoryref_field_type!)
-    # is boxed with its element offset, never narrowed to its Memory.
-    if expected isa ConcreteRef && expected.type_idx in values(ctx.type_registry.memoryref_box_idxs)
-        local mr_T = infer_value_type(val, ctx)
+    # A MemoryRef into a slot that holds any value (anyref/eqref/structref/externref) or into
+    # a field that holds its single-value struct (memoryref_field_type!) is that struct,
+    # classed MemoryRef{T} and carrying its element offset — never its bare Memory.
+    if (expected isa ConcreteRef && expected.type_idx in values(ctx.type_registry.memoryref_box_idxs)) ||
+       expected === AnyRef || expected === EqRef || expected === StructRef || expected === ExternRef
+        local mr_T = get_ssa_type(ctx, val)
         if mr_T isa DataType && mr_T <: Core.GenericMemoryRef && isconcretetype(mr_T)
             emit_memoryref_box!(b, ctx, val, mr_T)
+            expected === ExternRef && extern_convert_any!(b)
             return expected
         end
     end
@@ -1199,7 +1202,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     if node isa NirSSA
         # A MemoryRef carrying an element offset in the pair channel (builtins.jl) is
         # one value here only at offset 0; any other crossing rejects, located.
-        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :field)
+        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :snapshot)
             emit_memoryref_single!(b, ctx, node)
             return b
         end

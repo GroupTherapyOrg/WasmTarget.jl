@@ -728,19 +728,24 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
              isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
              length(pvb.v.stack))
         end
-        # A MemoryRef the pair channel (builtins.jl) carries with an element offset feeds a
-        # MemoryRef phi as its Memory — the phi's offset local takes the offset
-        # (set_phi_locals_for_edge!) — and any other phi as one value.
-        local _mr_kind = first(_memoryref_source(ctx, val))
-        if _mr_kind === :indexed || _mr_kind === :pair ||
-           (_mr_kind === :constant && !memoryref_offset_is_zero(ctx, val))
+        # A MemoryRef feeds a MemoryRef phi as its Memory — the phi's offset local takes the
+        # offset (set_phi_locals_for_edge!) — and a phi that holds any value as its
+        # single-value struct (emit_value!'s MemoryRef arm).
+        local _mr_val_t = _value_julia_type(val, ctx)
+        if _mr_val_t isa DataType && _mr_val_t <: Core.GenericMemoryRef && haskey(ctx.phi_locals, phi_idx)
             local _mr_phi_t = get(ctx.ssa_types, phi_idx, Any)
+            local _mr_kind = first(_memoryref_source(ctx, val))
             if _mr_phi_t isa Type && _mr_phi_t !== Union{} && _mr_phi_t <: Core.GenericMemoryRef
-                emit_memoryref_mem!(pvb, ctx, val; temp_map=temp_map)
+                if _mr_kind === :indexed || _mr_kind === :pair || _mr_kind === :snapshot ||
+                   (_mr_kind === :constant && !memoryref_offset_is_zero(ctx, val))
+                    emit_memoryref_mem!(pvb, ctx, val; temp_map=temp_map)
+                    return _cpv_ret()
+                end
             else
-                emit_memoryref_single!(pvb, ctx, val)
+                local _mr_local = ctx.phi_locals[phi_idx]
+                emit_value!(pvb, val, ctx, ctx.locals[_mr_local - ctx.n_params + 1])
+                return _cpv_ret()
             end
-            return _cpv_ret()
         end
         if is_nothing_value(val, ctx)
             # `nothing` is the null member of a reference-represented phi and the
@@ -968,18 +973,32 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # A MemoryRef phi's element offset (allocate_memoryref_offset_locals!): every
         # incoming offset is read before any phi on this edge is stored, then stored after
         # the Memories.
+        # An incoming indexed ref is re-emitted from its operands, which may be phi locals
+        # this edge stores; its Memory is read before any store too.
         offset_stores = Tuple{Int,Int}[]
+        mem_temps = Dict{Int,Int}()   # phi → the temp holding its incoming Memory
         for i in dest_start:dest_end
             stmt = nir[i].node
             stmt isa NirPhi || break
+            haskey(ctx.phi_locals, i) || continue
             off_local = get(ctx.memoryref_offset_locals, i, nothing)
-            off_local === nothing && continue
             for (edge_idx, edge) in enumerate(stmt.edges)
                 if edge == terminator_idx && stmt.values[edge_idx] !== nothing
-                    off_tmp = allocate_local!(ctx, I32)
-                    emit_memoryref_offset!(b, ctx, stmt.values[edge_idx])
-                    local_set!(b, off_tmp)
-                    push!(offset_stores, (off_local, off_tmp))
+                    val = stmt.values[edge_idx]
+                    phi_t = get(ctx.ssa_types, i, Any)
+                    if phi_t isa Type && phi_t !== Union{} && phi_t <: Core.GenericMemoryRef &&
+                       first(_memoryref_source(ctx, val)) === :indexed
+                        mem_tmp = allocate_local!(ctx, ctx.locals[ctx.phi_locals[i] - ctx.n_params + 1])
+                        emit_memoryref_mem!(b, ctx, val)
+                        local_set!(b, mem_tmp)
+                        mem_temps[i] = mem_tmp
+                    end
+                    if off_local !== nothing
+                        off_tmp = allocate_local!(ctx, I32)
+                        emit_memoryref_offset!(b, ctx, val)
+                        local_set!(b, off_tmp)
+                        push!(offset_stores, (off_local, off_tmp))
+                    end
                     break
                 end
             end
@@ -1002,7 +1021,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # convert_type! funnel → local.set. Replaces the arm-chain +
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
                                 # (cpv takes needs_temp) + the "safety check" re-derivation.
-                                pv_b, pv_ty, pv_n = compile_phi_value(val, i, needs_temp)
+                                pv_b, pv_ty, pv_n = haskey(mem_temps, i) ?
+                                    (let tb = _ctx_builder(ctx, "phi_edge_mem")
+                                         local_get!(tb, mem_temps[i])
+                                         (tb, tb.v.stack[end], 1)
+                                     end) :
+                                    compile_phi_value(val, i, needs_temp)
                                 # Typed merge — the audit proved the channel honest
                                 # (pv_n is now trustworthy; the phantom declared-push is gone).
                                 if pv_n >= 2

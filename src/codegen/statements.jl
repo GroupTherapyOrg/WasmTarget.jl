@@ -480,7 +480,11 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # preserve that value and coerce its emitted physical type; never repair a
         # failed narrowing with zero or ref.null.
         pi_type = get(ctx.ssa_types, idx, Any)
-        if pi_type !== Nothing && haskey(ctx.ssa_locals, idx)
+        if haskey(ctx.memoryref_offset_locals, idx)
+            # a MemoryRef out of a slot that holds any value: unpack its single-value struct
+            emit_value!(b, node.value, ctx, AnyRef)
+            emit_memoryref_unbox!(b, ctx, idx, pi_type)
+        elseif pi_type !== Nothing && haskey(ctx.ssa_locals, idx)
             local_idx = ctx.ssa_locals[idx]
             local_array_idx = local_idx - ctx.n_params + 1
             if !(1 <= local_array_idx <= length(ctx.locals))

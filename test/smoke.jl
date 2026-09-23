@@ -700,6 +700,24 @@ _g("memoryref_pair", Any[
     ("bc_throw_chained", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(Core.memoryrefnew(v.ref, 3, true), n, true); 0; catch e; e isa BoundsError ? (e.i::Int) : -1; end), Int64(9)),
     ("bc_unused_check", (n::Int64) -> (v = collect(1:10); try; Core.memoryrefnew(v.ref, n, true); 0; catch e; e isa BoundsError ? 1 : -1; end), Int64(11)),
 ])
+# A MemoryRef is a snapshot: a ref taken before its Array is grown, resized or given a new
+# :ref still reads the old Memory at its old offset; two MemoryRef phis swapping on one edge
+# read each other's old values. A MemoryRef in a slot that holds any value (BoundsError's
+# `a`, a Vector{Any} element) is classed MemoryRef{T}.
+_g("memoryref_snapshot", Any[
+    ("ref_snapshot_push", (n::Int64) -> (v = collect(1:3); r = v.ref; for k in 1:n; push!(v, k); end; v[1] = 99; Core.memoryrefget(r, :not_atomic, true)), Int64(10)),
+    ("indexed_snapshot_resize", (n::Int64) -> (v = collect(1:3); r = Core.memoryrefnew(v.ref, 2, true); resize!(v, n); v[2] = 77; Core.memoryrefget(r, :not_atomic, true)), Int64(100)),
+    ("indexed_snapshot_setfield", (n::Int64) -> (v = collect(1:5); r = Core.memoryrefnew(v.ref, n, true); w = collect(10:10:50); setfield!(v, :ref, w.ref); Core.memoryrefget(r, :not_atomic, true) * 100 + Base.memoryrefoffset(r)), Int64(2)),
+    ("phi_swap_offsets", (n::Int64) -> (v = collect(1:20); r = v.ref; s = Core.memoryrefnew(v.ref, 5, true); for k in 1:n; r, s = s, Core.memoryrefnew(r, 2, true); end; Core.memoryrefget(r, :not_atomic, true) * 100 + Core.memoryrefget(s, :not_atomic, true)), Int64(3)),
+    ("bc_payload_isa", (n::Int64) -> (m = Memory{Int64}(undef, 3); r = Core.memoryrefnew(Core.memoryrefnew(m), 2, true); try; Core.memoryrefnew(r, n, true); 0; catch e; a = (e::BoundsError).a; (a isa MemoryRef{Int64} ? 10 : 0) + (typeof(a) === MemoryRef{Int64} ? 1 : 0); end), Int64(5)),
+    ("bc_payload_zero_isa", (n::Int64) -> (m = Memory{Int64}(undef, 3); r = Core.memoryrefnew(m); try; Core.memoryrefnew(r, n, true); 0; catch e; a = (e::BoundsError).a; (a isa MemoryRef{Int64} ? 10 : 0) + (typeof(a) === MemoryRef{Int64} ? 1 : 0); end), Int64(5)),
+    ("any_slot_isa", (n::Int64) -> (v = collect(1:n); x = Any[v.ref, 1]; (x[1] isa MemoryRef{Int64} ? 1 : 0) + (x[2] isa MemoryRef{Int64} ? 10 : 0)), Int64(3)),
+])
+# Reading a MemoryRef back out of a slot that holds any value needs its single-value struct
+# unpacked into the pair channel; until then it rejects, located (native 1).
+_xf("memoryref_unbox", Any[
+    ("any_slot_unbox", (n::Int64) -> (v = collect(1:n); x = Any[v.ref, 1]; Core.memoryrefget(x[1]::MemoryRef{Int64}, :not_atomic, true)), Int64(3)),
+])
 # An Array keeps its :ref's element offset (the Array struct's off0 field): Julia's own
 # `_deletebeg!` (not an overlay) and `Base.wrap` store an offset ref, and every reader —
 # indexing, reshape, push!, copy, splatting, `take!` — honours it.
