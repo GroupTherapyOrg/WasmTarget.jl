@@ -27,6 +27,7 @@ L120_one_inference_path = 0
 L121_retired_names_absent_from_src = 0
 L122_closed_world_numbered_once = 0
 L123_wt_only_intrinsic_surface_extinct = 0
+L124_no_name_keyed_call_arms = 0
 L125_charter_is_the_definition_of_done = 0
 L126_ratchets_terminate_at_zero = 0
 L127_one_inference_path_keeps_source_lines = 0
@@ -132,7 +133,7 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
-L124_no_name_keyed_call_arms = 1
+R37_name_keyed_callee_arms = 1
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 24
