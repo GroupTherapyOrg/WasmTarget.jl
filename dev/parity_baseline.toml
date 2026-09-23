@@ -133,7 +133,6 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
-R37_name_keyed_callee_arms = 1
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 24
@@ -142,13 +141,14 @@ R21_foreigncall_arms = 0
 R27_coercion_bypass = 26
 R29a_raw_codeinfo_reads = 161
 R29b_code_info_identifier = 116
-R30_untyped_returns = 536
+R30_untyped_returns = 530
 R31_any_typed_fields = 18
-R32_unanchored_definitions = 615
-R33_unexercised_registry_entries = 17
-R34_silent_catches = 27
+R32_unanchored_definitions = 558
+R33_unexercised_registry_entries = 16
+R34_silent_catches = 25
 R35_detached_docstrings = 9
 R36_hidden_test_failures = 24
-R3_infer_value_type = 68
+R37_name_keyed_callee_arms = 1
+R3_infer_value_type = 66
 R5_julia_type_reguess = 74
 R7_raw_coercion_ops = 29
