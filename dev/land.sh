@@ -32,7 +32,19 @@ prepare)
     tip=$(git -C "$MAIN" rev-parse "$MARCH")
     cd "$W"
     [ -z "$(git status --porcelain)" ] || { echo "worktree $W is dirty — refusing"; exit 1; }
-    if [ -n "${3:-}" ]; then git rebase --onto "$tip" "$3" "$br"; else git rebase "$tip"; fi
+    if [ -n "${3:-}" ]; then rebase=(git rebase --onto "$tip" "$3" "$br"); else rebase=(git rebase "$tip"); fi
+    if ! "${rebase[@]}"; then
+        # a stop whose only conflict is the ratchet baseline resolves through
+        # dev/merge_baseline.py (per key the minimum; it refuses a key whose counter changed)
+        while [ "$(git diff --name-only --diff-filter=U)" = "dev/parity_baseline.toml" ]; do
+            python3 dev/merge_baseline.py dev/parity_baseline.toml
+            git add dev/parity_baseline.toml
+            GIT_EDITOR=true git rebase --continue && break
+        done
+        if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            echo "rebase of $br stopped on a conflict outside dev/parity_baseline.toml — resolve it in $W"; exit 1
+        fi
+    fi
     # strip transcript links; add the dev/CHARTER.md trailer where an agent omitted it
     # (CHARTER="C1 C9" dev/land.sh prepare … — the lander states what the branch closes)
     FILTER_BRANCH_SQUELCH_WARNING=1 WT_HOOK_FILTER=1 CHARTER="${CHARTER:-}" git filter-branch -f --msg-filter \
