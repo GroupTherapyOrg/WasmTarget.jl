@@ -2674,12 +2674,12 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
         end
     end
 
-    # String/Symbol `*` is CONCATENATION, not arithmetic: the plain-call path
-    # (closure-compiled bodies present concat as `call *`, not invoke) fell
-    # into the numeric branch and emitted i64.mul on two string refs — the
-    # E-003 island's fn#107 validation failure. Route to the same
-    # compile_string_concat the invoke path uses; the operands are on `fb`, so
-    # rebuild the fragment (pattern).
+    # String/Symbol `*` is CONCATENATION, not arithmetic: a `call *` of two proven
+    # String/Symbol operands would otherwise fall into the numeric branch and emit
+    # i64.mul on two string refs (the E-003 island's fn#107 validation failure).
+    # It lowers through compile_string_concat_many_b, the one N-way concatenation
+    # builder; the operands already pushed on `fb` are discarded by starting a
+    # fresh fragment, which the builder fills from the operands themselves.
     local _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
     local _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
     if callee === (*) && length(args) == 2 &&
@@ -2717,10 +2717,12 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
     return append_builder!(b, fb)
 end
 
-# `isa(value, T)` — type checking for Union discrimination. `T` is a
-# compile-time Type parameter (skipped by the shared operand rule), so exactly
-# one operand reaches `_compile_call_isa`, which is what its `_sub_builder(fb,
-# ctx, "_compile_call_isa", 1)` seeds.
+# `isa(value, T)` — type checking for Union discrimination. A constant `T` (a
+# Type literal or a bound global naming one) is skipped by emit_call_operands!'s
+# type-operand rule, so only the value is pushed, and `_compile_call_isa`'s
+# `_sub_builder(fb, ctx, "_compile_call_isa", 1)` seeds that one operand. A runtime
+# `T` is pushed as a second operand and reaches `_compile_call_isa` with
+# `check_type === nothing`.
 # parity(code_generator.dart:3159 visitIsExpression)
 function _lower_isa!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) >= 2 || return nothing
