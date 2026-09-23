@@ -775,6 +775,37 @@ _g("memoryref_array_offset", Any[
     ("deletebeg_splat_sum", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); +(v...)), Int64(5)),
     ("iobuffer_grow_take", (n::Int64) -> (io = IOBuffer(); for i in 1:n; write(io, UInt8(i % 256)); end; b = take!(io); length(b) * 1000 + Int64(b[end])), Int64(2000)),
 ])
+# The storage algebra (dev/formal/StorageRef.tla): a MemoryRef's ptr_or_offset counts in
+# Julia's stride — an element index for an isbits-union element, the inline struct's size
+# for an inline element — so Base's own pointer arithmetic lands on the same slot; an
+# unsafe_copyto! between offset refs; `atomic_pointerset(p, C_NULL)` unsets a reference
+# slot (Julia's `_unsetindex!`); a reshape shares its Vector's Memory. Then a const Vector
+# global is one object at every read (`===`, and a mutation seen by the next read), and
+# `sizeof`/`Core.sizeof` of a Vector.
+function _sm_ptr_stride(v, n::Int64, elsz::Int64)::Int64
+    GC.@preserve v begin
+        a = Base.unsafe_convert(Ptr{Nothing}, memoryref(v.ref, n))
+        b = Base.unsafe_convert(Ptr{Nothing}, memoryref(v.ref, 1))
+        return Int64(a == b + (n - 1) * elsz)
+    end
+end
+const _SM_CONST_VEC = [1, 2]
+_g("memoryref_storage", Any[
+    ("union_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(Union{Int64,Nothing}[1, nothing, 3, 4, 5], n, 8), Int64(3)),
+    ("tuple_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(Tuple{Int64,String}[(1, "a"), (2, "b"), (3, "c"), (4, "d")], n, 16), Int64(3)),
+    ("any_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(Any[1, 2, 3, 4, 5], n, 8), Int64(3)),
+    ("i64_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(collect(1:5), n, 8), Int64(3)),
+    ("union_memcopy_offset", (n::Int64) -> (v = Union{Int64,Nothing}[1, nothing, 3, 4, 5]; w = Union{Int64,Nothing}[0, 0, 0, 0, 0, 0]; unsafe_copyto!(memoryref(w.ref, n), memoryref(v.ref, 2), 3); s = 0; for x in w; s = s * 10 + (x === nothing ? 9 : x); end; s), Int64(3)),
+    ("any_memcopy_offset", (n::Int64) -> (v = Any[1, "a", 3, 4, 5]; w = Any[0, 0, 0, 0, 0, 0]; unsafe_copyto!(memoryref(w.ref, n), memoryref(v.ref, 2), 3); (w[n] == "a" ? 100 : 0) + (w[n + 1]::Int) * 10 + (w[n + 2]::Int)), Int64(3)),
+    ("unset_any_slot", (n::Int64) -> (v = Any[1, 2, 3]; GC.@preserve v Core.Intrinsics.atomic_pointerset(Ptr{Ptr{Cvoid}}(pointer(v)) + (n - 1) * 8, C_NULL, :monotonic); (isassigned(v, n) ? 10 : 0) + (isassigned(v, 1) ? 1 : 0)), Int64(2)),
+    ("reshape_mightalias", (n::Int64) -> (v = collect(1:n); m = reshape(v, 2, 2); Int64(Base.mightalias(v, m)) * 10 + Int64(Base.mightalias(v, collect(1:n)))), Int64(4)),
+    ("const_vector_identity", (n::Int64) -> (a = _SM_CONST_VEC; b = _SM_CONST_VEC; Int64(a === b)), Int64(0)),
+    ("const_vector_mutation", (n::Int64) -> (push!(_SM_CONST_VEC, n); r = _SM_CONST_VEC[end] * 10 + length(_SM_CONST_VEC); pop!(_SM_CONST_VEC); r), Int64(7)),
+    ("sizeof_vec_i64", (n::Int64) -> (v = collect(1:n); sizeof(v)), Int64(5)),
+    ("sizeof_vec_f32", (n::Int64) -> (v = Float32[1, 2, 3]; sizeof(v) * 10 + n), Int64(1)),
+    ("core_sizeof_vec_i64", (n::Int64) -> (v = collect(1:n); Core.sizeof(v)), Int64(5)),
+    ("core_sizeof_vec_f32", (n::Int64) -> (v = Float32[1, 2, 3]; Core.sizeof(v) * 10 + n), Int64(1)),
+])
 # ---- overlays retired for Julia's own bodies (dev/CHARTER.md C3, C6) -------
 # Each case is a value a bespoke overlay computed wrong (test/soundness_suspects.jl rows 10,
 # 11, 18, 22); Base's own method now compiles in its place.

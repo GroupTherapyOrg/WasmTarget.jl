@@ -1195,6 +1195,7 @@ end
 The wasm field of an Array struct (register_vector_type!, register_matrix_type!) that holds
 the element offset off0 of the Array's :ref — memoryrefoffset(a.ref) - 1 — beside the data
 array that holds its Memory. It follows the :ref and :size fields.
+formal(dev/formal/StorageRef.tla): InBounds, Contents, JuliaOffset — (data, off0, size) stays Julia's (mem, memoryrefoffset - 1, size) through push!, popfirst! and resize!.
 parity(sdk/lib/_internal/wasm/common/typed_data.dart:2443 WasmI8ArrayBase._offsetInElements):
 the view's element offset, a field beside its _data.
 """

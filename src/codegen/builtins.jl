@@ -597,6 +597,7 @@ definition: an argument, a constant, an SSA value held in its local (written onc
 definition), a PiNode of one, a fresh ref of one, or an indexed ref whose operands are
 fixed. Anything else — an SSA value WT recomputes from its definition, which may read a
 field a later `setfield!` or growth call changes — is not.
+formal(dev/formal/StorageRef.tla): RefSnapshot — a ref reads the slot of the Memory it was taken from, never the Array's current :ref (the ReemitRef variant).
 parity(quarantine: Julia's MemoryRef is an immutable snapshot of (Memory, offset); WT
 re-emits a ref from its operands only where that preserves the snapshot.)
 """
@@ -1195,6 +1196,42 @@ function _lower_memoryrefnew!(b, fb, ctx, call, idx, args, callee)
         return append_builder!(b, fb)
     end
     return nothing
+end
+
+# `atomic_pointerset(p, C_NULL, order)` with `p` inside a Memory whose slots hold
+# references: Julia's `_unsetindex!` / `_deleteend!` clearing a freed slot for its GC.
+# The slot is the storage-relative byte pointer divided by Julia's element stride
+# (memory_element_stride); in a WasmGC array that slot becomes null — unset, as
+# `isassigned` then reads it. Returns `p`, as the intrinsic does. Any other stored value
+# or pointer is not lowered here.
+# parity(sdk/lib/_internal/wasm/common/list.dart:611 GrowableList.length=): freed slots are
+# nulled with `_data.fill(newLength, length, null)`.
+function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
+    length(args) >= 2 || return nothing
+    p, x = args[1], args[2]
+    local null = _nir_const_operand(x)
+    (null isa Ptr || null isa Base.BitInteger) && iszero(UInt(null)) || return nothing
+    local backing = _trace_memmove_ptr(p, ctx; eltypes = _EveryEltype())
+    backing === nothing && return nothing
+    local T = _storage_element_type(backing, ctx)
+    local arr_t = get_array_type!(ctx.mod, ctx.type_registry, T)
+    local arr_def = ctx.mod.types[arr_t + 1]
+    arr_def isa ArrayType && _wt_is_ref(arr_def.elem.valtype) || return nothing
+    local elem = arr_def.elem.valtype
+    local stride = memory_element_stride(T)
+    local _apb = _ctx_builder(ctx, "compile_call")
+    _emit_backing_array!(_apb, backing, ctx, arr_t)
+    emit_value!(_apb, p, ctx, I64)
+    if stride > 1
+        i64_const!(_apb, Int64(stride))
+        num!(_apb, Opcode.I64_DIV_U)
+    end
+    narrow_length_to_i32!(_apb)
+    elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx), elem) : ref_null!(_apb, elem)
+    array_set!(_apb, arr_t, elem)
+    emit_value!(_apb, p, ctx, I64)
+    append_builder!(fb, _apb)
+    return append_builder!(b, fb)
 end
 
 # Special case for Core.tuple - tuple creation
@@ -2760,6 +2797,7 @@ _register_builtin!(Core.memorynew, _lower_memorynew!)
 _register_builtin!(Core.memoryref, _lower_memoryref!)
 _register_builtin!(Core.memoryrefnew, _lower_memoryrefnew!)
 _register_builtin!(Core.tuple, _lower_tuple!)
+_register_builtin!(Core.Intrinsics.atomic_pointerset, _lower_atomic_pointerset!)
 _register_builtin!(Core._expr, _lower_expr!)
 _register_builtin!(Symbol, _lower_symbol!)
 _register_builtin!(Core.donotdelete, _lower_donotdelete!)

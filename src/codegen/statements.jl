@@ -40,7 +40,7 @@ end
 # parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 const _STORAGE_RELATIVE_PTR_OPS = (Core.Intrinsics.add_ptr, Core.Intrinsics.sub_ptr,
                                    Core.Intrinsics.bitcast, Core.Intrinsics.pointerref,
-                                   Core.Intrinsics.pointerset)
+                                   Core.Intrinsics.pointerset, Core.Intrinsics.atomic_pointerset)
 # Integer arithmetic over a storage-relative offset stays a storage-relative offset
 # (Base.unsafe_convert(Ptr, ::MemoryRef) scales `UInt(ptr_or_offset)` by the element
 # size before add_ptr); its result is followed like the pointer it came from.
@@ -63,7 +63,8 @@ const _STORAGE_RELATIVE_PTR_FOREIGNCALLS = (:memcpy, :memmove, :memset, :memchr,
 """
 Prove that a storage pointer (`jl_value_ptr`, a Memory's `ptr`, a MemoryRef's
 `ptr_or_offset`) never escapes WT's storage-relative pointer algebra. In that algebra a
-storage object's base offset is exactly zero; the backing object is carried by the
+pointer is a byte offset from the start of its backing Memory (a MemoryRef's element offset
+times Julia's stride, memory_element_stride); the backing object is carried by the
 recognized consumer and may never be observed as a fabricated numeric address. For a
 Memory/MemoryRef root the one comparison admitted is `===`/`!==` against another storage
 pointer (`_storage_pointer_backing`: `ref.eq` of the backing objects and equality of the
@@ -99,11 +100,17 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
             elseif consumer isa NirCall && consumer.callee in _STORAGE_RELATIVE_OFFSET_OPS
                 push!(pending, consumer_idx)
             elseif consumer isa NirCall
-                consumer.callee in _STORAGE_RELATIVE_PTR_OPS || return false
+                # the callee as an object: IR may quote it, `(Core.Intrinsics.atomic_pointerset)(…)`
+                local callee = _nir_callee_object(consumer.callee)
+                callee in _STORAGE_RELATIVE_PTR_OPS || return false
+                # a store keeps the pointer inside the algebra only as its address operand
+                (callee === Core.Intrinsics.pointerset ||
+                 callee === Core.Intrinsics.atomic_pointerset) &&
+                    any(o -> o isa NirSSA && o.id == source, consumer.operands[2:end]) && return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)
                 # a bitcast to an integer is followed too: its consumers decide
                 (result_type isa Type && result_type <: Ptr ||
-                 consumer.callee === Core.Intrinsics.bitcast) && push!(pending, consumer_idx)
+                 callee === Core.Intrinsics.bitcast) && push!(pending, consumer_idx)
             elseif consumer isa NirForeignCall
                 consumer.c_symbol in _STORAGE_RELATIVE_PTR_FOREIGNCALLS || return false
                 result_type = get(ctx.ssa_types, consumer_idx, Any)

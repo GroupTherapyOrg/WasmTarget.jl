@@ -605,16 +605,21 @@ end
 """
     memory_element_stride(T) -> Int
 
-Julia's byte stride of a `Memory{T}` element, the unit `MemoryRef.ptr_or_offset` is
-counted in: `sizeof(T)` for an isbits element, 8 for a boxed reference slot
-(`Base.aligned_sizeof(Any)`). Every lowering that converts between a byte offset and an
-element index uses this one rule.
+The unit Julia counts a `Memory{T}` MemoryRef's `ptr_or_offset` in, read from Julia's own
+layout: 1 (an element index) for an isbits-union or zero-size element, else the element's
+byte size `Base.elsize(Memory{T})` (8 for a boxed reference slot, the struct's aligned
+size for an inline element). `Base.unsafe_convert(Ptr, ::MemoryRef)` multiplies an index
+by that size, so both forms land on the same storage-relative byte pointer. Every lowering
+that converts between that offset and a wasm array index uses this one rule.
 
-parity(quarantine: Julia's MemoryRef.ptr_or_offset counts a Memory{T} element in bytes —
-sizeof(T), or 8 for a boxed slot; dart arrays are indexed by element.)
+parity(quarantine: Julia's MemoryRef.ptr_or_offset is a byte pointer for most Memory
+element kinds and an element index for isbits-union and zero-size ones (jl_memoryrefoffset);
+dart arrays are indexed by element.)
 """
-memory_element_stride(@nospecialize(T))::Int =
-    (T isa DataType && isbitstype(T)) ? max(sizeof(T), 1) : 8
+function memory_element_stride(@nospecialize(T))::Int
+    elsz = Base.elsize(Memory{T})
+    return (Base.isbitsunion(T) || elsz == 0) ? 1 : elsz
+end
 
 """
     registered_structs(registry::TypeRegistry) -> Vector{Pair{Type,StructInfo}}
