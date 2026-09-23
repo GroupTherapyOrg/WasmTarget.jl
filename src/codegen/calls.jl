@@ -2207,6 +2207,15 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
 end
 
 # formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
+"""
+The callee's module-qualified name for a diagnostic — the object's own home, so the name
+is the same whichever module the IR reached it through (`getglobal` is `Core.getglobal`
+even when the IR names it `Base.getglobal`).
+parity(target.dart:719 DiagnosticReporter.report): a located diagnostic names its target.
+"""
+_callee_label(f)::String = f isa GlobalRef ? string(f.mod, ".", f.name) :
+    (f isa Function || f isa Core.Builtin) ? string(parentmodule(f), ".", nameof(f)) : string(f)
+
 function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCompilationContext)
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(_nir_text(node), 80))   # errors name the call
@@ -3820,7 +3829,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     # here). emit_unsupported_stub!'s must-execute gate loud-rejects only when
                     # definitely executed; dead Union-branch calls stay sound silent traps.
                     emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                        "unresolved dynamic call `$(func)` $(call_arg_types) — dynamic dispatch / type instability WT cannot lower"; idx=idx)
+                        "unresolved dynamic call `$(_callee_label(func))` $(call_arg_types) — dynamic dispatch / type instability WT cannot lower"; idx=idx)
                 end
                 end
                 end

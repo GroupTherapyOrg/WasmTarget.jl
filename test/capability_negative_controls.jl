@@ -111,13 +111,16 @@ end
     @testset "dlopen rejects — dynamic dispatch WT cannot lower" begin
         err = _wt_nc_compile_err(_wt_nc_dlopen, (Float64,))
         @test err isa WasmTarget.WasmCompileError
-        @test occursin("unresolved dynamic call `Base.getglobal`", sprint(showerror, err))
+        @test occursin("unresolved dynamic call `Core.getglobal`", sprint(showerror, err))
     end
 
     @testset "filesystem write rejects — no host filesystem import" begin
         err = _wt_nc_compile_err(_wt_nc_fs, (Float64,))
         @test err isa WasmTarget.WasmCompileError
-        @test occursin("foreigncall `ios_get_writable` (no lowering)", sprint(showerror, err))
+        @test occursin("a MemoryRef's ptr_or_offset escapes storage-relative WasmGC operations", sprint(showerror, err))
+        # the IOStream write path hands a MemoryRef's pointer to C (unsafe_convert(Ptr{Nothing},
+        # ::MemoryRef) in iswritable); the storage-pointer escape proof rejects there, located,
+        # before the missing `ios_get_writable` lowering is reached
     end
 
     @testset "Threads.Atomic rejects — pointer escapes storage-relative algebra" begin

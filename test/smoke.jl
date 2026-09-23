@@ -457,6 +457,7 @@ _xf("pointer_foreigncalls", Any[
 # "Int64"); on Julia 1.13 it passes (measured 2026-09-22).
 (VERSION >= v"1.13-" ? _g : _xf)("show_type", Any[
     ("repr_runtime_type", (x::Int64) -> length(repr(x > 0 ? Int64 : Float64)), Int64(1)),
+])
 # ---- Union{Nothing,<numeric>} storage (dart's `int?` = a nullable boxed ref) ----
 # A Union{Nothing,Int64} field / return / element must hold `nothing` distinctly from 0;
 # @noinline keeps the struct, the call and the vector from being scalar-replaced away.
@@ -497,8 +498,7 @@ _g("union_fields", Any[
     ("findfirst_vec_miss", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(9)),
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
-# ---- Memory: allocation length (C6 suspects 15, 27) ----
-# ---- Memory: fill, allocation length (C6 suspects 12, 15, 27) ----
+])
 # ---- Memory: fill, allocation length, storage identity (C6 suspects 12, 14, 15, 27) ----
 _sm_enc(v) = (r = 0; for x in v; r = r * 10 + x; end; r)
 _g("memory", Any[
