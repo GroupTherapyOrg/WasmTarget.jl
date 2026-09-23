@@ -320,6 +320,7 @@ _g("foreign_calls", Any[
     ("write_symbol", (x::Int64) -> (io = IOBuffer(); write(io, x > 0 ? :abc : :de); position(io)), Int64(1)),            # strlen
     # No Base method of Julia 1.12 or 1.13 calls jl_alloc_genericmemory (Memory{T}(undef, n)
     # is the `memorynew` builtin); an explicit ccall is the only spelling that reaches it.
+    ("memcpy", (x::Int64) -> (a = zeros(UInt8, 4); b = UInt8[1, 2, 3, x]; GC.@preserve a b Base.memcpy(pointer(a), pointer(b), 4); Int64(a[4])), Int64(9)),  # memcpy
     ("alloc_genericmemory_ccall", (n::Int64) -> (m = ccall(:jl_alloc_genericmemory, Ref{Memory{Int64}}, (Any, Csize_t), Memory{Int64}, n); m[1] = 4; m[1] + length(m)), Int64(3)),
 ])
 
@@ -441,6 +442,16 @@ _xf("builtin_crashes", Any[
     # Core.invoke_in_world: the re-dispatched `abs` is not in the closed world
     # ("unresolved dynamic call Main.abs (Int64,)")
     ("invoke_in_world", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
+])
+# FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
+_xf("pointer_foreigncalls", Any[
+    # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
+    # storage-relative WasmGC operations" (also the first reject on the way to
+    # utf8proc_grapheme_break_stateful, whose Ref{Int32} state argument goes through it)
+    ("ref_pointer_load", (x::Int64) -> (r = Ref(x); GC.@preserve r unsafe_load(Base.unsafe_convert(Ptr{Int64}, r))), Int64(5)),
+    ("grapheme_break_stateful", (x::Int64) -> Base.Unicode.isgraphemebreak!(Ref{Int32}(0), 'a', Char(x)) ? 1 : 0, Int64(98)),
+    # jl_ptr_to_array_1d: the lowering cannot trace pointer(v) and declines ("no lowering")
+    ("unsafe_wrap_pointer", (n::Int64) -> (v = collect(1:n); GC.@preserve v (w = unsafe_wrap(Array, pointer(v), n); w[2])), Int64(3)),
 ])
 # `repr` of a runtime type traps "dereferencing a null pointer" on Julia 1.12 (native
 # "Int64"); on Julia 1.13 it passes (measured 2026-09-22).

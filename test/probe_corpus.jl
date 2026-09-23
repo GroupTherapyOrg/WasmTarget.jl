@@ -319,7 +319,7 @@ _c("wt_unalias", _wt_wrap_unalias, Vector{Int64}, Vector{Int64})
 #     unknown-foreigncall trap — confirmed 2026-09-02).
 # ─────────────────────────────────────────────────────────────────────────────
 
-_c("fc_alloc_genericmemory", (n::Int64) -> (v = Vector{Float64}(undef, n); v[1] = 1.0; v[1]), Int64)   # jl_alloc_genericmemory
+_c("fc_alloc_genericmemory", (n::Int64) -> (v = Vector{Float64}(undef, n); v[1] = 1.0; v[1]), Int64)   # reaches Core.memorynew, not jl_alloc_genericmemory (measured by test/registry_coverage.jl)
 _c("fc_memset_dict_ctor", () -> (d = Dict{Int64,Int64}(); d[1] = 2; d[1]))                              # memset
 _c("fc_types_equal_pow", (x::Float32) -> x^2.0f0, Float32)                                              # jl_types_equal
 mutable struct _WTProbeObjId
