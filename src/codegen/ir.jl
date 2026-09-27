@@ -71,17 +71,14 @@ end
     infer_return_type(f, argtypes) -> Type
 
 The return type of `f(::argtypes...)` under the one inference path (overlays applied): the
-question a box-capture join asks about a write's value. `Any` when inference fails.
+question a box-capture join asks about a write's value. Julia's own answer: `Any` for a call
+inference cannot analyze, `Union{}` for one no method matches.
 parity(quarantine: a return-type query to Julia's own inference; dart reads a member's return
 type off its Kernel FunctionNode.)
 """
 function infer_return_type(@nospecialize(f), argtypes::Tuple;
                            interp::WasmInterpreter=get_wasm_interpreter())::Type
-    return try
-        Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
-    catch
-        Any
-    end
+    return Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
 end
 
 # parity(quarantine: the memo of Julia's host-layout reads, per specialization, installed for
@@ -135,7 +132,7 @@ function _ir_reads_host_layout(ci::Core.CodeInstance, depth::Int, memo::IdDict{A
     haskey(memo, key) && return memo[key]
     memo[key] = false                            # cycle guard
     local src = isdefined(ci, :inferred) ? ci.inferred : nothing
-    src isa String && (src = try Base._uncompressed_ir(ci, src) catch; nothing end)
+    src isa String && (src = Base._uncompressed_ir(ci, src))
     local found = !(src isa Core.CodeInfo)
     if !found
         for rec in build_nir(src)

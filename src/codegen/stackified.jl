@@ -1303,15 +1303,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 local _stmt_emitted = length(bb.instrs) > _stmt_i0
                 local _stmt_pushed_value = length(bb.v.stack) > _stmt_stack0
 
-                # DEBUG: trace DROP emissions (node count)
-                _dbg_fn = try string(ctx.func_name) catch; "" end
-                if contains(_dbg_fn, "test_if_call")
-                    _drop_count = count(x -> x isa InstrIR.Drop, @view bb.instrs[_stmt_i0+1:end])
-                    if stmt isa Union{NirCall, NirInvoke}
-                        @warn "STACKIFIED-DROP stmt=$i kind=$(nameof(typeof(ctx.nir[i].node))) drops=$(_drop_count) has_ssa=$(haskey(ctx.ssa_locals, i))" maxlog=20
-                    end
-                end
-
                 # After unreachable/stub, mark dead code within block.
                 # Previous `break` exited the block loop, causing subsequent dead
                 # statements to be placed in the wrong block. Now we mark dead code

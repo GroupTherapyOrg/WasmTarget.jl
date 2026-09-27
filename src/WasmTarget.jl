@@ -387,31 +387,28 @@ end
 
 """
 Disassemble ±12 instructions around the first `(at offset 0x…)` in a validator
-message. Best-effort: any failure returns "" (validation errors must never be
-masked by their own diagnostics).
+message, "" when the message names no offset or the printer prints nothing (a module
+`wasm-tools print` rejects): the validation error it accompanies is never masked by
+its own diagnostic.
 """
 function _disassembly_context(wasm_tools, wasm_path::AbstractString, validator_msg::AbstractString)::String
-    try
-        m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
-        m === nothing && return ""
-        target = parse(UInt64, m.captures[1]; base=16)
-        dis = read(pipeline(`$(wasm_tools) print --print-offsets $(wasm_path)`, stderr=devnull), String)
-        lines = split(dis, '\n')
-        # offsets appear as leading `(;@1fd2  ;)` comments
-        best = 0
-        for (i, ln) in enumerate(lines)
-            om = match(r"^\(;@([0-9a-f]+)\s*;\)", ln)
-            om === nothing && continue
-            off = parse(UInt64, om.captures[1]; base=16)
-            off <= target && (best = i)
-            off > target && break
-        end
-        best == 0 && return ""
-        lo, hi = max(1, best - 12), min(length(lines), best + 2)
-        join(lines[lo:hi], "\n")
-    catch
-        ""
+    m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
+    m === nothing && return ""
+    target = parse(UInt64, m.captures[1]; base=16)
+    dis = read(pipeline(ignorestatus(`$(wasm_tools) print --print-offsets $(wasm_path)`), stderr=devnull), String)
+    lines = split(dis, '\n')
+    # offsets appear as leading `(;@1fd2  ;)` comments
+    best = 0
+    for (i, ln) in enumerate(lines)
+        om = match(r"^\(;@([0-9a-f]+)\s*;\)", ln)
+        om === nothing && continue
+        off = parse(UInt64, om.captures[1]; base=16)
+        off <= target && (best = i)
+        off > target && break
     end
+    best == 0 && return ""
+    lo, hi = max(1, best - 12), min(length(lines), best + 2)
+    return join(lines[lo:hi], "\n")
 end
 
 """

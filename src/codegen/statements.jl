@@ -2026,7 +2026,7 @@ function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
         # type argument is a compile-time constant.
         local _fc_t = _nir_const_operand(node.operands[1])
         if _fc_t isa Type
-            i32_const!(b, (try Base.allocatedinline(_fc_t) catch; false end) ? 1 : 0)
+            i32_const!(b, Base.allocatedinline(_fc_t) ? 1 : 0)   # Julia's own jl_stored_inline
             return b
         end
     return nothing

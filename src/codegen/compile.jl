@@ -156,14 +156,11 @@ function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_r
     f isa Function || return nothing
     _build_standalone_intrinsic_bodies!()
     isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
-    m = try
-        which(f, arg_types)
-    catch
-        nothing
-    end
-    m === nothing && return nothing
-    haskey(STANDALONE_INTRINSIC_BODIES, m) || return nothing
-    return STANDALONE_INTRINSIC_BODIES[m](arg_types, mod, type_registry; return_type=return_type)
+    # Julia's own method lookup, which answers `nothing` for no match or an ambiguity
+    hit = Base._which(Tuple{Core.Typeof(f), arg_types...}; raise=false)
+    hit === nothing && return nothing
+    haskey(STANDALONE_INTRINSIC_BODIES, hit.method) || return nothing
+    return STANDALONE_INTRINSIC_BODIES[hit.method](arg_types, mod, type_registry; return_type=return_type)
 end
 
 """

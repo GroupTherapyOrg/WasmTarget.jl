@@ -1529,8 +1529,8 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
                     if field_sym isa Symbol && hasfield(obj_type, field_sym)
                         julia_field_type = fieldtype(obj_type, field_sym)
                     elseif field_sym isa Integer
-                        fc = try fieldcount(obj_type) catch; -1 end
-                        if fc >= 0 && 1 <= field_sym <= fc
+                        fc = Base.datatype_fieldcount(obj_type)   # nothing: no definite count (a Vararg tuple)
+                        if fc !== nothing && 1 <= field_sym <= fc
                             julia_field_type = fieldtype(obj_type, Int(field_sym))
                         end
                     end

@@ -344,21 +344,16 @@ end
 
 # ============================================================================
 # build_nir — the ONE pass that consumes a CodeInfo and produces the boundary. Everything
-# below is intentionally total (never throws) — a build_nir crash would break every
-# compile, not just the classification decision a consumer reads.
+# below asks Julia's own total queries (`isdefined`, `getdebugidx`, `widenconst`, a concrete
+# type's `fieldtype`), so nothing here catches: a query that throws is an internal error and
+# surfaces as one.
 # ============================================================================
 
 """Raw per-position DebugInfo line, 0 when that position carries none. Julia 1.12+ replaced
 the flat `codelocs` array with a compressed `Core.DebugInfo`; this is the one decode.
 parity(code_generator.dart:190 setSourceMapFileOffset): the source position dart reads from
 TreeNode.fileOffset (pkg/kernel/lib/src/ast/misc.dart:71); Julia stores it in Core.DebugInfo."""
-function _debug_line(di, i::Int)::Int
-    try
-        return Int(Base.IRShow.getdebugidx(di, i)[1])
-    catch
-        return 0
-    end
-end
+_debug_line(di::Core.DebugInfo, i::Int)::Int = Int(Base.IRShow.getdebugidx(di, i)[1])
 
 """Per-statement source lines for one CodeInfo, in ONE forward pass: a statement whose own
 DebugInfo entry is ≤ 0 (a synthesized one) inherits the nearest earlier statement that
@@ -373,10 +368,9 @@ the method's definition line and its inline chain is empty. Asking for `debuginf
 in ir.jl restores both (verified: 7/7 statements lined, a real 3-frame chain) — a change to
 the one inference path, not to this decode.
 parity(code_generator.dart:190 setSourceMapFileOffset): one source line per node, read once."""
-function _nir_lines(code_info, n::Int)::Vector{Int32}
+function _nir_lines(code_info::Core.CodeInfo, n::Int)::Vector{Int32}
     out = zeros(Int32, n)
-    di = try; code_info.debuginfo; catch; nothing; end
-    di === nothing && return out
+    di = code_info.debuginfo
     carried = Int32(0)
     for i in 1:n
         ln = _debug_line(di, i)
@@ -443,8 +437,8 @@ function resolve_operand(x, types)::NirNode
     elseif x isa Core.SlotNumber
         return NirSlot(x.id)
     elseif x isa GlobalRef
-        bound = try; isdefined(x.mod, x.name); catch; false; end
-        val = bound ? (try; getfield(x.mod, x.name); catch; nothing; end) : nothing
+        bound = isdefined(x.mod, x.name)
+        val = bound ? getfield(x.mod, x.name) : nothing
         return NirGlobalRef(x.mod, x.name, val, bound)
     elseif x isa QuoteNode
         return NirLiteral(x.value)
@@ -459,11 +453,7 @@ parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode 
 invocation carries its target member.)"""
 function resolve_call_callee(x, types)
     if x isa GlobalRef
-        try
-            return isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : x
-        catch
-            return x
-        end
+        return isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : x
     elseif x isa QuoteNode
         return x.value
     else
@@ -511,13 +501,9 @@ end
 function _resolve_type_operand(x)
     x isa Type && return x
     if x isa GlobalRef
-        try
-            isdefined(x.mod, x.name) || return Any
-            v = getfield(x.mod, x.name)
-            return v isa Type ? v : Any
-        catch
-            return Any
-        end
+        isdefined(x.mod, x.name) || return Any
+        v = getfield(x.mod, x.name)
+        return v isa Type ? v : Any
     end
     (x isa QuoteNode && x.value isa Type) && return x.value
     return Any
@@ -559,7 +545,7 @@ end
 # (pkg/kernel/lib/src/ast/expressions.dart:2907) initializes, read from the class once.
 _nir_field_types(T)::Vector{Type} =
     (T isa Type && isconcretetype(T)) ?
-        (try; Type[fieldtype(T, k) for k in 1:fieldcount(T)]; catch; Type[]; end) : Type[]
+        Type[fieldtype(T, k) for k in 1:fieldcount(T)] : Type[]
 
 """Build a `NirNew` from an already-known concrete type and raw field operands — the entry
 calls.jl uses when it SYNTHESIZES a field-wise constructor (there is no `Expr(:new, ...)`
@@ -606,7 +592,7 @@ function _resolve_new_type(type_ref, stmt_idx::Int, code_info)::Tuple{Type,Symbo
         ssatypes = code_info.ssavaluetypes
         (ssatypes isa Vector && 1 <= i <= length(ssatypes)) ? ssatypes[i] : Any
     end
-    _widen(t) = (t isa Type ? t : (try; Core.Compiler.widenconst(t); catch; Any; end))
+    _widen(t) = t isa Type ? t : Core.Compiler.widenconst(t)
     if type_ref isa GlobalRef || type_ref isa DataType || type_ref isa Type ||
        (type_ref isa QuoteNode && type_ref.value isa Type)
         # A literal that does not name a Type resolves to `Any` and still counts as
