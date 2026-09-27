@@ -7,7 +7,6 @@
         ("compile", "Core Compilation"),
         ("types", "Types"),
         ("module-building", "Module Building"),
-        ("caching", "Caching"),
         ("source-maps", "Source Maps"),
         ("low-level", "Low-Level / Advanced"),
     ]
@@ -99,19 +98,6 @@
         api_entry(
             "add_memory!(mod, pages) / add_data_segment!(mod, offset, bytes)",
             "Linear-memory escape hatch. Prefer WasmGC structs/arrays over linear memory for new code."
-        ),
-
-        # ── Caching ──
-        H2(:id => "caching", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Caching"),
-        api_entry(
-            "compile_cached(f, arg_types; ...) / compile_multi_cached(functions; ...)",
-            "Drop-in replacements for `compile` / `compile_multi` that memoize on the input IR + arg types. Returns the \
-             cached bytes immediately on hit — useful for hot-reload dev loops and CI builds that compile the same \
-             islands repeatedly."
-        ),
-        api_entry(
-            "enable_cache!() / disable_cache!() / clear_cache!() / cache_stats()",
-            "Process-wide cache controls. `cache_stats()` returns a NamedTuple of hit/miss counts."
         ),
 
         # ── Source Maps ──

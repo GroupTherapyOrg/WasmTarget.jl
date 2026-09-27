@@ -2168,7 +2168,12 @@ const LOCKS = [
                        "compile_from_codeinfo", "compile_module_from_ir", "_PrecomputedIRKey",
                        "preprocess_ir_entries", "serialize_ir_entries", "deserialize_ir_entries",
                        "collect_and_resolve_all_globalrefs", "substitute_globalrefs",
-                       "wasm_bytes_length", "wasm_bytes_get"]
+                       "wasm_bytes_length", "wasm_bytes_get",
+                       # the compiled-bytes cache: its key hashed only the entry method's
+                       # world, so a redefined callee was answered with stale bytes (2026-09-27)
+                       "compile_cached", "compile_multi_cached", "enable_cache!",
+                       "disable_cache!", "clear_cache!", "cache_stats", "CompileCache",
+                       "compute_cache_key", "compute_multi_cache_key", "_GLOBAL_CACHE"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue

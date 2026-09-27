@@ -53,7 +53,6 @@ include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
 include("codegen/sourcemap.jl")
-include("codegen/cache.jl")
 
 include("bridge.jl")
 
@@ -62,7 +61,6 @@ include("bridge.jl")
 export compile, compile_multi, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
 export compile_with_sourcemap, compile_multi_with_sourcemap
-export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
