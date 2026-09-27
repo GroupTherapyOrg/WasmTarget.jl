@@ -64,39 +64,41 @@ end
 """
     ensure_rng_globals!(mod) -> RNGGlobals
 
-Create 4 mutable i64 globals for Xoshiro256++ RNG state + JS seed import.
-Idempotent — returns existing globals if already created.
+The four mutable i64 globals that hold the Task's Xoshiro256++ state words, and the host
+entropy import `env.random_i64` that seeds them (rng_seed_initializer!). Idempotent.
 
-parity(quarantine: the module globals that hold the Task's Xoshiro256++ state, see RNGGlobals.)
+parity(sdk/lib/_internal/wasm/standalone/math_externs_patch.dart:54 _initialSeed): dart2wasm
+seeds its default Random from the embedder's random integer.
 """
 function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
     existing = get_rng_globals()
-    if existing !== nothing
-        return existing
+    existing === nothing || return existing
+    seed_idx = add_import!(mod, "env", "random_i64", WasmValType[], WasmValType[I64])
+    # const-expr init via the builder's ONE global-def channel (i64.const 0; end); the start
+    # function stores the host's seed before any code reads them
+    g = UInt32[add_global!(mod, I64, true, Int64(0)) for _ in 1:4]
+    return set_rng_globals!(RNGGlobals(g[1], g[2], g[3], g[4], seed_idx))
+end
+
+"""
+    rng_seed_initializer!(mod, rng) -> func_idx
+
+The module initializer that stores four host draws in the RNG's state words, in order: Julia's
+`Random.__init__` seeds the default RNG with four `UInt64`s from `RandomDevice`
+(`seed!(rng, nothing)` → `initstate!(rng, (s0, s1, s2, s3))`), and `env.random_i64` is that
+device. It is the first initializer the one start function runs.
+
+parity(globals.dart:167 _initializeAtStartup): a static field whose initializer is not a
+constant is initialized in the module's start function.
+"""
+function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
+    b = InstrBuilder(; func_name="rng_seed_initializer", mod=mod)
+    for g in (rng.rng0_idx, rng.rng1_idx, rng.rng2_idx, rng.rng3_idx)
+        call!(b, rng.seed_import_idx, WasmValType[], WasmValType[I64])
+        global_set!(b, g)
     end
-
-    # Import seed function: env.random_i64() -> i64
-    seed_idx = add_import!(mod, "env", "random_i64",
-        WasmValType[], WasmValType[I64])
-
-    # Create 4 mutable i64 globals with non-zero seeds
-    # Initial values are arbitrary non-zero constants (within signed i64 range)
-    seeds = Int64[
-        1311768467294899695,   # 0x1234567890ABCDEF & 0x7FFF...
-        3978425108881204001,   # non-zero seed
-        7463728394857261543,   # non-zero seed
-        2846573918374629105,   # non-zero seed
-    ]
-
-    rng_indices = UInt32[]
-    for seed in seeds
-        # const-expr init via the builder's ONE global-def channel (i64.const seed; end)
-        push!(rng_indices, add_global!(mod, I64, true, seed))
-    end
-
-    rng = RNGGlobals(rng_indices[1], rng_indices[2], rng_indices[3], rng_indices[4], seed_idx)
-    set_rng_globals!(rng)
-    return rng
+    end_block!(b)
+    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b))
 end
 
 """

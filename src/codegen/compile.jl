@@ -340,28 +340,6 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
-    needs_rng = false
-    for (f, arg_types, fname) in normalized
-        try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
-            for rec in build_nir(ci)
-                if rec.slot == 0 && rec.node isa NirForeignCall &&
-                   rec.node.c_symbol === :jl_get_current_task
-                    needs_rng = true
-                    break
-                end
-            end
-        catch
-        end
-        needs_rng && break
-    end
-    if needs_rng
-        ensure_rng_globals!(mod)
-    else
-        clear_rng_globals!()
-    end
-
     # Track all required globals across all functions
     required_globals = Dict{Int, Tuple{WasmValType, Type}}()  # global_idx -> (wasm_type, julia_elem_type)
 
@@ -437,6 +415,23 @@ function _compile_closed_world_plan(functions::Vector;
             add_global!(mod, wasm_type, true, zero(elem_type))
         end
     end
+
+    # A foreigncall whose lowering calls the host takes its import here, from the NIR bodies
+    # the first pass built: every import precedes the first defined function (add_import!
+    # refuses a later one), and the RNG's state globals follow the ones a WasmGlobal argument
+    # names by index. rand() reads the Task's Xoshiro state (RNGGlobals, seeded by the host);
+    # time_ns() reads the host clock.
+    for fd in function_data
+        fd[8] === nothing && continue
+        for rec in fd[8].stmts
+            (rec.slot == 0 && rec.node isa NirForeignCall) || continue
+            rec.node.c_symbol === :jl_get_current_task && ensure_rng_globals!(mod)
+            rec.node.c_symbol === :jl_hrtime && ensure_perf_now_import!(mod)
+        end
+    end
+    # the first module initializer seeds the RNG's state words from the host
+    local _rng = get_rng_globals()
+    _rng === nothing || push!(type_registry.module_init_functions, rng_seed_initializer!(mod, _rng))
 
     # Exception objects synthesized by lowering must join the closed component
     # before DFS class IDs freeze; late registration makes catch-side `isa`
@@ -590,13 +585,11 @@ function _compile_closed_world_plan(functions::Vector;
     end
 
     if link_roots !== nothing
-        imports_before_link = length(mod.imports)
+        # the linker runs after function indices exist, so add_import! refuses an import from it
         root_indices = Dict{String,UInt32}(
             name => UInt32(n_imports + n_existing + i - 1)
             for (i, (_, _, name, _, _, _, _)) in enumerate(function_data))
         link_roots(mod, root_indices, type_registry)
-        length(mod.imports) == imports_before_link || throw(ArgumentError(
-            "the root linker cannot add imports after function indices are frozen"))
     end
 
 

@@ -598,7 +598,10 @@ end
     add_import!(mod, module_name, field_name, params, results) -> func_idx
 
 Add an imported function to the module and return its function index.
-Imported functions come before local functions in the function index space.
+Imported functions come before local functions in the function index space, and WT numbers a
+function when it is defined (dart finalizes every index when the module is built, a
+FinalizableIndex): an import after a definition would renumber every defined function under
+the calls already emitted to it, so it is refused.
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
 """
 function add_import!(mod::WasmModule,
@@ -606,6 +609,7 @@ function add_import!(mod::WasmModule,
                      field_name::String,
                      params::Vector{NumType},
                      results::Vector{NumType})::UInt32
+    _check_import_precedes_definitions(mod, module_name, field_name)
     ft = FuncType(params, results)
     type_idx = add_type!(mod, ft)
     push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx))
@@ -619,6 +623,7 @@ function add_import!(mod::WasmModule,
                      field_name::String,
                      params::Vector{<:WasmValType},
                      results::Vector{<:WasmValType})::UInt32
+    _check_import_precedes_definitions(mod, module_name, field_name)
     # Convert to WasmValType vectors
     param_vec = WasmValType[p for p in params]
     result_vec = WasmValType[r for r in results]
@@ -627,6 +632,13 @@ function add_import!(mod::WasmModule,
     push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx))
     return UInt32(length(mod.imports) - 1)
 end
+
+# parity(quarantine: WT numbers a function when it is defined, where dart's FinalizableIndex
+# numbers it when the module is built, so a late import is refused instead of renumbered.)
+_check_import_precedes_definitions(mod::WasmModule, module_name::String, field_name::String)::Nothing =
+    isempty(mod.functions) ? nothing : _module_invalid(:add_import,
+        "import $(module_name).$(field_name) after $(length(mod.functions)) defined function(s) " *
+        "would renumber them: every import precedes the first definition")
 
 """
     num_imported_funcs(mod) -> Int

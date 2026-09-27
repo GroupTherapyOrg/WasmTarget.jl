@@ -1202,7 +1202,8 @@ const LOCKS = [
                         "add_root_global_initializer!",
                         "registry.module_init_functions",
                         "add_string_global!",
-                        "the root linker cannot add imports after function indices are frozen",
+                        # the linker cannot add an import: add_import! refuses one after a definition
+                        "@test_throws MBV.ModuleValidationError MBV.compile_multi(",
                         "constant_root", "root-link fixture", "unknown_link", "bad_entry",
                         "linked_indices", "bindings.bound_leaves"]
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)

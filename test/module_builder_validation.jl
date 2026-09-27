@@ -274,7 +274,8 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
                 MBV.add_global_export!(linked_mod, "eager_string", eager)
             end)
         @test init_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        @test_throws ArgumentError MBV.compile_multi(
+        # an import from the linker would renumber the defined functions: the builder refuses it
+        @test_throws MBV.ModuleValidationError MBV.compile_multi(
             Any[(leaf, (Int64,), "bad_linker")];
             link_roots=(linked_mod, _, _) -> MBV.add_import!(linked_mod,
                 "late", "forbidden", MBV.WasmValType[], MBV.WasmValType[]))
