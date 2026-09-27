@@ -59,7 +59,7 @@ anchor in `src/` has a row.)
 | SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
 | Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
 | Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
-| MemoryRef offset locals | `allocate_memoryref_offset_locals!` (builtins.jl) | — the StorageRef model belongs to the MemoryRef work |
+| Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
 | LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `vlq_encode` (sourcemap.jl) | — encodings; wasm-tools parses every module |
 
 ## Rules

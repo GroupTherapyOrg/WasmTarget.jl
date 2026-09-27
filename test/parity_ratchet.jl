@@ -461,6 +461,89 @@ function count_silent_catches(root::String=SRC)::Int
     return n
 end
 
+
+"""
+    unconsumed_files_outside_src() -> Vector{String}
+
+Tracked files outside `src/` that nothing consumes (dev/CHARTER.md C9): a file is consumed
+when a tracked file that is not prose names it (a `.md` only by its full path; the plan,
+the history and the changelog name files without consuming them), when a loader walks its
+directory, or when it is a repository convention file or a directory's README. A fuzz-ledger
+gap marked `status: fixed` records finished work and counts too.
+"""
+function unconsumed_files_outside_src()::Vector{String}
+    convention = Set(["Project.toml", "LICENSE.md", "CHANGELOG.md", "AGENTS.md",
+        ".gitignore", ".gitattributes", "release-please-config.json",
+        ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
+    # directories a loader walks: run_tlc.sh, the docs site's file routing, the fuzz ledger
+    # and corpus, Pkg's [extensions], GitHub Actions
+    walked = ("dev/formal/", "docs/src/", "test/fuzz/failures/", "test/fuzz/corpus/", "ext/",
+              ".github/workflows/")
+    not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
+    files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
+    texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
+                 if !(f in not_consumers) && isfile(joinpath(ROOT, f)))
+    bad = String[]
+    for f in files
+        startswith(f, "src/") && continue
+        (f in convention || basename(f) == "README.md" || any(d -> startswith(f, d), walked)) && continue
+        needle = endswith(f, ".md") ? f : basename(f)
+        any(((g, t),) -> g != f && !endswith(g, ".md") && occursin(needle, t), texts) || push!(bad, f)
+    end
+    for f in files
+        startswith(f, "test/fuzz/failures/") && isfile(joinpath(ROOT, f)) &&
+            occursin(r"^status: fixed"m, _text(joinpath(ROOT, f))) && push!(bad, f)
+    end
+    return bad
+end
+
+"""
+    components_without_model() -> Vector{String}
+
+dev/formal/README.md's Components table against src (dev/CHARTER.md C8): a modeled row whose
+model file is missing or whose model no file it names anchors (`formal(dev/formal/<M>.tla)`),
+an unmodeled row with no reason, a `formal(` anchor in src whose model has no row, and a
+function holding a worklist or fixpoint loop (`while changed|verifying|true|!isempty`) that
+no row names.
+"""
+function components_without_model()::Vector{String}
+    readme = _text(joinpath(ROOT, "dev", "formal", "README.md"))
+    rows = [strip.(split(strip(l), '|')[2:end-1]) for l in split(readme, '\n')
+            if startswith(l, "| ") && !startswith(l, "| Component") && count('|', l) == 4]
+    srcfiles = [joinpath(d, f) for (d, _, fs) in walkdir(SRC) for f in fs if endswith(f, ".jl")]
+    text = Dict(f => _text(f) for f in srcfiles)
+    bad = String[]
+    listed = Set{String}()
+    tablemodels = Set{String}()
+    for (comp, fns, model) in rows
+        union!(listed, [m.captures[1] for m in eachmatch(r"`([A-Za-z_!0-9]+)`", fns)])
+        if startswith(model, "—")
+            occursin(r"—\s*\S", model) || push!(bad, "row without a reason: $comp")
+            continue
+        end
+        push!(tablemodels, model)
+        isfile(joinpath(ROOT, "dev", "formal", model * ".tla")) || push!(bad, "no model file: $model")
+        files = [m.captures[1] for m in eachmatch(r"\(([a-z_]+\.jl)\)", fns)]
+        isempty(files) || any(f -> any(p -> endswith(p, "/" * f) &&
+                                        occursin("formal(dev/formal/$model.tla)", text[p]), srcfiles), files) ||
+            push!(bad, "no formal( anchor for $model in $(join(files, ", "))")
+    end
+    for (p, t) in text, m in eachmatch(r"formal\(dev/formal/([A-Za-z0-9_]+)\.tla\)", t)
+        m.captures[1] in tablemodels || push!(bad, "anchor with no row: $(m.captures[1]) in $(relpath(p, ROOT))")
+    end
+    for (p, t) in text
+        cur = nothing
+        for l in split(t, '\n')
+            mm = match(r"^(?:    )?function ([A-Za-z_!0-9.]+)\(", l)
+            mm === nothing || (cur = mm.captures[1])
+            if cur !== nothing && occursin(r"\bwhile (changed|verifying|true\b|!isempty)", l) && !(cur in listed)
+                push!(bad, "fixpoint with no row: $cur ($(basename(p)))"); cur = nothing
+            end
+        end
+    end
+    return unique(bad)
+end
+
 """
 Why AGENTS.md is not current and lean — dev/CHARTER.md C0. It is the one agent-instructions
 file (a CLAUDE.md beside it is a second, drifting copy); it holds only timeless rules and
@@ -2089,6 +2172,10 @@ const LOCKS = [
         end),
     "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
         () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
+        () -> length(unconsumed_files_outside_src())),
+    "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row (dev/CHARTER.md C8)",
+        () -> length(components_without_model())),
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
         () -> begin
             v = String[]
