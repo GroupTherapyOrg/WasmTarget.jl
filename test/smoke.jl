@@ -552,6 +552,12 @@ _g("builtins", Any[
     # the variable's joined type (translateTypeOfLocalVariable)
     ("mutate_capture_sub", (n::Int64) -> ((s = 100; foreach(i -> (s -= i), 1:n); s)::Int64), Int64(5)),   # Base.:-
     ("mutate_capture_mul", (n::Int64) -> ((s = 1; foreach(i -> (s *= i), 1:n); s)::Int64), Int64(5)),     # Base.:*
+    # one concrete operand type per machine width: the opcode and the unbox width are the
+    # type the operands' nodes state (native 2.0, 1, 2.25, 55)
+    ("mutate_capture_add_f64", (n::Int64) -> ((s = 0.0; foreach(i -> (s += 0.5), 1:n); s)::Float64), Int64(4)),                              # Base.:+
+    ("mutate_capture_add_u64", (n::Int64) -> (((s = typemax(UInt64); foreach(i -> (s += UInt64(2)), 1:n); s)::UInt64) % Int64), Int64(1)),   # Base.:+
+    ("mutate_capture_mul_f32", (n::Int64) -> Float64((s = 1.0f0; foreach(i -> (s *= 1.5f0), 1:n); s)::Float32), Int64(2)),                  # Base.:*
+    ("mutate_capture_add_i64", (n::Int64) -> ((s = 0; foreach(i -> (s += i), 1:n); s)::Int64), Int64(10)),                                  # Base.:+
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
@@ -591,8 +597,8 @@ end
 # BoxValueTypes.tla); native 1, 2, 1 on 1.12/1.13. propagate_numeric_value_types and
 # f3_box_value_types now pass their models (VERIFY rechecks each phi's join and restarts;
 # literal operands join). What each case does now:
-# - numeric_join_seeded_phi: still "expected I64, found F64" at `+(%16, 0.5)` in the parent
-#   the closure was inlined into: another producer of the same join types the phi's local.
+# - numeric_join_seeded_phi: rejects located, "`+` on operands typed (Any, Float64) has no
+#   single opcode" at `+(%16, 0.5)` (the phi is Any once VERIFY bans its Int64 seed).
 # - numeric_join_dropped_phi: rejects located, "boxed arithmetic result lacks a concrete
 #   Julia source type" at `+(%26, 1)` (was a runtime "illegal cast" trap).
 # - box_value_literal_phi: rejects located at the closure's `s += 1` (same message).

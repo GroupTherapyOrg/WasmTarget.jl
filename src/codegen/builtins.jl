@@ -2714,59 +2714,59 @@ const _OPERATOR_OPCODES = IdDict{Any,NamedTuple{(:f32, :f64, :i32, :i64),NTuple{
 
 function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     local ops = _OPERATOR_OPCODES[callee]
-    local arg_type, is_32bit, is_128bit = _call_operand_shape(args, ctx)
-
-    # The operands, plus the anyref unbox the retired pre-push loop applied to
-    # the generic arithmetic operators: dynamic call sites with everything
-    # typed Any (e.g. `4 - %foldl` in Random.hash_seed) default to the i64
-    # opcodes but would consume raw anyref.
-    local boxed_operand_unboxed = false
-    for arg in args
-        _is_type_operand(arg) && continue
-        emit_call_operand!(fb, ctx, arg)
-        if _is_boxed_numeric_operand(arg, ctx)
-            emit_classid_unbox!(fb, ctx, is_32bit ? I32 : I64; nullable=true)
-            boxed_operand_unboxed = true
-        end
-    end
+    # Each value operand's Julia type, read from its node (Julia's answer or a proven join).
+    local vals = NirNode[a for a in args if !_is_type_operand(a)]
+    local ts = Any[_value_julia_type(a, ctx) for a in vals]
 
     # String/Symbol `*` is CONCATENATION, not arithmetic: a `call *` of two proven
     # String/Symbol operands would otherwise fall into the numeric branch and emit
     # i64.mul on two string refs (the E-003 island's fn#107 validation failure).
     # It lowers through compile_string_concat_many_b, the one N-way concatenation
-    # builder; the operands already pushed on `fb` are discarded by starting a
-    # fresh fragment, which the builder fills from the operands themselves.
-    local _conc1 = length(args) >= 1 ? infer_value_type(args[1], ctx) : Nothing
-    local _conc2 = length(args) >= 2 ? infer_value_type(args[2], ctx) : Nothing
-    if callee === (*) && length(args) == 2 &&
-       (_conc1 === String || _conc1 === Symbol) && (_conc2 === String || _conc2 === Symbol)
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
-        append_builder!(fb, compile_string_concat_many_b([args[1], args[2]], ctx))
-    elseif arg_type === Float32
-        num!(fb, ops.f32)
-    elseif arg_type === Float64
-        num!(fb, ops.f64)
-    elseif is_32bit
-        num!(fb, ops.i32)
-    else
-        num!(fb, ops.i64)
+    # builder, which pushes the operands itself.
+    if callee === (*) && length(vals) == 2 && all(t -> t === String || t === Symbol, ts)
+        append_builder!(fb, compile_string_concat_many_b([vals[1], vals[2]], ctx))
+        return append_builder!(b, fb)
     end
+
+    # One opcode is Julia's answer only for `op(::T, ::T)` with T one of the types whose
+    # wasm arithmetic is Julia's (wrapping two's-complement or IEEE): every operand must
+    # have that same T. Anything else is dynamic arithmetic (Julia promotes, dispatches on
+    # the runtime types, or wraps a narrow integer at its own width), which needs the typed
+    # value channel; it rejects here instead of choosing an opcode or an unbox width.
+    local T = isempty(ts) ? nothing : ts[1]
+    local wt = T === Int32 || T === UInt32 ? I32 : T === Int64 || T === UInt64 ? I64 :
+               T === Float32 ? F32 : T === Float64 ? F64 : nothing
+    if wt === nothing || length(vals) != 2 || any(t -> t !== T, ts)
+        emit_unsupported_stub!(ctx, fb, :unsupported_type,
+            "`$(callee)` on operands typed ($(join((t === nothing ? "Any" : string(t) for t in ts), ", "))) has no single opcode: " *
+            "arithmetic on values not of one concrete machine type needs the typed value channel";
+            idx=idx, detail=call)
+        return append_builder!(b, fb)
+    end
+
+    # The operands; one held boxed (an AnyRef local) unboxes at T's width, the width of
+    # the type the node states.
+    local boxed_operand_unboxed = false
+    for arg in vals
+        emit_call_operand!(fb, ctx, arg)
+        if _is_boxed_numeric_operand(arg, ctx)
+            emit_classid_unbox!(fb, ctx, wt; nullable=true)
+            boxed_operand_unboxed = true
+        end
+    end
+    num!(fb, wt === F32 ? ops.f32 : wt === F64 ? ops.f64 : wt === I32 ? ops.i32 : ops.i64)
 
     # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT
     # side of the anyref-OPERAND unbox above — a numeric arith result flowing
     # into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store).
+    # `op(::T, ::T)` returns T for every T admitted above (Julia's own methods).
     if boxed_operand_unboxed && !ctx.last_stmt_was_stub
         local _dl = get(ctx.ssa_locals, idx, nothing)
         if _dl !== nothing
             local _doff = _dl - ctx.n_params
             if _doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef
-                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
-                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "boxed arithmetic result lacks a concrete Julia source type";
-                        idx=idx, detail=call)
-                emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
+                emit_classid_box!(fb, ctx, wt, T)
             end
         end
     end

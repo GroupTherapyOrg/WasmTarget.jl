@@ -672,7 +672,8 @@ const LOCKS = [
                          "For now, just do first two", "Multi-string concat: concat pairwise",
                          "_invoke_string_concat_or_reject_b", "_invoke_star_concat_b"]
             required = ["function compile_string_concat_many_b", "for loc in str_locals"]
-            builtins_required = ["(_conc1 === String || _conc1 === Symbol) && (_conc2 === String || _conc2 === Symbol)"]
+            # both operands of `*`, read from their nodes, proven String or Symbol
+            builtins_required = ["callee === (*) && length(vals) == 2 && all(t -> t === String || t === Symbol, ts)"]
             test_required = ["compare_julia_wasm(_wt_many_string_length).pass"]
             count(p -> occursin(p, codegen_src), forbidden) +
                 count(p -> !occursin(p, strings_src), required) +

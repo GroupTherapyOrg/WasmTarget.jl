@@ -177,3 +177,13 @@ end
         @test e !== nothing && e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)
     end
 end
+
+@testset "diagnostics: a dynamic operator on operands of no one machine type rejects, never guesses a width (C6)" begin
+    # The accumulator `s` carries Int64 then Float64; once the numeric-join VERIFY bans the
+    # phi's Int64 seed the `+` sees (Any, Float64). The operator fallback once unboxed the Any
+    # operand as i64 and failed with an internal stack error; it must reject at the `+`.
+    f = (n::Int64) -> (s = 0; foreach(i -> (s += 0.5), 1:n); s isa Float64 ? 1 : 2)
+    err = try WasmTarget.compile(f, (Int64,)); nothing catch e; e end
+    @test err isa WasmTarget.WasmCompileError
+    @test err !== nothing && occursin("has no single opcode", sprint(showerror, err))
+end
