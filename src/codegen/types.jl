@@ -629,15 +629,25 @@ object, whose iteration order varies per process; every consumer that picks
 "the first type at this wasm index" or assigns an id while walking it would
 otherwise emit process-varying bytes (the Dict-constant nondeterminism finding).
 The order is (wasm_type_idx, type name) — dart numbers classes once from the
-hierarchy (class_info.dart:864) and never depends on hash order.
+hierarchy (class_info.dart:864) and never depends on hash order. A name is printed only
+to order types that share one wasm index: printing a type is the costly half of the key.
 
 parity(quarantine: Julia Dict iteration follows address-based hashes of type objects, which
 vary per process and architecture; dart Maps iterate in insertion order.)
 """
 function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo}}
     registry.structs === nothing && return Pair{Type,StructInfo}[]
-    return sort!(collect(Pair{Type,StructInfo}, registry.structs);
-                 by = p -> (p.second.wasm_type_idx, string(p.first)))
+    pairs = sort!(collect(Pair{Type,StructInfo}, registry.structs); by = p -> p.second.wasm_type_idx)
+    i = 1
+    while i <= length(pairs)
+        j = i
+        while j < length(pairs) && pairs[j + 1].second.wasm_type_idx == pairs[i].second.wasm_type_idx
+            j += 1
+        end
+        j > i && (pairs[i:j] = ordered_by(pairs[i:j], p -> string(p.first)))
+        i = j + 1
+    end
+    return pairs
 end
 
 """
@@ -656,7 +666,21 @@ parity(quarantine: Julia Dict iteration follows address-based hashes of type, ty
 function and constant keys, which vary per process and architecture; dart Maps iterate in
 insertion order.)
 """
-ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = sort!(collect(dict); by = p -> keyfn(p.first))
+ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = ordered_by(collect(dict), p -> keyfn(p.first))
+
+"""
+    ordered_by(items, keyfn) -> Vector
+
+`items` stably sorted by `keyfn`, each key computed once. A sort's `by` re-derives the
+key at every comparison; the order keys here print types, so re-deriving them made one
+walk of an n-type registry cost O(n log n) type printings instead of n.
+
+parity(quarantine: the program-derived order key for identity-hashed keys, see ordered_pairs.)
+"""
+function ordered_by(items::AbstractVector, keyfn)::Vector{eltype(items)}
+    keys = [keyfn(x) for x in items]
+    return items[sortperm(keys)]
+end
 
 """A type's program-determined order key: its printed name, then its defining module
 (two modules may define a `Foo`), then the wrapper's name for UnionAll bodies.
