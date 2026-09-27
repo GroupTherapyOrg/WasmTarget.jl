@@ -53,9 +53,10 @@ with the per-clause status. A clause is never closed by argument.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported,
   never approximated; Julia's own bodies compile instead of bespoke re-implementations.
-  Checks: `L42` `L52` `L53` `L54` `L56` `L57` `L59` `L62` `L70` `L81` `L82` `L92` `L123`.
-  Planned: each bespoke lowering in `INVOKE_INTRINSICS` / `STANDALONE_INTRINSIC_BODIES` is
-  either deleted (Julia's body compiles) or carries the reason Julia's body cannot.
+  Checks: `L42` `L52` `L53` `L54` `L56` `L57` `L59` `L62` `L70` `L81` `L82` `L92` `L123`
+  `L133` (each bespoke body in `STANDALONE_INTRINSIC_BODIES` is on an exact allowlist with the
+  reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `R38` (each `@overlay`
+  states why Julia's body cannot compile, or goes).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission.
   Checks: `L9` `L35` `L49` `L74` `R17` `R30` `R31` (with Aqua and ExplicitImports in shard 0).

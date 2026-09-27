@@ -131,7 +131,12 @@ function _build_standalone_intrinsic_bodies!()
 end
 
 """The one standalone body every `Base.rethrow` MethodInstance compiles to when
-function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above)."""
+function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above).
+parity(code_generator.dart:2966 visitRethrow): throw the caught exception (and its stack
+trace, here none) with the exception tag.
+parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C
+runtime's jl_rethrow, not an expression inside its handler, so the caught exception is read
+from the \$current_exn global rather than a handler local.)"""
 function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
                                            return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]

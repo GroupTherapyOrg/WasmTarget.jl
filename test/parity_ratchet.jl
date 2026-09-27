@@ -463,6 +463,41 @@ end
 
 
 
+
+"""
+    overlays_without_reason() -> Vector{String}
+
+Every `@overlay …WASM_METHOD_TABLE` definition in src and ext whose line, the comment lines
+directly above it, or the docstring directly above it carries no `parity(` anchor
+(dev/CHARTER.md C3): an overlay replaces Julia's own body, so it either goes (Julia's body
+compiles) or states why Julia's body cannot.
+"""
+function overlays_without_reason()::Vector{String}
+    bad = String[]
+    paths = [joinpath(d, f) for root in (SRC, joinpath(ROOT, "ext")) for (d, _, fs) in walkdir(root)
+             for f in fs if endswith(f, ".jl")]
+    for path in paths
+        L = _lines(path)
+        for (i, l) in enumerate(L)
+            occursin(r"^\s*@overlay\s+[A-Za-z_.]*WASM_METHOD_TABLE", l) || continue
+            ok = occursin("parity(", l)
+            j = i - 1
+            while !ok && j >= 1 && startswith(strip(L[j]), "#")
+                ok = occursin("parity(", L[j]); j -= 1
+            end
+            if !ok && j >= 1 && endswith(strip(L[j]), "\"\"\"")
+                k = j - 1
+                while k >= 1 && !occursin("\"\"\"", L[k])
+                    ok = ok || occursin("parity(", L[k]); k -= 1
+                end
+                ok = ok || (k >= 1 && occursin("parity(", L[k]))
+            end
+            ok || push!(bad, "$(relpath(path, ROOT)):$i")
+        end
+    end
+    return bad
+end
+
 """
     unresolved_dart_anchors() -> Vector{String}
 
@@ -683,6 +718,8 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
+    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
+        () -> length(overlays_without_reason())),
     "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
         () -> length(components_without_model())),
     "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
@@ -2221,6 +2258,20 @@ const LOCKS = [
         end),
     "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
         () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L133_standalone_bodies_are_exact" => ("the functions that compile to a bespoke standalone body instead of Julia's own (STANDALONE_INTRINSIC_BODIES) are exactly the allowlist below, each for a stated reason, and each body carries its parity anchor; INVOKE_INTRINSICS is deleted (L121). Base.rethrow: its native body is a foreigncall to the C runtime's jl_rethrow (dev/CHARTER.md C3)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            allowed = Set(["Base.rethrow"])   # native body: a foreigncall to jl_rethrow
+            reg = match(r"(?s)function _build_standalone_intrinsic_bodies!\(\).*?\nend\n", compile_src)
+            reg === nothing && return 1
+            registered = Set(m.captures[1] for m in eachmatch(r"methods\(([A-Za-z_.]+)\)", reg.match))
+            bodies = Set(m.captures[1] for m in eachmatch(r"STANDALONE_INTRINSIC_BODIES\[m\] = ([A-Za-z_!]+)", reg.match))
+            unanchored = count(bodies) do fn
+                d = match(Regex("(?s)\"\"\"((?:(?!\"\"\").)*)\"\"\"\\nfunction " * fn * "\\("), compile_src)
+                d === nothing || !occursin("parity(", d.captures[1])
+            end
+            length(symdiff(registered, allowed)) + unanchored
+        end),
     "L132_dart_anchors_resolve" => ("every parity(<file>.dart:<line> <Symbol>) anchor in src resolves at the pinned dart-lang/sdk commit: the file and line exist and the line names the cited symbol; with no checkout at the pinned commit the check fails, never skips (dev/CHARTER.md C2)",
         () -> length(unresolved_dart_anchors())),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
