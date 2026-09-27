@@ -18,6 +18,11 @@ WORKERS="${TLC_WORKERS:-auto}"
 # the inner loop (dev/lanes.sh) runs the rest in ~30 s; CI and `bash run_tlc.sh` run all.
 DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg MCProvenDead.cfg MCStoragePointer.cfg MCDefiniteInit.cfg}"
 fail=0
+# Each instance gets its own TLC metadir: TLC names its default one after the current second,
+# and two instances started within one second collided ("TLC writes its files to a directory
+# whose name is generated from the current time", MCSidecar/MCSidecarBroken on CI).
+meta=$(mktemp -d "${TMPDIR:-/tmp}/wt-tlc.XXXXXX")
+trap 'rm -rf "$meta"' EXIT
 # TLC_NIGHTLY=1 (the scheduled formal.yml job, 5-hour budget) also runs dev/formal/nightly/:
 # instances too large for the 20-minute gate — same naming rules, checked against the
 # models one directory up.
@@ -36,7 +41,7 @@ for cfg in "${cfgs[@]}"; do
     [ -n "$base" ] && tla="$base.tla"
   fi
   if [ ! -e "$tla" ]; then printf '  FAIL %-28s no instance module %s\n' "$cfg" "$tla"; fail=1; continue; fi
-  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$WORKERS" -config "$cfg" -deadlock "$tla" 2>&1) || true
+  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$WORKERS" -metadir "$meta/${cfg//\//_}" -config "$cfg" -deadlock "$tla" 2>&1) || true
   # Classified with shell pattern matches, not `echo | grep -q`: under pipefail a
   # multi-megabyte counterexample trace makes `echo` die of SIGPIPE when grep -q
   # exits early, which misreported a real violation as "error" (found on Coercion).
