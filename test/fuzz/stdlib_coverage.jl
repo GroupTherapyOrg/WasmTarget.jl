@@ -204,7 +204,11 @@ end
 if "check" in ARGS
     readme = read(joinpath(_SCDIR, "..", "..", "README.md"), String)
     rows = collect(eachmatch(r"^\| `(\w+)`[^|]*\| \*\*(\d+)%\*\*([^|]*)\|"m, readme))
-    stated = Dict(m[1] => parse(Int, m[2]) for m in rows)
+    # a cell states the 1.12 measurement, then "· Julia 1.13: **N%**" where 1.13 measures
+    # differently (1.13's stdlibs export a different `names` surface)
+    stated113(m) = (x = match(r"Julia 1\.13: \*\*(\d+)%\*\*", m[3]); x === nothing ? nothing : parse(Int, x[1]))
+    stated = Dict(m[1] => (VERSION >= v"1.13-" && stated113(m) !== nothing ? stated113(m) :
+                           parse(Int, m[2])) for m in rows)
     # a row qualified "*(Julia ≤1.12)*" states a 1.12 measurement
     only112 = Set(m[1] for m in rows if occursin("≤1.12", m[3]))
     wrong = ["$nm: README states $(get(stated, nm, "no row")), measured $pct%"
