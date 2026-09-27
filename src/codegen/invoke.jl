@@ -2,22 +2,15 @@
 
 This is deliberately shape-based, not name-based: the optimized Julia body must
 contain exactly one allocation and a return, and its fields must be the method's
-fixed slots followed by its one vararg-tuple slot.
+fixed slots followed by its one vararg-tuple slot. The body read is the one the invoke
+calls, keyed by its MethodInstance's specTypes as the collection enrolled it.
 """
-function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.MethodInstance,
-                                               arg_types::Tuple)::Bool
+function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.MethodInstance)::Bool
     target isa DataType && isconcretetype(target) && isstructtype(target) || return false
     mi.def isa Method && mi.def.isva || return false
     fixed_count = mi.def.nargs - 2  # exclude #self# and the vararg tuple slot
     fieldcount(target) == fixed_count + 1 || return false
-    typed = try
-        [get_typed_ir(target, arg_types)]
-    catch
-        return false
-    end
-    length(typed) == 1 || return false
-    body = typed[1][1]
-    body isa Core.CodeInfo || return false
+    body, _ = get_typed_ir(target, Tuple(mi.specTypes.parameters[2:end]))
     nir = build_nir(body)
     news = NirNew[s.node for s in nir if s.slot == 0 && s.node isa NirNew]
     length(news) == 1 || return false
@@ -909,10 +902,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                                (haskey(ctx.type_registry.structs, _sc_tt) ||
                                 (isconcretetype(_sc_tt) && isstructtype(_sc_tt))) &&
                                isconcretetype(_sc_tt)
-                                local _sc_argtypes = tuple((_invoke_arg_static_type(arg, ctx)
-                                    for arg in args)...)
                                 _sc_ok = fieldcount(_sc_tt) == length(args) ||
-                                    _is_direct_vararg_struct_constructor(_sc_tt, mi, _sc_argtypes)
+                                    _is_direct_vararg_struct_constructor(_sc_tt, mi)
                             end
                         end
                     end
@@ -929,10 +920,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 local _ctor_sinfo = ctx.type_registry.structs[_ctor_target]
                 if _ctor_sinfo !== nothing
                     emit_struct_prefix!(fb, ctx.type_registry, _ctor_target, _ctor_sinfo)
-                    local _ctor_argtypes = tuple((_invoke_arg_static_type(arg, ctx)
-                        for arg in args)...)
-                    local _vararg_direct = _is_direct_vararg_struct_constructor(
-                        _ctor_target, mi, _ctor_argtypes)
+                    local _vararg_direct = _is_direct_vararg_struct_constructor(_ctor_target, mi)
                     local _fixed_count = _vararg_direct ? mi.def.nargs - 2 : length(args)
                     # Compile fixed constructor arguments as their exact struct fields.
                     for _fi in 1:_fixed_count
