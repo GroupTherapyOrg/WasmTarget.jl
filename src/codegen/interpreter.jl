@@ -975,20 +975,52 @@ end
 end
 end
 
-# P4-stdlib (Random hash_seed): byte-wise reinterpret of primitive words —
-# the generic Base._reinterpret_padding walks DataType padding metadata
-# (host pointers; not compilable). Pure shift arithmetic is semantically
-# identical for padding-free primitives.
-@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{NTuple{4, UInt8}}, x::UInt32) =
-    (x % UInt8, (x >> 8) % UInt8, (x >> 16) % UInt8, (x >> 24) % UInt8)
-@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{NTuple{8, UInt8}}, x::UInt64) =
-    (x % UInt8, (x >> 8) % UInt8, (x >> 16) % UInt8, (x >> 24) % UInt8,
-     (x >> 32) % UInt8, (x >> 40) % UInt8, (x >> 48) % UInt8, (x >> 56) % UInt8)
-@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{UInt32}, x::NTuple{4, UInt8}) =
-    UInt32(x[1]) | (UInt32(x[2]) << 8) | (UInt32(x[3]) << 16) | (UInt32(x[4]) << 24)
-@overlay WASM_METHOD_TABLE Base._reinterpret_padding(::Type{UInt64}, x::NTuple{8, UInt8}) =
-    UInt64(x[1]) | (UInt64(x[2]) << 8) | (UInt64(x[3]) << 16) | (UInt64(x[4]) << 24) |
-    (UInt64(x[5]) << 32) | (UInt64(x[6]) << 40) | (UInt64(x[7]) << 48) | (UInt64(x[8]) << 56)
+# A primitive word reinterpreted as its byte tuple, and back: the word's little-endian
+# byte lanes. Base's generic `_reinterpret` first proves the two packed sizes equal by
+# walking the host layout (`packedsize` → `padding` → `fieldoffset`), a fold WT refuses
+# (`_wt_reads_host_layout`) and a foreigncall it cannot lower; left in the program, that
+# runtime reflection over `fieldtype(T, i)::Any` fanned dynamic-dispatch discovery out
+# over every class of the closed world (9,644 functions collected for
+# `reinterpret(NTuple{8, UInt8}, ::UInt64)`). A primitive word has no padding, so its
+# packed size is its size and the answer is the byte lanes of its bits.
+# parity(quarantine: Julia defines reinterpret to and from a byte tuple by host memory layout; WT has no host layout, and a padding-free primitive's layout is its little-endian bytes.)
+_wt_le_bytes(u::UInt8)::NTuple{1, UInt8} = (u,)
+# parity(quarantine: the little-endian byte lanes of a primitive word, see _wt_le_bytes.)
+_wt_le_bytes(u::UInt16)::NTuple{2, UInt8} = (u % UInt8, (u >> 8) % UInt8)
+# parity(quarantine: the little-endian byte lanes of a primitive word, see _wt_le_bytes.)
+_wt_le_bytes(u::UInt32)::NTuple{4, UInt8} =
+    (u % UInt8, (u >> 8) % UInt8, (u >> 16) % UInt8, (u >> 24) % UInt8)
+# parity(quarantine: the little-endian byte lanes of a primitive word, see _wt_le_bytes.)
+_wt_le_bytes(u::UInt64)::NTuple{8, UInt8} =
+    (u % UInt8, (u >> 8) % UInt8, (u >> 16) % UInt8, (u >> 24) % UInt8,
+     (u >> 32) % UInt8, (u >> 40) % UInt8, (u >> 48) % UInt8, (u >> 56) % UInt8)
+# parity(quarantine: the primitive word of little-endian byte lanes, see _wt_le_bytes.)
+_wt_le_word(b::NTuple{1, UInt8})::UInt8 = b[1]
+# parity(quarantine: the primitive word of little-endian byte lanes, see _wt_le_bytes.)
+_wt_le_word(b::NTuple{2, UInt8})::UInt16 = UInt16(b[1]) | (UInt16(b[2]) << 8)
+# parity(quarantine: the primitive word of little-endian byte lanes, see _wt_le_bytes.)
+_wt_le_word(b::NTuple{4, UInt8})::UInt32 =
+    UInt32(b[1]) | (UInt32(b[2]) << 8) | (UInt32(b[3]) << 16) | (UInt32(b[4]) << 24)
+# parity(quarantine: the primitive word of little-endian byte lanes, see _wt_le_bytes.)
+_wt_le_word(b::NTuple{8, UInt8})::UInt64 =
+    UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) | (UInt64(b[4]) << 24) |
+    (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) | (UInt64(b[7]) << 48) | (UInt64(b[8]) << 56)
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{1, UInt8}}, x::_WT_BITS8) =
+    _wt_le_bytes(Core.bitcast(UInt8, x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{2, UInt8}}, x::_WT_BITS16) =
+    _wt_le_bytes(Core.bitcast(UInt16, x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{4, UInt8}}, x::_WT_BITS32) =
+    _wt_le_bytes(Core.bitcast(UInt32, x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{8, UInt8}}, x::_WT_BITS64) =
+    _wt_le_bytes(Core.bitcast(UInt64, x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{1, UInt8}) where {T<:_WT_BITS8} =
+    Core.bitcast(T, _wt_le_word(x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{2, UInt8}) where {T<:_WT_BITS16} =
+    Core.bitcast(T, _wt_le_word(x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{4, UInt8}) where {T<:_WT_BITS32} =
+    Core.bitcast(T, _wt_le_word(x))
+@overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{8, UInt8}) where {T<:_WT_BITS64} =
+    Core.bitcast(T, _wt_le_word(x))
 
 @overlay WASM_METHOD_TABLE function Base.push!(v::Vector{T}, x) where T
     n = length(v)

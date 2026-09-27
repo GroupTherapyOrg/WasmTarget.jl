@@ -452,6 +452,18 @@ _g("symbol_syntax", Any[
     ("literal_is_syntactic", (x::Int64) -> Int64(Base.is_syntactic_operator(x > 0 ? :(=) : :foo)), Int64(1)),
 ])
 
+# A primitive word reinterpreted as its byte tuple and back (the `_reinterpret` overlays,
+# interpreter.jl). Julia 1.13's Random.rehash! reinterprets its Int64 counter this way; the
+# generic path walks the host layout at runtime and its dynamic calls grew the closed world
+# to ~10,000 functions (measured 2026-09-23), so these compiled for hours instead of seconds.
+_g("byte_reinterpret", Any[
+    ("i64_to_bytes", (x::Int64) -> (b = reinterpret(NTuple{8, UInt8}, x); Int64(b[1]) + 256 * Int64(b[3]) + 65536 * Int64(b[8])), Int64(0x0123456789abcdef)),  # 109551
+    ("u64_to_bytes", (x::Int64) -> (b = reinterpret(NTuple{8, UInt8}, x % UInt64); Int64(b[2]) - Int64(b[7])), Int64(-12345678901)),                            # -28
+    ("f64_to_bytes", (x::Float64) -> Int64(reinterpret(NTuple{8, UInt8}, x)[8]), 1.5),                                                                          # 63
+    ("bytes_to_u32", (x::Int64) -> Int64(reinterpret(UInt32, (x % UInt8, 0x02, 0x03, 0x84))), Int64(0x1ff)),                                                   # 2214789887
+    ("bytes_to_i16", (x::Int64) -> Int64(reinterpret(Int16, (x % UInt8, 0x80))), Int64(7)),                                                                    # -32761
+])
+
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
 # Each case below is the smallest ordinary program that reaches the registry entry named
 # in its comment; the coverage lane confirms the entry fires while it compiles.
@@ -459,11 +471,10 @@ _g("symbol_syntax", Any[
 # FOREIGN_LOWERINGS. The seeded stream reaches `jl_type_intersection` through
 # Random.hash_seed's dispatch guards: a total break of that lowering on 2026-09-08 failed
 # every seeded Random differential in the full suite while smoke and probes stayed green.
-# On Julia 1.13 the seeded stream does not compile (measured 2026-09-22): the closed world
-# registers `Pair{Symbol, Union{}}`, and structs.jl `is_self_referential_type` calls
-# `eltype(Union{})` on its bottom-typed field (`Union{} <: AbstractVector`), escaping as a
-# raw ArgumentError ("Union{} does not have elements"); past that, the compile rejects
-# "closure typeof(getproperty): arity-2 specializations disagree on returning a value".
+# On Julia 1.13 the seeded stream does not compile (measured 2026-09-23): 1.13 seeds through
+# Random.SeedHasher, whose rehash! feeds SHA2_512 — `update!` reduces its UInt128 byte count
+# with `rem(::UInt128, ::UInt64)`, and both cases reject located at that `checked_urem_int`
+# (128-bit division has no lowering).
 (VERSION >= v"1.13-" ? _xf : _g)("seeded_random", Any[
     ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
     ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
