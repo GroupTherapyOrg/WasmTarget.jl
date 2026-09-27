@@ -59,9 +59,8 @@ include("bridge.jl")
 
 
 # Main API
-export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
+export compile, compile_multi, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export preprocess_ir_entries
 export compile_with_sourcemap, compile_multi_with_sourcemap
 export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
 export WasmGlobal, global_index, global_eltype
@@ -214,30 +213,6 @@ function compile_multi(functions::Vector; optimize=false,
         level = optimize === true ? :size : optimize
         return WasmTarget.optimize(bytes; level=level, validate=validate)
     end
-end
-
-"""
-    compile_from_codeinfo(code_info, return_type, func_name, arg_types; optimize=false) -> Vector{UInt8}
-
-Compile a pre-computed typed CodeInfo to WebAssembly bytes, bypassing Base.code_typed().
-This is the entry point for the eval_julia pipeline where type inference has already been run.
-
-# Arguments
-- `code_info::Core.CodeInfo`: Typed CodeInfo (from Base.code_typed or equivalent)
-- `return_type::Type`: The inferred return type
-- `func_name::String`: Export name for the WASM function
-- `arg_types::Tuple`: Argument types for the function
-- `optimize`: Same as compile() — false, true, :speed, or :debug
-"""
-function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
-                                func_name::String, arg_types::Tuple;
-                                optimize=false)::Vector{UInt8}
-    OPTIONS[] = options_from_env()
-    mod = compile_module_from_ir([(code_info, return_type, arg_types, func_name)])
-    bytes = to_bytes(mod)
-    optimize === false && return bytes
-    level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level)
 end
 
 # ============================================================================

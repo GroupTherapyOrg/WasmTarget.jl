@@ -49,7 +49,7 @@ function options_from_env()::CompilerOptions
 end
 
 # The active options, set once per public compile call (see compile/compile_multi/
-# compile_from_codeinfo/compile_with_base in WasmTarget.jl) — never read piecemeal.
+# compile_with_base in WasmTarget.jl) — never read piecemeal.
 const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
 
 """

@@ -43,6 +43,8 @@ Dates = "1"
 # re-verify the construction (ext/WasmTargetSimpleDiffEqExt.jl) on bumps.
 DiffEqBase = "6, 7"
 ForwardDiff = "0.10, 1"
+# JSON: used only by the test harness, which the lanes run under `--project=.`
+# (see test/test_aqua.jl); src does not load it.
 # JSON 1.x ONLY — 0.21 silently wraps >typemax(Int64) integer literals to a
 # garbage Int64 on parse, corrupting the Node-bridge decode of large-float results
 # (the differential fuzzer then reports spurious wrong_value divergences).

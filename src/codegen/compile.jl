@@ -717,51 +717,6 @@ function _compile_closed_world_plan(functions::Vector;
     return mod
 end
 
-"""
-    compile_module_from_ir(ir_entries::Vector)::WasmModule
-
-Compile pre-computed typed CodeInfo entries to a WasmModule, bypassing Base.code_typed().
-Each entry is (typed::Core.CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-Optionally a 5th element func_ref can be provided for cross-function call resolution.
-
-This is the entry point for the eval_julia pipeline where type inference has already been run.
-Unlike `compile_module`, this adapter starts from caller-supplied typed IR rather than
-running inference, then enters the same closed-world module compiler.
-"""
-struct _PrecomputedIRKey
-    id::Int
-end
-
-function compile_module_from_ir(ir_entries::Vector)::WasmModule
-    functions = Any[]
-    cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
-    for (i, entry) in enumerate(ir_entries)
-        length(entry) >= 4 || throw(ArgumentError(
-            "IR entry $i must be (CodeInfo, return_type, arg_types, name[, func_ref])"))
-        typed, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
-        typed isa Core.CodeInfo || throw(ArgumentError("IR entry $i does not contain Core.CodeInfo"))
-        arg_types isa Tuple || throw(ArgumentError("IR entry $i arg_types must be a Tuple"))
-        key = length(entry) >= 5 && entry[5] !== nothing ? entry[5] : _PrecomputedIRKey(i)
-        push!(functions, (key, arg_types, String(name)))
-        cache[(key, arg_types)] = (typed, return_type)
-    end
-
-    previous = TRIM_IR_CACHE[]
-    TRIM_IR_CACHE[] = cache
-    try
-        return _compile_closed_world_plan(functions)
-    finally
-        TRIM_IR_CACHE[] = previous
-    end
-end
-
-# ============================================================================
-# Browser byte-vector accessors. These are ordinary Julia functions compiled through
-# the canonical closed-world pipeline when an embedder requests them; they are not
-# a compiler or serializer path.
-wasm_bytes_length(v::Vector{UInt8})::Int32 = Int32(length(v))
-wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32 = Int32(v[i])
-
 # The sole module pipeline: collect one closed world, install its paired typed-IR
 # cache for the duration of codegen, then compile that immutable plan. Public
 # entry points may normalize inputs, but none may bypass this collector.

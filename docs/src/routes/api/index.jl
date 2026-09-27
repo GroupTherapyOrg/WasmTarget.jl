@@ -45,11 +45,6 @@
              one consistent inference world. This is the only supported discovery and module-codegen path."
         ),
         api_entry(
-            "compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type, ...)",
-            "Lower-level entry that takes a pre-built `CodeInfo` instead of starting from a function. Used by Therapy.jl's \
-             `@island` compiler when it has already computed the IR for a closure body."
-        ),
-        api_entry(
             "compile_with_base(functions::Vector; ...)",
             "Like `compile_multi` but reuses a shared `Base`-overlay state across the batch. Suitable when compiling many \
              unrelated functions in the same process and the per-call `Base` walk dominates."

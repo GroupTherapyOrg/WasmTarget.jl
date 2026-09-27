@@ -519,16 +519,10 @@ end
 
 _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
 
-# The functions in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
-# the boundary's input and the typed-IR transport.
+# The one function in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
+# the NIR boundary's input (the typed-IR JSON transport is deleted).
 const IR_RAW_READERS = Set([
     "get_typed_ir",
-    "collect_globalrefs", "_scan_globalrefs!", "resolve_globalrefs",
-    "collect_and_resolve_all_globalrefs", "substitute_globalrefs", "_substitute_globalref",
-    "preprocess_ir_entries", "serialize_ir_value", "serialize_ir_stmt", "serialize_type_name",
-    "serialize_ssa_type", "serialize_ir_entries", "deserialize_type_name",
-    "deserialize_ir_value", "deserialize_ir_stmt", "deserialize_ssa_type",
-    "_make_template_codeinfo", "deserialize_ir_entries",
 ])
 
 """Matches of `pattern` in src/codegen/ir.jl outside the bodies of the IR_RAW_READERS
@@ -2000,7 +1994,12 @@ const LOCKS = [
                        "IOImports", "add_io_imports!", "_IO_IMPORTS", "get_io_imports",
                        "set_io_imports!", "clear_io_imports!", "create_utf8_to_js_helper!",
                        "emit_jl_string_to_js!", "_UTF8_TO_JS_FUNC_IDX", "clear_utf8_to_js_func!",
-                       "get_char_array_type!", "_CHAR_ARRAY_TYPE_IDX", "clear_char_array_type!"]
+                       "get_char_array_type!", "_CHAR_ARRAY_TYPE_IDX", "clear_char_array_type!",
+                       # the typed-IR JSON transport and its planner entry (2026-09-27)
+                       "compile_from_codeinfo", "compile_module_from_ir", "_PrecomputedIRKey",
+                       "preprocess_ir_entries", "serialize_ir_entries", "deserialize_ir_entries",
+                       "collect_and_resolve_all_globalrefs", "substitute_globalrefs",
+                       "wasm_bytes_length", "wasm_bytes_get"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
@@ -2036,16 +2035,15 @@ const LOCKS = [
         end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE is the documented gate and exempt; locked 2026-09-02)",
         () -> count_sites(r"\"WT_(?!VALIDATE\b)[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
-    "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly two entries — the trim collector (_compile_module_trim) and the precomputed-IR installer (compile_module_from_ir); a third entry is a new discovery regime and must be reviewed here (locked 2026-09-01)",
+    "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly ONE entry — the trim collector (_compile_module_trim); the precomputed-IR installer and its JSON transport are deleted, and a second entry is a new discovery regime (locked 2026-09-01, one entry since 2026-09-27)",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
-            # the two sanctioned planner entries must exist verbatim, so a swap
-            # (delete a legitimate caller, add a rogue one) cannot keep the
-            # total at 3 and slip through
-            required = ["return _compile_closed_world_plan(functions)",
-                        "return _compile_closed_world_plan(plan; kwargs...)"]
+            # the one sanctioned planner entry must exist verbatim, so a swap
+            # (delete the legitimate caller, add a rogue one) cannot keep the
+            # total and slip through
+            required = ["return _compile_closed_world_plan(plan; kwargs...)"]
             extra = count_sites(r"_compile_closed_world_plan\(";
-                                exclude_line=r"function _compile_closed_world_plan\(") - 2
+                                exclude_line=r"function _compile_closed_world_plan\(") - 1
             max(extra, 0) + count(p -> !occursin(p, compile_src), required)
         end),
     "L98_single_external_link_road" => ("external wasm-merge linking is a single road living only in compile_with_base; merged output bypasses the typed builder, so any new call site must be reviewed here (locked 2026-09-01)",
