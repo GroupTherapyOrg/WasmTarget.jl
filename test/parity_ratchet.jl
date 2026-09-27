@@ -554,7 +554,11 @@ function components_without_model()::Vector{String}
     for (comp, fns, model) in rows
         union!(listed, [m.captures[1] for m in eachmatch(r"`([A-Za-z_!0-9]+)`", fns)])
         if startswith(model, "—")
+            # an algorithmic component with no model yet counts: C8 says every one carries a
+            # model. Only a row stating that there is no algorithmic claim to check (an
+            # encoding, a one-statement rule, a predicate list) stands on its reason.
             occursin(r"—\s*\S", model) || push!(bad, "row without a reason: $comp")
+            occursin(r"^—\s*none yet", model) && push!(bad, "no model yet: $comp")
             continue
         end
         push!(tablemodels, model)
@@ -677,6 +681,8 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
+    "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
+        () -> length(components_without_model())),
     "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
         () -> begin
             n = count_sites(r"is_func\(func, :"; roots=[CODEGEN])
@@ -2212,8 +2218,6 @@ const LOCKS = [
         () -> length(unresolved_dart_anchors())),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
-    "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row (dev/CHARTER.md C8)",
-        () -> length(components_without_model())),
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
         () -> begin
             v = String[]

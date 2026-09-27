@@ -34,7 +34,6 @@ L127_one_inference_path_keeps_source_lines = 0
 L128_agents_md_current_and_lean = 0
 L129_plan_holds_only_open_work = 0
 L130_every_file_outside_src_consumed = 0
-L131_every_algorithm_has_its_model = 0
 L132_dart_anchors_resolve = 0
 L12_god_fn_seams_only = 0
 L13_no_byte_bridges = 0
@@ -136,6 +135,7 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
+L131_every_algorithm_has_its_model = 7
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 19
