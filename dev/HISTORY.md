@@ -89,6 +89,16 @@ An audit on 2026-09-22 found the march drifting from its intent. The plan had be
 by its own exit checks; targets had been relabeled "floors"; dart parity was assumed where
 it was never measured. That audit produced `dev/CHARTER.md`, the definition of done since.
 
+## Phase 13 — closing the charter (2026-09-23 …)
+
+- R34 → 0: every catch that swallowed a failure became Julia's own non-throwing query or a
+  located reject; the compiled-bytes cache went with its catch (its key missed a redefined
+  callee). C6 then gained R39, the smoke xfails that compile and fail at run time.
+- L130 (every file outside src consumed), L131 (every algorithm mapped to its model),
+  L132 (every dart anchor resolves at the pin), L133 (the standalone bodies are exact), R38.
+- Host imports precede every defined function (time_ns() once renumbered them); rand() is
+  seeded by the host at startup, as Julia's Random.__init__ seeds it from RandomDevice.
+
 ## Why the archive was consolidated
 
 The original files were valuable while their campaigns were active, but later searches
