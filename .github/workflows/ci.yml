@@ -109,6 +109,13 @@ jobs:
             Pkg.instantiate()
           '
 
+      # The dart-lang/sdk files src/ cites, at the pinned commit, for L132 (every parity
+      # anchor resolves). The ratchet runs in the lanes and in shard 0 of Pkg.test.
+      - name: Pinned dart2wasm sources
+        if: matrix.target.slice == 'lanes' || matrix.target.slice == 'shard-0'
+        shell: bash
+        run: bash dev/fetch_dart_sdk.sh
+
       # The inner-loop lanes, on both Julia versions: the differential smoke
       # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
       # saw it), the structural ratchet, and — on 1.12, whose typed IR the

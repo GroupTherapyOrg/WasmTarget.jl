@@ -462,6 +462,42 @@ function count_silent_catches(root::String=SRC)::Int
 end
 
 
+
+"""
+    unresolved_dart_anchors() -> Vector{String}
+
+Every `parity(<file>.dart:<line> <Symbol>)` anchor in src against dart-lang/sdk at the commit
+pinned in dev/PARITY_MASTER.md (dev/CHARTER.md C2): the file exists (a path is relative to
+pkg/dart2wasm/lib unless it names its package or sdk/lib), the line exists, and it names the
+cited symbol (its last dotted component). The sources are read from `WT_DART_SDK`, else
+~/.cache/wasmtarget/dart-sdk (`bash dev/fetch_dart_sdk.sh` fetches exactly the cited files);
+no checkout at the pinned commit is one violation — the check never skips.
+"""
+function unresolved_dart_anchors()::Vector{String}
+    pin = match(r"[0-9a-f]{40}", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))).match
+    sdk = get(ENV, "WT_DART_SDK", joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk"))
+    head = isdir(sdk) ? readchomp(ignorestatus(`git -C $sdk rev-parse HEAD`)) : ""
+    head == pin || return ["no dart-lang/sdk checkout at $pin in $sdk: run `bash dev/fetch_dart_sdk.sh`"]
+    rx = r"parity(?:-region)?\(([A-Za-z0-9_/.\-]+\.dart):(\d+)(?:-\d+)?\s+([A-Za-z_$][A-Za-z0-9_$.]*)"
+    lines = Dict{String,Vector{String}}()
+    bad = String[]
+    for (d, _, fs) in walkdir(SRC), f in fs
+        endswith(f, ".jl") || continue
+        path = joinpath(d, f)
+        for (ln, l) in enumerate(_lines(path)), m in eachmatch(rx, l)
+            cited, line, sym = m.captures[1], parse(Int, m.captures[2]), m.captures[3]
+            rel = startswith(cited, "pkg/") || startswith(cited, "sdk/") ? cited : "pkg/dart2wasm/lib/" * cited
+            src = joinpath(sdk, rel)
+            where = "$(relpath(path, ROOT)):$ln $(m.match)"
+            isfile(src) || (push!(bad, "no file: $where"); continue)
+            text = get!(() -> _lines(src), lines, src)
+            line <= length(text) || (push!(bad, "no line: $where"); continue)
+            occursin(split(sym, '.')[end], text[line]) || push!(bad, "line does not name the symbol: $where")
+        end
+    end
+    return bad
+end
+
 """
     unconsumed_files_outside_src() -> Vector{String}
 
@@ -2172,6 +2208,8 @@ const LOCKS = [
         end),
     "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
         () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L132_dart_anchors_resolve" => ("every parity(<file>.dart:<line> <Symbol>) anchor in src resolves at the pinned dart-lang/sdk commit: the file and line exist and the line names the cited symbol; with no checkout at the pinned commit the check fails, never skips (dev/CHARTER.md C2)",
+        () -> length(unresolved_dart_anchors())),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
     "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row (dev/CHARTER.md C8)",

@@ -48,8 +48,8 @@ with the per-clause status. A clause is never closed by argument.
   that forces it. Nothing else may exist: a mechanism dart does not have and Julia does not
   force is a defect even when every test passes. Checks: `L2` `L20` `L21` `L23` `L28` `L30`
   `L31` `L32` `L43` `L44` `L46` `L50` `L55` `L77` `L83` `L84` `L86` `L88` `L95` `L110`
-  `R32`. Planned: anchors resolve — each cited line exists at the pinned commit and names
-  the cited symbol (CI fetches the pinned sources; a missing checkout fails, never skips).
+  `L132` (anchors resolve: each cited line exists at the pinned commit and names the cited
+  symbol; CI fetches the pinned sources and a missing checkout fails, never skips) `R32`.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported,
   never approximated; Julia's own bodies compile instead of bespoke re-implementations.
