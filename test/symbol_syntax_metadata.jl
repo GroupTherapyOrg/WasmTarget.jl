@@ -28,7 +28,8 @@ function _wt_flisp_lines(program::String)::Vector{String}
     # end of its input, and its printed lines are the answer
     julia = joinpath(Sys.BINDIR, Base.julia_exename())
     out = read(pipeline(ignorestatus(`$julia --lisp`); stdin=IOBuffer(program)), String)
-    return [String(split(l, "@@")[end]) for l in split(out, '\n') if occursin("@@", l)]
+    # eachline drops "\n" and "\r\n" alike: on Windows the flisp REPL prints CRLF
+    return [String(split(l, "@@")[end]) for l in eachline(IOBuffer(out)) if occursin("@@", l)]
 end
 _wt_unpack_name(v::UInt64) = String(UInt8[(v >> (8 * i)) % UInt8 for i in 0:7 if (v >> (8 * i)) % UInt8 != 0x00])
 
