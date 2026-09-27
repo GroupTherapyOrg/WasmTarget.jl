@@ -27,9 +27,10 @@
 (*             OPTIMISTIC seed that breaks the acc <-> add cycle.           *)
 (*     call -- every operand type numeric => out[i] = the return type Julia *)
 (*             infers for those operand types (here: `+`'s promotion).      *)
-(*   VERIFY: `while verifying`, drop any phi in `out` one of whose operands *)
-(*   does not resolve numeric. Nothing else is re-checked and nothing that  *)
-(*   was typed THROUGH a dropped phi is dropped.                            *)
+(*   VERIFY: a phi in `out` keeps its seed only if every operand resolves   *)
+(*   numeric and their join is exactly the seed; each phi that fails is     *)
+(*   banned (never typed again) and PROPAGATE restarts from an empty `out`, *)
+(*   so nothing typed through a failed seed survives.                       *)
 (*                                                                          *)
 (* THE CLAIM. For every SSA the analysis types, every value that can reach  *)
 (* it at run time has exactly that type (Soundness); and the analysis       *)
@@ -55,16 +56,17 @@
 (*    over these kinds, so the class is exhaustive at that size.           *)
 (*                                                                          *)
 (* VARIANTS (CONSTANT Verify):                                              *)
-(*   "Real"    -- the real code above.                                      *)
+(*   "Drop"    -- the code before the fix: VERIFY drops a phi one of whose  *)
+(*                operands does not resolve numeric, and nothing else.      *)
 (*   "Join"    -- VERIFY also requires the phi's recorded type to EQUAL the *)
 (*                join of all its operands' resolved types, but still drops *)
 (*                only the phi.                                             *)
 (*   "Restart" -- as "Join", and a phi that fails is banned and propagation *)
 (*                restarts from scratch without it, so nothing typed        *)
-(*                through it survives. The positive instance: the VERIFY    *)
-(*                propagate_numeric_value_types needs.                      *)
+(*                through it survives. The real code; the positive instance.*)
 (*                                                                          *)
-(* FINDING 1 (MCNumericJoinSeededPhiBroken.cfg, "Real"): the optimistic phi *)
+(* FINDING 1, FIXED (MCNumericJoinSeededPhiBroken.cfg, "Drop", kept as the  *)
+(* regression baseline TLC must reject): the optimistic phi                 *)
 (* seed is never revisited. `%phi = phi(0::Int64, %add)`, `%add = %phi +    *)
 (* 0.5` -- pass 1 seeds %phi = Int64 from the literal alone (%add not yet   *)
 (* resolved), then types %add = Float64; VERIFY sees both operands numeric *)
@@ -72,7 +74,8 @@
 (* `s = 0; foreach(i -> (s += 0.5), 1:n)`: out[%16] = Int64 for             *)
 (* `%16 = phi(0, %18)`, out[%18] = Float64 for `%18 = %16 + 0.5`; compiling *)
 (* it fails at `+(%16, 0.5)`, "expected I64, found F64".                    *)
-(* FINDING 2 (MCNumericJoinDroppedPhiBroken.cfg, "Join"): VERIFY drops a    *)
+(* FINDING 2, FIXED (MCNumericJoinDroppedPhiBroken.cfg, "Join"; the pre-fix *)
+(* "Drop" code shared it): VERIFY dropped a                                 *)
 (* phi but keeps what was typed through it. `%p = phi(v[1]::Any, 0)`,       *)
 (* `%q = %p + 1` -- %p is seeded Int64 from the literal, %q typed Int64,    *)
 (* VERIFY drops %p (v[1] never resolves) and %q stays Int64. Reproduced:    *)
@@ -86,10 +89,10 @@ EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS
     N,              \* number of statements
-    Verify          \* "Real" (the real code) | "Join" | "Restart" -- see the header
+    Verify          \* "Drop" (pre-fix) | "Join" | "Restart" (the real code) -- see the header
 
 ASSUME N \in Nat /\ N >= 1
-ASSUME Verify \in {"Real", "Join", "Restart"}
+ASSUME Verify \in {"Drop", "Join", "Restart"}
 
 Idx     == 1..N
 Num     == {"I", "F"}
@@ -169,7 +172,7 @@ Restrict(f, S)  == [j \in DOMAIN f \ S |-> f[j]]
 PhiOk(i) ==
     LET s == prog[i] IN
     /\ OpT(s.a) \in Num /\ OpT(s.b) \in Num
-    /\ (Verify # "Real" => ({OpT(s.a), OpT(s.b)} = {out[i]}))
+    /\ (Verify # "Drop" => ({OpT(s.a), OpT(s.b)} = {out[i]}))
 
 Init ==
     /\ prog \in Programs
@@ -194,7 +197,7 @@ EndPass ==
                   ELSE /\ phase' = "verify" /\ UNCHANGED <<idx, changed>>
     /\ UNCHANGED <<prog, out, banned>>
 
-\* VERIFY that drops one failing phi (in any order -- the real loop walks a Dict)
+\* VERIFY that drops one failing phi (in any order -- the pre-fix loop walked a Dict)
 DropPhi ==
     /\ phase = "verify" /\ Verify # "Restart"
     /\ \E i \in DOMAIN out :

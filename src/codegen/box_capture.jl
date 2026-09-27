@@ -348,7 +348,7 @@ it to type the chain). Does NOT type the box itself (that is the box-local typin
 parity(quarantine: values read from a Julia `Core.Box` are inferred `Any` because
 `contents::Any` erased the captured variable's type; this carries the restored type through the
 box-derived SSAs, where dart's visitor returns the ValueType it produced)
-formal(dev/formal/BoxValueTypes.tla): every SSA it types holds exactly that type on every execution — TLC rejects this code (a literal phi operand is left out of the join)
+formal(dev/formal/BoxValueTypes.tla): every SSA it types holds exactly that type on every execution (a literal phi operand joins like an SSA's)
 """
 function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                             extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(),
@@ -373,13 +373,16 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                 out[i] = out[node.value.id]; changed = true; continue
             end
             if node isa NirPhi
-                vts = Type[]; nssa = 0
+                # every operand joins: a box-derived SSA by its propagated type, a literal by
+                # its own; any other operand leaves the phi untyped
+                vts = Type[]
                 for v in node.values
-                    v isa NirSSA || continue
-                    nssa += 1
-                    haskey(out, v.id) && push!(vts, out[v.id])
+                    t = v isa NirSSA ? get(out, v.id, nothing) :
+                        v isa NirLiteral ? _f3_literal_type(v.value) : nothing
+                    t isa Type || (vts = nothing; break)
+                    push!(vts, t)
                 end
-                if !isempty(vts) && length(vts) == nssa
+                if vts !== nothing && !isempty(vts)
                     j = reduce((a, b) -> Union{a, b}, vts)
                     if j isa DataType && isconcretetype(j)
                         out[i] = j; changed = true; continue
@@ -413,13 +416,15 @@ Julia erases a mutated capture to `Any` even after the WT interpreter inlines + 
 `%acc = φ(0::Int64, %add)::Any; %add = %acc + i::Any`). Those `Any` SSAs get anyref locals the i64
 value can't fill. This recovers the concrete type: anchor on already-concrete-numeric SSAs, then a
 fixed point that types an `Any` numeric op / phi by its operands (OPTIMISTICALLY seeding a phi from
-its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass that drops any phi
-whose operands don't ALL resolve numeric (so `φ(0,"x")` stays Any). Returns ssa_id → concrete numeric
+its resolved concrete operand to break the acc↔add cycle), then a VERIFY pass: a phi keeps its
+seed only if every operand resolves numeric and their join is the seeded type (so `φ(0,"x")` and
+`φ(0, %acc + 0.5)` stay Any); a phi that fails is banned and the fixed point restarts, so nothing
+typed through the failed seed survives. Returns ssa_id → concrete numeric
 Julia type for the `Any`-but-really-numeric SSAs only. Pure analysis.
 parity(quarantine: Julia leaves a scalar-replaced `Core.Box` capture's numeric accumulator typed
 `Any`; dart types a captured variable by its declared type, closures.dart:1579
 translateTypeOfLocalVariable.)
-formal(dev/formal/NumericJoin.tla): every SSA it types holds exactly that type on every execution — TLC rejects this code (a seeded phi is never revisited; VERIFY keeps what a dropped phi typed)
+formal(dev/formal/NumericJoin.tla): every SSA it types holds exactly that type on every execution (VERIFY rechecks each phi's join, bans a failing phi and restarts)
 """
 function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                                         argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
@@ -432,53 +437,51 @@ function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
               Any
     # only consider SSAs Julia left as Any (don't override a known concrete type)
     pend = Int[i for i in eachindex(nir) if _f3_ssa_type(ssa_types, i) === Any]
-    changed = true
-    while changed
-        changed = false
-        for i in pend
-            haskey(out, i) && continue
-            local node = nir[i].node
-            if node isa NirPhi
-                ts = Type[]; have_concrete = false
-                for v in node.values
-                    t = _opT(v)
-                    _f3_is_numeric_jl(t) && (push!(ts, t); have_concrete = true)
-                end
-                # optimistic: a phi with ≥1 resolved-numeric operand seeds to their join (cycle break)
-                if have_concrete
-                    j = reduce((a, b) -> Union{a, b}, ts)
-                    if _f3_is_numeric_jl(j)
-                        out[i] = j; changed = true
+    banned = Set{Int}()   # phis VERIFY rejected: never typed again
+    while true
+        changed = true
+        while changed
+            changed = false
+            for i in pend
+                (haskey(out, i) || i in banned) && continue
+                local node = nir[i].node
+                if node isa NirPhi
+                    ts = Type[]; have_concrete = false
+                    for v in node.values
+                        t = _opT(v)
+                        _f3_is_numeric_jl(t) && (push!(ts, t); have_concrete = true)
+                    end
+                    # optimistic: a phi with ≥1 resolved-numeric operand seeds to their join (cycle break)
+                    if have_concrete
+                        j = reduce((a, b) -> Union{a, b}, ts)
+                        if _f3_is_numeric_jl(j)
+                            out[i] = j; changed = true
+                        end
+                    end
+                elseif node isa NirCall || node isa NirInvoke
+                    # Both call nodes name the callee and the runtime operands the same way — the
+                    # `:invoke` preamble (its MethodInstance) never reaches `args`.
+                    f = _nir_callee_object(node.callee)
+                    f === nothing && continue
+                    ats = Any[_opT(a) for a in node.operands]
+                    all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
+                    rt = infer_return_type(f, Tuple(ats))
+                    if _f3_is_numeric_jl(rt)
+                        out[i] = rt; changed = true
                     end
                 end
-            elseif node isa NirCall || node isa NirInvoke
-                # Both call nodes name the callee and the runtime operands the same way — the
-                # `:invoke` preamble (its MethodInstance) never reaches `args`.
-                f = _nir_callee_object(node.callee)
-                f === nothing && continue
-                ats = Any[_opT(a) for a in node.operands]
-                all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
-                rt = infer_return_type(f, Tuple(ats))
-                if _f3_is_numeric_jl(rt)
-                    out[i] = rt; changed = true
-                end
             end
         end
+        # VERIFY: a phi's optimistic seed stands only if EVERY operand resolves numeric and their
+        # join is exactly the seeded type. A phi that fails is banned and propagation restarts
+        # from nothing, so no type computed through the failed seed survives.
+        failed = Int[i for (i, t) in out if nir[i].node isa NirPhi &&
+                     !(all(v -> _f3_is_numeric_jl(_opT(v)), nir[i].node.values) &&
+                       reduce((a, b) -> Union{a, b}, Type[_opT(v) for v in nir[i].node.values]) === t)]
+        isempty(failed) && return out
+        union!(banned, failed)
+        empty!(out)
     end
-    # VERIFY: drop any phi we optimistically typed whose operands don't ALL resolve numeric.
-    verifying = true
-    while verifying
-        verifying = false
-        for (i, _) in collect(out)
-            local node = nir[i].node
-            node isa NirPhi || continue
-            ok = all(v -> _f3_is_numeric_jl(_opT(v)), node.values)
-            if !ok
-                delete!(out, i); verifying = true
-            end
-        end
-    end
-    return out
 end
 
 

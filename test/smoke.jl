@@ -588,13 +588,14 @@ function _sm_boxlit(n::Int64)
     return x isa Float64 ? 1 : 2
 end
 # TLC findings against box_capture.jl's type recovery (dev/formal/NumericJoin.tla,
-# BoxValueTypes.tla). propagate_numeric_value_types seeds an accumulator phi from its literal
-# operand and never revisits it: `s = 0; s += 0.5` types the phi Int64 while it carries
-# Float64 (compiling fails "expected I64, found F64" at the `+`). Its VERIFY drops a phi
-# but keeps what was typed through it: `q = p + 1` stays Int64 after `p = phi(v[1], 0)` is
-# dropped, and the wasm traps "illegal cast" where native returns 2.5. f3_box_value_types
-# skips a literal phi operand: `x = n > 0 ? s : 0.5` over an Int64 box is typed Int64
-# (today compiling rejects earlier, at the closure's `s += 1`). Native 1, 2, 1 on 1.12/1.13.
+# BoxValueTypes.tla); native 1, 2, 1 on 1.12/1.13. propagate_numeric_value_types and
+# f3_box_value_types now pass their models (VERIFY rechecks each phi's join and restarts;
+# literal operands join). What each case does now:
+# - numeric_join_seeded_phi: still "expected I64, found F64" at `+(%16, 0.5)` in the parent
+#   the closure was inlined into: another producer of the same join types the phi's local.
+# - numeric_join_dropped_phi: rejects located, "boxed arithmetic result lacks a concrete
+#   Julia source type" at `+(%26, 1)` (was a runtime "illegal cast" trap).
+# - box_value_literal_phi: rejects located at the closure's `s += 1` (same message).
 _xf("box_type_recovery", Any[
     ("numeric_join_seeded_phi", (n::Int64) -> (s = 0; foreach(i -> (s += 0.5), 1:n); s isa Float64 ? 1 : 2), Int64(4)),
     ("numeric_join_dropped_phi", (n::Int64) -> (v = Any[1.5]; p = n > 0 ? v[1] : 0; q = p + 1; q isa Int64 ? 1 : 2), Int64(1)),
