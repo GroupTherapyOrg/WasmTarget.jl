@@ -373,8 +373,10 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                 out[i] = out[node.value.id]; changed = true; continue
             end
             if node isa NirPhi
-                # every operand joins: a box-derived SSA by its propagated type, a literal by
-                # its own; any other operand leaves the phi untyped
+                # a phi is box-derived when an operand is: only then is it typed. Every operand
+                # joins — a box-derived SSA by its propagated type, a literal by its own; any
+                # other operand leaves the phi untyped
+                any(v -> v isa NirSSA && haskey(out, v.id), node.values) || continue
                 vts = Type[]
                 for v in node.values
                     t = v isa NirSSA ? get(out, v.id, nothing) :
