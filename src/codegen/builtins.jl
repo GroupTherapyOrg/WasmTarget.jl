@@ -1317,31 +1317,22 @@ function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)
     return append_builder!(b, fb)
 end
 
-# Runtime Union construction is Dart's RTI union node: a real $JlUnion
-# containing the two runtime type operands. This is the dynamic counterpart
-# of get_type_constant_global!(Union{A,B}); no host type fabrication occurs.
+# A `Union{A, B}` built at run time is Julia's jl_type_union: it flattens member unions, drops a
+# member another subsumes, and orders the rest by union_sort_cmp, so `Union{T, Nothing}` is
+# `Nothing` for T = Nothing and equals the Union Julia writes for the same members. A bare
+# $JlUnion of the two operands is none of these (a runtime `Union{Int64, Nothing}` was not ===
+# the constant), so until that normalization is ported the construction rejects.
 # parity(quarantine: Julia builds a `Union` at runtime through `Core.apply_type`; dart has no
 # runtime union-type construction.)
 function _lower_apply_type!(b, fb, ctx, call, idx, args, callee)
     length(args) == 3 || return nothing
     union_ctor = nir_const(args[1]) === Union ||
         (args[1] isa NirGlobalRef && args[1].bound && args[1].value === Union)
-    if union_ctor
-        union_idx = ctx.type_registry.jl_union_idx
-        jl_type_idx = ctx.type_registry.jl_type_idx
-        (union_idx === nothing || jl_type_idx === nothing) &&
-            error("runtime Union construction requires the JlType hierarchy")
-        ub = _ctx_builder(ctx, "compile_apply_type_union")
-        i32_const!(ub, 1) # TYPE_UNION
-        expected_type = ConcreteRef(jl_type_idx, true)
-        emit_value!(ub, args[2], ctx, expected_type)
-        emit_value!(ub, args[3], ctx, expected_type)
-        struct_new!(ub, union_idx,
-                    WasmValType[I32, expected_type, expected_type])
-        append_builder!(fb, ub)
-        return append_builder!(b, fb)
-    end
-    return nothing
+    union_ctor || return nothing
+    emit_unsupported_stub!(ctx, fb, :unsupported_method,
+        "Union{…} built at run time: Julia's jl_type_union flattens, deduplicates and orders " *
+        "its members (union_sort_cmp), which this lowering does not port"; idx=idx, detail=call)
+    return append_builder!(b, fb)
 end
 
 # typeof(x) returns the one $JlDataType representation.  The closed-world

@@ -2213,17 +2213,16 @@ function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
         return b
 end
 
+# `UnionAll(v, t)` (boot.jl) is this foreigncall, and it CONSTRUCTS a type: jl_type_unionall
+# answers t itself when t does not mention v, v's upper bound for `T where T<:S`, and a new
+# UnionAll otherwise, which needs jl_has_typevar's walk of t. That is not ported, so the call
+# rejects (it used to answer a `ref.test $JlUnionAll` of v, a predicate in the constructed
+# type's place).
 function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
-    length(node.operands) >= 1 || return nothing
-        # Julia 1.13 lowers `x isa UnionAll` to this runtime predicate on
-        # platforms where inference cannot prove x. The target already has one
-        # canonical $JlUnionAll subtype in the JlType hierarchy, so the exact
-        # operation is a nominal ref.test—not a host call or name-based guess.
-        unionall_idx = ctx.type_registry.jl_unionall_idx
-        unionall_idx === nothing && error("JlUnionAll hierarchy type is unavailable")
-        emit_value!(b, node.operands[1], ctx, AnyRef)
-        ref_test!(b, Int64(unionall_idx), false)
-        return b
+    emit_unsupported_stub!(ctx, b, :unsupported_method,
+        "UnionAll(v, t) builds a type at run time (jl_type_unionall), which this lowering " *
+        "does not port"; idx=idx, detail=node)
+    return b
 end
 
 function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)

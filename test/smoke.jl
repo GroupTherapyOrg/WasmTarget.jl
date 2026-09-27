@@ -236,9 +236,6 @@ _xf(name, cases) = push!(XFAIL, name => cases)
 const XFAIL_RUNTIME = Dict{String,Symbol}(
     "any_return_boundary/mutate_capture" => :unreadable,
     "string_identity_gaps/boxed_memory_typeof" => :trap,
-    "apply_type_union/runtime_union_egal" => :wrong,
-    "unionall_constructor/unionall_body_without_var" => :wrong,
-    "unionall_constructor/unionall_body_with_var" => :wrong,
     "isa_unionall/isa_unionall_any" => :wrong,
     "builtin_crashes/ncodeunits_abstract_string" => :unreadable,
     "builtin_crashes/ncodeunits_abstract_substring" => :trap,
@@ -667,9 +664,10 @@ _xf("box_type_recovery", Any[
     ("box_value_literal_phi", _sm_boxlit, Int64(0)),
 ])
 
-# BUILTIN_LOWERINGS apply_type: a runtime `Union{T, Nothing}` is a fresh $JlUnion
-# (builtins.jl `_lower_apply_type!`), and `===` against the same Union constant answers
-# false; Julia's Union is an immutable value, so the two are egal (native 1, wasm 0).
+# BUILTIN_LOWERINGS apply_type: a `Union{T, Nothing}` built at run time is Julia's
+# jl_type_union, which flattens, deduplicates and orders the members; that is not ported, so
+# the construction rejects (builtins.jl `_lower_apply_type!`). It used to build a bare $JlUnion
+# of the operands, which was not === the constant Union{Int64, Nothing} (native 1, wasm 0).
 _xf("apply_type_union", Any[
     ("runtime_union_egal", (x::Int64) -> (T = x > 0 ? Int64 : Float64; U = Union{T, Nothing}; U === Union{Int64, Nothing} ? 1 : 0), Int64(1)),
 ])
@@ -678,9 +676,10 @@ _xf("apply_type_union", Any[
 _g("memory_length", Any[
     ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
 ])
-# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type, but the lowering
-# (statements.jl `_fc_jl_type_unionall!`) emits `ref.test $JlUnionAll` on the TypeVar
-# operand — a predicate in place of the constructed type (native 1, wasm 0 for both).
+# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type (jl_type_unionall);
+# that is not ported, so the call rejects (statements.jl `_fc_jl_type_unionall!`). It used to
+# emit `ref.test $JlUnionAll` on the TypeVar operand, a predicate in the constructed type's
+# place (native 1, wasm 0 for both).
 const _SMOKE_TV = TypeVar(:T)
 @noinline _sm_unionall(t::TypeVar, @nospecialize(b)) = UnionAll(t, b)
 _xf("unionall_constructor", Any[

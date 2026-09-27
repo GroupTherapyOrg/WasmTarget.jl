@@ -1289,16 +1289,17 @@ const LOCKS = [
                 count(p -> !occursin(p, diag_src), diag_required) +
                 count(p -> !occursin(p, docs_ci), docs_required)
         end),
-    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
+    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("`UnionAll(v, t)` is the jl_type_unionall foreigncall, which constructs a type (boot.jl): its lowering rejects located until the constructor is ported, and nothing retypes its result (it was read as an `isa UnionAll` predicate, answered by a ref.test of v and typed Bool, restated 2026-09-27); bottom phi producers preserve their real terminator without inventing a runtime type",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             forbidden = ["jl_type_unionall` (no lowering)",
-                         "get_concrete_wasm_type(Union{}"]
-            required = ["node isa NirForeignCall && node.c_symbol === :jl_type_unionall",
-                        ":jl_type_unionall => _fc_jl_type_unionall!",
-                        "ref_test!(b, Int64(unionall_idx), false)",
+                         "get_concrete_wasm_type(Union{}",
+                         "node isa NirForeignCall && node.c_symbol === :jl_type_unionall",
+                         "ref_test!(b, Int64(unionall_idx), false)"]
+            required = [":jl_type_unionall => _fc_jl_type_unionall!",
+                        "UnionAll(v, t) builds a type at run time (jl_type_unionall)",
                         "A bottom producer has no runtime value to classify or coerce",
                         "bottom phi source has no terminating statement"]
             all_src = context_src * stmts_src * stack_src

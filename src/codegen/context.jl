@@ -1504,12 +1504,6 @@ function analyze_ssa_types!(ctx::AbstractCompilationContext)
     for (i, rec) in enumerate(ctx.nir)
         rec.slot == 0 || continue
         node = rec.node
-        if node isa NirForeignCall && node.c_symbol === :jl_type_unionall
-            # Julia 1.13 can erase the SSA annotation for its UnionAll
-            # predicate even though the C ABI and Julia operation both return
-            # Bool. Keep allocation and the nominal ref.test emitter aligned.
-            ctx.ssa_types[i] = Bool
-        end
         if node isa NirCall && length(node.operands) >= 2
             func = node.callee
             # Check getfield/getproperty on Any-typed struct field

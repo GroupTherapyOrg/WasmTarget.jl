@@ -87,7 +87,7 @@ end
 # UNREACHED/UNREACHABLE (a deletion candidate) or the smoke xfail case that reaches it.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "Core.!==") => "UNREACHED (measured 2026-09-22: Core.:(!==) === Base.:(!==), whose one method !(x === y) inlines to === and not_int, Any operands included)",
-    (:BUILTIN_LOWERINGS, "Core.apply_type") => "fires for a runtime Union{T, Nothing}, which is not === the same Union constant (native 1, wasm 0) — smoke xfail apply_type_union (measured 2026-09-22)",
+    (:BUILTIN_LOWERINGS, "Core.apply_type") => "fires for a runtime Union{T, Nothing} and rejects: jl_type_union's normalization is not ported — smoke xfail apply_type_union (measured 2026-09-27)",
     (:BUILTIN_LOWERINGS, "Base.check_world_bounded") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, which compile_invoke! routes to this entry by function identity; no :call form measured, and show_type_name's programs fail first on 1.12 — smoke xfail show_type)",
     (:BUILTIN_LOWERINGS, "Base.getproperty") => "fires on an Any receiver, then the compile rejects in the getproperty(::UInt64, ::Symbol) dispatch candidate — smoke xfail builtin_crashes/getproperty_any (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Base.ifelse") => "UNREACHED (measured 2026-09-22: Base.ifelse's one method inlines to Core.ifelse; with an Any condition the surviving :call is Core.ifelse)",
@@ -100,7 +100,7 @@ const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function/isvisible, which fail to compile first)",
     (:FOREIGN_LOWERINGS, "jl_is_const") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function; isconst(Base, runtime Symbol) reaches it, it declines, and the call rejects 'no lowering')",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "fires for unsafe_wrap(Array, pointer(v), n) and declines (pointer not traced) — smoke xfail pointer_foreigncalls/unsafe_wrap_pointer (measured 2026-09-22)",
-    (:FOREIGN_LOWERINGS, "jl_type_unionall") => "fires for UnionAll(v, t) and emits ref.test on the TypeVar in place of the constructed type (native 1, wasm 0) — smoke xfail unionall_constructor (measured 2026-09-22)",
+    (:FOREIGN_LOWERINGS, "jl_type_unionall") => "fires for UnionAll(v, t) and rejects: the constructor is not ported — smoke xfail unionall_constructor (measured 2026-09-27)",
     (:FOREIGN_LOWERINGS, "jl_value_ptr") => "every measured spelling (pointer_from_objref of a Ref, graphemes, isgraphemebreak!) rejects 'escapes storage-relative WasmGC operations' — smoke xfail pointer_foreigncalls/ref_pointer_load (measured 2026-09-22)",
 )
 
