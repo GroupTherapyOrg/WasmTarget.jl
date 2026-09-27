@@ -511,10 +511,11 @@ function unconsumed_files_outside_src()::Vector{String}
     convention = Set(["Project.toml", "LICENSE.md", "CHANGELOG.md", "AGENTS.md",
         ".gitignore", ".gitattributes", "release-please-config.json",
         ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
-    # directories a loader walks: run_tlc.sh, the docs site's file routing, the fuzz ledger
-    # and corpus, Pkg's [extensions], GitHub Actions
-    walked = ("dev/formal/", "docs/src/", "test/fuzz/failures/", "test/fuzz/corpus/", "ext/",
-              ".github/workflows/")
+    # directories a loader walks, each with the files that loader consumes: run_tlc.sh (the
+    # models and their instances), the docs site's file routing, the fuzz ledger and corpus,
+    # Pkg's [extensions], GitHub Actions. Anything else in them is consumed by nothing.
+    walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "test/fuzz/failures/" => r"",
+              "test/fuzz/corpus/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$")
     not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
     files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
     texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
@@ -522,7 +523,8 @@ function unconsumed_files_outside_src()::Vector{String}
     bad = String[]
     for f in files
         startswith(f, "src/") && continue
-        (f in convention || basename(f) == "README.md" || any(d -> startswith(f, d), walked)) && continue
+        (f in convention || basename(f) == "README.md" ||
+         any(((d, rx),) -> startswith(f, d) && occursin(rx, f), walked)) && continue
         needle = endswith(f, ".md") ? f : basename(f)
         any(((g, t),) -> g != f && !endswith(g, ".md") && occursin(needle, t), texts) || push!(bad, f)
     end
