@@ -2215,6 +2215,13 @@ end
     return _wasm_int64hash(-(_wasm_memhash_seed(String(s), 0xcafe8881) ⊻ 0xaaaaaaaaaaaaaaaa)) % UInt
 end
 
+# A String's objectid is its content's hash too: `"ab" === "ab"` holds for two objects,
+# and jl_object_id_ (builtins.c) answers `memhash_seed(bytes, len, 0xedc3b677)` for a
+# String (measured equal to native objectid on 1.12.7 and 1.13.0).
+# parity(quarantine: jl_object_id_ for a String, builtins.c — memhash_seed of the bytes
+# seeded 0xedc3b677)
+@overlay WASM_METHOD_TABLE Base.objectid(s::String) = _wasm_memhash_seed(s, 0xedc3b677) % UInt
+
 # ─── Operator-name predicates Overlay — Julia's parser answer for any name ──
 # Why: Base._isoperator and Base.is_syntactic_operator are the foreigncalls
 #      jl_is_operator / jl_is_syntactic_operator (ast.c), which ask the flisp parser

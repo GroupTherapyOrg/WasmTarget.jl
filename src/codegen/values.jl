@@ -493,9 +493,12 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
                 _wt_ref_nullable(to) || ref_as_non_null!(b)
                 return b
-            elseif _from_is_sarr && !_to_is_sarr
-                # a bare data array flowing to a value position: WRAP (the one producer)
-                # under the value's class, then adjust the struct ref to `to` normally
+            elseif _from_is_sarr && !_to_is_sarr &&
+                   (from_julia === nothing || from_julia === String || from_julia === Symbol)
+                # a String's or Symbol's bare data array flowing to a value position: WRAP
+                # (the one producer) under the value's class, then adjust the struct ref to
+                # `to` normally. A Memory{UInt8} shares the byte array type but is no string:
+                # it stays the array and takes the ref→ref arms below.
                 emit_string_wrap!(b, ctx, from_julia === Symbol ? Symbol : String)
                 _to_is_sstr && return b
                 convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx)

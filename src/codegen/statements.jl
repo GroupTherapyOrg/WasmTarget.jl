@@ -1364,9 +1364,9 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
             # assign a non-zero module-local identity on first observation.
             local object_arg = length(node.operands) >= 1 ? node.operands[1] : nothing
             local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
-            local object_idx = (object_type === String || object_type === Symbol) ?
-                               get_string_struct_type!(ctx.mod, ctx.type_registry) :
-                               object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx :
+            # a String's or Symbol's objectid is its content's hash (the Base.objectid
+            # overlays, interpreter.jl), never this per-object counter
+            local object_idx = object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx :
                                (object_type !== nothing && haskey(ctx.type_registry.structs, object_type) &&
                                 ctx.type_registry.structs[object_type].field_offset == 2 ?
                                 ctx.type_registry.structs[object_type].wasm_type_idx : nothing)
@@ -1450,14 +1450,54 @@ function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx
             return b
 end
 
+"""
+    _emit_cstring_extent!(b, ptr_arg, source, ctx) -> (arr_local, off_local, len_local)
+
+The C string a traced String/Symbol pointer points at: the source's byte array, the byte
+offset the pointer carries (a string pointer's value is 1 + its byte offset, see
+`_fc_jl_string_ptr!`, so any add_ptr/sub_ptr chain is exact), and its length up to the first
+NUL byte or the end of the bytes (Julia stores a NUL after a String's bytes; WasmGC arrays
+carry none). Nothing is pushed; the three values are left in fresh locals.
+parity(quarantine: jl_cstr_to_string and strlen read a NUL-terminated C string at a pointer,
+julia/src/array.c; dart has no raw pointers outside dart:ffi)
+"""
+function _emit_cstring_extent!(b::InstrBuilder, ptr_arg::NirNode, source::NirNode,
+                               ctx::AbstractCompilationContext)::Tuple{Int,Int,Int}
+    local arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    local arr_local = allocate_local!(ctx, ConcreteRef(UInt32(arr_idx), true))
+    local off_local = allocate_local!(ctx, I32)
+    local end_local = allocate_local!(ctx, I32)
+    local len_local = allocate_local!(ctx, I32)
+    emit_value!(b, source, ctx, ConcreteRef(UInt32(arr_idx), true))
+    local_set!(b, arr_local)
+    emit_value!(b, ptr_arg, ctx, I64)
+    coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8})
+    i32_const!(b, 1)
+    num!(b, Opcode.I32_SUB)
+    local_tee!(b, off_local)
+    local_set!(b, end_local)
+    local done = block!(b)
+    local scan = loop!(b)
+    local_get!(b, end_local); local_get!(b, arr_local); array_len!(b)
+    num!(b, Opcode.I32_GE_U); br_if!(b, done)
+    local_get!(b, arr_local); local_get!(b, end_local); array_get!(b, arr_idx, I32; signed=false)
+    num!(b, Opcode.I32_EQZ); br_if!(b, done)
+    local_get!(b, end_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, end_local)
+    br!(b, scan)
+    end_block!(b)
+    end_block!(b)
+    local_get!(b, end_local); local_get!(b, off_local); num!(b, Opcode.I32_SUB)
+    local_set!(b, len_local)
+    return (arr_local, off_local, len_local)
+end
+
 function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
                 source, _ = traced
-                str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
-                array_len!(b)
+                _, _, len_local = _emit_cstring_extent!(b, node.operands[1], source, ctx)
+                local_get!(b, len_local)
                 julia_to_wasm_type(node.ret_julia_type) === I64 && widen_length_to_i64!(b)
                 return b
             end
@@ -1512,17 +1552,22 @@ function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int,
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
+                # a new String of the C string's bytes: from the pointer's offset up to the
+                # first NUL (the source may be a Symbol's name, `String(::Symbol)`)
                 source, _ = traced
-                if get_ssa_type(ctx, source) === String
-                    str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(b, source, ctx, ConcreteRef(UInt32(str_idx), true))
-                else
-                    # a Symbol's name (`String(::Symbol)`): the result is a String, so its
-                    # bytes are wrapped under String's class, never returned as the Symbol
-                    arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-                    emit_value!(b, source, ctx, ConcreteRef(UInt32(arr_idx), true))
-                    emit_string_wrap!(b, ctx, String)
-                end
+                arr_local, off_local, len_local = _emit_cstring_extent!(b, node.operands[1], source, ctx)
+                arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+                dest_local = allocate_local!(ctx, ConcreteRef(UInt32(arr_idx), false))
+                local_get!(b, len_local)
+                array_new_default!(b, arr_idx)
+                local_tee!(b, dest_local)
+                i32_const!(b, 0)
+                local_get!(b, arr_local)
+                local_get!(b, off_local)
+                local_get!(b, len_local)
+                array_copy!(b, arr_idx, arr_idx)
+                local_get!(b, dest_local)
+                emit_string_wrap!(b, ctx, String)
                 return b
             end
             record_unsupported!(ctx, :unsupported_method,

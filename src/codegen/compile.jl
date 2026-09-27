@@ -512,9 +512,10 @@ function _compile_closed_world_plan(functions::Vector;
     needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
     needs_unicode_case && get_or_create_unicode_case_func!(mod, type_registry)
 
-    # LAZY constants: collect long (>64B) String/Symbol literals and pre-create
-    # their init functions NOW — the same index-freeze constraint (functions cannot be
-    # added during body compilation without shifting indices). dart constants.dart:454.
+    # LAZY constants: collect long (>64B) String literals and pre-create their init
+    # functions NOW — the same index-freeze constraint (functions cannot be added during
+    # body compilation without shifting indices). dart constants.dart:454. A long Symbol
+    # literal is built in place (values.jl), so it takes no lazy global.
     for fd in function_data
         fn_nir = fd[8]
         fn_nir === nothing && continue
@@ -522,8 +523,6 @@ function _compile_closed_world_plan(functions::Vector;
             for v in nir_literal_values(rec)
                 if v isa String && ncodeunits(v) > 64
                     get_or_create_lazy_string!(mod, type_registry, v)
-                elseif v isa Symbol && ncodeunits(String(v)) > 64
-                    get_or_create_lazy_string!(mod, type_registry, String(v))
                 end
             end
         end

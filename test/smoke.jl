@@ -464,6 +464,29 @@ _g("byte_reinterpret", Any[
     ("bytes_to_i16", (x::Int64) -> Int64(reinterpret(Int16, (x % UInt8, 0x80))), Int64(7)),                                                                    # -32761
 ])
 
+# ---- string_identity: a String's identity is its content (jl_object_id memhashes the bytes),
+# a C string starts at its pointer, and a boxed byte Memory keeps its own class ----
+@noinline _si_any(v::Vector{Any}, i::Int64) = v[i]
+_g("string_identity", Any[
+    ("objectid_equal_strings", (x::Int64) -> Int64(objectid("ab") == objectid(string('a', Char(x)))), Int64(98)),
+    ("objectid_string_value", (x::Int64) -> reinterpret(Int64, objectid(string('a', Char(x)))), Int64(98)),
+    ("cstring_mid_pointer", (x::Int64) -> (s = string('a', 'b', 'c', Char(x)); GC.@preserve s length(unsafe_string(pointer(s, 3)))), Int64(100)),
+    ("cstring_mid_pointer_bytes", (x::Int64) -> (s = string('a', 'b', 'c', Char(x)); GC.@preserve s Int64(codeunit(unsafe_string(pointer(s, 2)), 1))), Int64(100)),
+    ("cstring_substring_pointer", (x::Int64) -> (s = string('x', 'y', Char(x), 'z'); ss = SubString(s, 3); GC.@preserve s length(unsafe_string(pointer(ss)))), Int64(0x77)),
+    ("boxed_memory_isa_String", (x::Int64) -> (v = Any[Memory{UInt8}(undef, x)]; Int64(_si_any(v, 1) isa String)), Int64(3)),
+    ("boundserror_memory_isa_String", (x::Int64) -> (e = BoundsError(Memory{UInt8}(undef, 2), x); Int64(_si_any(Any[e.a], 1) isa String)), Int64(5)),
+    ("boundserror_memory_isa_Memory", (x::Int64) -> (e = BoundsError(Memory{UInt8}(undef, 2), x); Int64(_si_any(Any[e.a], 1) isa Memory{UInt8})), Int64(5)),
+    ("sprint_print_string", (x::Int64) -> length(sprint(print, string('a', Char(x)))), Int64(98)),
+    ("sprint_print_symbol", (x::Int64) -> length(sprint(print, Symbol(string('a', Char(x))))), Int64(98)),
+])
+# IdDict's table is C (jl_eqtable_get/put, iddict.c); no lowering exists, so its methods reject
+# at compile time ("unsupported method: foreigncall"). A Memory held in Any is its bare array
+# (no classId), so typeof of it traps "illegal cast" (measured 2026-09-23).
+_xf("string_identity_gaps", Any[
+    ("iddict_string_key", (x::Int64) -> (d = IdDict{String,Int64}(); d["ab"] = 7; get(d, string('a', Char(x)), -1)), Int64(98)),
+    ("boxed_memory_typeof", (x::Int64) -> (v = Any[Memory{UInt8}(undef, x)]; Int64(typeof(_si_any(v, 1)) === Memory{UInt8})), Int64(3)),
+])
+
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
 # Each case below is the smallest ordinary program that reaches the registry entry named
 # in its comment; the coverage lane confirms the entry fires while it compiles.
