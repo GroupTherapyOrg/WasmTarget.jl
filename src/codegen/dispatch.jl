@@ -92,31 +92,37 @@ selector_order_key(reg::DispatchTableRegistry, func_ref)::Int =
 
 # ==================== Table Building ====================
 
-# tag-run: the declared supertype of a struct wasm type — read through the abstract
-# synthetics' registry (the DAG's chain lives there + $JlBase terminates).
-function _dispatch_supertype_idx(idx::UInt32, registry)::Union{UInt32, Nothing}
+# The declared supertype of every struct wasm type, read through the abstract synthetics'
+# registry (the DAG's chain lives there + $JlBase terminates). Computed once per table
+# build: dart's `_upperBound` reads `superType` straight off each struct definition.
+# A struct index maps to the parent of the first type (registered order) that owns it; an
+# abstract synthetic's index to its supertype's synthetic; `$JlBase` to `nothing`; any
+# other index to `$JlBase`.
+# parity(dispatch_table.dart:239 _upperBound): each struct's `superType`, read directly.
+function _dispatch_supertype_map(registry)::Dict{UInt32,Union{UInt32,Nothing}}
     d = registry.abstract_struct_idxs
-    # a concrete struct's parent: find T with this idx, return its dag parent chainable
+    parents = Dict{UInt32,Union{UInt32,Nothing}}()
     for (T, info) in registered_structs(registry)
-        if info.wasm_type_idx == idx && T isa DataType
-            local P = supertype(T)
-            (P === Any || !(P isa DataType)) && return registry.base_struct_idx
-            return (d !== nothing && haskey(d, P)) ? d[P] : registry.base_struct_idx
-        end
+        (T isa DataType && !haskey(parents, info.wasm_type_idx)) || continue
+        local P = supertype(T)
+        parents[info.wasm_type_idx] = (P === Any || !(P isa DataType)) ? registry.base_struct_idx :
+            (d !== nothing && haskey(d, P)) ? d[P] : registry.base_struct_idx
     end
-    # an abstract synthetic's parent
     if d !== nothing
         for (A, aidx) in d
-            if aidx == idx
-                local PA = supertype(A)
-                (PA === Any || !(PA isa DataType)) && return registry.base_struct_idx
-                return haskey(d, PA) ? d[PA] : registry.base_struct_idx
-            end
+            haskey(parents, aidx) && continue
+            local PA = supertype(A)
+            parents[aidx] = (PA === Any || !(PA isa DataType)) ? registry.base_struct_idx :
+                haskey(d, PA) ? d[PA] : registry.base_struct_idx
         end
     end
-    idx == registry.base_struct_idx && return nothing
-    return registry.base_struct_idx
+    return parents
 end
+
+# parity(dispatch_table.dart:239 _upperBound): one `s.superType` step.
+_dispatch_supertype_idx(parents::Dict{UInt32,Union{UInt32,Nothing}}, idx::UInt32, registry)::Union{UInt32,Nothing} =
+    haskey(parents, idx) ? parents[idx] :
+    idx == registry.base_struct_idx ? nothing : registry.base_struct_idx
 
 # parity(dispatch_table.dart:501 DispatchTable.build)
 # formal(dev/formal/ClassIdDispatch.tla): first-fit packing is collision-free, every tuple WITH a specialization resolves to it (one hop or the two-axis cascade), and a receiver tuple WITHOUT one traps (span reservation + classId span guard + wrapper slot check: MissingMethodTraps)
@@ -126,6 +132,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
     # step3 (LANDED): threshold=2 — dart tables EVERY used targetCount>1 selector
     # (dispatch_table.dart:919 _isUsedViaDispatchTableCall). The 2-8 machinery was proven at
     dt_registry = DispatchTableRegistry()
+    supertypes = _dispatch_supertype_map(type_registry)
 
     for (func_ref, infos) in func_registry.by_ref   # a Vector: registration order
         length(infos) < threshold && continue
@@ -224,7 +231,7 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
                     local ch = UInt32[idx]
                     local cur = idx
                     for _ in 1:64
-                        local nxt = _dispatch_supertype_idx(cur, type_registry)
+                        local nxt = _dispatch_supertype_idx(supertypes, cur, type_registry)
                         nxt === nothing && break
                         push!(ch, nxt); cur = nxt
                     end
