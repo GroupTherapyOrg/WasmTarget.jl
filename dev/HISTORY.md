@@ -98,6 +98,7 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   L132 (every dart anchor resolves at the pin), L133 (the standalone bodies are exact), R38.
 - Host imports precede every defined function (time_ns() once renumbered them); rand() is
   seeded by the host at startup, as Julia's Random.__init__ seeds it from RandomDevice.
+- The builder checks an `if`'s then-branch value types at `else`, as dart's else_ does.
 
 ## Why the archive was consolidated
 

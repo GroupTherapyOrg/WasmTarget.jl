@@ -614,11 +614,19 @@ function validate_else!(v::WasmStackValidator)
         return
     end
 
-    # Validate then-branch stack: should have result_types above entry height
+    # Validate the then-branch's end as a block end: its height AND its value types against the
+    # if's results (dart `_verifyEndOfBlock` → `_checkStackTypes(label.outputs)`); only the
+    # height was checked, so an arm leaving a value of another type reached the module
     if v.reachable
         expected_height = label.stack_height_at_entry + length(label.result_types)
         if length(v.stack) != expected_height
             push!(v.errors, "$(v.func_name): if then-branch stack height mismatch — expected $(expected_height), got $(length(v.stack))")
+        end
+        for (i, expected) in enumerate(label.result_types)
+            idx = label.stack_height_at_entry + i
+            if idx <= length(v.stack) && !wasm_subtype(v.stack[idx], expected, v.mod)
+                push!(v.errors, "$(v.func_name): if then-branch result type mismatch at position $i — expected $(expected), found $(v.stack[idx])")
+            end
         end
     end
 

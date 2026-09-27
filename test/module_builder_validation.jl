@@ -329,4 +329,27 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.StackImbalanceError MBV.try_table!(
             bad_catch, [MBV.catch_clause(tag, wrong)])
     end
+
+    @testset "an if's then-branch is typed against the if's results at else" begin
+        # dart else_ → _verifyEndOfBlock → _checkStackTypes(label.outputs): only the height was
+        # checked, and a then-arm leaving a value of an unrelated type reached the module
+        m = MBV.WasmModule()
+        a = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        c = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        ra, rc = MBV.ConcreteRef(UInt32(a), true), MBV.ConcreteRef(UInt32(c), true)
+        ok = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
+        MBV.local_get!(ok, 0)
+        MBV.if_!(ok, ra)
+        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.else_!(ok)
+        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.end_block!(ok)
+        MBV.finish_function!(ok)
+
+        bad = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
+        MBV.local_get!(bad, 0)
+        MBV.if_!(bad, ra)
+        MBV.ref_null!(bad, Int64(c), rc)
+        @test_throws MBV.StackImbalanceError MBV.else_!(bad)
+    end
 end
