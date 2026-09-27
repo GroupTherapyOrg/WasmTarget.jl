@@ -1372,7 +1372,36 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
         actual_type === ExternRef && any_convert_extern!(_tofb)
         nullable && br_on_null!(_tofb, isnull)
         temp_local = _ensure_typeof_scratch_local!(ctx)
-        emit_typeof_struct_with_local!(_tofb, base_idx, ctx.type_registry, temp_local)
+        # a type object carries no classId: its type is its kind (typeof(Int64) === DataType).
+        # A TypeVar is its own struct; a DataType, Union or UnionAll is a $JlType whose $kind
+        # names it (Union and UnionAll share one wasm struct).
+        local reg = ctx.type_registry
+        if arg_type !== nothing && typeintersect(arg_type, Union{Type, TypeVar}) === Union{}
+            emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
+        else
+            local konst!(K) = (g = get_type_constant_global!(ctx.mod, reg, K);
+                               global_get!(_tofb, g, ctx.mod.globals[Int(g) + 1].valtype))
+            local v = allocate_local!(ctx, AnyRef)
+            local k = allocate_local!(ctx, I32)
+            local_set!(_tofb, v)
+            local kdone = block!(_tofb, AnyRef)
+            local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_typevar_idx), false)
+            if_!(_tofb); konst!(TypeVar); br!(_tofb, kdone); end_block!(_tofb)
+            local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_type_idx), false)
+            if_!(_tofb)
+            local_get!(_tofb, v); ref_cast!(_tofb, Int64(reg.jl_type_idx), false)
+            struct_get!(_tofb, reg.jl_type_idx, UInt32(0), I32); local_set!(_tofb, k)
+            for (K, code) in ((Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
+                              (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
+                local_get!(_tofb, k); i32_const!(_tofb, Int64(code)); num!(_tofb, Opcode.I32_EQ)
+                if_!(_tofb); konst!(K); br!(_tofb, kdone); end_block!(_tofb)
+            end
+            konst!(DataType); br!(_tofb, kdone)
+            end_block!(_tofb)
+            local_get!(_tofb, v)
+            emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
+            end_block!(_tofb)
+        end
         if nullable
             br!(_tofb, done)
             end_block!(_tofb)

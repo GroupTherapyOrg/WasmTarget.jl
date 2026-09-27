@@ -115,11 +115,11 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
         elseif lit isa Type
-            # Type values (like Bool, Int64) compile to global.get (DataType struct ref).
-            # Must check BEFORE isstructtype since typeof(Type) is DataType (a struct)
-            # Use $JlDataType when hierarchy is available
-            dt_idx = get_datatype_type_idx(ctx.type_registry)
-            return ConcreteRef(dt_idx, true)
+            # a type object compiles to global.get of its constant, an instance of its kind
+            # (typeof(Int64) is DataType). Checked BEFORE isstructtype: typeof(Type) is a struct.
+            ctx.type_registry.jl_type_idx === nothing &&
+                return ConcreteRef(get_datatype_type_idx(ctx.type_registry), true)
+            return ConcreteRef(type_object_struct_idx(ctx.type_registry, lit), true)
         elseif lit isa Core.TypeName
             # TypeName constants compile to global.get ($JlTypeName struct ref)
             tn_idx = ctx.type_registry.jl_typename_idx

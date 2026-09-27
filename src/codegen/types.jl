@@ -62,9 +62,10 @@ mutable struct TypeRegistry
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
     numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
-    # Type constant globals — each unique Type value gets a unique Wasm global
-    # so that ref.eq distinguishes different Types (e.g., Int64 !== String)
-    type_constant_globals::Union{Nothing, Dict{Type, UInt32}}  # Type value -> Wasm global index
+    # Type constant globals — each type object (by ===, Julia's identity: `==` on types is
+    # mutual subtyping, which calls `Vector` equal to its body `Array{T,1}`) gets its own Wasm
+    # global, so ref.eq distinguishes different Types (e.g., Int64 !== String)
+    type_constant_globals::Union{Nothing, IdDict{Type, UInt32}}  # Type value -> Wasm global index
     # TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
     typename_constant_globals::Union{Nothing, Dict{Core.TypeName, UInt32}}  # TypeName -> Wasm global index
@@ -146,7 +147,7 @@ end
 TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Type, StructInfo}(), Dict{Type, UInt32}(), nothing, nothing,
     Dict{WasmValType, UInt32}(),
-    Dict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
+    IdDict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
@@ -921,6 +922,51 @@ end
 
 # Kind constants for $JlType.$kind field
 const JL_TYPE_KIND_DATATYPE  = Int32(0)
+# parity(quarantine: the $kind of a type object — a Union and a UnionAll are one wasm struct
+# (identical layouts canonicalize), so a field names the kind dart gives each its own class.)
+const JL_TYPE_KIND_UNION     = Int32(1)
+# parity(quarantine: the $kind of a UnionAll, sharing the Union's wasm struct.)
+const JL_TYPE_KIND_UNIONALL  = Int32(2)
+# parity(quarantine: the $kind of Union{}, the one instance of Core.TypeofBottom: a bare
+# \$JlType, isa Type and no DataType, Union or UnionAll.)
+const JL_TYPE_KIND_BOTTOM    = Int32(3)
+
+"""
+    type_object_struct_idx(registry, X) -> UInt32
+
+The struct of the type object X at run time, its own kind (`typeof(X)`): a DataType is a
+\$JlDataType, a Union a \$JlUnion, a UnionAll a \$JlUnionAll, and `Union{}` (the one instance
+of Core.TypeofBottom) a bare \$JlType whose \$kind is JL_TYPE_KIND_BOTTOM.
+parity(constants.dart:361 _lowerTypeToConstant): a type constant is an instance of the class
+of its type's kind.
+"""
+function type_object_struct_idx(registry::TypeRegistry, @nospecialize(X::Type))::UInt32
+    idx = X isa DataType ? registry.jl_datatype_idx :
+          X isa Union ? registry.jl_union_idx :
+          X isa UnionAll ? registry.jl_unionall_idx :
+          X === Union{} ? registry.jl_type_idx : nothing
+    idx === nothing && error("the type object $X (a $(typeof(X))) has no runtime representation")
+    return idx
+end
+
+"""
+    type_value_struct_idx(registry, t) -> UInt32
+
+The struct every value of the static type `t <: Type` is at run time: `DataType`, `Union` and
+`UnionAll` name their kind, `Type{X}` is X's one type object, so X's kind, and any other
+subtype of `Type` spans kinds, so \$JlType.
+parity(constants.dart:361 _lowerTypeToConstant): the class of a type value is its kind's.
+"""
+function type_value_struct_idx(registry::TypeRegistry, @nospecialize(t::Type))::UInt32
+    t === DataType && return registry.jl_datatype_idx
+    t === Union && return registry.jl_union_idx
+    t === UnionAll && return registry.jl_unionall_idx
+    if t isa DataType && t.name === Type.body.name
+        X = t.parameters[1]
+        (X isa DataType || X isa Union || X isa UnionAll) && return type_object_struct_idx(registry, X)
+    end
+    return registry.jl_type_idx
+end
 
 """
     create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)
@@ -1065,13 +1111,18 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
         UInt32(1)  # skip kind field
     )
 
-    # UnionAll: fields body, var
+    # UnionAll: its body. Its var is a TypeVar, which has no representation (nor has Union{},
+    # a TypeVar's usual lower bound), so `var` is no readable field and reading it rejects.
     registry.structs[UnionAll] = StructInfo(
         UnionAll, jl_unionall_idx,
-        [:body, :var],
-        Type[Any, TypeVar],
+        [:body],
+        Type[Any],
         UInt32(1)  # skip kind field
     )
+
+    # Core.TypeofBottom: its one instance, Union{}, is a bare $JlType (kind JL_TYPE_KIND_BOTTOM)
+    registry.structs[Core.TypeofBottom] = StructInfo(
+        Core.TypeofBottom, jl_type_idx, Symbol[], Type[], UInt32(1))
 
     # TypeVar: fields name, lb, ub
     registry.structs[TypeVar] = StructInfo(
@@ -1756,19 +1807,16 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
         return registry.type_constant_globals[type_val]
     end
 
-    dt_type_idx = registry.jl_datatype_idx
-    dt_type_idx === nothing && error("type constants require the canonical JlType hierarchy")
-
-    # Create init expression: struct.new_default $dt_type_idx
-    # Each struct.new_default creates a unique allocation with all fields zeroed.
-    # ref.eq compares pointer identity, so different allocations are distinguishable.
-    # Fields are populated later by populate_type_constant_globals!
+    registry.jl_datatype_idx === nothing && error("type constants require the canonical JlType hierarchy")
+    # the constant is an instance of its kind; struct.new_default zeroes it, and
+    # populate_type_constant_globals! fills it (ref.eq tells two allocations apart)
+    kind_idx = type_object_struct_idx(registry, type_val)
     b = InstrBuilder(; func_name="get_type_constant_global!")
-    struct_new_default!(b, dt_type_idx)
+    struct_new_default!(b, kind_idx)
     init_bytes = builder_code(b)
 
     # Create the global (mutable ref — needs patching by init function)
-    global_idx = add_global_ref!(mod, dt_type_idx, true, init_bytes; nullable=false)
+    global_idx = add_global_ref!(mod, kind_idx, true, init_bytes; nullable=false)
 
     # Cache
     registry.type_constant_globals[type_val] = global_idx
@@ -1785,12 +1833,18 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
             get_type_constant_global!(mod, registry, type_val.super)
         end
 
-        # Ensure parameter type globals exist
+        # Ensure parameter type globals exist, a parameter of every type-object kind
         for i in 1:length(type_val.parameters)
             p = type_val.parameters[i]
-            if p isa DataType
+            if p isa DataType || p isa Union || p isa UnionAll
                 get_type_constant_global!(mod, registry, p)
             end
+        end
+    elseif type_val isa Union || type_val isa UnionAll
+        # a Union's members and a UnionAll's body: a TypeVar among them has no representation,
+        # so its field stays unset
+        for m in (type_val isa Union ? (type_val.a, type_val.b) : (type_val.body,))
+            (m isa DataType || m isa Union || m isa UnionAll) && get_type_constant_global!(mod, registry, m)
         end
     end
 
@@ -2004,7 +2058,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         else
             for i in 1:nparams
                 p = params[i]
-                if p isa DataType && haskey(registry.type_constant_globals, p)
+                if (p isa DataType || p isa Union || p isa UnionAll) && haskey(registry.type_constant_globals, p)
                     p_global_idx = registry.type_constant_globals[p]
                     begin
             local _gvt = mod.globals[Int(p_global_idx) + 1].valtype
@@ -2080,6 +2134,27 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         end
         i32_const!(b, Int64(getfield(type_val, :flags)))
         struct_set!(b, dt_type_idx, UInt32(8), I32)
+    end
+
+    # a Union constant: its kind and its two members; a UnionAll: its kind and its body (its
+    # `var` is no readable field — a TypeVar has no representation here); Union{}: its kind
+    for (type_val, g) in ordered_pairs(registry.type_constant_globals, type_order_key)
+        (type_val isa Union || type_val isa UnionAll || type_val === Union{}) || continue
+        local si = type_object_struct_idx(registry, type_val)
+        local self_t = ConcreteRef(si, false)
+        global_get!(b, g, self_t)
+        i32_const!(b, Int64(type_val isa Union ? JL_TYPE_KIND_UNION :
+                            type_val isa UnionAll ? JL_TYPE_KIND_UNIONALL : JL_TYPE_KIND_BOTTOM))
+        struct_set!(b, si, UInt32(0), I32)
+        local members = type_val isa Union ? ((UInt32(1), type_val.a), (UInt32(2), type_val.b)) :
+                        type_val isa UnionAll ? ((UInt32(1), type_val.body),) : ()
+        for (f, m) in members
+            (m isa Type && haskey(registry.type_constant_globals, m)) || continue
+            local mg = registry.type_constant_globals[m]
+            global_get!(b, g, self_t)
+            global_get!(b, mg, mod.globals[Int(mg) + 1].valtype)
+            struct_set!(b, si, f, ConcreteRef(jl_type_idx, true))
+        end
     end
 
     # Populate $JlTypeName fields
@@ -2355,9 +2430,11 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
         for_local && result === AnyRef && registry.jl_type_idx === nothing && return ExternRef
         return result
     end
-    # union of Type{T} values → the DataType struct ref (dart: a reified-type value).
+    # union of type values → their kinds' struct, $JlType when the kinds differ (dart: a
+    # reified-type value).
     if all(t -> t isa DataType && t <: Type, non_nothing) && registry.jl_datatype_idx !== nothing
-        return ConcreteRef(registry.jl_datatype_idx, true)
+        kinds = unique(UInt32[type_value_struct_idx(registry, t) for t in non_nothing])
+        return ConcreteRef(length(kinds) == 1 ? only(kinds) : registry.jl_type_idx, true)
     end
     # WT reps Memory/MemoryRef as RAW WASM ARRAYS: isstructtype(Memory) is true in Julia,
     # but the union of array-repped variants joins to ArrayRef, never StructRef (1.13-rc1's
@@ -2461,9 +2538,9 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
     # Exclude Union types (e.g., Union{Type{Int64}, Type{Number}}) — these are
     # multi-variant unions that map to AnyRef (via julia_to_wasm_type), not single DataType refs.
     if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
-        # Use $JlDataType when hierarchy is available
-        dt_idx = get_datatype_type_idx(registry)
-        return ConcreteRef(dt_idx, true)
+        # a `Type{X}` value is X's one type object, whose struct is X's kind
+        registry.jl_type_idx === nothing && return ConcreteRef(get_datatype_type_idx(registry), true)
+        return ConcreteRef(type_value_struct_idx(registry, T), true)
     end
     if T === String || T === Symbol
         # parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string — {classId, data} <: $JlBase (dart: String IS

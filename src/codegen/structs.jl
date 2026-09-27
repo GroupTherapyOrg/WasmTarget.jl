@@ -780,17 +780,19 @@ end
 """
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
-Rewrite Type{X} tuple parameters to DataType so every spelling of
-a type-object-carrying tuple shares one registry entry / wasm struct type.
-parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as
-DataType; a Dart record's field types have one spelling.)
+Rewrite a Type{X} tuple parameter to X's kind, `typeof(X)` (DataType, Union, UnionAll or
+Core.TypeofBottom), so
+every spelling of a type-object-carrying tuple shares one registry entry / wasm struct type.
+parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as its
+kind; a Dart record's field types have one spelling.)
 """
 function _canonical_tuple_type(T::DataType)
     changed = false
     ps = Any[]
     for P in T.parameters
-        if P isa DataType && P !== DataType && P !== Union{} && P <: Type
-            push!(ps, DataType)
+        X = (P isa DataType && P.name === Type.body.name) ? P.parameters[1] : nothing
+        if X isa DataType || X isa Union || X isa UnionAll || X === Union{}
+            push!(ps, typeof(X))
             changed = true
         else
             push!(ps, P)
@@ -896,7 +898,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
         return register_vararg_tuple_type!(mod, registry, T)
     end
 
-    # Canonicalize Type{X} elements to DataType. Inference spells a
+    # Canonicalize Type{X} elements to X's kind. Inference spells a
     # type-object tuple element as Type{Int32} on one path (Const-widened arg
     # inference in the Core.tuple emitter) and DataType on another (the SSA
     # local's widenconst). Registering both spellings created two distinct wasm

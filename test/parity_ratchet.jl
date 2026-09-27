@@ -2052,10 +2052,10 @@ const LOCKS = [
         end),
     "L109_no_patch_marker_tags" => ("no PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- patch-tag tokens anywhere in src, comment lines included — constraint-bearing sentences stay as untagged comments (locked 2026-09-02)",
         () -> count_lines_all(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d"; roots=[SRC])),
-    "L106_dead_codegen_defs_extinct" => ("the fifteen dead codegen definitions the march census found stay deleted (locked 2026-09-02)",
+    "L106_dead_codegen_defs_extinct" => ("the dead codegen definitions the march census found stay deleted (locked 2026-09-02). JL_TYPE_KIND_UNION and JL_TYPE_KIND_UNIONALL left the list on 2026-09-27: every type constant was a \$JlDataType then, and they are live again as the \$kind that tells a Union from a UnionAll, which share one wasm struct",
         () -> begin
             dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
-                          "emit_string_data!", "JL_TYPE_KIND_UNION", "JL_TYPE_KIND_UNIONALL",
+                          "emit_string_data!",
                           "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
                           "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
                           "has_dispatch_table", "get_string_ref_array_type!"]

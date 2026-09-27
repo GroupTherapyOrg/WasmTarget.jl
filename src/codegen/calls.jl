@@ -1572,8 +1572,8 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     num!(b, Opcode.REF_EQ)
     ret!(() -> i32_const!(b, 1))
     end_block!(b)
-    # type objects: kinds equal, then Union (1) / UnionAll (2) fieldwise; DataType (0) and
-    # TypeVar (3) are canonical objects, so identity (already false) decides them
+    # type objects: kinds equal, then a Union / UnionAll fieldwise; a DataType and Union{} are
+    # canonical objects, so identity (already false) decides them
     local jtr = ConcreteRef(UInt32(jt), true)
     local_get!(b, 0); ref_test!(b, Int64(jt), false)
     if_!(b)
@@ -1585,7 +1585,7 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     local_get!(b, 1); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
     num!(b, Opcode.I32_NE)
     ret!(() -> i32_const!(b, 0))
-    for (kind, si) in ((1, registry.jl_union_idx), (2, registry.jl_unionall_idx))
+    for (kind, si) in ((JL_TYPE_KIND_UNION, registry.jl_union_idx), (JL_TYPE_KIND_UNIONALL, registry.jl_unionall_idx))
         local_get!(b, k); i32_const!(b, kind); num!(b, Opcode.I32_EQ)
         ret!(() -> begin
             for f in (UInt32(1), UInt32(2))
@@ -1853,6 +1853,15 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             else
                 _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an unboxed $(isa2_val_wasm) value whose Julia type codegen does not know")
             end
+        elseif check_type === DataType || check_type === Union || check_type === UnionAll ||
+               check_type === TypeVar || check_type === Core.TypeofBottom
+            # a type object is no numbered class: its kind answers (a TypeVar is its own struct;
+            # a DataType, Union or UnionAll is a $JlType whose $kind names it, and Union and
+            # UnionAll share one wasm struct, so no layout or classId test can)
+            isa2_val_wasm === ExternRef && any_convert_extern!(bld)
+            local _tk_local = allocate_local!(ctx, AnyRef)
+            local_set!(bld, _tk_local)
+            _emit_isa_type_object_kinds!(bld, ctx, _tk_local, check_type)
         elseif isa2_val_wasm === ExternRef
             # Value is externref (Any-typed field). Need proper type check.
             # For Exception subtypes with DFS typeIds, use typeId comparison
@@ -2068,11 +2077,7 @@ numbered class hierarchy.)"""
 function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                                       local_idx::Integer, @nospecialize(check_type))::Nothing
     reg = ctx.type_registry
-    kinds = UInt32[]
-    for (K, idx) in ((DataType, reg.jl_datatype_idx), (Union, reg.jl_union_idx),
-                     (UnionAll, reg.jl_unionall_idx), (TypeVar, reg.jl_typevar_idx))
-        (idx !== nothing && K <: check_type) && push!(kinds, idx)
-    end
+    kinds = UInt32[]   # the bare-array representations (Memory, SimpleVector) under check_type
     if reg.type_ids !== nothing
         outside = UInt32[]
         for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
@@ -2090,6 +2095,34 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
             return nothing
         end
     end
+    # a type object: a TypeVar is its own struct; a DataType, Union, UnionAll or Union{} is a
+    # $JlType whose $kind names it (Union and UnionAll share one wasm struct)
+    local codes = Int32[code for (K, code) in ((DataType, JL_TYPE_KIND_DATATYPE),
+                        (Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
+                        (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM)) if K <: check_type]
+    local tv, jt = reg.jl_typevar_idx, reg.jl_type_idx
+    local_get!(bld, UInt32(local_idx))
+    ref_test!(bld, Int64(tv), false)
+    if_!(bld, I32)
+    i32_const!(bld, TypeVar <: check_type ? 1 : 0)
+    else_!(bld)
+    local_get!(bld, UInt32(local_idx))
+    ref_test!(bld, Int64(jt), false)
+    if_!(bld, I32)
+    if isempty(codes)
+        i32_const!(bld, 0)
+    else
+        local k = allocate_local!(ctx, I32)
+        local_get!(bld, UInt32(local_idx))
+        ref_cast!(bld, Int64(jt), false)
+        struct_get!(bld, jt, UInt32(0), I32)
+        local_set!(bld, k)
+        for (i, code) in enumerate(codes)
+            local_get!(bld, k); i32_const!(bld, Int64(code)); num!(bld, Opcode.I32_EQ)
+            i > 1 && num!(bld, Opcode.I32_OR)
+        end
+    end
+    else_!(bld)
     if isempty(kinds)
         i32_const!(bld, 0)
     else
@@ -2099,6 +2132,8 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
             i > 1 && num!(bld, Opcode.I32_OR)
         end
     end
+    end_block!(bld)
+    end_block!(bld)
     return nothing
 end
 

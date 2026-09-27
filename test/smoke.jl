@@ -236,7 +236,6 @@ _xf(name, cases) = push!(XFAIL, name => cases)
 const XFAIL_RUNTIME = Dict{String,Symbol}(
     "any_return_boundary/mutate_capture" => :unreadable,
     "string_identity_gaps/boxed_memory_typeof" => :trap,
-    "isa_unionall/isa_unionall_any" => :wrong,
     "builtin_crashes/ncodeunits_abstract_string" => :unreadable,
     "builtin_crashes/ncodeunits_abstract_substring" => :trap,
     "builtin_crashes/symbol_any_int" => :trap,
@@ -686,9 +685,35 @@ _xf("unionall_constructor", Any[
     ("unionall_body_without_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) === Int64 ? 1 : 0), Int64(1)),
     ("unionall_body_with_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) isa UnionAll ? 1 : 0), Int64(2)),
 ])
-# `isa UnionAll` on an Any-typed value answers 0 for `Vector` (native 1).
-_xf("isa_unionall", Any[
+# A type object is an instance of its kind, typeof(X) (constants.dart:361 _lowerTypeToConstant):
+# a Union constant is a $JlUnion holding its members, a UnionAll a $JlUnionAll holding its
+# body, and isa/typeof answer by the kind. Every type constant used to be a $JlDataType, so
+# `isa Union`/`isa UnionAll` answered 0 and `isa DataType` 1 for them, and `typeof` of any
+# type object trapped; the constants were keyed by isequal, so `Vector` and its body
+# `Array{T,1}` (equal under mutual subtyping) shared one object.
+_g("type_object_kinds", Any[
     ("isa_unionall_any", (x::Int64) -> (v = Any[Vector, Int64]; v[x] isa UnionAll ? 1 : 0), Int64(1)),
+    ("isa_union_const", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; v[x] isa Union ? 1 : 0), Int64(1)),
+    ("isa_union_not_datatype", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; v[x] isa DataType ? 1 : 0), Int64(1)),
+    ("isa_unionall_not_datatype", (x::Int64) -> (v = Any[Vector, Int64]; v[x] isa DataType ? 1 : 0), Int64(1)),
+    ("isa_datatype_const", (x::Int64) -> (v = Any[Int64, 5]; v[x] isa DataType ? 1 : 0), Int64(1)),
+    ("isa_type_union", (x::Int64) -> (v = Any[Union{Int64,Nothing}, 1]; v[x] isa Type ? 1 : 0), Int64(1)),
+    ("isa_type_int", (x::Int64) -> (v = Any[Int64, 5]; v[x] isa Type ? 1 : 0), Int64(2)),
+    ("typeof_union_const", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; typeof(v[x]) === Union ? 1 : 0), Int64(1)),
+    ("typeof_unionall_const", (x::Int64) -> (v = Any[Vector, Int64]; typeof(v[x]) === UnionAll ? 1 : 0), Int64(1)),
+    ("typeof_datatype_const", (x::Int64) -> (v = Any[Vector, Int64]; typeof(v[x]) === DataType ? 1 : 0), Int64(2)),
+    ("typeof_int_value", (x::Int64) -> (v = Any[Int64, 5]; typeof(v[x]) === Int64 ? 1 : 0), Int64(2)),
+    ("union_const_egal", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; v[x] === Union{Nothing,Int64} ? 1 : 0), Int64(1)),
+    ("union_member_a", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; u = v[x]; u isa Union ? (u.a === Nothing ? 1 : 2) : 0), Int64(1)),
+    ("union_member_b", (x::Int64) -> (v = Any[Union{Int64,Nothing}, Int64]; u = v[x]; u isa Union ? (u.b === Int64 ? 1 : 2) : 0), Int64(1)),
+    ("unionall_body", (x::Int64) -> (v = Any[Vector, Int64]; u = v[x]; u isa UnionAll ? (u.body isa DataType ? 1 : 2) : 0), Int64(1)),
+    ("datatype_param", (x::Int64) -> (v = Any[Vector{Int64}, Int64]; t = v[x]; t isa DataType ? (t.parameters[1] === Int64 ? 1 : 2) : 0), Int64(1)),
+    ("datatype_param_union", (x::Int64) -> (v = Any[Vector{Union{Int64,Nothing}}, Int64]; t = v[x]; t isa DataType ? (t.parameters[1] isa Union ? 1 : 2) : 0), Int64(1)),
+    # Union{} is the one instance of Core.TypeofBottom: a Type, not a DataType
+    ("bottom_egal", (x::Int64) -> (v = Any[Union{}, Int64]; v[x] === Union{} ? 1 : 0), Int64(1)),
+    ("bottom_isa_type", (x::Int64) -> (v = Any[Union{}, 5]; v[x] isa Type ? 1 : 0), Int64(1)),
+    ("bottom_not_datatype", (x::Int64) -> (v = Any[Union{}, Int64]; v[x] isa DataType ? 1 : 0), Int64(1)),
+    ("typeof_bottom", (x::Int64) -> (v = Any[Union{}, Int64]; typeof(v[x]) === Core.TypeofBottom ? 1 : 0), Int64(1)),
 ])
 # isa is a test or Julia's own answer, never a constant (calls.jl `_compile_call_isa`): an
 # unboxed numeric answers by its exact Julia type (a captured Int64 is not a Float64; a UInt64
