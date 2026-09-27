@@ -46,11 +46,11 @@ jobs:
 
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Bounds re-measured 2026-09-08: the full `all` slice runs 60-76 min on the
-    # macOS runners and the Windows fuzz slice 45 min (the SimpleDiffEq
-    # differential suite alone is 12-27 min); the previous 75/45 bounds were
-    # hit by one minute on green runs. A hang still self-kills well inside the
-    # 6-hour default.
+    # Every slice is an independently bounded job. The single serial `all` slice (lanes +
+    # every shard + fuzz on one runner) ran 94 min on macOS at 3d67b2aa and passed the
+    # 110-min bound on march/batch-9 as the smoke corpus grew, so ubuntu and macOS are
+    # sliced like Windows: the inner-loop lanes, the codegen shards (four on ubuntu; two
+    # on macOS, whose runners GitHub caps at five concurrent jobs), and the fuzz pass.
     timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 70 || 110 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
@@ -62,12 +62,19 @@ jobs:
           # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
           - '~1.13.0-0'
         target:
-          # Unix runners have already proven the bounded local orchestrator.
-          - { os: ubuntu-latest, slice: all, shard: '', fuzz: '' }
-          - { os: macos-latest, slice: all, shard: '', fuzz: '' }
-          # On Windows, make each compiler shard and fuzz pass an independently
-          # bounded job. The local orchestrator buffers child logs and blocks on
-          # the first process, which hid the responsible shard until job timeout.
+          - { os: ubuntu-latest, slice: lanes, shard: '', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-0, shard: '0,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-1, shard: '1,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-2, shard: '2,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-3, shard: '3,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: macos-latest, slice: lanes, shard: '', fuzz: '' }
+          - { os: macos-latest, slice: shard-0, shard: '0,2', fuzz: '' }
+          - { os: macos-latest, slice: shard-1, shard: '1,2', fuzz: '' }
+          - { os: macos-latest, slice: fuzz, shard: '', fuzz: '1' }
+          # Each shard and the fuzz pass is its own job: the local orchestrator buffers
+          # child logs and blocks on the first process, which hid the responsible shard
+          # until job timeout.
           - { os: windows-latest, slice: shard-0, shard: '0,4', fuzz: '' }
           - { os: windows-latest, slice: shard-1, shard: '1,4', fuzz: '' }
           - { os: windows-latest, slice: shard-2, shard: '2,4', fuzz: '' }
@@ -107,13 +114,14 @@ jobs:
       # saw it), the structural ratchet, and — on 1.12, whose typed IR the
       # baseline records — byte identity of the probe corpus.
       - name: Inner-loop lanes
-        if: matrix.target.slice == 'all'
+        if: matrix.target.slice == 'lanes'
         run: |
           julia --project=. test/smoke.jl
           julia --project=. test/parity_ratchet.jl
           if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; julia --project=. test/registry_coverage.jl; fi
 
       - name: Run tests
+        if: matrix.target.slice != 'lanes'
         env:
           WT_SHARD: ${{ matrix.target.shard }}
           WT_FUZZ: ${{ matrix.target.fuzz }}
