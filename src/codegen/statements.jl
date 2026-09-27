@@ -2133,6 +2133,20 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
         if dest_info !== nothing && src_info !== nothing
             dest_arr_ssa, dest_offset_ssa = dest_info
             src_arr_ssa, src_offset_ssa = src_info
+            # memmove passes a byte count and array.copy takes an element count. Julia memmoves
+            # only bits storage, `n * aligned_sizeof(T)` bytes (Base.unsafe_copyto! on two
+            # MemoryRefs), so the element size is Julia's own for the storage's element type.
+            local _mem_type = dest_arr_ssa isa NirSSA ? get(ctx.ssa_types, dest_arr_ssa.id, Any) : Any
+            local _el_type = (_mem_type isa DataType &&
+                              _mem_type <: Union{GenericMemory, GenericMemoryRef, Array}) ?
+                             eltype(_mem_type) : nothing
+            if !(_el_type isa Type && isbitstype(_el_type))
+                emit_unsupported_stub!(ctx, b, :unsupported_type,
+                    "memmove into storage typed $(_mem_type): Julia memmoves only bits storage, " *
+                    "so its element size is not known here"; idx=idx, detail=node)
+                return b
+            end
+            local _elem_size = Base.aligned_sizeof(_el_type)
             # Determine actual array type from the SSA's wasm local type
             # Default to string array (i32[]) but use correct type if SSA local is a ConcreteRef
             arr_copy_type = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -2165,27 +2179,7 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
                 i32_const!(b, 1)
                 num!(b, Opcode.I32_SUB)
             end
-            # count (convert from bytes to elements)
-            # memmove passes byte count, but array.copy needs element count.
-            # Determine element size from the Memory/MemoryRef type parameter.
-            _elem_size = 1  # default for UInt8/i8 arrays
-            if dest_arr_ssa isa NirSSA
-                _mem_type = get(ctx.ssa_types, dest_arr_ssa.id, Any)
-                _el_type = nothing
-                if _mem_type isa DataType
-                    _tname = _mem_type.name.name
-                    if (_tname === :GenericMemoryRef || _tname === :GenericMemory) && length(_mem_type.parameters) >= 2
-                        # Julia 1.12: MemoryRef{T}/Memory{T} are GenericMemoryRef/GenericMemory
-                        # Parameters: (:not_atomic, T, AddrSpace)
-                        _el_type = _mem_type.parameters[2]
-                    elseif (_tname === :MemoryRef || _tname === :Memory) && !isempty(_mem_type.parameters)
-                        _el_type = _mem_type.parameters[1]
-                    end
-                end
-                if _el_type !== nothing && _el_type isa DataType
-                    try; _elem_size = sizeof(_el_type); catch; end
-                end
-            end
+            # count: the byte count in elements
             emit_value!(b, nbytes_arg, ctx, I32)   # a Julia Int byte count narrows through the funnel
             if _elem_size > 1
                 i32_const!(b, Int64(_elem_size))
