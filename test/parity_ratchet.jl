@@ -465,6 +465,19 @@ end
 
 
 """
+The smoke xfails that compile and then fail when they run: the entries of test/smoke.jl's
+XFAIL_RUNTIME (a wrong value, a trap, or a result the harness cannot read back). The table
+is static; smoke's xfail lane measures every case and fails when the table disagrees.
+"""
+function smoke_runtime_xfails()::Int
+    src = _text(joinpath(ROOT, "test", "smoke.jl"))
+    m = match(r"const XFAIL_RUNTIME = Dict\{String,Symbol\}\((.*?)\n\)"s, src)
+    m === nothing && error("R39: test/smoke.jl has no XFAIL_RUNTIME table")
+    return count(l -> occursin(r"^\s*\"[^\"]+/[^\"]+\" => :(wrong|trap|unreadable),", l),
+                 split(m.captures[1], '\n'))
+end
+
+"""
     overlays_without_reason() -> Vector{String}
 
 Every `@overlay …WASM_METHOD_TABLE` definition in src and ext whose line, the comment lines
@@ -720,6 +733,8 @@ end
 const METRICS = [
     "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
         () -> length(overlays_without_reason())),
+    "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
+        () -> smoke_runtime_xfails()),
     "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
         () -> length(components_without_model())),
     "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",

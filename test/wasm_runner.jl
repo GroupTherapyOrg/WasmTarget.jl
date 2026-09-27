@@ -220,8 +220,13 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
-    try { return [{ ok: JSON.parse(JSON.stringify(f($js_args), enc)) }]; }
+    let v;
+    try { v = f($js_args); }
     catch (e) { return [{ trap: String(e && e.message || e) }]; }
+    // an export with no result answers `undefined`, which is Julia's `nothing`
+    if (v === undefined) return [{ ok: null }];
+    try { return [{ ok: JSON.parse(JSON.stringify(v, enc)) }]; }
+    catch (e) { return [{ trap: 'unserializable result (a GC reference; compare it through the bridge): ' + String(e && e.message || e) }]; }
     """
     status, results = run_driver(pool, enc_wasm(bytes), src; ninputs = 1)
     status === :error && return (:error, results)

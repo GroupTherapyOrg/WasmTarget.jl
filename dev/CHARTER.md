@@ -69,7 +69,8 @@ with the per-clause status. A clause is never closed by argument.
   fabricated result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
-  `L101` `L118` `L119` `L127` `R34`.
+  `L101` `L118` `L119` `L127` `R34` `R39` (no smoke xfail compiles and then answers wrong,
+  traps, or returns what the harness cannot read).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99`.

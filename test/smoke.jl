@@ -226,6 +226,42 @@ _g("closures", Any[
 # When one flips to passing, the smoke says so loudly (the loop that closes it is done).
 const XFAIL = Vector{Pair{String,Vector{Any}}}()
 _xf(name, cases) = push!(XFAIL, name => cases)
+# The xfails that compile and then fail when they run, each with what it does: `:wrong`
+# returns a value native does not (a module that runs and answers wrong, the worst outcome),
+# `:trap` traps where native returns, and `:unreadable` returns a GC reference for an
+# abstract return type that the harness cannot read back, so its value is unverified. Every
+# other xfail rejects at compile time. The xfail lane measures each case against this table
+# exactly, so a loud reject cannot turn into a wrong answer unseen; R39 counts the table
+# (dev/CHARTER.md C6), terminal state 0.
+const XFAIL_RUNTIME = Dict{String,Symbol}(
+    "any_return_boundary/mutate_capture" => :unreadable,
+    "string_identity_gaps/boxed_memory_typeof" => :trap,
+    "apply_type_union/runtime_union_egal" => :wrong,
+    "unionall_constructor/unionall_body_without_var" => :wrong,
+    "unionall_constructor/unionall_body_with_var" => :wrong,
+    "isa_unionall/isa_unionall_any" => :wrong,
+    "builtin_crashes/ncodeunits_abstract_string" => :unreadable,
+    "builtin_crashes/ncodeunits_abstract_substring" => :trap,
+    "builtin_crashes/symbol_any_int" => :trap,
+    "memoryref_offset/offset_after_popfirst" => :wrong,
+    "memoryref_offset/pushfirst_len_offset" => :wrong,
+    "memoryref_offset/queue_push_popfirst" => :wrong,
+)
+# What an xfail case does now: :pass, one of XFAIL_RUNTIME's outcomes, or :loud (the compile
+# rejects it).
+function xfail_outcome(f, args)::Symbol
+    expected = f(args...)
+    bytes = try
+        WasmTarget.compile(f, Tuple(map(typeof, args)); optimize=false)
+    catch
+        return :loud
+    end
+    status, val = WasmRunner.run_wasm_single(bytes, string(nameof(f)),
+                                             join(map(format_js_arg, args), ", "))
+    status === :ok && return unmarshal_result(val) == expected ? :pass : :wrong
+    status === :trap && return startswith(val, "unserializable result") ? :unreadable : :trap
+    error("xfail lane: the runner answered $status: $val")
+end
 # M6 progress (2026-07-02): the closure body now compiles VALID wasm (the self-box numeric
 # join types the capture cycle — f3_self_box_joins, dart Capture.type). The remaining gap is
 # SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
@@ -1041,21 +1077,27 @@ function main()
             end
         end
     end
-    # xfail lane: known-pending gaps. Report status; a NEWLY-PASSING one is great news
-    # (its loop landed) but never fails the gate; a still-failing one is expected.
-    xf_now_pass = String[]; xf_still = 0
+    # xfail lane: known-pending gaps. A NEWLY-PASSING one is great news (its loop landed) and
+    # never fails the gate; a still-failing one must fail the way XFAIL_RUNTIME says it does.
+    xf_now_pass = String[]; xf_still = 0; xf_mismatch = String[]; xf_seen = Set{String}()
     for (group, cases) in XFAIL
         _want(group) || continue
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
-            ok = try
-                r = isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
-                r.pass
-            catch
-                false
+            tag = "$group/$name"; push!(xf_seen, tag)
+            got = xfail_outcome(f, args)
+            if got === :pass
+                push!(xf_now_pass, tag)
+            else
+                xf_still += 1
+                want = get(XFAIL_RUNTIME, tag, :loud)
+                got === want || push!(xf_mismatch, "$tag: XFAIL_RUNTIME says $want, measured $got")
             end
-            ok ? push!(xf_now_pass, "$group/$name") : (xf_still += 1)
         end
+    end
+    for tag in keys(XFAIL_RUNTIME)
+        _want(String(first(split(tag, '/')))) && !(tag in xf_seen) &&
+            push!(xf_mismatch, "$tag: listed in XFAIL_RUNTIME, but no xfail case has that name")
     end
     dt = round(time() - t0; digits = 1)
     println("\n" * "="^60)
@@ -1064,9 +1106,11 @@ function main()
     if !isempty(xf_now_pass)
         println("xfail NOW PASSING (a gap closed — promote it out of XFAIL): ", join(xf_now_pass, ", "))
     end
-    println("xfail: $(length(xf_now_pass)) now-passing, $xf_still still-pending (expected)")
+    for m in xf_mismatch; println("  XFAIL OUTCOME ", m); end
+    println("xfail: $(length(xf_now_pass)) now-passing, $xf_still still-pending (expected), " *
+            "$(length(xf_mismatch)) outcome mismatch(es)")
     println("smoke: $npass passed, $nfail wrong, $nerr errored  ($(dt)s)")
-    exit((nfail + nerr) == 0 ? 0 : 1)
+    exit((nfail + nerr + length(xf_mismatch)) == 0 ? 0 : 1)
 end
 # main() runs when smoke.jl is the program; test/registry_coverage.jl includes it for GROUPS only
 abspath(PROGRAM_FILE) == (@__FILE__) && main()
