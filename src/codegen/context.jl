@@ -145,10 +145,10 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
     # (the statement entry, L119, cannot see it) — never a bare error naming no site.
     try
         analyze_ssa_types!(ctx)
-        analyze_control_flow!(ctx)  # Find loops and phi nodes
+        numeric_joins = analyze_control_flow!(ctx)  # loops, phi locals, the numeric joins
         analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
         allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
-        allocate_ssa_locals!(ctx)
+        allocate_ssa_locals!(ctx, numeric_joins)
         allocate_memoryref_offset_locals!(ctx)
         allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     catch e
@@ -459,9 +459,49 @@ _is_getfield_callee(@nospecialize(f))::Bool =
     f === Core.getfield || f === Base.getproperty || f === Core.Compiler.getproperty
 
 """
+    numeric_local_joins(ctx) -> Dict{Int,Type}
+
+The Any-but-really-numeric joins of the function being compiled: Julia leaves a scalar-replaced
+`Core.Box` accumulator and its phis typed `Any`, and these recover the one numeric type such an
+SSA carries so its local is that type. The parent side first records each `%new(Core.Box)`'s
+contents type for the capturing closure's body (populate_box_field_types!); then
+propagate_numeric_value_types (NumericJoin.tla); in a closure body, f3_self_box_joins (the
+closure-local solver, optimistic with a verify pass: not modeled yet) and the seeds for the
+captured Box fields the parent recorded, propagated by f3_box_value_types (BoxValueTypes.tla).
+Computed once per compilation context (analyze_control_flow!); every join it returns is
+applied to an erased SSA type.
+parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): a variable's local is
+typed by its real inferred type, not the erased one.
+"""
+function numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type}
+    populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
+    joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
+        argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
+    selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
+    if selfT isa DataType && isstructtype(selfT)
+        # Julia inference's own SSA types (the NIR boundary's widened answer)
+        merge!(joins, f3_self_box_joins(ctx.nir, ctx.nir, selfT;
+            argtypes=ctx.arg_types, self_shift=1))
+    end
+    if selfT isa DataType && ctx.type_registry.box_contents_types !== nothing
+        contents = get(ctx.type_registry.box_contents_types, selfT, nothing)
+        contentsT = contents === I64 ? Int64 : contents === I32 ? Int32 :
+                    contents === F64 ? Float64 : contents === F32 ? Float32 : nothing
+        if contentsT !== nothing
+            seeds = f3_closure_box_seeds(ctx.nir, selfT, contentsT)
+            if !isempty(seeds)
+                merge!(joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=seeds))
+                merge!(joins, seeds)
+            end
+        end
+    end
+    return joins
+end
+
+"""
 Analyze control flow to find loops and handle phi nodes.
 """
-function analyze_control_flow!(ctx::AbstractCompilationContext)
+function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     nir = ctx.nir
 
     # Find loop headers (targets of backward jumps — an unconditional goto back)
@@ -471,56 +511,11 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
         end
     end
 
-    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the Any-but-really-numeric JOIN (dart translateTypeOfLocalVariable —
-    # a variable's local is typed by its REAL inferred type, not the erased Any). The
-    # dormant Loop-C value-channel pass proves, conservatively, which Any-typed SSAs/phis
-    # only ever carry one numeric type (the scalar-replaced Core.Box accumulator cycle);
-    # their locals become that numeric type so the adds/stores line up — the return/phi
-    # boundaries box via the wrap channel where anyref is genuinely required.
-    _numeric_joins = try
-        # Parent side: record %new(Core.Box) contents types per capturing closure type
-        # (feeds the closure-side seeding below when THAT closure's body compiles).
-        populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
-        _joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
-            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
-        # Closure side: seed the captured-Box getfields with the recorded contents type
-        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
-        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
-        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
-        _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
-        if _sbT isa DataType && isstructtype(_sbT)
-            _sst = ctx.nir   # Julia inference's own SSA types (the NIR boundary's widened answer)
-            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
-            merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
-                argtypes=ctx.arg_types, self_shift=1))
-        end
-        if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
-            _selfT = _sbT
-            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
-            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
-                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
-            if _bj !== nothing
-                _seeds = f3_closure_box_seeds(ctx.nir, _selfT, _bj)
-                if !isempty(_seeds)
-                    merge!(_joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=_seeds))
-                    merge!(_joins, _seeds)
-                end
-            end
-        end
-        _joins
-    catch
-        rethrow()
-    end
-    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
-    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
-    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
-    # type-safe-default ZERO (the mutable-capture silent 0).
-    # ONLY the CONSERVATIVE joins (the fixed-point pass verifies every phi operand
-    # numeric) become globally visible. This includes the phi itself: consumers such
-    # as convert(T, phi) must see the proven type, not an erased Any while the local
-    # silently uses a different representation. Optimistic box-solver joins remain
-    # local-only hints.
-    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
+    # The numeric joins, computed once (numeric_local_joins): they type the phi locals below
+    # and the SSA locals in allocate_ssa_locals!, and each refines an erased (Any or Union)
+    # SSA type so every consumer sees the proven type.
+    _numeric_joins = numeric_local_joins(ctx)
+    for (_jk, _jv) in _numeric_joins
         local _orig = get(ctx.ssa_types, _jk, Any)
         if _orig === Any || _orig isa Union
             ctx.ssa_types[_jk] = _jv
@@ -678,6 +673,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)
             ctx.phi_locals[i] = local_idx
         end
     end
+    return _numeric_joins
 end
 
 """
@@ -688,64 +684,9 @@ We need locals when:
 3. An SSA value is used in a multi-arg call where a sibling arg has a local
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
 """
-function allocate_ssa_locals!(ctx::AbstractCompilationContext)
+function allocate_ssa_locals!(ctx::AbstractCompilationContext,
+                             _numeric_joins::Dict{Int,Type})
     nir = ctx.nir
-    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): Any-but-really-numeric JOIN (see the phi-allocation site for the design).
-    _numeric_joins = try
-        # Parent side: record %new(Core.Box) contents types per capturing closure type
-        # (feeds the closure-side seeding below when THAT closure's body compiles).
-        populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
-        _joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
-            argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
-        # Closure side: seed the captured-Box getfields with the recorded contents type
-        # (dart translateTypeOfLocalVariable for captures), then propagate through the body.
-        # Closure-LOCAL typed capture: solve the self-captured Box contents type from the
-        # body alone (optimistic + verified) — covers the parent-scalar-replaced case.
-        _sbT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
-        if _sbT isa DataType && isstructtype(_sbT)
-            _sst = ctx.nir   # Julia inference's own SSA types (the NIR boundary's widened answer)
-            _conservative_joins = copy(_joins)   # propagate output only (proven cycles)
-            merge!(_joins, f3_self_box_joins(ctx.nir, _sst, _sbT;
-                argtypes=ctx.arg_types, self_shift=1))
-        end
-        if _sbT isa DataType && ctx.type_registry.box_contents_types !== nothing
-            _selfT = _sbT
-            _bw = get(ctx.type_registry.box_contents_types, _selfT, nothing)
-            _bj = _bw === I64 ? Int64 : _bw === I32 ? Int32 :
-                  _bw === F64 ? Float64 : _bw === F32 ? Float32 : nothing
-            if _bj !== nothing
-                _seeds = f3_closure_box_seeds(ctx.nir, _selfT, _bj)
-                if !isempty(_seeds)
-                    merge!(_joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=_seeds))
-                    merge!(_joins, _seeds)
-                end
-            end
-        end
-        _joins
-    catch
-        rethrow()
-    end
-    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the join IS the variable's real type (dart translateTypeOfLocalVariable)
-    # — visible to EVERY consumer, not just local allocation. Without this, compile_call
-    # still saw `Any`, classified the accumulator `+` as dynamic, and emitted the
-    # type-safe-default ZERO (the mutable-capture silent 0).
-    # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): ONLY the CONSERVATIVE joins (the phi-cycle pass — every operand
-    # proven numeric) become globally-visible types. The OPTIMISTIC box-solver joins
-    # stay local-typing hints only (they poisoned print_to_string's string-carrying
-    # accumulator when made visible).
-    for (_jk, _jv) in (@isdefined(_conservative_joins) ? _conservative_joins : _numeric_joins)
-        local _orig = get(ctx.ssa_types, _jk, Any)
-        # Refine ERASED slots only, and only for CALL/INVOKE results (the M10a case:
-        # the dynamic-+ classified off the stale Any). PHI slots keep their erased
-        # type — their truth lives in the join-typed LOCAL, and rewriting them
-        # desynced String-carrying phis in print_to_string (a String local receiving
-        # a join-typed i32 edge).
-        local _jrec = _jk >= 1 && _jk <= length(nir) ? nir[_jk] : nothing
-        if (_orig === Any || _orig isa Union) && _jrec !== nothing && _jrec.slot == 0 &&
-           (_jrec.node isa NirCall || _jrec.node isa NirInvoke)
-            ctx.ssa_types[_jk] = _jv
-        end
-    end
     refine_checked_cast_types!(ctx)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
     # Count uses of each SSA value

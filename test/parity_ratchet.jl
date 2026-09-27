@@ -876,20 +876,25 @@ const LOCKS = [
             forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
             count(p -> occursin(p, strings_src), forbidden)
         end),
-    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation",
+    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation — the joins are computed once, by numeric_local_joins, whose body holds no catch",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             capture_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
             capture_test = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             forbidden = ["catch\n        Dict{Int,Type}()", "capture analysis fallback"]
-            required = ["_numeric_joins = try", "catch\n        rethrow()",
+            # the joins are computed once, by numeric_local_joins, whose body holds no catch:
+            # a failure inside any capture/value-channel proof propagates
+            required = ["_numeric_joins = numeric_local_joins(ctx)",
                         "propagate_numeric_value_types",
                         "f3_self_box_joins", "f3_closure_box_seeds",
                         "isconcretetype(T) && isstructtype(T)",
                         "Tuple{Vararg{Int64}}"]
+            body = match(r"(?s)\nfunction numeric_local_joins\(.*?\nend\n", context_src)
             all_src = context_src * capture_src * capture_test
             count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                count(p -> !occursin(p, all_src), required) +
+                (body === nothing ? 1 : count("catch", body.match)) +
+                max(count("= numeric_local_joins(ctx)", context_src) - 1, 0)
         end),
     "L74_builder_owns_statement_arity" => ("post-emission drop decisions use the builder's actual stack delta; no Julia-type/registry heuristic may re-guess whether a call produced a value",
         () -> begin
