@@ -601,7 +601,7 @@ function components_without_model()::Vector{String}
         push!(tablemodels, model)
         isfile(joinpath(ROOT, "dev", "formal", model * ".tla")) || push!(bad, "no model file: $model")
         files = [m.captures[1] for m in eachmatch(r"\(([a-z_]+\.jl)\)", fns)]
-        isempty(files) || any(f -> any(p -> endswith(p, "/" * f) &&
+        isempty(files) || any(f -> any(p -> basename(p) == f &&
                                         occursin("formal(dev/formal/$model.tla)", text[p]), srcfiles), files) ||
             push!(bad, "no formal( anchor for $model in $(join(files, ", "))")
     end
