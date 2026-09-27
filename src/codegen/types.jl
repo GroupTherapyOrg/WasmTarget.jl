@@ -2637,7 +2637,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 return ConcreteRef(_inner_w.type_idx, derive_nullability(T))
             end
             if _inner_w === I32 || _inner_w === I64 || _inner_w === F32 || _inner_w === F64
-                # parity(translator.dart:1141 translateStorageType): a nullable builtin is its
+                # parity(translator.dart:1067 translateStorageType): a nullable builtin is its
                 # box class, nullable (`int?` = (ref null $BoxedInt)) — `nothing` is the null
                 # ref, a value is the classId box; in every position (field, local, element).
                 return ConcreteRef(get_numeric_box_type!(mod, registry, _inner_w), true)

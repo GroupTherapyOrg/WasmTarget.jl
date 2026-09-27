@@ -39,7 +39,7 @@ end
 
 """The Julia type a literal operand contributes as a call argument. A type literal argues as
 `Type` (the call site passes the type OBJECT), everything else as its own concrete type.
-parity(code_generator.dart:133 ConstantExpression): a constant's static type is its constant's type."""
+parity(code_generator.dart:130 ConstantExpression): a constant's static type is its constant's type."""
 _f3_literal_type(@nospecialize(v))::Type = v isa Type ? Type : typeof(v)
 
 # parity(quarantine: `:contents` is the one field of Julia's `Core.Box`, the untyped cell Julia

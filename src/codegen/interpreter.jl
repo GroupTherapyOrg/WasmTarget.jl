@@ -2209,7 +2209,7 @@ end
     return key
 end
 
-# parity(symbol_patch.dart:34 Symbol.hashCode): a Symbol hashes by its name alone; the
+# parity(sdk/lib/_internal/wasm/common/symbol_patch.dart:34 Symbol.hashCode): a Symbol hashes by its name alone; the
 # function is Julia's (symbol.c hash_symbol)
 @overlay WASM_METHOD_TABLE function Base.objectid(s::Symbol)
     return _wasm_int64hash(-(_wasm_memhash_seed(String(s), 0xcafe8881) ⊻ 0xaaaaaaaaaaaaaaaa)) % UInt

@@ -39,7 +39,7 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     (I64, I64, :and_int)  => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_AND), I64),
     (I64, I64, :or_int)   => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_OR), I64),
     (I64, I64, :xor_int)  => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_XOR), I64),
-    # parity(boxed_int.dart:54 BoxedInt._truncDiv): dart's `~/` entry calls a helper
+    # parity(sdk/lib/_internal/wasm/common/boxed_int.dart:54 BoxedInt._truncDiv): dart's `~/` entry calls a helper
     # that guards divisor==0 and MIN_INT÷-1 before the raw op; these entries do the
     # same through _emit_div_guard! (calls.jl), throwing a catchable DivideError.
     # Julia's div/rem lower to the checked_* names, so both spellings land here.

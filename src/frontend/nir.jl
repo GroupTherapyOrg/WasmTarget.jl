@@ -773,7 +773,7 @@ operands (its literal callee and a `%new`'s literal type included) and a
 `throw_undef_if_not`'s variable name, a slot's literal right-hand side, or the statement
 itself when it is a literal. The constants a module must materialize before its function
 indices freeze (compile.jl's long-string pre-pass).
-parity(constants.dart:454 Constants.ensureConstant): constants are collected before codegen."""
+parity(constants.dart:298 Constants.ensureConstant): constants are collected before codegen."""
 function nir_literal_values(rec::NirStmt)::Vector{Any}
     node = rec.node
     ops = rec.slot > 0 ? nir_direct_operands(rec) :
@@ -840,13 +840,13 @@ end
 """One NIR record printed in Julia's IR notation (`%3`, `_2`, `callee(args…)`, `goto #7 if
 not %5`, …) — what a located diagnostic shows as the statement codegen was compiling. A
 slot assignment prints as `_n = …`; an unclassified statement prints its source form.
-parity(target.dart:719 DiagnosticReporter): a located report names the node it was raised on."""
+parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report): a located report names the node it was raised on."""
 function nir_text(rec::NirStmt)::String
     body = _nir_text(rec.node)
     return rec.slot > 0 ? string("_", rec.slot, " = ", body) : body
 end
 
-# parity(target.dart:719 DiagnosticReporter): one node's printed form (see nir_text).
+# parity(pkg/kernel/lib/target/targets.dart:84 DiagnosticReporter.report): one node's printed form (see nir_text).
 function _nir_text(x)::String
     x === nothing && return "#undef"
     x isa NirSSA && return string("%", x.id)

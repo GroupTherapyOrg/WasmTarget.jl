@@ -975,7 +975,7 @@ literal's value (a quoted global read through to its binding), or a bound global
 non-const binding's CURRENT value as a mutable-global initializer, so its type is
 reachable too). `(false, nothing)` for an SSA use, an argument, a slot or an unbound
 global — values whose types the inferred types already carry.
-parity(constants.dart:454 Constants.ensureConstant): a constant operand is a value the module
+parity(constants.dart:298 Constants.ensureConstant): a constant operand is a value the module
 materializes.
 """
 function _collected_operand_value(operand::NirNode)::Tuple{Bool, Any}

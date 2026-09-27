@@ -582,7 +582,7 @@ registered right now contributes its reserved recursion-group index), else the o
 translator's answer (for a numeric `inner_type`, its nullable box). Shared by both struct
 registrars so a nullable field has one layout.
 
-parity(class_info.dart:596 _generateFields): a field's wasm type is `translateTypeOfField`,
+parity(class_info.dart:539 _generateFields): a field's wasm type is `translateTypeOfField`,
 i.e. translateStorageType with the field type's nullability (translator.dart:1141).
 """
 function _nullable_field_storage_type!(mod::WasmModule, registry::TypeRegistry,

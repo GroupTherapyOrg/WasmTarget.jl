@@ -562,7 +562,7 @@ wrapped it): unwrap via `.context` when the runtime value is the object, cast di
 otherwise. The unwrap exists only where wrapping exists — no vtable globals in the module
 means no closure object can flow, so the plain cast keeps Base-internal closure structs'
 emission unchanged.
-parity(translator.dart:1613 convertType): the ref→ref arm — ref.as_non_null when only
+parity(translator.dart:1597 convertType): the ref→ref arm — ref.as_non_null when only
 nullability blocks the upcast (:1614-1616), else ref.cast (:1619).
 """
 function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
@@ -660,7 +660,7 @@ canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type cl
 `julia_type` is the proven concrete Julia source type; it supplies the exact classId.
 There is no width-based fallback because distinct Julia types share Wasm representations.
 Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
-parity(translator.dart:1621 convertType): the boxing arm; the classId comes from the Julia
+parity(translator.dart:1597 convertType): the boxing arm; the classId comes from the Julia
 source type where dart reads `boxedClasses[from]` (:1623).
 """
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
@@ -688,7 +688,7 @@ value field (field 1). THE single unboxing consumer (dart `convertType` unbox ar
 selects the ref.cast form: `false` (default) traps on a null ref — correct inside an isa/ref.test
 guard; `true` permits null (the permissive external/dynamic call boundary). An extern→any prefix
 (`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
-parity(translator.dart:1645 convertType): the unboxing arm.
+parity(translator.dart:1597 convertType): the unboxing arm.
 """
 function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
                              nullable::Bool=false)::InstrBuilder
@@ -696,7 +696,7 @@ function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, t
 end
 # Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
 # codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
-# parity(translator.dart:1645 convertType): the unboxing arm — ref.cast to the box, struct.get
+# parity(translator.dart:1597 convertType): the unboxing arm — ref.cast to the box, struct.get
 # of the value field.
 function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                              to_wasm::WasmValType; nullable::Bool=false)::InstrBuilder

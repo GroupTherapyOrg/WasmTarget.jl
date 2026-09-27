@@ -1274,7 +1274,7 @@ end
 
 """Store the value `push` emits (wasm type `w`) in a fresh local; returns its index.
 
-parity(code_generator.dart:677 accept1): an operand evaluated once into a local its
+parity(code_generator.dart:676 accept1): an operand evaluated once into a local its
 consumer reads."""
 function _egal_local!(b::InstrBuilder, alloc::Function, push::Function, w::WasmValType)::Int
     local l = alloc(w)
@@ -1289,7 +1289,7 @@ Push `p1 === p2` for two values of the primitive type `P` in their representatio
 register, or the two-limb struct of a 128-bit integer): the bits compare, never an IEEE
 compare (`NaN === NaN`, `0.0 !== -0.0`), and a narrow integer compares only its own width —
 the bits of an i32 register above `8 * sizeof(P)` are not part of the value.
-parity(intrinsics.dart:1433 StaticIntrinsic.identical): the int arm (`i64.eq`) and the
+parity(intrinsics.dart:1409 StaticIntrinsic.identical): the int arm (`i64.eq`) and the
 double arm (`i64.reinterpret_f64` of both, then `i64.eq`), per Julia primitive width.
 """
 function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
@@ -1351,7 +1351,7 @@ end
 
 """Convert the ref on top of the stack (wasm type `w`) to an eqref, for `ref.eq`.
 
-parity(intrinsics.dart:1455 StaticIntrinsic.identical): its operands translated to `eqref`."""
+parity(intrinsics.dart:1409 StaticIntrinsic.identical): its operands translated to `eqref`."""
 function _to_eqref!(b::InstrBuilder, mod::WasmModule, w::WasmValType)::InstrBuilder
     w === ExternRef && any_convert_extern!(b)
     wasm_subtype(w, EqRef, mod) || ref_cast!(b, EqRef, true)
@@ -1374,7 +1374,7 @@ True when two distinct heap objects of the concrete type `T` can still be `===`,
 alone cannot answer: primitives, String and Symbol, and immutable structs and tuples that are
 not singletons. Type objects (`T <: Type`, TypeVar) and SimpleVector are compared by their own
 arms of the runtime egal function.
-parity(intrinsics.dart:1446 StaticIntrinsic.identical canBeValueType): which classes need an
+parity(intrinsics.dart:1409 StaticIntrinsic.identical canBeValueType): which classes need an
 unboxed comparison; Julia's value classes are its immutable types (builtins.c jl_egal).
 """
 function _egal_needs_value_compare(@nospecialize(T))::Bool
@@ -1504,7 +1504,7 @@ end
 
 Push whether the anyref in local `l` is `nothing`: a null reference, or a classed value whose
 classId is `Nothing`'s (the boxed-nothing singleton, or a boxed `Nothing` register value).
-parity(intrinsics.dart:2994 MemberIntrinsic.identical): its null arm (`br_on_null`), with
+parity(intrinsics.dart:2974 MemberIntrinsic.identical): its null arm (`br_on_null`), with
 Julia's `nothing` carried either as null or as the Nothing class.
 """
 function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer)::InstrBuilder
@@ -1661,7 +1661,7 @@ Inside the runtime egal function, with both anyref operands (locals 0 and 1) kno
 class `C`: push their egal. A singleton class is its one instance; a primitive class reads
 both boxes' payloads; String/Symbol and immutable structs cast to `C`'s representation and
 compare by `_emit_egal_same!`. A value class with no classed representation traps, loudly.
-parity(intrinsics.dart:3013 MemberIntrinsic.identical): the per-value-class arm — cast both,
+parity(intrinsics.dart:2974 MemberIntrinsic.identical): the per-value-class arm — cast both,
 `struct.get` the payload, compare.
 """
 function _emit_egal_class!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
@@ -3883,7 +3883,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         _dyneq_ok = true
                     end
                 end
-                # parity(translator.dart:1598 Translator.convertType): convert(T, x) where x's REFINED type is already T —
+                # parity(translator.dart:1597 Translator.convertType): convert(T, x) where x's REFINED type is already T —
                 # identity (dart: no conversion node when types agree). The join can
                 # refine an erased Any to T after inference classified the convert.
                 if !_dyneq_ok && called_func === Base.convert && length(args) == 2 &&
@@ -4047,7 +4047,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         ctx.last_stmt_was_stub = true
     end
 
-    # parity(translator.dart:1621 Translator.convertType): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
+    # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
     # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
     # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
     # Keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a

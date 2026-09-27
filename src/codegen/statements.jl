@@ -188,7 +188,7 @@ function _storage_element_type(backing, ctx::AbstractCompilationContext)::Type
     return T === String || T === Symbol ? UInt8 : eltype(T)
 end
 
-# parity(intrinsics.dart:1255 wasmArrayCopy): dart passes each offset and size as an i64
+# parity(intrinsics.dart:1254 wasmArrayCopy): dart passes each offset and size as an i64
 # narrowed by i32.wrap_i64; a Julia storage-relative byte pointer or byte count becomes that
 # element offset by the element-size shift (a String backing's pointer counts from 1).
 function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
@@ -1256,7 +1256,7 @@ Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
 # ============================================================================
-# Foreigncall lowering registry — parity(functions.dart:90-189 FunctionCollector):
+# Foreigncall lowering registry — parity(functions.dart:21 FunctionCollector):
 # dart resolves wasm:import/wasm:export externals by (module, name) STRING
 # identity; a foreigncall's C symbol IS that identity here (unlike a Julia
 # Method, there is no dispatch ambiguity to preserve), so a Symbol-keyed

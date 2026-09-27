@@ -909,9 +909,9 @@ end
 # Binary Serialization
 # ============================================================================
 
-# parity-region(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
-const WASM_MAGIC = UInt8[0x00, 0x61, 0x73, 0x6D]  # \0asm; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
-const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1; parity(pkg/wasm_builder/lib/src/ir/module.dart:103 Module.serialize)
+# parity-region(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
+const WASM_MAGIC = UInt8[0x00, 0x61, 0x73, 0x6D]  # \0asm; parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
+const WASM_VERSION = UInt8[0x01, 0x00, 0x00, 0x00]  # version 1; parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
 # end parity-region
 
 # Section IDs
@@ -1591,19 +1591,19 @@ end
 # ============================================================================
 
 # Type constructors for binary encoding
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:1023 FunctionType.serializeDefinitionInner)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner)
 const FUNCTYPE_BYTE = 0x60
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:1168 StructType.serializeDefinitionInner)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1167 StructType.serializeDefinitionInner)
 const STRUCTTYPE_BYTE = 0x5F
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:1256 ArrayType.serializeDefinitionInner)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1255 ArrayType.serializeDefinitionInner)
 const ARRAYTYPE_BYTE = 0x5E
 
 # WasmGC subtype opcodes (required for GC types)
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:747 DefType.serializeDefinition)
 const SUB_BYTE = 0x50       # sub (non-final subtype)
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:749 DefType.serializeDefinition)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:747 DefType.serializeDefinition)
 const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping)
-# parity(pkg/wasm_builder/lib/src/serialize/sections.dart:76 TypeSection.serializeContents)
+# parity(pkg/wasm_builder/lib/src/serialize/sections.dart:59 TypeSection.serializeContents)
 const REC_BYTE = 0x4E       # rec (recursive type group)
 
 """

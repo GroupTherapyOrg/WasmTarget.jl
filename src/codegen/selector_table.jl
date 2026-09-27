@@ -151,12 +151,12 @@ function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::
     end
     dt_registry.selector_table_len = length(table)
     dt_registry.selector_table_idx = add_table!(mod, FuncRef, UInt32(length(table)))
-    # parity(code_generator.dart:2062 _virtualCall noTarget): a table that can't route (3+-axis / axis-tied — unseen in practice)
+    # parity(code_generator.dart:2028 _virtualCall noTarget): a table that can't route (3+-axis / axis-tied — unseen in practice)
     # is DROPPED: its callers compile their normal bodies, and an unresolvable dynamic
     # call surfaces through the loud record_unsupported! posture instead of a probe.
     for func_ref in collect(keys(dt_registry.tables))
         if !haskey(dt_registry.selector_offset, func_ref)
-            @debug "parity(code_generator.dart:2062 _virtualCall noTarget): dispatch table for $(func_ref) is not selector-routable — dropped"
+            @debug "dispatch table for $(func_ref) is not selector-routable — dropped"
             delete!(dt_registry.tables, func_ref)
         end
     end
