@@ -691,6 +691,18 @@ program-derived key; dart Maps iterate in insertion order.)"""
 type_order_key(@nospecialize(T))::Tuple{String,String} =
     (string(T), T isa DataType ? string(T.name.module) : (T isa UnionAll ? string(Base.unwrap_unionall(T).name.module) : ""))
 
+"""
+    ordered_type_constants(registry) -> Vector{Pair}
+
+The type constants in program order: by type_order_key, and among type objects that print
+alike but are not === (two `Array{T,1}` bodies over different TypeVars) by their global's
+index, which the program's traversal assigned. The registry is keyed by identity, so its
+own iteration order is the objects' addresses, which differ from process to process.
+parity(quarantine: the program-derived order of the type constants, see type_order_key.)
+"""
+ordered_type_constants(registry::TypeRegistry)::Vector{<:Pair} =
+    ordered_by(collect(registry.type_constant_globals), p -> (type_order_key(p.first), p.second))
+
 # parity(quarantine: the program-derived order key for a Core.TypeName, see type_order_key.)
 typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))
 
@@ -1983,7 +1995,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         struct_set!(b, module_idx, UInt32(3), AnyRef)
     end
 
-    for (type_val, dt_global_idx) in ordered_pairs(registry.type_constant_globals, type_order_key)
+    for (type_val, dt_global_idx) in ordered_type_constants(registry)
         type_val isa DataType || continue
 
         # Field 0: kind = TYPE_DATATYPE (0)
@@ -2138,7 +2150,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
 
     # a Union constant: its kind and its two members; a UnionAll: its kind and its body (its
     # `var` is no readable field — a TypeVar has no representation here); Union{}: its kind
-    for (type_val, g) in ordered_pairs(registry.type_constant_globals, type_order_key)
+    for (type_val, g) in ordered_type_constants(registry)
         (type_val isa Union || type_val isa UnionAll || type_val === Union{}) || continue
         local si = type_object_struct_idx(registry, type_val)
         local self_t = ConcreteRef(si, false)
