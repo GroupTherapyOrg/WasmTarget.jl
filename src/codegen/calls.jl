@@ -195,6 +195,40 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
     return bld
 end
 
+"""
+    _emit_storage_pointer_offset!(b, ctx, ptr, index, source, step) -> Nothing
+
+The byte offset, as an i32, that `pointerref(ptr, index, align)` / `pointerset(ptr, x, index,
+align)` reaches inside the storage object `source` its pointer was traced to
+(`_trace_memmove_ptr`). A storage pointer's value is its object's base plus a byte offset --
+1 for a String's or Symbol's bytes (`_fc_jl_string_ptr!`: a match at offset 0 is never NULL),
+0 for a Memory's -- and add_ptr/sub_ptr compile to arithmetic on that value, so the offset is
+`ptr - base + (index - 1) * step`, `step` being the size of the pointer's element type (Julia's
+`pointerref` addresses `ptr + (index - 1) * sizeof(T)`). Every pointer load and store arm reads
+it here: they computed it apiece, and one ignored `index` while another read a String pointer
+by pattern-matching one add_ptr step.
+parity(quarantine: Julia's pointer intrinsics; dart has no raw pointers outside dart:ffi, and
+WasmArrayExt.copy/fill take an array and an element offset, intrinsics.dart:1255/:1279.)
+"""
+function _emit_storage_pointer_offset!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                       ptr::NirNode, index, source::NirNode, step::Int)::Nothing
+    emit_value!(b, ptr, ctx, I64)
+    local src_type = get_ssa_type(ctx, source)
+    (src_type === String || src_type === Symbol) && (i64_const!(b, 1); num!(b, Opcode.I64_SUB))
+    if index !== nothing && !(nir_const(index) isa Integer && nir_const(index) == 1)
+        emit_value!(b, index, ctx, I64)
+        i64_const!(b, Int64(1))
+        num!(b, Opcode.I64_SUB)
+        if step != 1
+            i64_const!(b, Int64(step))
+            num!(b, Opcode.I64_MUL)
+        end
+        num!(b, Opcode.I64_ADD)
+    end
+    num!(b, Opcode.I32_WRAP_I64)
+    return nothing
+end
+
 # Guard an integer div/rem so Julia-visible error cases THROW (catchable
 # DivideError) instead of reaching the wasm instruction's uncatchable trap:
 #   * divisor == 0                  → DivideError   (div_s/div_u/rem_s/rem_u trap)
@@ -2591,22 +2625,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         return append_builder!(b, fb)
     elseif func === Core.Intrinsics.pointerref
         ptr_arg = length(args) >= 1 ? args[1] : nothing
-        str_info = ptr_arg !== nothing ? _trace_string_ptr(ptr_arg, ctx) : nothing
-        if str_info !== nothing
-            str_ssa, idx_ssa = str_info
-            idx_ssa === nothing && (idx_ssa = length(args) >= 2 ? args[2] : 1)
-            local _prsb = _ctx_builder(ctx, "compile_call")
-            string_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
-            # parity(translator.dart:1597 Translator.convertType): the classed string → its DATA array (the funnel adjusts)
-            emit_value!(_prsb, str_ssa, ctx, ConcreteRef(UInt32(string_arr_type), true))
-            emit_value!(_prsb, idx_ssa, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
-            num!(_prsb, Opcode.I32_WRAP_I64)
-            i32_const!(_prsb, 1)
-            num!(_prsb, Opcode.I32_SUB)
-            array_get!(_prsb, string_arr_type, I32; signed=false)
-            append_builder!(fb, _prsb)
-            return append_builder!(b, fb)
-        end
         # P3 gap 450889a9cb7e: DataType layout-metadata loads
         # (datatype_layoutsize/arrayelem in inlined _unsetindex!) — the layout
         # pointer is compile-time host metadata; fold the whole load.
@@ -2627,14 +2645,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _prvb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_prvb, _pr_vec, ctx, _pr_arr_t)
-            emit_value!(_prvb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
-                emit_value!(_prvb, args[2], ctx, I64)
-                i64_const!(_prvb, Int64(1))
-                num!(_prvb, Opcode.I64_SUB)
-                num!(_prvb, Opcode.I64_ADD)
-            end
-            num!(_prvb, Opcode.I32_WRAP_I64)
+            _emit_storage_pointer_offset!(_prvb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing, _pr_vec, 1)
             array_get!(_prvb, _pr_arr_t, I32; signed=false)
             append_builder!(fb, _prvb)
             return append_builder!(b, fb)
@@ -2655,16 +2666,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _prwb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_prwb, _pr_vec, ctx, _prw_arr)
             local_set!(_prwb, _prw_la)
-            emit_value!(_prwb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
-                emit_value!(_prwb, args[2], ctx, I64)
-                i64_const!(_prwb, Int64(1))
-                num!(_prwb, Opcode.I64_SUB)
-                i64_const!(_prwb, Int64(_prw_s))
-                num!(_prwb, Opcode.I64_MUL)
-                num!(_prwb, Opcode.I64_ADD)
-            end
-            num!(_prwb, Opcode.I32_WRAP_I64)
+            _emit_storage_pointer_offset!(_prwb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing, _pr_vec, _prw_s)
             local_set!(_prwb, _prw_lb)
             for _prw_k in 0:(_prw_s - 1)
                 local_get!(_prwb, _prw_la)
@@ -2718,15 +2720,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _prb_lb = length(ctx.locals) + ctx.n_params
             push!(ctx.locals, I32)
             local _prbb = _ctx_builder(ctx, "compile_call")
-            # byte offset = ptr + (i-1)   (pointer target is 1 byte wide)
-            emit_value!(_prbb, ptr_arg, ctx, I64)
-            if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
-                emit_value!(_prbb, args[2], ctx, I64)
-                i64_const!(_prbb, Int64(1))
-                num!(_prbb, Opcode.I64_SUB)
-                num!(_prbb, Opcode.I64_ADD)
-            end
-            num!(_prbb, Opcode.I32_WRAP_I64)
+            # byte offset = ptr - base + (i-1)   (pointer target is 1 byte wide)
+            _emit_storage_pointer_offset!(_prbb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing, _prb_vec, 1)
             local_set!(_prbb, _prb_lb)
             # arr ref
             _emit_backing_array!(_prbb, _prb_vec, ctx, _prb_arr)
@@ -2807,16 +2802,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             ConcreteRef(UInt32(_prg_vinfo.wasm_type_idx), true))
                 struct_get!(_prgb, _prg_vinfo.wasm_type_idx, wasm_field_idx(_prg_vinfo, 1), ConcreteRef(_prg_arr, true))
                 ref_cast!(_prgb, Int64(_prg_arr), true)
-                emit_value!(_prgb, ptr_arg, ctx, I64)      # i64 byte offset
-                if length(args) >= 2 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) == 1)
-                    emit_value!(_prgb, args[2], ctx, I64)
-                    i64_const!(_prgb, Int64(1))
-                    num!(_prgb, Opcode.I64_SUB)
-                    i64_const!(_prgb, Int64(sizeof(_prg_te)))
-                    num!(_prgb, Opcode.I64_MUL)
-                    num!(_prgb, Opcode.I64_ADD)
-                end
-                num!(_prgb, Opcode.I32_WRAP_I64)
+                _emit_storage_pointer_offset!(_prgb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing,
+                                              _prg_vec, sizeof(_prg_te))
                 i32_const!(_prgb, Int64(trailing_zeros(sizeof(_prg_te))))
                 num!(_prgb, Opcode.I32_SHR_U)
                 array_get!(_prgb, _prg_arr, julia_to_wasm_type(_prg_te);
@@ -2853,8 +2840,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _psb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
-            emit_value!(_psb, _ps_ptr, ctx, I64)   # the wrap-to-i32 follows — the value is an I64 index
-            num!(_psb, Opcode.I32_WRAP_I64)
+            _emit_storage_pointer_offset!(_psb, ctx, _ps_ptr, length(args) >= 3 ? args[3] : nothing, _ps_vec, 1)
             emit_value!(_psb, args[2], ctx, I32)
             array_set!(_psb, _ps_arr_t, I32)
             emit_value!(_psb, _ps_ptr, ctx, I64)
@@ -2931,16 +2917,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     struct_get!(_psgb, _psg_vinfo.wasm_type_idx, wasm_field_idx(_psg_vinfo, 1), ConcreteRef(_psg_arr, true))
                 end
                 ref_cast!(_psgb, Int64(_psg_arr), true)
-                emit_value!(_psgb, _ps_ptr, ctx, I64)      # i64 byte offset
-                if length(args) >= 3 && !(nir_const(args[3]) isa Integer && nir_const(args[3]) == 1)
-                    emit_value!(_psgb, args[3], ctx, I64)
-                    i64_const!(_psgb, Int64(1))
-                    num!(_psgb, Opcode.I64_SUB)
-                    i64_const!(_psgb, Int64(sizeof(_psg_te)))
-                    num!(_psgb, Opcode.I64_MUL)
-                    num!(_psgb, Opcode.I64_ADD)
-                end
-                num!(_psgb, Opcode.I32_WRAP_I64)
+                _emit_storage_pointer_offset!(_psgb, ctx, _ps_ptr, length(args) >= 3 ? args[3] : nothing,
+                                              _psg_vec, sizeof(_psg_te))
                 i32_const!(_psgb, Int64(trailing_zeros(sizeof(_psg_te))))
                 num!(_psgb, Opcode.I32_SHR_U)
                 emit_value!(_psgb, args[2], ctx, julia_to_wasm_type(_psg_tp))
@@ -2982,17 +2960,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # array ref
                 _emit_backing_array!(_pswb, _psw_vec, ctx, _psw_arr)
                 local_set!(_pswb, _psw_la)
-                # base byte index = ptr + (i-1)*s
-                emit_value!(_pswb, _ps_ptr, ctx, I64)
-                if length(args) >= 3 && !(nir_const(args[3]) isa Integer && nir_const(args[3]) == 1)
-                    emit_value!(_pswb, args[3], ctx, I64)
-                    i64_const!(_pswb, Int64(1))
-                    num!(_pswb, Opcode.I64_SUB)
-                    i64_const!(_pswb, Int64(_psw_s))
-                    num!(_pswb, Opcode.I64_MUL)
-                    num!(_pswb, Opcode.I64_ADD)
-                end
-                num!(_pswb, Opcode.I32_WRAP_I64)
+                # base byte index = ptr - base + (i-1)*s
+                _emit_storage_pointer_offset!(_pswb, ctx, _ps_ptr, length(args) >= 3 ? args[3] : nothing, _psw_vec, _psw_s)
                 local_set!(_pswb, _psw_li)
                 # value as i64 (extend 32-bit values); a 128-bit value as its two limbs
                 local _psw_lh = _psw_lv

@@ -757,6 +757,18 @@ _g("int128_limbs", Any[
     ("sdiv_typemin_by_minus1", (n::Int64) -> (try; Int64(div(typemin(Int128) + Int128(n), Int128(-1)) % Int64); catch e; e isa DivideError ? -1 : -2; end), Int64(0)),
     ("bswap_u128", (n::Int64) -> Int64(bswap(UInt128(n) << 64 + UInt128(0x0102030405060708)) % Int64), Int64(7)),
 ])
+# Loads and stores through a storage pointer: one offset for every arm, `ptr - base + (i - 1) *
+# sizeof(T)`, with a String's or Symbol's pointer carrying base 1 and a Memory's base 0
+# (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on
+# byte 0 of a Vector{UInt8}), a String store was off by one, and a String load read one add_ptr
+# step as the index and ignored `i` and sub_ptr.
+_g("storage_pointers", Any[
+    ("string_load_offset_index", (n::Int64) -> (s = "abcdefgh"; GC.@preserve s Int64(unsafe_load(pointer(s) + n ÷ 10, n % 10))), Int64(23)),
+    ("vector_load_offset_index", (n::Int64) -> (v = UInt8[0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68]; GC.@preserve v Int64(unsafe_load(pointer(v) + n ÷ 10, n % 10))), Int64(23)),
+    ("string_store_index", (n::Int64) -> (s = Base._string_n(8); GC.@preserve s (for k in 1:8; unsafe_store!(pointer(s), UInt8(0x40 + k), k); end; unsafe_store!(pointer(s) + n ÷ 10, UInt8(0x7a), n % 10)); sum(Int64(codeunit(s, k)) * k for k in 1:8)), Int64(23)),
+    ("vector_store_index", (n::Int64) -> (v = zeros(UInt8, 8); GC.@preserve v (for k in 1:8; unsafe_store!(pointer(v), UInt8(0x40 + k), k); end; unsafe_store!(pointer(v) + n ÷ 10, UInt8(0x7a), n % 10)); sum(Int64(v[k]) * k for k in 1:8)), Int64(23)),
+    ("string_store_first_byte", (n::Int64) -> (s = Base._string_n(3); GC.@preserve s unsafe_store!(pointer(s), UInt8(65 + n)); Int64(codeunit(s, 1))), Int64(1)),
+])
 _g("abstract_receivers", Any[
     ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
     ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
