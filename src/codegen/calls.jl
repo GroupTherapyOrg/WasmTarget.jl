@@ -4539,7 +4539,7 @@ Builds the result Object struct from `vec`:
 Allocates 5 temporary locals: vec_ref, src_arr, len (i32), new_arr, src_off (i32).
 """
 function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_type::DataType, ctx;
-                                   result_type::DataType=container_type)
+                                   result_type::DataType=container_type)::Union{Nothing, InstrBuilder}
     vec_info  = get(ctx.type_registry.structs, container_type, nothing)
     result_info = get(ctx.type_registry.structs, result_type, nothing)
     elem_type = eltype(container_type)

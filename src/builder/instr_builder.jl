@@ -528,7 +528,7 @@ function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::V
 end
 # throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:820 InstructionsBuilder.throw_)
-function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])
+function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])::InstrBuilder
     if b.v.reachable
         for t in reverse(inputs); validate_pop!(b.v, t); end
     end
@@ -610,7 +610,7 @@ end
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
-function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
+function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)::InstrBuilder
     op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
@@ -656,7 +656,7 @@ end
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1735 InstructionsBuilder.array_get)
-function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)
+function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)::InstrBuilder
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))
@@ -723,7 +723,7 @@ function _br_on_cast_flags(src_nullable::Bool, dst_nullable::Bool)::UInt8
     UInt8((src_nullable ? 0x01 : 0x00) | (dst_nullable ? 0x02 : 0x00))
 end
 function br_on_cast!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
-                     dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)
+                     dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)::InstrBuilder
     # br_on_cast: branches when the cast SUCCEEDS; on fallthrough the value FAILED the cast, so
     # the top keeps the source ref type (we leave it untouched). dart2wasm verifies the branch
     # carries dst_reftype; here we model fallthrough (no net stack change) + record the op.
@@ -731,7 +731,7 @@ function br_on_cast!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, d
     _emit!(b, InstrIR.BrOnCast(flags, UInt32(depth), copy(src_heap), copy(dst_heap)))
 end
 function br_on_cast_fail!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
-                          dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)
+                          dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)::InstrBuilder
     # br_on_cast_fail: branches when the cast FAILS; on fallthrough the value SUCCEEDED, so the
     # top is refined to dst_reftype.
     if b.v.reachable
@@ -789,7 +789,7 @@ end
 # RawBytes instruction, advancing the stack model by an explicit (pops, pushes) effect.
 # Deleted once every emitter is migrated (Phase 6).
 # ════════════════════════════════════════════════════════════════════════════════
-function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])
+function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])::InstrBuilder
     for _ in 1:pops; validate_pop_any!(b.v); end
     for p in pushes; validate_push!(b.v, p); end
     # A zero-byte splice records NO instruction (the declared effects above still

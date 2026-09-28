@@ -43,8 +43,8 @@ end
 #      simple struct) → emits invalid wasm (ref where i64 expected). Empty
 #      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
 # Remove when: codegen compiles the real Dict tuple-constructor body.
-@inline _wasm_dict_insert_pairs!(d::Dict, ::Tuple{}) = d
-@inline function _wasm_dict_insert_pairs!(d::Dict{K,V}, kv::Tuple) where {K,V}
+@inline _wasm_dict_insert_pairs!(d::Dict, ::Tuple{})::Dict = d
+@inline function _wasm_dict_insert_pairs!(d::Dict{K,V}, kv::Tuple)::Dict where {K,V}
     p = first(kv)
     d[p.first] = p.second
     return _wasm_dict_insert_pairs!(d, Base.tail(kv))
@@ -169,8 +169,8 @@ end
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
 # Remove when: codegen handles IOBuffer-based string construction
 
-@inline _wasm_print_to_string_tuple(::Tuple{}) = ""
-@inline function _wasm_print_to_string_tuple(xs::Tuple)
+@inline _wasm_print_to_string_tuple(::Tuple{})::String = ""
+@inline function _wasm_print_to_string_tuple(xs::Tuple)::Union{Missing, Base.AnnotatedString{String}, Regex, String}
     return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
 end
 
@@ -452,7 +452,7 @@ end
 # compile error (gap 05bc422e7ffb) is better than silently-wrong content; the real
 # fix needs that underlying codegen bug. Triaged for Part 2 with the strip gaps.
 
-@noinline function _wasm_titlecase_impl(s::String, strict::Bool)
+@noinline function _wasm_titlecase_impl(s::String, strict::Bool)::String
     n = ncodeunits(s)
     n == 0 && return s
     bytes = UInt8[]
@@ -616,10 +616,10 @@ end
 # WasmGC has no such header ABI. State the complete little-endian value semantics in
 # valid Julia instead: equal-width elements bitcast directly, wider destinations pack
 # consecutive parent elements, and narrower destinations select their byte lane.
-_wt_uint_type(::Val{1}) = UInt8
-_wt_uint_type(::Val{2}) = UInt16
-_wt_uint_type(::Val{4}) = UInt32
-_wt_uint_type(::Val{8}) = UInt64
+_wt_uint_type(::Val{1})::Type{UInt8} = UInt8
+_wt_uint_type(::Val{2})::Type{UInt16} = UInt16
+_wt_uint_type(::Val{4})::Type{UInt32} = UInt32
+_wt_uint_type(::Val{8})::Type{UInt64} = UInt64
 
 # Primitive numeric elements have no padding. Folding this target-independent
 # layout fact keeps ReinterpretArray construction out of Julia's host pointer/
@@ -708,7 +708,7 @@ end
 # semantic boundary for WT inference so codegen can read the immutable result
 # captured in its TypeName metadata. This is analogous to dart2wasm retaining a
 # recognized runtime operation instead of inlining VM implementation details.
-@noinline function _closed_world_type_bounds(tn::Core.TypeName)
+@noinline function _closed_world_type_bounds(tn::Core.TypeName)::Union{Nothing, UnitRange{Int64}}
     binding = ccall(:jl_get_module_binding, Ref{Core.Binding},
                     (Any, Any, Cint), tn.module, tn.name, true)
     isdefined(binding, :partitions) || return nothing
@@ -731,7 +731,7 @@ end
     return _closed_world_type_bounds(tn)
 end
 
-@noinline function _closed_world_isvisible(sym::Symbol, parent::Module, from::Module)
+@noinline function _closed_world_isvisible(sym::Symbol, parent::Module, from::Module)::Bool
     Base.isdeprecated(parent, sym) && return false
     Base.isdefinedglobal(from, sym) || return false
     Base.isdefinedglobal(parent, sym) || return false
@@ -2428,13 +2428,13 @@ end
 # to the Union (heterogeneous-union tuple reads still miscompile — the
 # hetero-Dict class), so give inference concrete signatures to prefer for the
 # common mixed pairs ("m" * substring, str * char, ...).
-@inline function _wasm_append_str!(out::Vector{UInt8}, s::Union{String, SubString{String}})
+@inline function _wasm_append_str!(out::Vector{UInt8}, s::Union{String, SubString{String}})::Vector{UInt8}
     for i in 1:ncodeunits(s)
         push!(out, codeunit(s, i))
     end
     return out
 end
-@inline function _wasm_append_char!(out::Vector{UInt8}, c::Char)
+@inline function _wasm_append_char!(out::Vector{UInt8}, c::Char)::Vector{UInt8}
     u = reinterpret(UInt32, c)
     nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
     i = 1
@@ -2741,4 +2741,4 @@ end
 Create a WasmInterpreter with overlay method table for the current world age.
 Must be called after all user functions are defined (so they're visible to inference).
 """
-get_wasm_interpreter() = WasmInterpreter(; world=Base.get_world_counter())
+get_wasm_interpreter()::WasmInterpreter = WasmInterpreter(; world=Base.get_world_counter())
