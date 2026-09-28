@@ -95,25 +95,17 @@ function run_simplediffeq_tests(; reps::Int = 30)
             # scalar states → Float64
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_decay_", S)),    (Float64,), ic(), Float64)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_logistic_", S)), (Float64,), ic(), Float64)
-            # Vector states → Vector{Float64}
-            # NB: ODE solving over a `Vector{Float64}` state emits invalid wasm on Julia
-            # ≥1.13 for multi-stage solvers (SimpleRK4 / SimpleTsit5 / LoopRK4; the
-            # single-stage Euler happens to dodge it) — a WT-CORE codegen bug exposed by
-            # 1.13's tighter IR. The Vector `.ref`-write result (a new memref) is
-            # stack-threaded directly into a following `array.set` as its array operand,
-            # a WT reuse optimization with NO IR-level representation; when that reuse
-            # doesn't happen the value orphans on the stack ("values remaining"). It's
-            # SUB-IR (an IR-level use guard can't tell threaded-reuse from orphan), so it
-            # needs a WT-core stack-threading fix.
-            # LOUD/SOUND (a compile-time validation error, never a silent miscompile).
-            # Gated on 1.13 only; scalar / SVector-state / parameterized ODE solving and
-            # ALL of 1.12 pass. This is a prerelease (1.13.0-rc1) codegen corner.
-            if VERSION >= v"1.13.0-"
-                @test_skip false; @test_skip false; @test_skip false
-            else
-                @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_osc_", S)),  (Float64,), ic(), Vector{Float64})
-                @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_lv_", S)),   (Float64,), ic(), Vector{Float64})
-                @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_pend_", S)), (Float64,), ic(), Vector{Float64})
+            # Vector states → Vector{Float64}. On 1.13, SimpleRK4's and SimpleTsit5's `__solve` has a
+            # control region the stackifier does not nest ("crossing control regions ... forward
+            # label is not the innermost open control label"): the compile rejects, asserted here
+            # (MARCH 13.10), never a wrong value. Every other solver runs them on both Julias.
+            for sys in (:_sde_osc_, :_sde_lv_, :_sde_pend_)
+                local f = getfield(@__MODULE__, Symbol(sys, S))
+                if VERSION >= v"1.13-" && S in (:SimpleRK4, :SimpleTsit5)
+                    @test_throws r"crossing control regions" WasmTarget.compile(f, (Float64,))
+                else
+                    @test _sde_diff(f, (Float64,), ic(), Vector{Float64})
+                end
             end
             # SVector state → Float64 (reduction)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_oscS_", S)), (Float64,), ic(), Float64)
