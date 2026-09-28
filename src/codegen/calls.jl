@@ -892,11 +892,8 @@ low-level switch, intrinsics.dart:710-929, has no byte-swap entry.)
 """
 function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                               is_128bit::Bool, is_32bit::Bool, idx::Int)::WasmValType
-    if is_128bit   # quarantine: loud reject — not in INT128_OPS, no dart lowering exists
-        emit_unsupported_stub!(ctx, fb, :unsupported_method,
-            "128-bit byte-swap (Int128/UInt128)"; idx=idx)
-        return is_32bit ? I32 : I64   # nominal — dead past `unreachable`
-    end
+    # a 128-bit operand is INT128_OPS's (emit_int128_bswap!), consulted before this registry
+    is_128bit && error("_compile_call_bswap!: a 128-bit bswap_int reached the misc registry")
     # The swap reverses exactly the value's own bytes: bswap_int returns its operand's type,
     # and a 16-bit value in an i32 register has two bytes, not four.
     local _bsT = get(ctx.ssa_types, idx, nothing)
@@ -2962,11 +2959,12 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 return append_builder!(b, fb)
             end
         end
-        # P4-stdlib (Random digest!): CROSS-WIDTH store — Ptr{UInt64/32/16}
-        # into Vector{UInt8} storage (SHA writes the bitlength into its byte
-        # buffer). Emit little-endian byte-wise array.set stores.
+        # P4-stdlib (Random digest!): CROSS-WIDTH store — Ptr{UInt128/64/32/16}
+        # into Vector{UInt8} storage (SHA writes the bitlength, and SHA-512 its 128-bit
+        # state words, into its byte buffer). Emit little-endian byte-wise array.set stores;
+        # a 128-bit value's bytes are its low limb's, then its high limb's.
         local _psw_vec = (_ps_ptr !== nothing && _psg_tp isa DataType &&
-                          isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8)) ?
+                          isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8, 16)) ?
             _trace_memmove_ptr(_ps_ptr, ctx) : nothing
         if _psw_vec !== nothing && length(args) >= 2
             local _psw_te = eltype(infer_value_type(_psw_vec, ctx))
@@ -2996,11 +2994,22 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 end
                 num!(_pswb, Opcode.I32_WRAP_I64)
                 local_set!(_pswb, _psw_li)
-                # value as i64 (extend 32-bit values)
-                local _psw_vw = julia_to_wasm_type(_psg_tp)
-                emit_value!(_pswb, args[2], ctx, _psw_vw)
-                _psw_vw === I32 && num!(_pswb, Opcode.I64_EXTEND_I32_U)
-                _psw_vw === F64 && num!(_pswb, Opcode.I64_REINTERPRET_F64)
+                # value as i64 (extend 32-bit values); a 128-bit value as its two limbs
+                local _psw_lh = _psw_lv
+                if _psw_s == 16
+                    local _psw_it = get_int128_type!(ctx.mod, ctx.type_registry, _psg_tp)
+                    local _psw_lx = allocate_local!(ctx, ConcreteRef(_psw_it, true))
+                    _psw_lh = allocate_local!(ctx, I64)
+                    emit_value!(_pswb, args[2], ctx, ConcreteRef(_psw_it, true))
+                    local_set!(_pswb, _psw_lx)
+                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 2, I64); local_set!(_pswb, _psw_lh)
+                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 1, I64)
+                else
+                    local _psw_vw = julia_to_wasm_type(_psg_tp)
+                    emit_value!(_pswb, args[2], ctx, _psw_vw)
+                    _psw_vw === I32 && num!(_pswb, Opcode.I64_EXTEND_I32_U)
+                    _psw_vw === F64 && num!(_pswb, Opcode.I64_REINTERPRET_F64)
+                end
                 local_set!(_pswb, _psw_lv)
                 for _psw_k in 0:(_psw_s - 1)
                     local_get!(_pswb, _psw_la)
@@ -3009,9 +3018,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         i32_const!(_pswb, Int64(_psw_k))
                         num!(_pswb, Opcode.I32_ADD)
                     end
-                    local_get!(_pswb, _psw_lv)
-                    if _psw_k > 0
-                        i64_const!(_pswb, Int64(8 * _psw_k))
+                    local_get!(_pswb, _psw_k < 8 ? _psw_lv : _psw_lh)
+                    if _psw_k % 8 > 0
+                        i64_const!(_pswb, Int64(8 * (_psw_k % 8)))
                         num!(_pswb, Opcode.I64_SHR_U)
                     end
                     num!(_pswb, Opcode.I32_WRAP_I64)
@@ -3030,16 +3039,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         return append_builder!(b, fb)
     end
 
-    # Int128 checked/div/rem arithmetic can't be compiled (struct args on
-    # stack would mismatch i64 ops). Emit unreachable BEFORE pushing args.
+    # 128-bit overflow-checked add/sub/mul (the Tuple{T,Bool} intrinsics) has no limb lowering:
+    # reject before the arguments are pushed. Division and remainder are INT128_OPS entries.
     if (arg_type === Int128 || arg_type === UInt128) && func isa Core.IntrinsicFunction && nameof(func) in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
-             :checked_ssub_int, :checked_usub_int, :checked_sdiv_int, :checked_udiv_int,
-             :checked_srem_int, :checked_urem_int,
-             :sdiv_int, :udiv_int, :srem_int, :urem_int)
-        # 128-bit checked/div/rem arithmetic unsupported. Loud reject (returns a value natively).
+             :checked_ssub_int, :checked_usub_int)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
-            "128-bit checked/division/remainder arithmetic (Int128/UInt128)"; idx=idx)
+            "128-bit overflow-checked arithmetic (Int128/UInt128)"; idx=idx)
         return append_builder!(b, fb)
     end
 

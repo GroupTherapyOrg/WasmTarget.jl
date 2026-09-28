@@ -138,7 +138,7 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
-L131_every_algorithm_has_its_model = 6
+L131_every_algorithm_has_its_model = 5
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 2
 R17_unwrapped_value_emissions = 18

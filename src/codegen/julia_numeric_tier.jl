@@ -40,6 +40,15 @@ const INT128_OPS = Dict{Symbol,Function}(
     :shl_int   => (b, ctx, t) -> (emit_int128_shl!(b, ctx, t);   _int128_structref(ctx, t)),
     :ashr_int  => (b, ctx, t) -> (emit_int128_ashr!(b, ctx, t);  _int128_structref(ctx, t)),
     :lshr_int  => (b, ctx, t) -> (emit_int128_lshr!(b, ctx, t);  _int128_structref(ctx, t)),
+    :sdiv_int  => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=true,  rem=false); _int128_structref(ctx, t)),
+    :udiv_int  => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=false, rem=false); _int128_structref(ctx, t)),
+    :srem_int  => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=true,  rem=true);  _int128_structref(ctx, t)),
+    :urem_int  => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=false, rem=true);  _int128_structref(ctx, t)),
+    :checked_sdiv_int => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=true,  rem=false); _int128_structref(ctx, t)),
+    :checked_udiv_int => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=false, rem=false); _int128_structref(ctx, t)),
+    :checked_srem_int => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=true,  rem=true);  _int128_structref(ctx, t)),
+    :checked_urem_int => (b, ctx, t) -> (emit_int128_divrem!(b, ctx, t; signed=false, rem=true);  _int128_structref(ctx, t)),
+    :bswap_int => (b, ctx, t) -> (emit_int128_bswap!(b, ctx, t); _int128_structref(ctx, t)),
 )
 
 """
@@ -51,8 +60,7 @@ and `emit_intrinsic_unop!`'s nullable-return contract). Operands are already on 
 stack (the same operand emission the residue arms relied on); `arg_type` is the
 caller's already-inferred Int128/UInt128 source type (the same value the residue arms
 were passed — recomputing it here would be a second `infer_value_type` call site, R3).
-Returns `nothing` when `op` is not one of this tier's ops — the caller's legacy arm
-(`bswap_int`'s loud reject) keeps handling it.
+Returns `nothing` when `op` is not one of this tier's ops.
 
 On a hit, finishes exactly like the intrinsics table routes: the SSA result gets the
 same rebox check (a numeric result flowing into a ref-typed local boxes through

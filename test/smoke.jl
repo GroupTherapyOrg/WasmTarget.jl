@@ -745,6 +745,18 @@ _xf("isa_runtime_type", Any[
 # own method (the builtin lowered every AbstractString as a String's byte array, which read a
 # SubString's parent or trapped at the cast), and `typeof` of a Memory held in Any is read off
 # its array type (a bare array carries no classId; the classId read trapped).
+# Int128/UInt128 over two i64 limbs (dev/formal/Int128Limbs.tla): the shift intrinsics past the
+# width (they took the amount modulo 64: shl_int(Int128(1), 130) answered 2^66), division and
+# remainder (once rejected), and the byte swap (once rejected).
+@noinline _sm_one128(n::Int64) = Int128(n > -1000) + Int128(n) * 0
+_g("int128_limbs", Any[
+    ("shl_past_width", (n::Int64) -> (r = Core.Intrinsics.shl_int(_sm_one128(n), n % UInt64); Int64((r >> 64) % Int64) * 1000 + Int64(r % Int64)), Int64(130)),
+    ("ashr_past_width", (n::Int64) -> (r = Core.Intrinsics.ashr_int(-(_sm_one128(n) << 100), n % UInt64); Int64(r % Int64)), Int64(128)),
+    ("sdiv_wide", (n::Int64) -> Int64(div(Int128(n) << 70 + 12345, -(Int128(n) << 65 + 3)) % Int64), Int64(987654321)),
+    ("urem_big_divisor", (n::Int64) -> Int64(rem(typemax(UInt128) - UInt128(n), (UInt128(1) << 127) + UInt128(n)) >> 100), Int64(5)),
+    ("sdiv_typemin_by_minus1", (n::Int64) -> (try; Int64(div(typemin(Int128) + Int128(n), Int128(-1)) % Int64); catch e; e isa DivideError ? -1 : -2; end), Int64(0)),
+    ("bswap_u128", (n::Int64) -> Int64(bswap(UInt128(n) << 64 + UInt128(0x0102030405060708)) % Int64), Int64(7)),
+])
 _g("abstract_receivers", Any[
     ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
     ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),

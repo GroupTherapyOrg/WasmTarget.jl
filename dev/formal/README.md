@@ -55,7 +55,7 @@ anchor in `src/` has a row.)
 | `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | — none yet: MARCH 13.4 replaces it with dart's `identical`; model it with that change |
 | Recursive type groups | `register_struct_type!` (structs.jl), `add_rec_group!` (instructions.jl) | — none yet: MARCH 13.4 replaces placeholder-and-patch with dart's define-then-fill; model it with that change |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), validator.jl | — none yet: C7's emitting-line checks, with wasm-tools as the alarm |
-| Int128 over i64 limbs | int128.jl | — none yet |
+| Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
 | SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
 | Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
 | Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
