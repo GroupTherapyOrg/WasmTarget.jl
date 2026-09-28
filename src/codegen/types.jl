@@ -208,7 +208,7 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
 
 LAZY constants — dart's shape: an uninitialized
 (ref null \$JlString) global + an init function that builds the string once, stores
-it, and returns it. MUST be called BEFORE function-index assignment (the index-freeze
+it, and returns it as the non-null (ref \$JlString). MUST be called BEFORE function-index assignment (the index-freeze
 constraint) — the literal pre-pass in compile.jl does.
 
 parity(constants.dart:2108 _createLazyConstant): a nullable global plus the init function
@@ -222,20 +222,21 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     g = add_global_ref!(mod, struct_idx, true, init)
     bytes = codeunits(s)
     seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
-    results = WasmValType[ConcreteRef(struct_idx, true)]
-    b = InstrBuilder(WasmValType[ConcreteRef(arr_idx, true)], results;
-                     func_name="lazy_string_init")
+    # parity(constants.dart:2137 _createLazyGlobalInitializer): `[] -> [T]` with T the
+    # constant's non-null type; build it, local.tee a T temp, store the global, return the temp.
+    local str_ref = ConcreteRef(struct_idx, false)
+    results = WasmValType[str_ref]
+    local init_locals = WasmValType[ConcreteRef(arr_idx, true), str_ref]
+    b = InstrBuilder(init_locals, results; func_name="lazy_string_init")
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
     emit_string_wrap!(b, mod, registry, 0, String)
-    global_set_peek = length(b.instrs)
-    # store AND return: local.tee via global — global.set then global.get
+    local_tee!(b, 1)
     global_set!(b, g)
-    global_get!(b, g, ConcreteRef(struct_idx, true))
-    return_!(b)
+    local_get!(b, 1)
     end_block!(b)
-    fidx = add_function!(mod, WasmValType[], results, WasmValType[ConcreteRef(arr_idx, true)], builder_code(b))
+    fidx = add_function!(mod, WasmValType[], results, init_locals, builder_code(b))
     registry.lazy_string_globals[s] = (g, fidx)
     return (g, fidx)
 end

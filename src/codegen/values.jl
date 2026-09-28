@@ -119,6 +119,13 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         elseif lit isa Int128 || lit isa UInt128
             # a 128-bit constant is its {classId, lo, hi} struct, built or read from its global
             return ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(lit)), false)
+        elseif isprimitivetype(typeof(lit))
+            # Char and every other primitive constant is its bits, as the emitter pushes them:
+            # i32 up to 4 bytes, i64 at 8
+            local nbytes = sizeof(typeof(lit))
+            nbytes <= 4 && return I32
+            nbytes == 8 && return I64
+            error("a $(nbytes)-byte primitive constant ($(typeof(lit))) has no Wasm representation")
         # Every reference constant below is non-null, as every dart constant is
         # (constants.dart:821 `assert(!type.nullable)`; TypeOfConstantVisitor's _typeOfClass).
         elseif lit isa TypeVar && ctx.type_registry.jl_typevar_idx !== nothing
@@ -970,6 +977,13 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
     # the heaviest shards after the struct_new! mod-resolving fix).
     vb = _compile_value_b(val, ctx)
     ty = isempty(vb.v.stack) ? nothing : vb.v.stack[end]
+    # A constant's type is known before it is emitted, and the emission pushes exactly that
+    # type: dart asserts the same of every constant (constants.dart:811
+    # `info.constant.accept(TypeOfConstantVisitor(translator)) == info.type`).
+    if (val isa NirLiteral || (val isa NirGlobalRef && val.bound)) && ty !== nothing && vb.v.reachable
+        local st = static_wasm_type(val, ctx)
+        st == ty || error("a $(typeof(val.value)) constant pushed $(ty), but static_wasm_type names $(st)")
+    end
     append_builder!(b, vb)
     return ty
 end
@@ -1532,12 +1546,12 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
                     get(ctx.type_registry.lazy_string_globals, val, nothing)
         if _lz !== nothing
-            local _lzs = get_string_struct_type!(ctx.mod, ctx.type_registry)
-            local _lzt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[ConcreteRef(_lzs, true)]))
-            local _lazy_done = block!(b, Int(_lzt); results=WasmValType[ConcreteRef(_lzs, true)])
-            global_get!(b, _lz[1], ConcreteRef(_lzs, true))
+            # parity(constants.dart:1937 _readDefinedConstant): `block [T]`, T non-null
+            local _lzs = ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false)
+            local _lazy_done = block!(b, _lzs)
+            global_get!(b, _lz[1], ConcreteRef(_lzs.type_idx, true))
             br_on_non_null!(b, _lazy_done)
-            call!(b, _lz[2], WasmValType[], WasmValType[ConcreteRef(_lzs, true)])
+            call!(b, _lz[2], WasmValType[], WasmValType[_lzs])
             end_block!(b)
             return b
         end

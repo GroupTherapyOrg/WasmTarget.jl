@@ -58,8 +58,9 @@ with the per-clause status. A clause is never closed by argument.
   reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `R38` (each `@overlay`
   states why Julia's body cannot compile, or goes).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
-  outside named heterogeneous seams, every emitted value typed at its emission.
-  Checks: `L9` `L35` `L49` `L74` `R17` `R30` `R31` (with Aqua and ExplicitImports in shard 0).
+  outside named heterogeneous seams, every emitted value typed at its emission, and a
+  constant's static type the type its emission pushes.
+  Checks: `L9` `L35` `L49` `L74` `L136` `R17` `R30` `R31` (with Aqua and ExplicitImports in shard 0).
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected
   at the edit site (load-time typing, the enforcing builder, the locks) or by the
   minute-scale lanes, never first by an hour-long run. Every lowering-registry entry is

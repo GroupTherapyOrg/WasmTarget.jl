@@ -109,7 +109,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   store ignored its index; String loads and stores were off by one).
 - Seeded Random runs on 1.13 (its SHA-512 seeding). objectid of an immutable is Julia's
   jl_object_id_ (content hash), so an immutable struct is a correct Dict or Set key.
-- Every value emission names its expected type (R17 = 0, counted on the parse tree).
+- Every value emission names its expected type (R17 = 0, counted on the parse tree), and a
+  constant pushes exactly its static type, every reference constant non-null (L136).
 
 ## Why the archive was consolidated
 

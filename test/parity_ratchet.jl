@@ -2368,6 +2368,14 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L136_constant_type_is_its_emission" => ("a constant's static type (static_wasm_type, dart's TypeOfConstantVisitor) is the type its emission pushes: the one visitor, emit_value!(b, val, ctx), checks it for every literal and bound GlobalRef it emits, as dart asserts it of every constant (constants.dart:811), and every reference constant is non-null (constants.dart:821). A long String constant pushed (ref null \$JlString) under a non-null static type until 2026-09-28 (dev/CHARTER.md C4)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "values.jl"), String)
+            m = match(r"(?s)\nfunction emit_value!\(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext\)::.*?\nend\n", src)
+            m === nothing && return 1
+            count(r -> !occursin(r, m.match),
+                  ["local st = static_wasm_type(val, ctx)", "st == ty || error("])
+        end),
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
         () -> begin
             v = String[]
