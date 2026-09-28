@@ -3676,7 +3676,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
            args[1] isa NirSSA && nir_const(args[2]) === :contents &&
            get(ctx.ssa_types, args[1].id, Any) === Core.Box
             local _bxd_ib = _ctx_builder(ctx, "compile_call")
-            local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
+            local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx, static_wasm_type(args[1], ctx))  # box intrinsic branches on the operand's type
             local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
                              UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_bxd_ty isa ConcreteRef) && ref_cast!(_bxd_ib, Int64(_bxd_idx), false)

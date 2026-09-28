@@ -1288,7 +1288,7 @@ end
 # no interior array reference.)
 function _lower_memoryrefnew!(b, fb, ctx, call, idx, args, callee)
     if length(args) == 1
-        emit_value!(fb, args[1], ctx)  # R17-floor: a fresh ref is its Memory, at the Memory's array type
+        emit_value!(fb, args[1], ctx, static_wasm_type(args[1], ctx))  # a fresh ref is its Memory, at the Memory's array type
         return append_builder!(b, fb)
     elseif length(args) >= 2
         local _mrnb = _ctx_builder(ctx, "compile_call")
@@ -1479,7 +1479,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
             done = block!(_tofb, AnyRef)
             isnull = block!(_tofb)
         end
-        actual_type = emit_value!(_tofb, arg, ctx)  # R17-floor: typeof inspects the value's actual heap representation
+        actual_type = emit_value!(_tofb, arg, ctx, static_wasm_type(arg, ctx))  # typeof inspects the value's heap representation
         actual_type === ExternRef && any_convert_extern!(_tofb)
         nullable && br_on_null!(_tofb, isnull)
         temp_local = _ensure_typeof_scratch_local!(ctx)
@@ -1797,7 +1797,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
             end
             return append_builder!(b, fb)
         end
-        local _ta_ty = emit_value!(fb, args[1], ctx)  # R17-floor: dynamic typeassert selects its class-range check from the actual reference representation
+        local _ta_ty = emit_value!(fb, args[1], ctx, static_wasm_type(args[1], ctx))  # dynamic typeassert selects its class-range check from the reference representation
         if _ta_target isa Type && isconcretetype(_ta_target) &&
            (_ta_ty === AnyRef || _ta_ty isa ConcreteRef || _ta_ty === StructRef) &&
            ctx.type_registry.base_struct_idx !== nothing
@@ -2025,7 +2025,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         local _mb_fld = nir_const(field_ref)
         if obj_type === Core.Box && _mb_fld === :contents
             local _mb_ib = _ctx_builder(ctx, "compile_call")
-            local _mb_ty = emit_value!(_mb_ib, obj_arg, ctx)  # R17-floor: actual box family selects projection
+            local _mb_ty = emit_value!(_mb_ib, obj_arg, ctx, static_wasm_type(obj_arg, ctx))  # the box family selects the projection
             local _mb_idx = _mb_ty isa ConcreteRef ? _mb_ty.type_idx :
                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)

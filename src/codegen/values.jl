@@ -908,7 +908,7 @@ function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::Abstract
         end
     end
     set_context!(b, "GotoIfNot cond → i32")
-    emit_value!(b, cond, ctx)  # R17-floor: actual local representation drives Bool unboxing
+    emit_value!(b, cond, ctx, static_wasm_type(cond, ctx))  # the local's representation drives Bool unboxing
     # Check if the condition value is in a non-i32 local
     if cond isa NirSSA
         local_idx = get(ctx.ssa_locals, cond.id, nothing)
