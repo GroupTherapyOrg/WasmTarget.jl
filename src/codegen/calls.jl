@@ -1718,6 +1718,16 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
             "which does not record which member of $(T) it is")
     elseif T1 === T2 && (T1 === String || T1 === Symbol)
         append_builder!(bld, compile_string_equal_b(x, y, ctx))
+    elseif T1 === T2 && concrete(T1) && T1 <: Core.GenericMemoryRef
+        # a MemoryRef is an immutable (mem, offset) pair: egal is the same Memory at the same
+        # element offset (Julia compares its ptr_or_offset and mem fields)
+        emit_memoryref_mem!(bld, ctx, x)
+        emit_memoryref_mem!(bld, ctx, y)
+        num!(bld, Opcode.REF_EQ)
+        emit_memoryref_offset!(bld, ctx, x)
+        emit_memoryref_offset!(bld, ctx, y)
+        num!(bld, Opcode.I32_EQ)
+        num!(bld, Opcode.I32_AND)
     elseif T1 === T2 && concrete(T1)
         local w = _egal_rep(T1, mod, reg)
         _emit_egal_same!(bld, mod, reg, alloc, T1, pusher(x, w, T1), w, pusher(y, w, T1), w, Any[])

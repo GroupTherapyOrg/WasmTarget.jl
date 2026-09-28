@@ -884,18 +884,26 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
-    "L69_one_vector_mutation_path" => ("push! and resize! compile their collected pure-Julia overlays (resize!'s replaces only Base's grow branch) and pop! compiles Julia's own body (its overlay read v[0] on an empty vector — dev/CHARTER.md C3, it may not return); name-routed mutation emitters and capacity assumptions are extinct",
+    "L69_one_vector_mutation_path" => ("Vector mutation compiles Julia's own bodies — push!, pop!, resize!, pushfirst!, popfirst!, insert!, deleteat!, append!, prepend!, empty! and _deleteend!, growing through _growend!/_growbeg!/_growat! and the reallocating closures the collector enrolls as statically invoked closures — with no WASM_METHOD_TABLE overlay of them and no name-routed mutation emitter or grow stand-in (restated 2026-09-27: it pinned the reallocating push!/resize! overlays, which put a Vector's MemoryRef back at offset 1, dev/CHARTER.md C3)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
                          "is_func(func, :resize!)", "assume capacity is sufficient",
-                         "function _resize!", "function Base.pop!(v::Vector{T})"]
-            required = ["function Base.push!(v::Vector{T}, x)",
-                        "function Base.resize!(v::Vector{T}, n::Integer)",
-                        "_wt_vector_mutation_semantics"]
-            all_src = calls_src * interp_src * test_src
+                         "function _resize!", "function Base.pop!(v::Vector{T})",
+                         "function Base.push!(v::Vector{T}, x)",
+                         "function Base.resize!(v::Vector{T}, n::Integer)",
+                         "function Base.pushfirst!(v::Vector{T}, x)",
+                         "function Base.popfirst!(v::Vector{T})",
+                         "function Base.insert!(v::Vector{T}", "function Base.deleteat!(v::Vector{T}",
+                         "function Base.append!(v::Vector{T}", "function Base.prepend!(v::Vector{T}",
+                         "function Base.empty!(v::Vector{T})", "function Base._deleteend!(a::Vector{T}",
+                         "function Base._growend_internal!", "^#_growend!", "^#_(?:growend"]
+            required = ["_wt_vector_mutation_semantics", "ftyp in invoked_closures"]
+            all_src = calls_src * interp_src * invoke_src * trim_src * test_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),

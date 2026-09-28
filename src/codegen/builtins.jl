@@ -677,9 +677,21 @@ is its (Memory, offset) pair.)
 """
 function _is_memoryref_store_result(ctx::AbstractCompilationContext, rec::NirStmt)::Bool
     rec.slot == 0 && rec.node isa NirCall && length(rec.node.operands) >= 2 || return false
-    _nir_callee_object(rec.node.callee) === Core.memoryrefset! || return false
-    T = get_ssa_type(ctx, rec.node.operands[2])
-    return T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)
+    callee = _nir_callee_object(rec.node.callee)
+    if callee === Core.memoryrefset!
+        T = get_ssa_type(ctx, rec.node.operands[2])
+        return T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)
+    end
+    # `setfield!(a::Array, :ref, v)` returns v; a read result is a pair like v
+    (callee === Core.setfield! || callee === Base.setproperty!) && length(rec.node.operands) >= 3 ||
+        return false
+    _nir_field_name(rec.node.operands[2]) === :ref || return false
+    O = get_ssa_type(ctx, rec.node.operands[1])
+    (O isa Type && O !== Union{} && O <: Array) || return false
+    T = get_ssa_type(ctx, rec.node.operands[3])
+    (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) || return false
+    idx = findfirst(r -> r === rec, ctx.nir)
+    return idx !== nothing && any(j -> j != idx && nir_refs_ssa(ctx.nir[j].node, idx), eachindex(ctx.nir))
 end
 
 """
@@ -2638,16 +2650,13 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     emit_memoryref_offset!(_vrb, ctx, value_arg)
                     struct_set!(_vrb, info.wasm_type_idx, array_offset_field_idx(info), I32)
-                    # setfield! returns the ref it stored: as one value, its Memory, and only
-                    # when nothing reads a ref whose offset is not provably 0
-                    if !memoryref_offset_is_zero(ctx, value_arg) &&
-                       any(j -> j != idx && nir_refs_ssa(ctx.nir[j].node, idx), eachindex(ctx.nir))
-                        emit_unsupported_stub!(ctx, _vrb, :unsupported_type,
-                            "the result of setfield!(::Array, :ref, ref) is read, and the ref's element offset is not provably 0";
-                            idx=idx, detail=value_arg)
-                    else
-                        local_get!(_vrb, temp_local)
+                    # setfield! returns the ref it stored: a read result is a snapshot pair
+                    # (_is_memoryref_store_result) — its off0 here, its Memory left for the store
+                    if haskey(ctx.memoryref_offset_locals, idx)
+                        emit_memoryref_offset!(_vrb, ctx, value_arg)
+                        local_set!(_vrb, ctx.memoryref_offset_locals[idx])
                     end
+                    local_get!(_vrb, temp_local)
                     append_builder!(fb, _vrb)
                     return append_builder!(b, fb)
                 end

@@ -807,6 +807,22 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         cmi = codeinfos[j].def isa Core.MethodInstance ? codeinfos[j].def : codeinfos[j].def.def
         push!(collected_method_specs, (cmi.def, cmi.specTypes))
     end
+    # A capturing closure a collected body invokes statically (Base's reallocating
+    # `_growend!`/`_growbeg!` closures) is a direct call of a known method: its body is
+    # compiled like the invoker's, keyed by the closure type (dart: a closure's target is
+    # compiled when the closure is created). Dynamic calls of Base closures stay out.
+    invoked_closures = Set{DataType}()
+    for j in 1:2:length(codeinfos)
+        (j + 1 <= length(codeinfos) && codeinfos[j + 1] isa Core.CodeInfo) || continue
+        for s in build_nir(codeinfos[j + 1])
+            local n = s.node
+            (n isa NirInvoke && n.mi isa Core.MethodInstance) || continue
+            local st = n.mi.specTypes
+            (st isa DataType && length(st.parameters) >= 1) || continue
+            local ft = st.parameters[1]
+            ft isa DataType && is_closure_type(ft) && push!(invoked_closures, ft)
+        end
+    end
     # Functions pulled in only by dispatch-candidate discovery are registered as
     # candidates rather than ordinary direct-call targets.
     dispatch_candidates = Set{Any}()
@@ -842,7 +858,8 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             # its target. USERLAND ONLY: converting Base-internal closure pairs
             # (previously skipped) changed unrelated compiles — randsubseq's
             # internals regressed in the suite context (the march-16 gate catch).
-            (ftyp in _ENROLLED_CALLABLE_TYPES[] || ftyp <: _RuntimeComposition) && (f = ftyp)
+            (ftyp in _ENROLLED_CALLABLE_TYPES[] || ftyp in invoked_closures ||
+             ftyp <: _RuntimeComposition) && (f = ftyp)
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig

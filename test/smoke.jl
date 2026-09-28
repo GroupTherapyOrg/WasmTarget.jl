@@ -239,9 +239,6 @@ const XFAIL_RUNTIME = Dict{String,Symbol}(
     "builtin_crashes/ncodeunits_abstract_string" => :unreadable,
     "builtin_crashes/ncodeunits_abstract_substring" => :trap,
     "builtin_crashes/symbol_any_int" => :trap,
-    "memoryref_offset/offset_after_popfirst" => :wrong,
-    "memoryref_offset/pushfirst_len_offset" => :wrong,
-    "memoryref_offset/queue_push_popfirst" => :wrong,
 )
 # What an xfail case does now: :pass, one of XFAIL_RUNTIME's outcomes, or :loud (the compile
 # rejects it).
@@ -913,13 +910,6 @@ _g("memory", Any[
     ("bcast_view_into_vector", (n::Int64) -> (a = collect(1:n); b = collect(1:n); a .= view(b, n:-1:1); _sm_enc(a)), Int64(4)),
 ])
 
-# popfirst!/pushfirst! are WASM_METHOD_TABLE overlays (codegen/interpreter.jl) that copy
-# into a fresh allocation, so the Vector's MemoryRef is back at offset 1 where Julia's
-# _deletebeg! advanced it to 3. The lowering reads the offset WT's MemoryRef carries — a
-# ref with an offset cannot be stored (it rejects loudly) — so the gap is the overlay:
-# Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
-# pushfirst! (Julia's offset 6, WT's 1) and a push!/popfirst! queue (5, WT's 1) are the
-# same gap.
 # A struct field of MemoryRef type holds the ref's single-value struct {mem, off0}; reading the
 # field unpacks it into the pair channel, so a ref stored at an element offset reads back the
 # element and the offset Julia gives it (it used to reject: "not unpacked into the pair channel").
@@ -939,24 +929,23 @@ _g("memoryref_field", Any[
     ("field_at_offset", (n::Int64) -> (v = collect(1:n); _sm_mr_read(_SmMRHolder(memoryref(v.ref, 3)))), Int64(5)),
     ("field_value_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); _sm_mr_value(_SmMRHolder(v.ref))), Int64(5)),
 ])
-# Base._growbeg! reallocates in a capturing closure, which returns the MemoryRef it stores
-# (a call result carries only its Memory yet); invoke.jl's name-keyed stand-in grew such a
-# vector at the END and answered wrong values (pushfirst!(v, 7, 8): native 7816, wasm 7836),
-# so the invoke now rejects: pushfirst! of several items, and any insertion through _growat!,
-# whose `i == 1` branch calls _growbeg!. They compile once the closure does (13.13).
-_xf("grow_front_closure", Any[
-    ("pushfirst_multi", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 7, 8); v[1] * 1000 + v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
-    ("splice_insert", (n::Int64) -> (v = collect(1:n); splice!(v, 2:1, [5, 6]); v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
-])
-_xf("memoryref_offset", Any[
+# Vector growth and deletion run Julia's own bodies — _growend!, _growbeg!, _growat!,
+# _deletebeg! and their reallocating closures, which the collector enrolls as statically
+# invoked closures — so the Vector's MemoryRef offset and its Memory's length are Julia's.
+# The reallocating WASM_METHOD_TABLE overlays these replace put the ref back at offset 1
+# (popfirst! twice: Julia 3, WT 1), and the name-keyed stand-in for _growbeg!'s closure
+# answered wrong values (pushfirst!(v, 7, 8): 7816 vs 7836).
+_g("vector_growth_offsets", Any[
     ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
     ("pushfirst_len_offset", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 0); length(v) * 10 + Base.memoryrefoffset(v.ref)), Int64(5)),
     ("queue_push_popfirst", (n::Int64) -> (v = collect(1:n); s = 0; for i in 1:40; push!(v, i); s += popfirst!(v); end; (Base.memoryrefoffset(v.ref) * 100 + length(v.ref.mem)) * 1000 + s), Int64(5)),
+    ("pushfirst_multi", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 7, 8); v[1] * 1000 + v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
+    ("splice_insert", (n::Int64) -> (v = collect(1:n); splice!(v, 2:1, [5, 6]); v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
+    ("deque_mix", (n::Int64) -> (v = Int64[]; s = 0; for i in 1:n; pushfirst!(v, i); push!(v, -i); end; while !isempty(v); s = s * 3 + popfirst!(v); end; s), Int64(6)),
 ])
-# The same Vectors observed through their elements: the overlays already compute these, and
-# they must keep computing them once Julia's own growth bodies (which move the ref's offset)
-# replace the overlays. Native values are identical on 1.12 and 1.13. The last case is the
-# freed slot Julia's `_deleteend!` nulls.
+# The same Vectors observed through their elements, under Julia's own growth bodies. Native
+# values are identical on 1.12 and 1.13. The last case is the freed slot Julia's `_deleteend!`
+# nulls (`_unsetindex!`), which a later grow finds unassigned.
 _g("memoryref_offset", Any[
     ("resize_grow_write", (n::Int64) -> (v = collect(1:n); resize!(v, 3n); v[3n] = 7; v[3n] + length(v)), Int64(5)),
     ("push_view_sum", (n::Int64) -> (v = Int64[]; for i in 1:n; push!(v, i); end; sum(view(v, 3:n))), Int64(12)),

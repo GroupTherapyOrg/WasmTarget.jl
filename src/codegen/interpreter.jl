@@ -953,28 +953,6 @@ end
     return result
 end
 
-# ─── Array Mutation Overlays ──────────────────────────────────────────────
-# Julia 1.12's array mutation IR uses low-level GC operations that are
-# incompatible with WasmGC. These use similar() + indexing which compile fine.
-
-# P4-stdlib (Statistics median/quantile on 1.13): _growend_internal! replaced
-# the _growend! closures sort's scratch handling uses. WasmGC has no capacity
-# concept — reallocate-and-copy exactly like the push!/append! overlays.
-@static if VERSION >= v"1.13-"
-@overlay WASM_METHOD_TABLE function Base._growend_internal!(a::Vector{T}, delta::Int, len::Int) where T
-    newlen = len + delta
-    new_v = similar(a, newlen)
-    i = 1
-    while i <= len
-        new_v[i] = a[i]
-        i += 1
-    end
-    setfield!(a, :ref, getfield(new_v, :ref))
-    setfield!(a, :size, (newlen,))
-    return nothing
-end
-end
-
 # A primitive word reinterpreted as its byte tuple, and back: the word's little-endian
 # byte lanes. Base's generic `_reinterpret` first proves the two packed sizes equal by
 # walking the host layout (`packedsize` → `padding` → `fieldoffset`), a fold WT refuses
@@ -1022,19 +1000,6 @@ _wt_le_word(b::NTuple{8, UInt8})::UInt64 =
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{8, UInt8}) where {T<:_WT_BITS64} =
     Core.bitcast(T, _wt_le_word(x))
 
-@overlay WASM_METHOD_TABLE function Base.push!(v::Vector{T}, x) where T
-    n = length(v)
-    new_v = similar(v, n + 1)
-    i = 1
-    while i <= n
-        new_v[i] = v[i]
-        i += 1
-    end
-    new_v[n + 1] = convert(T, x)
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return v
-end
 
 # Base.resize! with only the grow branch replaced. Base grows through _growend!'s capturing
 # closure, which the closed-world collector does not enroll (Base-internal closures are
@@ -1043,117 +1008,10 @@ end
 # out-of-bounds trap on resize!(zeros(10), 100)). Growing reallocates to exactly `nl`;
 # the shrink branch, the n >= 0 check and its ArgumentError are Base's own.
 # parity(quarantine: Base.resize!'s grow branch needs the Base-internal _growend! closure, which WT does not compile yet)
-@overlay WASM_METHOD_TABLE function Base.resize!(v::Vector{T}, n::Integer) where T
-    nl = Int(n)::Int
-    l = length(v)
-    if nl > l
-        new_v = similar(v, nl)
-        i = 1
-        while i <= l
-            new_v[i] = v[i]
-            i += 1
-        end
-        setfield!(v, :ref, getfield(new_v, :ref))
-        setfield!(v, :size, getfield(new_v, :size))
-    elseif nl != l
-        nl < 0 && Base._throw_argerror("new length must be ≥ 0")
-        Base._deleteend!(v, l - nl)
-    end
-    return v
-end
 
-@overlay WASM_METHOD_TABLE function Base.pushfirst!(v::Vector{T}, x) where T
-    n = length(v)
-    new_v = similar(v, n + 1)
-    new_v[1] = convert(T, x)
-    i = 1
-    while i <= n
-        new_v[i + 1] = v[i]
-        i += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return v
-end
 
-@overlay WASM_METHOD_TABLE function Base.popfirst!(v::Vector{T}) where T
-    n = length(v)
-    val = v[1]
-    new_v = similar(v, n - 1)
-    i = 2
-    while i <= n
-        new_v[i - 1] = v[i]
-        i += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return val
-end
 
-@overlay WASM_METHOD_TABLE function Base.insert!(v::Vector{T}, i::Integer, x) where T
-    n = length(v)
-    idx = Int(i)
-    new_v = similar(v, n + 1)
-    j = 1
-    while j < idx
-        new_v[j] = v[j]
-        j += 1
-    end
-    new_v[idx] = convert(T, x)
-    j = idx
-    while j <= n
-        new_v[j + 1] = v[j]
-        j += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return v
-end
 
-@overlay WASM_METHOD_TABLE function Base.deleteat!(v::Vector{T}, i::Integer) where T
-    n = length(v)
-    idx = Int(i)
-    new_v = similar(v, n - 1)
-    j = 1
-    while j < idx
-        new_v[j] = v[j]
-        j += 1
-    end
-    j = idx + 1
-    while j <= n
-        new_v[j - 1] = v[j]
-        j += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return v
-end
-
-@overlay WASM_METHOD_TABLE function Base.append!(v::Vector{T}, w::AbstractVector) where T
-    for x in w
-        push!(v, x)
-    end
-    return v
-end
-
-@overlay WASM_METHOD_TABLE function Base.prepend!(v::Vector{T}, w::AbstractVector) where T
-    nw = length(w)
-    n = length(v)
-    new_v = similar(v, n + nw)
-    i = 1
-    while i <= nw
-        new_v[i] = w[i]
-        i += 1
-    end
-    i = 1
-    while i <= n
-        new_v[nw + i] = v[i]
-        i += 1
-    end
-    setfield!(v, :ref, getfield(new_v, :ref))
-    setfield!(v, :size, getfield(new_v, :size))
-    return v
-end
 
 @overlay WASM_METHOD_TABLE function Base.splice!(v::Vector{T}, i::Integer) where T
     val = v[Int(i)]
@@ -1817,11 +1675,20 @@ end
 # Why: Base.empty! uses internal _deleteend! with foreigncall(:memmove) for
 #      clearing vector contents. Simple resize to 0 works in WASM.
 # Remove when: codegen handles _deleteend! foreigncalls
-@overlay WASM_METHOD_TABLE function Base.empty!(v::Vector{T}) where T
-    while length(v) > 0
-        pop!(v)
-    end
-    return v
+
+# Base._unsetindex!(::MemoryRef{T}) clears a freed slot: a bits element keeps its bits, an
+# isbits-union slot keeps its value, and any other slot is nulled (`atomic_pointerset(p,
+# C_NULL)`, which WT lowers to storing null, so `isassigned` then reads it unset). Base
+# decides which by reading the Memory's host layout (datatype_arrayelem, datatype_layoutsize),
+# which WT does not fold, so the decision is made here from T itself; the clearing store is
+# Julia's own.
+# parity(quarantine: Base._unsetindex! selects its clearing by reading host layout metadata;
+# the same selection follows from T, as dart's GrowableList.length= nulls freed slots,
+# list.dart:611.)
+@overlay WASM_METHOD_TABLE function Base._unsetindex!(A::MemoryRef{T}) where T
+    (isbitstype(T) || Base.isbitsunion(T)) && return A
+    Core.Intrinsics.atomic_pointerset(Ptr{Ptr{Cvoid}}(pointer(A)), C_NULL, :monotonic)
+    return A
 end
 
 # ─── reinterpret Overlay ──────────────────────────────────────────────────
@@ -2466,33 +2333,7 @@ end
     return String(out)
 end
 
-# ─── MemoryRef slot-clear Overlay ───────────────────────────────────────────
-# Why: Base._unsetindex!(::MemoryRef) nulls freed slots for the native GC. It
-#      reads DataType layout metadata (getfield(Memory{T}, :layout) via
-#      datatype_arrayelem/datatype_layoutsize) BEFORE its isbits early-return,
-#      and those reads stub → uncatchable trap (gap 450889a9cb7e: Ryu
-#      writeshortest's merged IR inlines it on the fixed-decimal path).
-#      WasmGC tracks the backing array as a whole — slot clearing is a no-op.
-# Cost: ref elements in freed slots stay reachable until the container dies
-#      (same accepted trade-off as the _deleteend! overlay below).
-@overlay WASM_METHOD_TABLE function Base._unsetindex!(A::MemoryRef{T}) where T
-    return A
-end
 
-# ─── Vector shrink Overlay ──────────────────────────────────────────────────
-# Why: shrinking resize! inlines Base._deleteend! whose freed-slot clearing
-#      (atomic_pointerset GC bookkeeping) stubs to a runtime trap (gap
-#      4c40e07c9230, WASMMAKIE T-005). In the WasmGC layout a Vector is
-#      struct{array, size} with capacity ≥ size — shrinking is just a size
-#      update; the GC tracks the backing array as a whole.
-# Cost: ref-typed elements in the hidden capacity stay reachable until the
-#      vector itself dies (bounded by capacity; same class as sizehint!).
-
-@overlay WASM_METHOD_TABLE function Base._deleteend!(a::Vector{T}, delta::Int) where T
-    n = length(a)
-    setfield!(a, :size, (n - delta,))
-    return nothing
-end
 
 # ─── Byte-vector membership Overlay ─────────────────────────────────────────
 # Why: in(::Int8/UInt8, ::DenseInt8/DenseUInt8) goes through findfirst whose

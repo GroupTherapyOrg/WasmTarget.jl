@@ -101,6 +101,9 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - Type objects are instances of their kind (Union, UnionAll, Union{}, TypeVar), keyed by
   identity and populated in program order on every machine.
 - The builder checks an `if`'s then-branch value types at `else`, as dart's else_ does.
+- A MemoryRef keeps its offset in a field and across a call (its single-value struct), and
+  Vector growth runs Julia's own bodies and reallocating closures: the ten reallocating
+  Vector overlays and the name-keyed grow stand-in are deleted, R37 = 0, C1 closed.
 
 ## Why the archive was consolidated
 
