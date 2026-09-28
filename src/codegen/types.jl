@@ -363,16 +363,17 @@ architecture (constants.dart:793 ensureConstant; a string constant is eager unle
 standalone, :872 visitStringConstant). Every use of an equal short literal reads ONE global,
 matching dart's code-size and `===`-identity semantics. A Symbol `s` is its own constant of
 its own class (constants.dart:1556 visitSymbolConstant), never the equal String's. Names longer than the
-eager threshold return `nothing` (they keep the inline data-segment path — dart
-handles those with LAZY init functions, deferred here because init functions
-cannot be added during body compilation without shifting function indices).
+eager threshold return `nothing` unless `eager`: the pre-pass gives a long literal of the
+program a LAZY global (compile.jl; dart constants.dart:454), and a long constant the pre-pass
+cannot see -- one codegen itself emits, or a long Symbol name -- takes an eager global,
+since a global (unlike an init function) can be added during body compilation.
 
 parity(constants.dart:872 ConstantCreator.visitStringConstant): the interned string constant.
 """
 function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry,
-                                     s::Union{String,Symbol})::Union{UInt32, Nothing}
+                                     s::Union{String,Symbol}; eager::Bool=false)::Union{UInt32, Nothing}
     registry.string_constant_globals === nothing && return nothing
-    ncodeunits(String(s)) > 64 && return nothing   # eager threshold (dart lazies large constants)
+    !eager && ncodeunits(String(s)) > 64 && return nothing   # eager threshold (dart lazies large constants)
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
     struct_idx, init = _string_constant_initializer!(mod, registry, s)
     g = add_global_ref!(mod, struct_idx, false, init; nullable=false)

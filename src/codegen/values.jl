@@ -1532,22 +1532,10 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             end_block!(b)
             return b
         end
-        # String constant via passive data segment + array.new_data
-        # parity(constants.dart:872 visitStringConstant): then WRAPPED as the classed string {classId, data} (the ONE producer).
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-        n_bytes = ncodeunits(val)
-
-        if n_bytes == 0
-            array_new_fixed!(b, type_idx, 0, I32)
-        else
-            utf8_bytes = Vector{UInt8}(codeunits(val))
-            seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
-            i32_const!(b, 0)              # offset 0 (start of segment)
-            # (signed-LEB length note preserved: see git history)
-            i32_const!(b, Int32(n_bytes))  # length
-            array_new_data!(b, type_idx, seg_idx)
-        end
-        emit_string_wrap!(b, ctx, String)
+        # a long constant the pre-pass could not see (one codegen itself emits): an eager global
+        # parity(constants.dart:872 visitStringConstant): a string constant is its global.
+        global_get!(b, get_string_constant_global!(ctx.mod, ctx.type_registry, val; eager=true)::UInt32,
+                    ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
 
     elseif val isa QuoteNode
         # QuoteNode wraps a constant value - unwrap and compile.
@@ -1599,22 +1587,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     elseif val isa Symbol
         # Symbols share the classed string layout and its intern registry under their own
         # class (dart visitSymbolConstant) — equal symbol literals read the ONE deduplicated
-        # global, never the equal String's. Long names keep the inline data-segment path.
-        name_str = String(val)
-        local _syg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
-        if _syg !== nothing
-            global_get!(b, _syg, ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
-            return b
-        end
-        type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-        n_bytes = ncodeunits(name_str)
-        utf8_bytes = Vector{UInt8}(codeunits(name_str))
-        seg_idx = add_passive_data_segment!(ctx.mod, utf8_bytes)
-        i32_const!(b, 0)
-        # i32.const operands are SIGNED LEB128 (see String path above).
-        i32_const!(b, Int32(n_bytes))
-        array_new_data!(b, type_idx, seg_idx)
-        emit_string_wrap!(b, ctx, Symbol)
+        # global, never the equal String's, whatever the name's length.
+        global_get!(b, get_string_constant_global!(ctx.mod, ctx.type_registry, val; eager=true)::UInt32,
+                    ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false))
 
     elseif typeof(val) <: Tuple
         # funnel-first (tuple) — tuples of constant-expressible fields intern

@@ -767,6 +767,13 @@ _g("storage_pointers", Any[
     ("vector_store_index", (n::Int64) -> (v = zeros(UInt8, 8); GC.@preserve v (for k in 1:8; unsafe_store!(pointer(v), UInt8(0x40 + k), k); end; unsafe_store!(pointer(v) + n ÷ 10, UInt8(0x7a), n % 10)); sum(Int64(v[k]) * k for k in 1:8)), Int64(23)),
     ("string_store_first_byte", (n::Int64) -> (s = Base._string_n(3); GC.@preserve s unsafe_store!(pointer(s), UInt8(65 + n)); Int64(codeunit(s, 1))), Int64(1)),
 ])
+# A long string constant codegen itself emits (Julia's `_new_genericmemory_` message, 107
+# bytes) and a long Symbol name are eager constant globals; they were bytes in a passive data
+# segment, the one constant path outside the constant funnel (R15).
+_g("long_constants", Any[
+    ("memory_size_message", (n::Int64) -> (try; length(Memory{UInt8}(undef, n)); catch e; m = (e::ArgumentError).msg::String; ncodeunits(m) * 1000 + Int64(codeunit(m, 9)); end), Int64(-1)),
+    ("long_symbol_name", (n::Int64) -> ncodeunits(String(:a_symbol_whose_name_is_well_past_the_sixty_four_byte_eager_threshold)) + n, Int64(1)),
+])
 _g("abstract_receivers", Any[
     ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
     ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
