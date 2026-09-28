@@ -9,12 +9,20 @@
 # Why native dispatch, not Moshi @data/@match: dart2wasm uses per-class virtual methods,
 # whose 1:1 Julia map is per-type dispatch — `encode!(code, ::I32Const)` — NOT a giant
 # match. It's also dependency-free (matters for the freeze/notarize story). The structs
-# carry only Base-typed fields so this submodule has zero parent dependencies.
+# carry Base-typed fields, and a block's type is the builder's value-type union (the one
+# parent binding this submodule reads, as dart's instruction carries a typed w.BlockType).
 #
 # The InstrBuilder produces a `Vector{WasmInstr}` (the ir/ layer); `builder_code`
 # serializes it (the serialize/ layer). One representation, no parallel byte path.
 
 module InstrIR
+
+using ..WasmTarget: WasmValType
+
+# A block's type: the 0x40 void byte or a value type (both WasmValType), or a function-type
+# index for a multi-value frame (an Int, encoded s33).
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:642 BeginNoEffectBlock): the typed blocktype
+const BlockTypeArg = Union{WasmValType, Int}
 
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 abstract type WasmInstr end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
@@ -47,9 +55,9 @@ struct GlobalSet <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/s
 # ── control flow ─────────────────────────────────────────────────────────────────
 struct Unreachable <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:624 Unreachable)
 struct Nop         <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:633 Nop)
-struct Block <: WasmInstr; blocktype::Any; end   # blocktype: 0x40 byte or a WasmValType; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:642 BeginNoEffectBlock)
-struct Loop  <: WasmInstr; blocktype::Any; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:733 BeginNoEffectLoop)
-struct If    <: WasmInstr; blocktype::Any; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:821 BeginNoEffectIf)
+struct Block <: WasmInstr; blocktype::BlockTypeArg; end   # blocktype: 0x40 byte, a WasmValType, or a type index; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:642 BeginNoEffectBlock)
+struct Loop  <: WasmInstr; blocktype::BlockTypeArg; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:733 BeginNoEffectLoop)
+struct If    <: WasmInstr; blocktype::BlockTypeArg; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:821 BeginNoEffectIf)
 struct Else  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:899 Else)
 struct End   <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1096 End)
 struct Br    <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1110 Br)
@@ -83,7 +91,7 @@ struct TryCatch
     label::UInt32
 end
 # try_table: a block opener (blocktype: 0x40 byte or a WasmValType) plus the catch vec.
-struct TryTable <: WasmInstr; blocktype::Any; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
+struct TryTable <: WasmInstr; blocktype::BlockTypeArg; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
 struct Throw    <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1032 Throw)
 # end parity-region
 struct ThrowRef <: WasmInstr; end

@@ -132,7 +132,7 @@ mutable struct TypeRegistry
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
     closure_base_idx::Union{Nothing, UInt32}
     closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct
-    closure_vtable_globals::Union{Nothing, Dict{Any, UInt32}}          # closure body key -> global
+    closure_vtable_globals::Union{Nothing, Dict{Type, UInt32}}         # closure type -> vtable global
     # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
@@ -167,7 +167,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     UInt32[],                    # module_init_functions
     Dict{Union{String,Symbol}, UInt32}(),  # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
-    nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
+    nothing, Dict{Int, UInt32}(), Dict{Type, UInt32}(),  # closure layouter
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants

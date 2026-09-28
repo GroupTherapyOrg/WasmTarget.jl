@@ -59,12 +59,10 @@ mutable struct WasmStackValidator
     labels::Vector{ValidatorLabel}      # Label stack for control flow
     reachable::Bool                     # Whether current code is reachable
     # The WasmModule being built — `wasm_subtype` needs it to resolve a ConcreteRef's
-    # declared supertype chain (struct-vs-array kind + nominal `<:`). Held untyped to
-    # avoid an include-order/layer dependency on WasmModule (the builder layer is below
-    # codegen); `wasm_subtype`/`_wt_heap_kind` already take `mod` duck-typed. `nothing`
-    # when unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
+    # declared supertype chain (struct-vs-array kind + nominal `<:`). `nothing` when
+    # unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
     # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
-    mod::Any
+    mod::Union{Nothing, WasmModule}
     context_hint::String   # the emitting Julia statement (set via set_context!)
 end
 

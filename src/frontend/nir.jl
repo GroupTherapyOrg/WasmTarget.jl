@@ -227,8 +227,8 @@ parity(quarantine: Julia's `Expr(:foreigncall)` names a C symbol and its ABI typ
 FFI natives in the CFE ffi transformer, before Kernel reaches codegen.)"""
 struct NirForeignCall <: NirNode
     c_symbol::Union{Symbol,Nothing}
-    arg_julia_types::Vector{Any}
-    ret_julia_type::Any
+    arg_julia_types::Vector{Union{Type, Core.TypeofVararg}}   # a Vararg marker is not a Type
+    ret_julia_type::Type
     operands::Vector{NirNode}
 end
 
@@ -680,7 +680,8 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
         elseif head === :foreigncall
             c_symbol = !isempty(args) ? extract_foreigncall_name(args[1]) : nothing
             ret_t = length(args) >= 2 ? args[2] : Any
-            arg_ts = (length(args) >= 3 && args[3] isa Core.SimpleVector) ? collect(Any, args[3]) : Any[]
+            arg_ts = (length(args) >= 3 && args[3] isa Core.SimpleVector) ?
+                collect(Union{Type, Core.TypeofVararg}, args[3]) : Union{Type, Core.TypeofVararg}[]
             cargs = length(args) >= 6 ? NirNode[resolve_operand(a, types) for a in @view args[6:end]] : NirNode[]
             return NirForeignCall(c_symbol, arg_ts, ret_t, cargs)
         elseif head === :boundscheck

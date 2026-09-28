@@ -250,6 +250,15 @@ end
 # carry a fixed type, each with a one-line reason. (struct, field) => skip.
 const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:WasmDiagnostic, :detail),         # the raw Expr/MethodInstance/Type a diagnostic points at — open by construction
+    (:WasmInternalError, :cause),       # the value a codegen bug threw — Julia can throw any value
+    (:NirGlobalRef, :value),            # a bound global's value — as open as a literal's
+    (:NirUnsupported, :raw),            # the raw IR node the boundary could not classify — open by construction
+    (:CompilationContext, :func_ref),   # the function being compiled — anything callable, as FunctionInfo.func_ref
+    (:CompilationContext, :captured_constant_fields),  # a closure's captured constants, by field — open values
+    (:RootBindings, :captured_constants),              # an entry closure's captured constants, by name — open values
+    (:RootBindings, :bound_leaves),     # (callable, argument types) of a bound leaf — the callable is open
+    (:TypeRegistry, :constant_globals),                # constants.dart's constant map: a constant is any value
+    (:TypeRegistry, :mutable_constant_globals),        # the same, for a mutable constant (by identity)
     (:NirLiteral, :value),              # a Julia literal's runtime value — literals are open
     (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
     (:NirInvoke, :callee),              # ditto: an :invoke's own callee operand, which is a
