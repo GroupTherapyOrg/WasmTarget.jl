@@ -1281,18 +1281,6 @@ function _emit_throw_value!(b::InstrBuilder, ctx::AbstractCompilationContext, ex
     return b
 end
 
-# Special case for Core.memoryref - creates MemoryRef from Memory
-# memoryref(memory::Memory{T}) -> MemoryRef{T}
-# In WasmGC, this is a no-op since Memory IS the array
-# parity(quarantine: Julia's `Core.memoryref` makes a GenericMemoryRef from a Memory; dart has no
-# interior array reference.)
-function _lower_memoryref!(b, fb, ctx, call, idx, args, callee)
-    length(args) == 1 || return nothing
-    # Pass through the array reference - Memory and MemoryRef are the same in WasmGC
-    emit_value!(fb, args[1], ctx)  # R17-floor: memoryref identity preserves its array representation
-    return append_builder!(b, fb)
-end
-
 # `memoryrefnew(mem)` is the fresh ref at offset 0: its Memory. `memoryrefnew(p, i, bc)` is an
 # indexed ref, re-emitted from its operands wherever it is read (the pair channel above);
 # its statement runs only the bounds check, which is its one effect.
@@ -1699,9 +1687,8 @@ end
 # `ifelse(cond, a, b)` — dart lowers a ConditionalExpression lazily, as an
 # if/else (code_generator.dart:2810 visitConditionalExpression); Julia's
 # `ifelse` evaluates both operands, so WT emits `select`/`select_t`. Self-contained: compiles all three operands itself, so it
-# never depended on the generic arg-push loop. `Base.ifelse` (the generic
-# function) and `Core.ifelse` (the builtin) are DIFFERENT objects — the retired
-# `is_func(func, :ifelse)` matched either by bare name, so both are keys here.
+# never depended on the generic arg-push loop. The key is the builtin `Core.ifelse`: `Base.ifelse`
+# is a different object whose one method inlines to it, so a :call of it compiles Julia's body.
 # L38_no_known_value_substitutions pins this body's two reject messages.
 # parity(quarantine: Julia's `ifelse` is a function whose operands are both evaluated — a wasm
 # `select`, not dart's lazy ConditionalExpression.)
@@ -2847,7 +2834,6 @@ function _lower_egal!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,N
     else
         emit_egal!(fb, ctx, args[1], args[2])
     end
-    callee === Core.:(!==) && num!(fb, Opcode.I32_EQZ)
     return append_builder!(b, fb)
 end
 
@@ -2964,7 +2950,6 @@ _register_builtin!(Core.memoryrefget, _lower_memoryrefget!)
 _register_builtin!(Core.memoryrefoffset, _lower_memoryrefoffset!)
 _register_builtin!(Core.memoryrefset!, _lower_memoryrefset!)
 _register_builtin!(Core.memorynew, _lower_memorynew!)
-_register_builtin!(Core.memoryref, _lower_memoryref!)
 _register_builtin!(Core.memoryrefnew, _lower_memoryrefnew!)
 _register_builtin!(Core.tuple, _lower_tuple!)
 _register_builtin!(Core.Intrinsics.atomic_pointerset, _lower_atomic_pointerset!)
@@ -2974,13 +2959,11 @@ _register_builtin!(Core.compilerbarrier, _lower_compilerbarrier!)
 _register_builtin!(Core.apply_type, _lower_apply_type!)
 _register_builtin!(Core.typeof, _lower_typeof!)
 _register_builtin!(Core.:(===), _lower_egal!)
-_register_builtin!(Core.:(!==), _lower_egal!)
 _register_builtin!(Core.isa, _lower_isa!)                  # === Base.isa
 _register_builtin!(+, _lower_operator!)
 _register_builtin!(-, _lower_operator!)
 _register_builtin!(*, _lower_operator!)
 _register_builtin!(Core.ifelse, _lower_ifelse!)
-_register_builtin!(Base.ifelse, _lower_ifelse!)
 _register_builtin!(Core.typeassert, _lower_typeassert!)
 _register_builtin!(Core.getfield, _lower_getfield!)        # === Base.getfield
 # `Core.getproperty` is NOT a key: it IS `Core.getfield` (measured), and
