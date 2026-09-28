@@ -508,9 +508,10 @@ end
 """
     allocate_memoryref_offset_locals!(ctx)
 
-Give every snapshot pair — an Array :ref read (`getfield(a, :ref)`), an indexed ref with
-an operand not fixed at its definition, a `memoryrefset!` storing a MemoryRef (its result),
-or a PiNode unpacking a MemoryRef's single-value
+Give every snapshot pair — an Array :ref read (`getfield(a, :ref)`), a MemoryRef read out of
+a struct, closure or tuple field (its single-value struct, _unpack_memoryref_field_read!), an
+indexed ref with an operand not fixed at its definition, a `memoryrefset!` storing a MemoryRef
+(its result), or a PiNode unpacking a MemoryRef's single-value
 struct out of a slot that holds any value (emit_memoryref_unbox!) — a local for its Memory and an i32 local for the
 off0 its statement stores, and every MemoryRef phi with an incoming ref whose offset is not provably 0 an
 i32 local for its off0, beside the phi local that holds its Memory — to a fixpoint, since a
@@ -526,14 +527,10 @@ function allocate_memoryref_offset_locals!(ctx::AbstractCompilationContext)::Not
             !(_memoryref_operand_is_fixed(ctx, rec.node.operands[1]) &&
               _memoryref_operand_is_fixed(ctx, rec.node.operands[2]))) ||
            (rec.node isa NirPi && _is_memoryref_unbox(ctx, rec)) ||
-           _is_memoryref_store_result(ctx, rec)
+           _is_memoryref_store_result(ctx, rec) || _is_memoryref_field_read(ctx, rec)
             haskey(ctx.ssa_locals, i) || (ctx.ssa_locals[i] = allocate_local!(ctx,
                 ConcreteRef(get_array_type!(ctx.mod, ctx.type_registry, eltype(rec.julia_type)), true)))
             ctx.memoryref_offset_locals[i] = allocate_local!(ctx, I32)
-        elseif _is_memoryref_field_read(ctx, rec)
-            record_unsupported!(ctx, :unsupported_type,
-                "a MemoryRef read from a struct, closure or tuple field: the field holds the ref's single-value struct, which is not unpacked into the pair channel yet";
-                idx=i, detail=rec.node)
         elseif _is_memoryref_unbox(ctx, rec)
             record_unsupported!(ctx, :unsupported_type,
                 "typeassert of a value that holds any value to a MemoryRef: its single-value struct is unpacked only by a PiNode yet";
@@ -702,6 +699,24 @@ function _is_memoryref_field_read(ctx::AbstractCompilationContext, rec::NirStmt)
     T isa Type && T !== Union{} && T <: Core.GenericMemoryRef || return false
     O = get_ssa_type(ctx, node.operands[1])
     return !(O isa Type && (O <: Array || O <: Core.GenericMemoryRef || O <: GenericMemory))
+end
+
+"""
+    _unpack_memoryref_field_read!(b, ctx, idx) -> b
+
+After a field read, when statement `idx` reads a MemoryRef out of a struct, closure or tuple
+field: the field's single-value struct is on the stack; unpack its off0 and Memory into the
+statement's snapshot pair and leave the Memory, as an Array's :ref read leaves its data.
+Any other field read is left as it is.
+parity(quarantine: Julia's MemoryRef is an inline immutable; a field of MemoryRef type holds
+its pair, which reading the field unpacks.)
+"""
+function _unpack_memoryref_field_read!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int)::InstrBuilder
+    (haskey(ctx.memoryref_offset_locals, idx) && 1 <= idx <= length(ctx.nir) &&
+     _is_memoryref_field_read(ctx, ctx.nir[idx])) || return b
+    emit_memoryref_unbox!(b, ctx, idx, ctx.nir[idx].julia_type)
+    local_get!(b, ctx.ssa_locals[idx])
+    return b
 end
 
 """
@@ -2182,6 +2197,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 if field_idx !== nothing
                     emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
                     struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                    _unpack_memoryref_field_read!(fb, ctx, idx)
                     return append_builder!(b, fb)
                 end
             end
@@ -2225,6 +2241,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 local _sfg_fields = _sfg_layout.fields
                 local _sfg_ft = _sfg_fields[Int(_sfg_wfi) + 1].valtype
                 struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi, _sfg_ft)
+                _unpack_memoryref_field_read!(_sfgb, ctx, idx)
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
             end

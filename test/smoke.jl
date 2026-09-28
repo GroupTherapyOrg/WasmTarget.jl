@@ -914,8 +914,19 @@ _g("memory", Any[
 # Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
 # pushfirst! (Julia's offset 6, WT's 1) and a push!/popfirst! queue (5, WT's 1) are the
 # same gap.
-# Base._growbeg! reallocates in a capturing closure whose body reads its captured MemoryRef,
-# which is not unpacked into the pair channel yet; invoke.jl's name-keyed stand-in grew such a
+# A struct field of MemoryRef type holds the ref's single-value struct {mem, off0}; reading the
+# field unpacks it into the pair channel, so a ref stored at an element offset reads back the
+# element and the offset Julia gives it (it used to reject: "not unpacked into the pair channel").
+struct _SmMRHolder; r::MemoryRef{Int64}; end
+@noinline _sm_mr_read(h::_SmMRHolder)::Int64 = h.r[] * 10 + Base.memoryrefoffset(h.r)
+@noinline _sm_mr_value(h::_SmMRHolder)::Int64 = h.r[]
+_g("memoryref_field", Any[
+    ("field_fresh", (n::Int64) -> (v = collect(10:10+n); _sm_mr_read(_SmMRHolder(v.ref))), Int64(3)),
+    ("field_at_offset", (n::Int64) -> (v = collect(1:n); _sm_mr_read(_SmMRHolder(memoryref(v.ref, 3)))), Int64(5)),
+    ("field_value_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); _sm_mr_value(_SmMRHolder(v.ref))), Int64(5)),
+])
+# Base._growbeg! reallocates in a capturing closure, which returns the MemoryRef it stores
+# (a call result carries only its Memory yet); invoke.jl's name-keyed stand-in grew such a
 # vector at the END and answered wrong values (pushfirst!(v, 7, 8): native 7816, wasm 7836),
 # so the invoke now rejects: pushfirst! of several items, and any insertion through _growat!,
 # whose `i == 1` branch calls _growbeg!. They compile once the closure does (13.13).
