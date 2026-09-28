@@ -1370,8 +1370,12 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
             local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
             # a String's or Symbol's objectid is its content's hash (the Base.objectid
             # overlays, interpreter.jl), never this per-object counter
+            # Identity is a mutable object's: an immutable value's objectid is its content's hash
+            # (jl_object_id_, builtins.c: the type's hash mixed with each field's id), which a
+            # per-object counter is not -- two equal immutables would get two ids.
             local object_idx = object_type === Core.TypeName ? ctx.type_registry.jl_typename_idx :
-                               (object_type !== nothing && haskey(ctx.type_registry.structs, object_type) &&
+                               (object_type isa DataType && ismutabletype(object_type) &&
+                                haskey(ctx.type_registry.structs, object_type) &&
                                 ctx.type_registry.structs[object_type].field_offset == 2 ?
                                 ctx.type_registry.structs[object_type].wasm_type_idx : nothing)
             if object_idx !== nothing
@@ -1403,7 +1407,10 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
                 extend_identity_hash_to_u64!(b)
                 return b
             end
-            record_unsupported!(ctx, :value_stub, "objectid / identity-hash (jl_object_id)"; idx=idx, detail=node)
+            record_unsupported!(ctx, :value_stub,
+                object_type isa DataType && !ismutabletype(object_type) ?
+                    "objectid of an immutable $(object_type) is its content's hash (jl_object_id_), which is not lowered" :
+                    "objectid / identity-hash (jl_object_id)"; idx=idx, detail=node)
             unreachable!(b)  # structural trap after recorded unsupported
             ctx.last_stmt_was_stub = true
             return b

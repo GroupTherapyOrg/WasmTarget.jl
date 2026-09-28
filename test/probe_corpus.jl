@@ -325,7 +325,7 @@ mutable struct _WTProbeObjId
     x::Int64
 end
 _c("fc_object_id", (s::_WTProbeObjId) -> objectid(s), _WTProbeObjId)                                    # jl_object_id
-_c("fc_string_to_genericmemory", (s::String) -> length(Vector{UInt8}(s)), String)                       # jl_string_to_genericmemory
+_c("fc_string_to_genericmemory", (s::String) -> length(unsafe_wrap(Vector{UInt8}, s)), String)          # jl_string_to_genericmemory
 _c("fc_genericmemory_to_string", (v::Vector{UInt8}) -> String(v), Vector{UInt8})                        # jl_genericmemory_to_string (+ jl_pchar_to_string)
 _c("fc_symbol_to_string", (s::Symbol) -> String(s), Symbol)                                             # jl_symbol_name / jl_string_ptr
 _c("fc_string_to_symbol", (s::String) -> String(Symbol(s)), String)                                     # jl_symbol_n
