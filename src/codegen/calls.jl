@@ -3067,21 +3067,11 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     end
     # THE single callee-identity extraction (the intrinsic's name — every table below is
     # keyed on intrinsic names) — the intrinsics-table route and the quarantine-tier
-    # registry route below reuse this SAME local instead of re-deriving it a second time,
-    # so the muladd/fma reorder gate right below and their eventual FMA_OPS dispatch can
-    # never disagree about which call this is (R19: a data test against `_it_name`,
-    # never a fresh `is_func` probe).
+    # registry route below reuse this SAME local instead of re-deriving it a second time
+    # (R19: a data test against `_it_name`, never a fresh `is_func` probe).
     local _it_name = nir_const(func) isa Core.IntrinsicFunction ? nameof(nir_const(func)) : nothing
 
-    # Reorder muladd_float/fma_float args for correct WASM stack order.
-    # muladd_float(a, b, c) = a*b + c. With default push order [a, b, c],
-    # WASM f64.mul takes top 2 (b,c) giving a+b*c (WRONG). Reorder to
-    # [c, a, b] so f64.mul takes (a,b) then f64.add takes (c, a*b) = a*b+c.
-    _push_args = args
-    if (_it_name === :muladd_float || _it_name === :fma_float) && length(args) == 3
-        _push_args = Any[args[3], args[1], args[2]]
-    end
-    for arg in _push_args
+    for arg in args
         if _skip_arg_prepush
             continue
         end
@@ -3150,8 +3140,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # emit here via `emit_intrinsic_binop!` (the ONE production caller — see
     # intrinsics_table.jl); the chain below keeps only what the table can't
     # express (128-bit, checked-overflow, unary, ===, conversions) and shrinks
-    # with M11. (`_it_name` is already in scope — hoisted above, ahead of the
-    # muladd/fma arg-reorder gate, so there is only ONE extraction site.)
+    # with M11. (`_it_name` is already in scope — hoisted above, so there is only ONE
+    # extraction site.)
     if _it_name !== nothing && !is_128bit
         # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
         local _it_w = arg_type === Float64 ? F64 :

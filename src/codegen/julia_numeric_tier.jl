@@ -132,32 +132,36 @@ const SHIFT_OPS = Dict{Symbol,Function}(
 # ============================================================================
 #
 # parity(quarantine: WASM has no scalar FMA instruction — no `intrinsics.dart`
-# entry to anchor to). `muladd_float`/`fma_float` both lower to `mul; add` (TWO
-# roundings), which is Julia's `muladd` semantics exactly but NOT `fma`'s
-# single-rounding contract — `have_fma` always answers `false` so Julia's
-# generic `fma` fallback (mul+add) is consistent with what gets emitted; the
-# double-rounding divergence this creates on the rare input where single- vs
-# double-rounding differ is a PRE-EXISTING gap, unchanged by this move (see the
-# Phase 6 finding: measured, not fixed, here). The 3-arg push-order reorder
-# (`[c, a, b]` so `f64.mul` sees `(a,b)` then `f64.add` sees `(c, a*b)`) happens
-# in `compile_call!`'s SHARED arg-push loop, ahead of every registry consult —
-# operands are already correctly ordered on the stack by the time these fire.
-# That reorder gate is keyed on THE SAME `_it_name` extraction these keys are
-# dispatched by (R19: one hoisted local, not a second `is_func` re-derivation)
-# — see the "Reorder muladd_float/fma_float args" comment there.
+# entry to anchor to). `muladd_float` and `fma_float` round once: each calls Julia's own
+# software fma, `Base.fma_emulated`, which the collector enrolls wherever either intrinsic
+# appears (trimcollect.jl `_fused_multiply_add_mis`). `have_fma` then answers true, as it
+# does natively on any host with an FMA unit. Native Julia fuses `muladd` on such a host,
+# so the single rounding is native's answer; the two roundings of `mul; add` were not,
+# and made Julia's own `exp`, `expm1` and `acos` differ from native in the last bit, while
+# `have_fma = false` sent `hypot` down its fallback branch.
 const FMA_OPS = Dict{Symbol,Function}(
-    :muladd_float => (fb, ctx, arg_type) -> begin
-        num!(fb, arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        num!(fb, arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-        arg_type === Float32 ? F32 : F64
-    end,
-    :fma_float => (fb, ctx, arg_type) -> begin
-        num!(fb, arg_type === Float32 ? Opcode.F32_MUL : Opcode.F64_MUL)
-        num!(fb, arg_type === Float32 ? Opcode.F32_ADD : Opcode.F64_ADD)
-        arg_type === Float32 ? F32 : F64
-    end,
-    :have_fma => (fb, ctx, arg_type) -> (i32_const!(fb, 0); I32),   # WASM has no hardware FMA
+    :muladd_float => (fb, ctx, arg_type) -> _emit_fused_multiply_add!(fb, ctx, arg_type),
+    :fma_float => (fb, ctx, arg_type) -> _emit_fused_multiply_add!(fb, ctx, arg_type),
+    :have_fma => (fb, ctx, arg_type) -> (i32_const!(fb, 1); I32),
 )
+
+"""
+    _emit_fused_multiply_add!(fb, ctx, T) -> WasmValType
+
+`muladd_float`/`fma_float` over the three operands on the stack, in order: a call of
+Julia's `Base.fma_emulated(::T, ::T, ::T)`, which rounds once.
+parity(quarantine: WASM has no scalar FMA instruction; Julia's own software fma is the body
+its `fma` runs without one.)
+"""
+function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
+    (T === Float64 || T === Float32) ||
+        error("a fused multiply-add over $(T) reached codegen; the collector enrolls Float32 and Float64 only")
+    info = get_function(ctx.func_registry, Base.fma_emulated, (T, T, T))
+    info === nothing && error("Base.fma_emulated(::$T, ::$T, ::$T) is not in the closed world")
+    local w = T === Float32 ? F32 : F64
+    call!(fb, info.wasm_idx, WasmValType[w, w, w], WasmValType[w])
+    return w
+end
 
 # ============================================================================
 # Misc registry (bswap_int, flipsign_int)

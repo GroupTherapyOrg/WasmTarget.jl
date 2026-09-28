@@ -755,6 +755,61 @@ _g("int128_limbs", Any[
     ("sdiv_typemin_by_minus1", (n::Int64) -> (try; Int64(div(typemin(Int128) + Int128(n), Int128(-1)) % Int64); catch e; e isa DivideError ? -1 : -2; end), Int64(0)),
     ("bswap_u128", (n::Int64) -> Int64(bswap(UInt128(n) << 64 + UInt128(0x0102030405060708)) % Int64), Int64(7)),
 ])
+# Julia's own math kernels, bit-exact against native: each case hashes the exact result bits
+# of f over n evenly spaced inputs in (-20, 20], so one == compares n answers. A NaN result
+# counts as one canonical NaN (its sign bit is the host's). muladd_float and fma_float round
+# once (Julia's fma_emulated) and have_fma is true, as natively on an FMA host: with two
+# roundings exp, expm1 and acos differed in the last bit, and hypot took its fallback branch.
+# The Float32 exp/exp2/exp10/sinh/cosh/tanh and Float64 sinh/cosh/tanh/asin/hypot overlays
+# they replace answered differently from Julia (exp(-2.4282868f0) was 0.088187784f0, Julia's
+# is 0.08818779f0). x^n is not here: muladd lets the compiler round once or twice, and native
+# Julia 1.12 fuses the muladds in pow_body where native 1.13 does not (measured on all 4001
+# inputs), so no one lowering is both versions' answer.
+@noinline function _sm_bits(f::F, ::Type{T}, n::Int64)::Int64 where {F,T}
+    acc = UInt64(14695981039346656037)
+    for i in 1:n
+        r = f(T(-20.0 + 40.0 * i / n))
+        b = isnan(r) ? UInt64(0x7ff8000000000000) : UInt64(reinterpret(Base.uinttype(T), r))
+        acc = (acc ⊻ b) * 0x00000100000001b3
+    end
+    return reinterpret(Int64, acc)
+end
+# fma over its own branches: subnormal operands and results, a product below 2^-969,
+# overflow, infinities, NaN, signed zeros, and an exact cancellation two roundings lose.
+const _SM_FMA_TABLE = NTuple{3,Float64}[
+    (1.0 + 2.0^-30, 1.0 - 2.0^-30, -1.0), (1e-310, 2.0, 0.0), (1e-310, 1e-310, 1e-320),
+    (1e-200, 1e-200, 1e-310), (3.0e-160, 7.0e-160, -2.0e-318), (1e300, 1e10, -1e308),
+    (1e300, 1e300, -Inf), (Inf, 0.0, 1.0), (Inf, 1.0, -Inf), (-0.0, 1.0, 0.0),
+    (-0.0, 1.0, -0.0), (0.1, 10.0, -1.0), (nextfloat(1.0), prevfloat(1.0), -1.0),
+    (-1.7976931348623157e308, 2.0, 1.7976931348623157e308), (5e-324, 0.5, 0.0)]
+@noinline function _sm_fma_bits(k::Int64)::Int64
+    acc = UInt64(14695981039346656037)
+    for (a, b, c) in _SM_FMA_TABLE
+        r = k == 1 ? fma(a, b, c) : muladd(a, b, c)
+        acc = (acc ⊻ (isnan(r) ? UInt64(0x7ff8000000000000) : reinterpret(UInt64, r))) * 0x00000100000001b3
+    end
+    return reinterpret(Int64, acc)
+end
+_g("bit_exact_math", Any[
+    ("exp_f64", (n::Int64) -> _sm_bits(exp, Float64, n), Int64(4001)),
+    ("expm1_f64", (n::Int64) -> _sm_bits(expm1, Float64, n), Int64(4001)),
+    ("acos_f64", (n::Int64) -> _sm_bits(x -> acos(x / 21), Float64, n), Int64(4001)),
+    ("asin_f64", (n::Int64) -> _sm_bits(x -> asin(x / 21), Float64, n), Int64(4001)),
+    ("sinh_f64", (n::Int64) -> _sm_bits(sinh, Float64, n), Int64(4001)),
+    ("cosh_f64", (n::Int64) -> _sm_bits(cosh, Float64, n), Int64(4001)),
+    ("tanh_f64", (n::Int64) -> _sm_bits(tanh, Float64, n), Int64(4001)),
+    ("hypot_f64", (n::Int64) -> _sm_bits(x -> hypot(x, 1.5), Float64, n), Int64(4001)),
+    ("pow_f64", (n::Int64) -> _sm_bits(x -> abs(x)^1.7, Float64, n), Int64(4001)),
+    ("log_sin_atan_f64", (n::Int64) -> _sm_bits(x -> log(abs(x) + 1e-3) + sin(x) + atan(x), Float64, n), Int64(4001)),
+    ("exp_f32", (n::Int64) -> _sm_bits(exp, Float32, n), Int64(4001)),
+    ("exp2_f32", (n::Int64) -> _sm_bits(exp2, Float32, n), Int64(4001)),
+    ("exp10_f32", (n::Int64) -> _sm_bits(x -> exp10(x / 3), Float32, n), Int64(4001)),
+    ("sinh_f32", (n::Int64) -> _sm_bits(sinh, Float32, n), Int64(4001)),
+    ("cosh_f32", (n::Int64) -> _sm_bits(cosh, Float32, n), Int64(4001)),
+    ("tanh_f32", (n::Int64) -> _sm_bits(tanh, Float32, n), Int64(4001)),
+    ("fma_branches", _sm_fma_bits, Int64(1)),
+    ("muladd_fused", _sm_fma_bits, Int64(2)),
+])
 # Loads and stores through a storage pointer: one offset for every arm, `ptr - base + (i - 1) *
 # sizeof(T)`, with a String's or Symbol's pointer carrying base 1 and a Memory's base 0
 # (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on

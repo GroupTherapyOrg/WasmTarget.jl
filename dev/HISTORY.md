@@ -111,6 +111,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   jl_object_id_ (content hash), so an immutable struct is a correct Dict or Set key.
 - Every value emission names its expected type (R17 = 0, counted on the parse tree), and a
   constant pushes exactly its static type, every reference constant non-null (L136).
+- muladd and fma round once (Julia's fma_emulated), so Julia's own math is bit-exact with
+  native (smoke bit_exact_math); twelve approximating math overlays deleted.
 
 ## Why the archive was consolidated
 

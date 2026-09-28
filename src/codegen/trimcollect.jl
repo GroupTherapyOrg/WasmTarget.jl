@@ -542,6 +542,34 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     return out
 end
 
+"""
+    _fused_multiply_add_mis(codeinfos, scanned) -> Vector{Any}
+
+The `Base.fma_emulated` MethodInstances that the collected bodies' `muladd_float` and
+`fma_float` intrinsic calls lower to (julia_numeric_tier.jl `FMA_OPS`), one per float type:
+Julia's own software fma, which rounds once.
+parity(quarantine: WASM has no scalar FMA instruction, so the intrinsic's lowering is a call
+of Julia's software fma, which the closed world must hold.)
+"""
+function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any})::Vector{Any}
+    types = Set{Type}()
+    for k in 2:2:length(codeinfos)
+        src = codeinfos[k]
+        (src isa Core.CodeInfo && !(src in scanned)) || continue
+        push!(scanned, src)
+        for rec in build_nir(src)
+            rec.node isa NirCall || continue
+            f = _nir_callee_object(rec.node.callee)
+            (f === Core.Intrinsics.muladd_float || f === Core.Intrinsics.fma_float) || continue
+            T = CC.widenconst(rec.julia_type)
+            (T === Float64 || T === Float32) && push!(types, T)
+        end
+    end
+    return Any[CC.specialize_method(which(Base.fma_emulated, (T, T, T)),
+                                    Tuple{typeof(Base.fma_emulated), T, T, T}, Core.svec())
+               for T in types]
+end
+
 # Dynamic-dispatch selector roots, distinct from the ordinary dependencies that
 # their candidate compilation discovers transitively.
 const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
@@ -663,7 +691,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # sequential fixpoints are insufficient. Iterate both collectors together
     # until neither can add a MethodInstance; every collection uses a fresh
     # interpreter/cache partition and only new pairs are merged.
-    function collect_new_pairs!(mis)
+    function collect_new_pairs!(mis; roots::Union{Nothing,Set{Any}}=nothing)
         isempty(mis) && return false
         fresh_interp = WasmInterpreter(Base.RefValue(0))
         fresh_ci = Any[]
@@ -686,6 +714,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # pruning must not discard the overlay body merely because its native
             # precursor has the same signature but a different Method object.
             root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
+            roots === nothing || push!(roots, resolved_mi)
             push!(fresh_wq, resolved_mi)
         end
         CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
@@ -703,6 +732,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         return added
     end
 
+    # the Julia bodies intrinsic lowerings call: roots no :invoke edge reaches
+    intrinsic_body_roots = Set{Any}()
+    fma_scanned = Base.IdSet{Any}()
     while true
         changed = collect_new_pairs!(_missing_explicit_invoke_mis(
             codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries)))
@@ -714,6 +746,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # pruning what no site invokes any more.
             prune_roots = Any[entries...]
             append!(prune_roots, _DYNAMIC_ROOT_MIS[])
+            append!(prune_roots, intrinsic_body_roots)
             codeinfos = _prune_external_leaf_subgraphs(
                 codeinfos, prune_roots, external_leaves; unreachable=true)
             empty!(base_mis)
@@ -739,6 +772,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             end
         end
         changed |= collect_new_pairs!(extra)
+        fma_mis = Any[mi for mi in _fused_multiply_add_mis(codeinfos, fma_scanned)
+                   if !(mi_key(mi) in base_mi_keys)]
+        changed |= collect_new_pairs!(fma_mis; roots=intrinsic_body_roots)
         changed || break
     end
 
