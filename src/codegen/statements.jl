@@ -159,9 +159,10 @@ end
 Whether `operand` is a value Julia never makes equal to a storage address: NULL (a
 literal zero integer or `C_NULL` — Julia's allocator never returns NULL, and an empty
 Memory still points at its own instance), or an `objectid` (the `jl_object_id`
-foreigncall, possibly through `bitcast` — the id Base.dataids gives an AbstractArray
-without storage of its own; a mutable object's id hashes its address and an immutable's
-hashes its content, so it meets a storage address only by a 64-bit hash collision).
+foreigncall, or a call of `Base.objectid` — the content hash of an immutable, the objectid
+overlay — possibly through `bitcast`: the id Base.dataids gives an AbstractArray without
+storage of its own; a mutable object's id hashes its address and an immutable's hashes its
+content, so it meets a storage address only by a 64-bit hash collision).
 parity(quarantine: Base's NULL checks and dataids compare storage addresses against C_NULL and objectids; WasmGC has no addresses.)
 """
 function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand::NirNode)::Bool
@@ -172,6 +173,8 @@ function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand::N
         node isa NirSSA && 1 <= node.id <= length(ctx.nir) && ctx.nir[node.id].slot == 0 || return false
         def = ctx.nir[node.id].node
         def isa NirForeignCall && return def.c_symbol === :jl_object_id
+        def isa NirInvoke && def.mi isa Core.MethodInstance &&
+            return _invoke_callee_object(def.mi) === Base.objectid
         def isa NirCall && def.callee === Core.Intrinsics.bitcast && length(def.operands) == 2 || return false
         node = def.operands[2]
     end

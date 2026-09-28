@@ -198,6 +198,7 @@ _wt_shard0() && include("vararg_fixed_prefix.jl")
 _wt_shard0() && include("symbol_syntax_metadata.jl")
 _wt_shard0() && include("memmove_single_path.jl")
 _wt_shard0() && include("host_imports.jl")
+_wt_shard0() && include("immutable_objectid.jl")
 _wt_shard0() && include("mutable_global_initialization.jl")
 # Ground-truth string hashing: hash(::String/::SubString{String}) now bit-exact
 # with native Julia (not merely internally consistent) — Dict{String,V}/

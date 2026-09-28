@@ -2124,6 +2124,18 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 register_reachable_type!(ctx.mod, ctx.type_registry, obj_type)
             end
 
+            # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the
+            # byte array — getfield(cu, :s) is the array itself. Runs before the
+            # `:ref`/1 read, which is an Array's first field, and the generic struct_get path.
+            if obj_type isa DataType && obj_type.name.name === :CodeUnits &&
+               length(obj_type.parameters) >= 2 && obj_type.parameters[1] === UInt8 &&
+               obj_type.parameters[2] === String
+                local _cu_field0 = nir_const(field_ref)
+                if _cu_field0 === :s || _cu_field0 === 1   # the one field, by name or index
+                    emit_value!(fb, obj_arg, ctx, static_wasm_type(obj_arg, ctx))
+                    return append_builder!(b, fb)
+                end
+            end
             if field_sym === :ref || field_sym === 1
                 # :ref is the pair (data, off0): off0 is snapshotted into this read's offset
                 # local (allocate_memoryref_offset_locals!), then the data array is pushed.
@@ -2177,18 +2189,6 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 return append_builder!(b, fb)
             end
 
-            # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the
-            # byte array — getfield(cu, :s) is the array itself. Must run BEFORE
-            # the generic struct_get path (CodeUnits is no longer a struct).
-            if obj_type isa DataType && obj_type.name.name === :CodeUnits &&
-               length(obj_type.parameters) >= 2 && obj_type.parameters[1] === UInt8 &&
-               obj_type.parameters[2] === String
-                local _cu_field0 = nir_const(field_ref)
-                if _cu_field0 === :s
-                    emit_value!(fb, obj_arg, ctx, static_wasm_type(obj_arg, ctx))
-                    return append_builder!(b, fb)
-                end
-            end
 
             # AbstractArray subtypes that are pure structs (e.g., UnitRange)
             # have named fields like :start, :stop — handle via struct_get

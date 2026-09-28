@@ -107,7 +107,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - Int128 limbs are modeled (Int128Limbs): raw shifts past 128 answered wrong; division and
   the byte swap compile. One storage-pointer offset serves every load and store (a byte
   store ignored its index; String loads and stores were off by one).
-- Seeded Random runs on 1.13 (its SHA-512 seeding); objectid of an immutable rejects.
+- Seeded Random runs on 1.13 (its SHA-512 seeding). objectid of an immutable is Julia's
+  jl_object_id_ (content hash), so an immutable struct is a correct Dict or Set key.
 
 ## Why the archive was consolidated
 

@@ -1837,13 +1837,24 @@ end
     return (x << r) | (x >> (64 - r))
 end
 
+# The bytes memhash reads: a string's codeunits, or a byte vector (an immutable value's bits,
+# _wasm_bits_hash).
+# parity(quarantine: C memhash_seed reads the bytes through a pointer, support/MurmurHash3.c)
+@inline _wasm_mm3_byte(s::AbstractString, i::Int)::UInt8 = codeunit(s, i)
+# parity(quarantine: C memhash_seed reads the bytes through a pointer, support/MurmurHash3.c)
+@inline _wasm_mm3_byte(v::Vector{UInt8}, i::Int)::UInt8 = @inbounds v[i]
+# parity(quarantine: C memhash_seed takes the byte count, support/MurmurHash3.c)
+@inline _wasm_mm3_len(s::AbstractString)::Int = ncodeunits(s)
+# parity(quarantine: C memhash_seed takes the byte count, support/MurmurHash3.c)
+@inline _wasm_mm3_len(v::Vector{UInt8})::Int = length(v)
+
 # parity(quarantine: C memhash_seed reads the bytes through a pointer, support/MurmurHash3.c;
 # here a little-endian word is read over codeunits)
 @inline function _wasm_mm3_load_u64(s, start::Int, nbytes::Int)::UInt64
     v = UInt64(0)
     i = 0
     while i < nbytes
-        v |= UInt64(codeunit(s, start + i)) << (8 * i)
+        v |= UInt64(_wasm_mm3_byte(s, start + i)) << (8 * i)
         i += 1
     end
     return v
@@ -1862,8 +1873,8 @@ end
 # MurmurHash3_x64_128(buf, n, seed, out) -> out[1], C `memhash_seed` on Julia 1.12 and 1.13:
 # 1.12 Base hashes a String with it, and both versions derive a Symbol's hash from it.
 # parity(quarantine: Julia's memhash_seed is C, support/hashing.c; ported over codeunit reads)
-@noinline function _wasm_memhash_seed(s::Union{String,SubString{String}}, seed::UInt32)::UInt64
-    n = ncodeunits(s)
+@noinline function _wasm_memhash_seed(s::Union{String,SubString{String},Vector{UInt8}}, seed::UInt32)::UInt64
+    n = _wasm_mm3_len(s)
     c1 = 0x87c37b91114253d5
     c2 = 0x4cf5ad432745937f
     h1 = UInt64(seed)
@@ -2088,6 +2099,129 @@ end
 # parity(quarantine: jl_object_id_ for a String, builtins.c — memhash_seed of the bytes
 # seeded 0xedc3b677)
 @overlay WASM_METHOD_TABLE Base.objectid(s::String) = _wasm_memhash_seed(s, 0xedc3b677) % UInt
+
+# ─── objectid of an immutable value — Julia's jl_object_id_ ─────────────────
+# Why: jl_object_id (builtins.c) answers identity only for a mutable object. An immutable
+#      value's objectid is its content's hash (immut_id_): the type's hash (the DataType's
+#      `hash`, a uint32) mixed with each field's id, or the bits' hash when the layout is plain
+#      bits (no padding, bits-egal, no pointers). Base.hash of any value without its own
+#      method is objectid-based, so this is the hash of a user's immutable struct (a Dict or
+#      Set key). The lowered jl_object_id gives a mutable object its identity; an immutable
+#      reaching it rejects (it once got a per-object counter: two equal keys, two ids).
+# Measured equal to native objectid on 1.12.7 and 1.13.0 (test/immutable_objectid.jl).
+
+# parity(quarantine: Thomas Wang's int32hash, support/hashing.c)
+@inline function _wasm_int32hash(a::UInt32)::UInt32
+    a = (a + 0x7ed55d16) + (a << 12)
+    a = (a ⊻ 0xc761c23c) ⊻ (a >> 19)
+    a = (a + 0x165667b1) + (a << 5)
+    a = (a + 0xd3a2646c) ⊻ (a << 9)
+    a = (a + 0xfd7046c5) + (a << 3)
+    a = (a ⊻ 0xb55a4f09) ⊻ (a >> 16)
+    return a
+end
+
+# parity(quarantine: bitmix, support/hashing.h: int64hash(a ^ bswap_64(b)))
+@inline _wasm_bitmix(a::UInt64, b::UInt64)::UInt64 = _wasm_int64hash(a ⊻ bswap(b))
+
+# The primitive leaves of a plain-bits layout, each at its byte offset (a primitive value, or a
+# struct flattened field by field). The layout has no padding, so the leaves cover every byte.
+# parity(quarantine: jl_object_id_ reads an immutable's bytes through a pointer, builtins.c)
+function _wasm_bits_leaves(@nospecialize(T), off::Int, path::Vector{Int}, out::Vector{Any})::Vector{Any}
+    if isprimitivetype(T)
+        push!(out, (off, T, copy(path)))
+    else
+        for i in 1:fieldcount(T)
+            _wasm_bits_leaves(fieldtype(T, i), off + Int(fieldoffset(T, i)), push!(copy(path), i), out)
+        end
+    end
+    return out
+end
+
+# The unsigned integer type of a primitive's size, to read its bits
+# parity(quarantine: jl_object_id_ reads an immutable's bytes through a pointer, builtins.c)
+function _wasm_uint_of_size(n::Int)::DataType
+    n == 1 && return UInt8
+    n == 2 && return UInt16
+    n == 4 && return UInt32
+    n == 8 && return UInt64
+    n == 16 && return UInt128
+    error("_wasm_uint_of_size: no unsigned integer of $n bytes")
+end
+
+# bits_hash(v, sz), builtins.c: int32hash of a 1-, 2- or 4-byte value (1 and 2 bytes read
+# signed and widened), int64hash of an 8-byte one, memhash (seed 0xcafe8881) of the bytes
+# otherwise.
+# parity(quarantine: bits_hash, builtins.c)
+@generated function _wasm_bits_hash(x::T)::UInt64 where T
+    local sz = sizeof(T)
+    local leaves = _wasm_bits_leaves(T, 0, Int[], Any[])
+    local getleaf(path) = foldl((e, i) -> :(getfield($e, $i)), path; init=:x)
+    # the value's bits as a UInt64 (sizes up to 8)
+    local bits = Expr(:call, :|, UInt64(0),
+        (:(UInt64(reinterpret($(_wasm_uint_of_size(sizeof(LT))), $(getleaf(path)))) << $(8off))
+         for (off, LT, path) in leaves)...)
+    if sz == 1
+        return :(UInt64(_wasm_int32hash(reinterpret(UInt32, Int32(($bits % UInt8) % Int8)))))
+    elseif sz == 2
+        return :(UInt64(_wasm_int32hash(reinterpret(UInt32, Int32(($bits % UInt16) % Int16)))))
+    elseif sz == 4
+        return :(UInt64(_wasm_int32hash($bits % UInt32)))
+    elseif sz == 8
+        return :(_wasm_int64hash($bits))
+    end
+    local body = Expr(:block, :(bytes = Vector{UInt8}(undef, $sz)))
+    for (off, LT, path) in leaves
+        local nb = sizeof(LT)
+        push!(body.args, :(w = reinterpret($(_wasm_uint_of_size(sizeof(LT))), $(getleaf(path)))))
+        for k in 0:nb-1
+            push!(body.args, :(@inbounds bytes[$(off + k + 1)] = (w >> $(8k)) % UInt8))
+        end
+    end
+    push!(body.args, :(return _wasm_memhash_seed(bytes, 0xcafe8881)))
+    return body
+end
+
+# immut_id_(dt, v, h), builtins.c: ~h for a zero-size value; the bits' hash xor h for a
+# plain-bits layout; else h mixed (bitmix) with each field's id -- a pointer field's objectid
+# (0 when undefined), an inline field's own immut_id_ from 0 (a Union field by the value's
+# component; 0 when the inline field is undefined).
+# parity(quarantine: immut_id_, builtins.c)
+@generated function _wasm_immut_id(x::T, h::UInt64)::UInt64 where T
+    sizeof(T) == 0 && return :(~h)
+    if fieldcount(T) == 0 || (!Base.datatype_haspadding(T) && Base.datatype_isbitsegal(T) &&
+                              Base.datatype_pointerfree(T))
+        return :(_wasm_bits_hash(x) ⊻ h)
+    end
+    local body = Expr(:block, :(acc = h))
+    for i in 1:fieldcount(T)
+        local FT = fieldtype(T, i)
+        local u = Base.allocatedinline(FT) ?
+            :(isdefined(x, $i) ? _wasm_immut_id(getfield(x, $i), UInt64(0)) : UInt64(0)) :
+            :(isdefined(x, $i) ? UInt64(objectid(getfield(x, $i))) : UInt64(0))
+        push!(body.args, :(acc = _wasm_bitmix(acc, $u)))
+    end
+    push!(body.args, :(return acc))
+    return body
+end
+
+# The one objectid: a mutable object's identity is the lowered jl_object_id; an immutable
+# value's is its content's hash from its type's own hash (String and Symbol have their own
+# methods above). It stays a call, as Julia's foreigncall is: Base.dataids compares a
+# storage address against it, which _is_never_a_storage_pointer (statements.jl) recognizes
+# by the call.
+# parity(quarantine: jl_object_id__cold, builtins.c: identity for a mutable object, immut_id_
+# from dt->hash for an immutable one)
+@overlay WASM_METHOD_TABLE @noinline function Base.objectid(x::T)::UInt where T
+    ismutabletype(T) && return ccall(:jl_object_id, UInt, (Any,), x)
+    return _wasm_immut_id(x, _wasm_type_hash(T)) % UInt
+end
+
+# dt->hash, a uint32 the DataType carries (read on the host: a literal in the module)
+# parity(quarantine: jl_datatype_t's hash field, julia.h)
+@generated function _wasm_type_hash(::Type{T})::UInt64 where T
+    return :(UInt64($(UInt64(reinterpret(UInt32, getfield(T, :hash))))))
+end
 
 # ─── Operator-name predicates Overlay — Julia's parser answer for any name ──
 # Why: Base._isoperator and Base.is_syntactic_operator are the foreigncalls

@@ -816,15 +816,11 @@ _xf("dynamic_single_class", Any[
     ("pop_empty_message", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? (ncodeunits(e.msg)::Int) : -1; end), Int64(0)),
 ])
 # objectid of an immutable is its content's hash (jl_object_id_, builtins.c: the type's hash mixed
-# with each field's id), which is not lowered, so it rejects at its statement. It is reached by
-# Base.dataids -> mightalias -> unalias when a Vector is filled from a non-array source:
-# `Vector{UInt8}(s)` copies from `codeunits(s)` (the identity counter it once read trapped at a
-# cast, and would have given two equal immutables two ids).
-_xf("immutable_objectid", Any[
+# with each field's id; the objectid overlay, interpreter.jl). Base.dataids -> mightalias ->
+# unalias reaches it when 1.12's `Vector{UInt8}(s)` copies from `codeunits(s)`; the lowered
+# jl_object_id once gave an immutable a per-object counter (and trapped at a cast for CodeUnits).
+_g("immutable_objectid", Any[
     ("objectid_equal_immutables", (n::Int64) -> objectid(Base.CodeUnits(string(n))) == objectid(Base.CodeUnits(string(n))) ? 1 : 0, Int64(7)),
-])
-# 1.12's Vector{UInt8}(s) copies through unalias; 1.13's never asks for the objectid
-(VERSION >= v"1.13-" ? _g : _xf)("vector_from_string", Any[
     ("vector_from_string", (n::Int64) -> length(Vector{UInt8}(n > 0 ? "hello" : "ab")), Int64(1)),
 ])
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
