@@ -262,37 +262,3 @@ end
 # (tags.dart:37 ExceptionTags._defineDartExceptionTag) — census queue item D9.1; the dart
 # source is the reference, not dead scaffolding.
 
-"""
-Generate try/catch code using generate_stackified_flow for the try body.
-Used when the try body has complex control flow (phi nodes, nested conditionals).
-The simple linear approach in generate_try_catch can't handle phi locals or nested
-GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
-
-Structure:
-  block \$catch_landing (void)          ; catch_all jumps here
-    try_table (catch \$exceptionTag)   ; catch clause retains its landing label
-      ; generate_stackified_flow for all blocks before catch handler
-      ; (handles phi nodes, nested control flow, all returns)
-    end
-  end
-  ; catch handler code (pop_exception skipped, returns -1 or similar)
-"""
-# Compile a catch-handler region [from..to] honouring GotoIfNot
-# (conditional catch arms / exception isa dispatch). The linear per-statement
-# loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
-# then arm (gap f80bce91645e). Mirrors the handling from the simple
-# no-merge generator.
-"""builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
-
-# `if cond; try A catch X end else try B catch
-# Y end end` — two INDEPENDENT try/catches, one per branch arm, every arm
-# returning. Neither the chain nor the sequential generator fits (chain glues
-# the else arm into the then arm's catch; sequential leaves the branch
-# condition stranded on the stack). Layout:
-#   <pre-branch code>
-#   block $else
-#     cond eqz br_if 0                ;; !cond → else arm
-#     <then arm: try_table A / catch X>   ;; all paths return
-#   end
-#   <else arm: try_table B / catch Y>     ;; all paths return
-"""builder-native front for the branch-split try generator."""

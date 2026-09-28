@@ -896,15 +896,10 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
 end
 
 """
-Compile a GotoIfNot condition to i32.
-When the condition SSA value has an anyref/externref local (because Julia typed it as Any),
-the raw compile_value would push anyref, but i32.eqz needs i32. This helper unboxes via
-ref.cast + struct.get when needed.
+THE condition visitor: emit a GotoIfNot condition as an i32 directly into the target builder.
+When the condition SSA value has an anyref/externref local (Julia typed it Any), the value
+would push a reference where i32.eqz needs an i32, so it is unboxed (ref.cast + struct.get).
 """
-# MIGRATED to InstrBuilder (Phase 1, dart2wasm-style typed emission). The shared
-# builder is threaded once the callers migrate; for now a fragment builder validates
-# this emitter's stack in isolation (compile_value bridged via its known pushed type).
-"""THE condition visitor (): emit the i32 condition directly into the target builder."""
 function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     if tracing(:condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))

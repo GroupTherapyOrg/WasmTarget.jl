@@ -763,9 +763,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     return b
 end
 
-"""
-Compile a struct construction expression (%new).
-"""
 # ============================================================================
 # The definite-initialization proof for a partial `%new`. It runs over NIR — the
 # caller's `ctx.nir`, and, for the interprocedural step, `build_nir` on the CALLEE's
@@ -1258,10 +1255,6 @@ function _task_ssa_used_unsafely(ctx::AbstractCompilationContext, ssa_id::Int)::
     return false
 end
 
-"""
-Compile a foreign call expression — dart visitor shape (): emits INTO the
-caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
-"""
 # ============================================================================
 # Foreigncall lowering registry — parity(functions.dart:21 FunctionCollector):
 # dart resolves wasm:import/wasm:export externals by (module, name) STRING
@@ -2366,6 +2359,10 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :utf8proc_islower => _fc_utf8proc_islower!,
 )
 
+"""
+Compile a foreign call expression — dart visitor shape (): emits INTO the
+caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
+"""
 function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
     # The C symbol was decoded ONCE at the boundary (NirForeignCall.c_symbol) and
     # `node.operands` holds only the runtime operands — the ABI preamble

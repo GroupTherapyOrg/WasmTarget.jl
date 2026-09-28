@@ -4609,15 +4609,6 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
 end
 
 
-"""
-    _try_fold_layout_pointerref(ptr_arg, ctx) -> DataTypeLayout | nothing
-
-P3 gap 450889a9cb7e: fold `unsafe_load(convert(Ptr{DataTypeLayout},
-dt.layout))` (the datatype_layoutsize / datatype_arrayelem idiom) when `dt`
-is a DataType literal — the layout struct is immutable host metadata, fully
-known at compile time. Returns the host-loaded DataTypeLayout for literal
-materialization, or nothing if the chain doesn't match.
-"""
 
 # Emit a SimpleVector as its actual WasmGC array representation.
 function _emit_svec_values!(b::InstrBuilder, values::AbstractVector{<:NirNode},
@@ -4655,6 +4646,17 @@ function _try_host_svec(arg::NirNode, ctx::AbstractCompilationContext)
     return nothing
 end
 
+"""
+    _try_fold_layout_pointerref(ptr_arg, ctx) -> DataTypeLayout | nothing
+
+P3 gap 450889a9cb7e: fold `unsafe_load(convert(Ptr{DataTypeLayout},
+dt.layout))` (the datatype_layoutsize / datatype_arrayelem idiom) when `dt`
+is a DataType literal — the layout struct is immutable host metadata, fully
+known at compile time. Returns the host-loaded DataTypeLayout for literal
+materialization, or nothing if the chain doesn't match.
+parity(quarantine: a DataType's layout is Julia's host metadata, read through a pointer; dart
+has no layout pointers.)
+"""
 function _try_fold_layout_pointerref(ptr_arg::NirNode, ctx::AbstractCompilationContext)
     cur = ptr_arg
     for _ in 1:4

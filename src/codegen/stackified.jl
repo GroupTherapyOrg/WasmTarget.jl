@@ -8,18 +8,6 @@
 # The stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
 
 """
-Stackifier algorithm for complex control flow.
-Converts Julia IR CFG to WASM structured control flow by:
-1. Building a CFG from basic blocks
-2. Computing dominators and identifying merge points
-3. Generating each block exactly once
-4. Using block/br for forward jumps, loop/br for back jumps
-
-Based on LLVM's WebAssembly backend stackifier and Cheerp's enhancements.
-Reference: https://labs.leaningtech.com/blog/control-flow
-"""
-
-"""
 The value's static Julia type for boxing (SSA inferred / Bool literal / argument type), or
 `nothing` when unknown. Used to pick the box's real classId and the i31 fast-path decision.
 parity(code_generator.dart:135 getStaticType): a value's static type, read from its node.
@@ -216,9 +204,20 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{N
     return blocks
 end
 
-# parity(quarantine: Julia's typed IR is an unstructured goto CFG that must be stackified into
-# wasm blocks and loops; Kernel's control flow is already structured, so dart2wasm lowers it
-# statement by statement.)
+"""
+Stackifier algorithm for complex control flow.
+Converts Julia IR CFG to WASM structured control flow by:
+1. Building a CFG from basic blocks
+2. Computing dominators and identifying merge points
+3. Generating each block exactly once
+4. Using block/br for forward jumps, loop/br for back jumps
+
+Based on LLVM's WebAssembly backend stackifier and Cheerp's enhancements.
+Reference: https://labs.leaningtech.com/blog/control-flow
+parity(quarantine: Julia's typed IR is an unstructured goto CFG that must be stackified into
+wasm blocks and loops; Kernel's control flow is already structured, so dart2wasm lowers it
+statement by statement.)
+"""
 function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock};
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder

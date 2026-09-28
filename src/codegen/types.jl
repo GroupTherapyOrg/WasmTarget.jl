@@ -2504,24 +2504,6 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
 end
 
 """
-Takes a Julia type `T`, the target `mod`, its `registry`, and a `for_local` keyword
-(default `false`); returns the `WasmValType` that represents `T`.
-
-THE single Julia-type → Wasm-type translator (dart2wasm parity: `translateType`
-translator.dart:1044 → `translateStorageType(type, {unbox})` :1067 — dart has ONE such
-translator, gated by one `unbox` flag; WT had TWO drifting ~200-line copies, this one and
-a former `ctx`-taking twin (`julia_to_wasm_type` plus `_concrete` — deleted; every call
-site now calls this function directly with `for_local` set true). `for_local`
-mirrors dart's `unbox`: `true` is the SSA-local/phi/PhiC/slot allocator (a value about to
-occupy a WT-allocated local that has no OTHER fixed representation yet); `false` is every
-signature/field/return position where the value already has a fixed representation
-established elsewhere (a function parameter's declared type, a struct field's wasm type).
-`T` is intentionally unannotated (not typed as a `Type`): `Vararg{T,N}` markers are
-`Core.TypeofVararg` instances, which are not subtypes of `Type`, so a `Type`-constrained
-signature would MethodError on them before the Vararg case below ever runs.
-"""
-
-"""
     derive_nullability(T) -> Bool
 
 tag-run item 2 (dart translator.dart:1068 `type.isPotentiallyNullable`): THE nullability
@@ -2568,7 +2550,24 @@ function translate_external_type(T, mod::WasmModule, registry::TypeRegistry)::Wa
     return AnyRef
 end
 
-# parity(translator.dart:1067 translateStorageType): the one Julia-type to wasm-type translator.
+"""
+Takes a Julia type `T`, the target `mod`, its `registry`, and a `for_local` keyword
+(default `false`); returns the `WasmValType` that represents `T`.
+
+THE single Julia-type → Wasm-type translator (dart2wasm parity: `translateType`
+translator.dart:1044 → `translateStorageType(type, {unbox})` :1067 — dart has ONE such
+translator, gated by one `unbox` flag; WT had TWO drifting ~200-line copies, this one and
+a former `ctx`-taking twin (`julia_to_wasm_type` plus `_concrete` — deleted; every call
+site now calls this function directly with `for_local` set true). `for_local`
+mirrors dart's `unbox`: `true` is the SSA-local/phi/PhiC/slot allocator (a value about to
+occupy a WT-allocated local that has no OTHER fixed representation yet); `false` is every
+signature/field/return position where the value already has a fixed representation
+established elsewhere (a function parameter's declared type, a struct field's wasm type).
+`T` is intentionally unannotated (not typed as a `Type`): `Vararg{T,N}` markers are
+`Core.TypeofVararg` instances, which are not subtypes of `Type`, so a `Type`-constrained
+signature would MethodError on them before the Vararg case below ever runs.
+parity(translator.dart:1067 translateStorageType): the one Julia-type to wasm-type translator.
+"""
 function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_local::Bool=false)::WasmValType
     # Vararg is a type modifier (Core.TypeofVararg), not a proper Julia type — never `<: Type`.
     # Use ExternRef for locals to avoid externref↔anyref mismatches (Any→ExternRef, and
