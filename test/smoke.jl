@@ -810,6 +810,29 @@ _g("bit_exact_math", Any[
     ("fma_branches", _sm_fma_bits, Int64(1)),
     ("muladd_fused", _sm_fma_bits, Int64(2)),
 ])
+# Julia's own bit-level bodies, which replaced overlays: shifts by a negative or oversized
+# Int amount (the overlays existed because `0x01 << typemin(Int64)` once answered 1; Julia's
+# is 0), isless over NaN and signed zeros, unsigned of negatives, primitive reinterpret.
+_g("julia_bit_bodies", Any[
+    ("shl_typemin", (n::Int64) -> Int64(0x01 << (typemin(Int64) + n)), Int64(0)),
+    ("shl_negative", (n::Int64) -> Int64(UInt32(40) << -n), Int64(3)),
+    ("ashr_oversized", (n::Int64) -> Int64(Int8(-100) >> n), Int64(200)),
+    ("lshr_negative", (n::Int64) -> Int64(UInt16(5) >>> -n), Int64(4)),
+    ("shl_width", (n::Int64) -> (typemax(Int64) << n) + (Int32(7) << (n - 32)), Int64(64)),
+    ("isless_nan_zero", (x::Float64) -> Int64(isless(x, NaN)) + 2Int64(isless(NaN, x)) +
+                                         4Int64(isless(-0.0, x)) + 8Int64(isless(x, -0.0)) +
+                                         16Int64(isless(NaN, NaN)), 0.0),
+    ("isless_f32", (x::Float32) -> Int64(isless(x, NaN32)) + 2Int64(isless(-0.0f0, x)) +
+                                   4Int64(isless(x, -1.0f0)), 0.0f0),
+    ("sort_nan_zeros", (x::Float64) -> (v = sort([NaN, 1.0, -0.0, x, -1.0]);
+                                        Int64(isnan(v[5])) + 2Int64(signbit(v[2])) + 4Int64(v[4] == 1.0)), 0.0),
+    ("unsigned_neg", (n::Int64) -> Int64(unsigned(Int8(-n))) + Int64(unsigned(Int16(-n)) % 1000) +
+                                   Int64(unsigned(Int32(-n)) % 1000) + Int64(unsigned(-n) % 1000), Int64(3)),
+    ("reinterpret_prims", (x::Float64) -> Int64(reinterpret(UInt64, x) % 1000) +
+                                          Int64(reinterpret(UInt32, Float32(x)) % 1000) +
+                                          Int64(reinterpret(Int64, -x) % 1000) +
+                                          Int64(reinterpret(Float64, reinterpret(UInt64, x) + 1) > x), -0.1),
+])
 # Loads and stores through a storage pointer: one offset for every arm, `ptr - base + (i - 1) *
 # sizeof(T)`, with a String's or Symbol's pointer carrying base 1 and a Memory's base 0
 # (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on

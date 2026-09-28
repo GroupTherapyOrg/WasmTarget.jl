@@ -586,30 +586,12 @@ end
     return String(out)
 end
 
-# ─── reinterpret Overlay  ─────────────────────────────────────
-# Why: Base.reinterpret between primitive bits types inlines to ~390 stmts of
-#      generic bit-checking machinery (padding checks, _foldl_impl, LazyString
-#      error paths) that miscompiles (gap e817213d1890). For same-size
-#      primitives it is exactly Core.bitcast, which the wasm backend lowers to
-#      i32/i64.reinterpret_f32/f64 or a no-op.
-# Remove when: the generic Base.reinterpret path compiles clean.
+# The padding-free primitive element types of the reinterpret overlays below, by width.
 const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
 const _WT_BITS64 = Union{Int64, UInt64, Float64}
 const _WT_BITS16 = Union{Int16, UInt16}
 const _WT_BITS8  = Union{Int8, UInt8, Bool}
 const _WT_PRIMITIVE_BITS = Union{_WT_BITS8, _WT_BITS16, _WT_BITS32, _WT_BITS64}
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS32) where {Out<:_WT_BITS32}
-    Core.bitcast(Out, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS64) where {Out<:_WT_BITS64}
-    Core.bitcast(Out, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS16) where {Out<:_WT_BITS16}
-    Core.bitcast(Out, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Out}, x::_WT_BITS8) where {Out<:_WT_BITS8}
-    Core.bitcast(Out, x)
-end
 
 # Padding-free ReinterpretArray elements are assembled from the parent's value bits.
 # Julia's native implementation probes GC object headers through pointer_from_objref;
@@ -773,52 +755,6 @@ end
 # Remove when: runtime type-subtraction (nonnothingtype/nonmissingtype) compiles,
 #      or the dead-value-across-block-boundary stackifier defect is fixed.
 @overlay WASM_METHOD_TABLE Base.nonnothing_nonmissing_typeinfo(io::IO) = Any
-
-# ─── Shift Overlays (deterministic dispatch) ──────────────────────────────
-# Why: under CC.OverlayMethodTable, `x << n` / `x >> n` with an Int64 amount
-#      resolves to a raw-intrinsic-bodied method instead of Base's guarded
-#      one, so huge/negative amounts leaked raw wasm shift semantics
-#      (`0x01 << typemin(Int64)` returned 1; native gives 0 — gap
-#      31d4d64b9325 family, 6 gaps). These overlays make dispatch
-#      deterministic with Julia's documented semantics: negative amount
-#      flips direction; over-shift → 0 (shl/lshr) or sign-fill (ashr).
-#      The wasm-side emission of the intrinsics already guards over-shift,
-#      so bodies compile to the existing guarded sequences.
-# Remove when: overlay-table method selection matches native dispatch.
-@overlay WASM_METHOD_TABLE function Base.:(<<)(x::T, n::Int64) where {T <: Base.BitInteger}
-    nb = 8 * sizeof(T)
-    if n >= 0
-        return n >= nb ? zero(T) : Base.shl_int(x, Core.bitcast(UInt64, n))
-    end
-    m = -n   # NB: -typemin(Int64) wraps to typemin — caught by m < 0
-    if m < 0 || m >= nb
-        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
-    end
-    return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, m)) : Base.lshr_int(x, Core.bitcast(UInt64, m))
-end
-
-@overlay WASM_METHOD_TABLE function Base.:(>>)(x::T, n::Int64) where {T <: Base.BitInteger}
-    nb = 8 * sizeof(T)
-    if n >= 0
-        if n >= nb
-            return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, Int64(nb - 1))) : zero(T)
-        end
-        return T <: Signed ? Base.ashr_int(x, Core.bitcast(UInt64, n)) : Base.lshr_int(x, Core.bitcast(UInt64, n))
-    end
-    m = -n
-    (m < 0 || m >= nb) && return zero(T)
-    return Base.shl_int(x, Core.bitcast(UInt64, m))
-end
-
-@overlay WASM_METHOD_TABLE function Base.:(>>>)(x::T, n::Int64) where {T <: Base.BitInteger}
-    nb = 8 * sizeof(T)
-    if n >= 0
-        return n >= nb ? zero(T) : Base.lshr_int(x, Core.bitcast(UInt64, n))
-    end
-    m = -n
-    (m < 0 || m >= nb) && return zero(T)
-    return Base.shl_int(x, Core.bitcast(UInt64, m))
-end
 
 @overlay WASM_METHOD_TABLE function Base.replace(s::String, pair::Pair{String,String})
     pattern = pair.first
@@ -1101,33 +1037,6 @@ end
     return result
 end
 
-# ─── unsigned Overlay ─────────────────────────────────────────────────────
-# Why: Base.unsigned(::Signed) can enter reinterpret infrastructure containing
-#      foreigncall(:jl_get_field_offset),
-#      foreigncall(:memcpy), foreigncall(:jl_value_ptr), etc. — complex reinterpret infrastructure.
-#      The actual operation is a same-width bitcast (a no-op for scalar Wasm
-#      integers; WT's two-i64 Int128 representation preserves the same bits).
-# Remove when: codegen handles same-width signed→unsigned reinterpret natively
-@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int8)
-    return Core.bitcast(UInt8, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int16)
-    return Core.bitcast(UInt16, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int64)
-    return Core.bitcast(UInt64, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int32)
-    return Core.bitcast(UInt32, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base.unsigned(x::Int128)
-    return Core.bitcast(UInt128, x)
-end
-
 # ─── copy(Vector) Overlay ─────────────────────────────────────────────────
 # Why: Base.copy(::Vector) uses foreigncall(:memmove) and foreigncall(:jl_genericmemory_copyto)
 #      for bulk memory copying. WASM has no memmove — use element-by-element copy instead.
@@ -1402,46 +1311,6 @@ end
     return nothing
 end
 
-# ─── isless(Float64) Overlay ────────────────────────────────────────────
-# Why: Base.isless(Float64,Float64) produces 793 IR stmts with complex dispatch
-#      through isnan checks and bitwise comparisons — triggers stackifier bug.
-# Remove when: stackifier handles 793-stmt functions correctly
-@overlay WASM_METHOD_TABLE function Base.isless(x::Float64, y::Float64)
-    # Julia convention: NaN sorts to end (isless(x, NaN)=true, isless(NaN, x)=false)
-    # Also: isless(-0.0, 0.0)=true
-    if isnan(x)
-        return false  # NaN is never less than anything
-    end
-    if isnan(y)
-        return true   # everything is less than NaN
-    end
-    # Handle signed zero: -0.0 < 0.0
-    if x == y
-        return signbit(x) && !signbit(y)
-    end
-    return x < y
-end
-
-# ─── isless(Float32) Overlay ────────────────────────────────────────────
-# Why: Base.isless(Float32,Float32) (like the Float64 case) emits invalid wasm —
-#      a `type mismatch: expected i64, found anyref` validation failure — so any
-#      Float32 ordering (e.g. `sort(::Vector{Float32})`, found by the fuzzer as
-#      `length(sort([0f0,0f0,0f0]))`) fails to compile. Same NaN/signed-zero
-#      convention as the Float64 overlay; isnan/signbit/== all work for Float32.
-# Remove when: Base's Float32 isless compiles to valid wasm directly.
-@overlay WASM_METHOD_TABLE function Base.isless(x::Float32, y::Float32)
-    if isnan(x)
-        return false
-    end
-    if isnan(y)
-        return true
-    end
-    if x == y
-        return signbit(x) && !signbit(y)
-    end
-    return x < y
-end
-
 # ─── repeat(String) Overlay ─────────────────────────────────────────────
 # Why: Base.repeat(::String, ::Int) uses unsafe_copyto! with foreigncall(:memmove)
 #      for efficient string repetition. Pure Julia loop with codeunit works in WASM.
@@ -1551,72 +1420,6 @@ end
     (isbitstype(T) || Base.isbitsunion(T)) && return A
     Core.Intrinsics.atomic_pointerset(Ptr{Ptr{Cvoid}}(pointer(A)), C_NULL, :monotonic)
     return A
-end
-
-# ─── reinterpret Overlay ──────────────────────────────────────────────────
-# Why: The WasmInterpreter resolves reinterpret(UInt64, x::Float64) through the
-#      full _reinterpret_padding path (type flags, padding checks, packedsize,
-#      mapfoldl/kwerr infrastructure) — 200+ IR stmts. The native compiler inlines
-#      it to Core.bitcast which is a single WASM instruction.
-# Remove when: WasmInterpreter inference matches native compiler's reinterpret inlining
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt64}, x::Float64)
-    return Core.bitcast(UInt64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float64}, x::UInt64)
-    return Core.bitcast(Float64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int64}, x::Float64)
-    return Core.bitcast(Int64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float64}, x::Int64)
-    return Core.bitcast(Float64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int64}, x::UInt64)
-    return Core.bitcast(Int64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt64}, x::Int64)
-    return Core.bitcast(UInt64, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Int32}, x::UInt32)
-    return Core.bitcast(Int32, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt32}, x::Int32)
-    return Core.bitcast(UInt32, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{UInt32}, x::Float32)
-    return Core.bitcast(UInt32, x)
-end
-@overlay WASM_METHOD_TABLE function Base.reinterpret(::Type{Float32}, x::UInt32)
-    return Core.bitcast(Float32, x)
-end
-
-# ─── _reinterpret_padding Overlay ─────────────────────────────────────────
-# Why: Base._reinterpret_padding goes through pointer_from_objref + packedsize
-#      which generates 200+ IR stmts with mapfoldl/kwerr/fieldtype infrastructure.
-#      Core.bitcast is a direct WASM reinterpret instruction (no-op on same-size types).
-# Remove when: codegen handles the full reinterpret codepath natively
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{UInt64}, x::Float64)
-    return Core.bitcast(UInt64, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float64}, x::UInt64)
-    return Core.bitcast(Float64, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{UInt32}, x::Float32)
-    return Core.bitcast(UInt32, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float32}, x::UInt32)
-    return Core.bitcast(Float32, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Int64}, x::Float64)
-    return Core.bitcast(Int64, x)
-end
-
-@overlay WASM_METHOD_TABLE function Base._reinterpret_padding(::Type{Float64}, x::Int64)
-    return Core.bitcast(Float64, x)
 end
 
 # ─── table_unpack Overlay ─────────────────────────────────────────────────

@@ -114,6 +114,12 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - muladd and fma round once (Julia's fma_emulated), so Julia's own math is bit-exact with
   native (smoke bit_exact_math); twelve approximating math overlays deleted.
 
+## Phase 13 — Julia's own bodies (2026-09-28 …)
+
+- Thirty bit-level overlays deleted (primitive reinterpret, `_reinterpret_padding`,
+  `unsigned`, the Int-amount shifts, `isless`): Julia's own bodies compile and match native
+  (smoke julia_bit_bodies).
+
 ## Why the archive was consolidated
 
 The original files were valuable while their campaigns were active, but later searches
