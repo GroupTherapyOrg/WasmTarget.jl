@@ -388,6 +388,14 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # Push arguments through the resolved target signature. Each value is converted
     # while it is still on top of the stack; no post-push positional repairs exist.
     for (arg_idx, arg) in enumerate(args)
+        # a MemoryRef argument crosses as its single-value struct, offset included
+        # (boundary_wasm_type), never as its bare Memory
+        local _mr_pt = (param_types !== nothing && arg_idx <= length(param_types)) ?
+            param_types[arg_idx] : nothing
+        if _mr_pt isa DataType && _mr_pt <: Core.GenericMemoryRef && isconcretetype(_mr_pt)
+            emit_value!(fb, arg, ctx, boundary_wasm_type(_mr_pt, ctx.mod, ctx.type_registry))
+            continue
+        end
 
         # Check if this is a nothing argument that needs ref.null
         # Also check PiNode with typ === Nothing (Union dispatch pattern)

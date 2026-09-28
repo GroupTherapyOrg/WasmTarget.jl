@@ -713,7 +713,11 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                                       _stmt_ends_unreachable  # catch stub UNREACHABLE
             is_unreachable = is_unreachable_type || is_unreachable_bytecode
             should_store = (!isempty(stmt_bytes) || is_passthrough_statement(node, ctx)) && !is_unreachable
-            if should_store
+            if should_store && haskey(ctx.memoryref_offset_locals, idx) &&
+               _is_memoryref_call_result(ctx, rec) && !isempty(b.v.stack)
+                # a MemoryRef call result: its single-value struct into the statement's pair
+                _store_memoryref_call_result!(b, ctx, idx)
+            elseif should_store
                 local_idx = ctx.ssa_locals[idx]
                 local_array_idx = local_idx - ctx.n_params + 1
                 local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing

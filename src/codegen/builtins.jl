@@ -308,10 +308,15 @@ end
 #   * a MemoryRef phi with an incoming ref whose off0 is not provably 0 keeps off0 in an
 #     i32 local beside its phi local (allocate_memoryref_offset_locals!);
 #   * a MemoryRef constant carries its own offset;
-#   * every other MemoryRef value (a fresh ref, a non-Array field read, an argument, a
-#     call result) is at off0 = 0: a ref crosses a single-value boundary — a field, a
-#     call, a return, an Any slot — as its memory alone, and only when its off0 is
-#     provably 0 (emit_memoryref_single! rejects the rest at the crossing).
+#   * a MemoryRef read out of a struct, closure or tuple field, or returned by a call, is a
+#     snapshot pair too: the field or the call result holds the ref's single-value struct
+#     {mem, off0}, which the statement unpacks (_unpack_memoryref_field_read!,
+#     _store_memoryref_call_result!);
+#   * a MemoryRef argument is its single-value struct in its parameter (boundary_wasm_type),
+#     read field by field where it is used (`:boxed`);
+#   * every other MemoryRef value (a fresh ref) is at off0 = 0; a ref crosses a boundary that
+#     holds one wasm value — a Memory{MemoryRef} element — as its memory alone, and only when
+#     its off0 is provably 0 (emit_memoryref_single! rejects the rest at the crossing).
 
 """
     _memoryref_source(ctx, ref) -> (kind, node)
@@ -320,7 +325,8 @@ Where MemoryRef operand `ref` keeps its element offset, looking through PiNodes 
 no local: `(:pair, phi)` for a phi with an offset local, `(:snapshot, ssa)` for an Array's
 `getfield(a, :ref)` or an indexed ref stored in its two locals, `(:indexed, call)` for an indexed
 `memoryrefnew` re-emitted from its operands, `(:constant, value)` for a MemoryRef
-constant, and `(:zero, ref)` for every other MemoryRef value, which is at offset 0.
+constant, `(:boxed, arg)` for a MemoryRef argument held as its single-value struct, and
+`(:zero, ref)` for every other MemoryRef value, which is at offset 0.
 parity(sdk/lib/_internal/wasm/common/typed_data.dart:2441 WasmI8ArrayBase): the view's
 (_data, _offsetInElements) pair, found where the value was made.
 """
@@ -329,6 +335,11 @@ function _memoryref_source(ctx::AbstractCompilationContext, ref::NirNode)::Tuple
     for _ in 1:(length(ctx.nir) + 1)
         literal = _nir_const_operand(node)
         literal isa Core.GenericMemoryRef && return (:constant, literal)
+        if node isa NirArgument
+            T = get_ssa_type(ctx, node)
+            return (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) ?
+                (:boxed, node) : (:zero, ref)
+        end
         node isa NirSSA && 1 <= node.id <= length(ctx.nir) || return (:zero, ref)
         haskey(ctx.memoryref_offset_locals, node.id) &&
             return (ctx.nir[node.id].node isa NirPhi ? :pair : :snapshot, node)
@@ -381,6 +392,8 @@ function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, r
             emit_value!(b, ref, ctx) :  # R17-floor: a MemoryRef at offset 0 is its memory, at the emitted array type
             emit_value!(b, ref, ctx, expected; from_julia=from_julia)
         return b
+    elseif kind === :boxed
+        _emit_memoryref_box_field!(b, ctx, src, UInt32(2))
     elseif kind === :indexed
         emit_memoryref_mem!(b, ctx, src.operands[1]; temp_map=temp_map)
     elseif kind === :pair || kind === :snapshot
@@ -410,9 +423,42 @@ function emit_memoryref_offset!(b::InstrBuilder, ctx::AbstractCompilationContext
         i32_const!(b, Int64(Base.memoryrefoffset(src) - 1))
     elseif kind === :pair || kind === :snapshot
         local_get!(b, ctx.memoryref_offset_locals[src.id])
+    elseif kind === :boxed
+        _emit_memoryref_box_field!(b, ctx, src, UInt32(3))
     else
         _emit_indexed_offset!(b, ctx, src)
     end
+    return b
+end
+
+"""
+    _memoryref_argument_local(ctx, arg) -> Int
+
+The wasm local of MemoryRef argument `arg`: its parameter, counted past the phantom
+WasmGlobal parameters (and past `#self#` for a function that is not a compiled closure), as
+emit_value! reads an argument.
+parity(code_generator.dart:2127 visitVariableGet): a parameter is read from its local.
+"""
+function _memoryref_argument_local(ctx::AbstractCompilationContext, arg::NirArgument)::Int
+    arg_idx = ctx.is_compiled_closure ? arg.n : arg.n - 1
+    return count(i -> !(i in ctx.global_args), 1:arg_idx-1)
+end
+
+"""
+    _emit_memoryref_box_field!(b, ctx, arg, field) -> b
+
+Push field 2 (the Memory) or field 3 (off0) of MemoryRef argument `arg`, which its
+parameter holds as the ref's single-value struct (boundary_wasm_type).
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2442 WasmI8ArrayBase._data): the view's
+fields are read off the view.
+"""
+function _emit_memoryref_box_field!(b::InstrBuilder, ctx::AbstractCompilationContext, arg::NirNode,
+                                    field::UInt32)::InstrBuilder
+    T = get_ssa_type(ctx, arg)
+    box_idx = register_memoryref_box!(ctx.mod, ctx.type_registry, T)
+    local_get!(b, _memoryref_argument_local(ctx, arg))
+    struct_get!(b, box_idx, field, field == UInt32(2) ?
+        ConcreteRef(get_array_type!(ctx.mod, ctx.type_registry, eltype(T)), true) : I32)
     return b
 end
 
@@ -464,8 +510,9 @@ function emit_memoryref_position!(b::InstrBuilder, ctx::AbstractCompilationConte
         i64_const!(b, 1)
     elseif kind === :constant
         i64_const!(b, Int64(Base.memoryrefoffset(src)))
-    elseif kind === :pair || kind === :snapshot
-        local_get!(b, ctx.memoryref_offset_locals[src.id])
+    elseif kind === :pair || kind === :snapshot || kind === :boxed
+        kind === :boxed ? _emit_memoryref_box_field!(b, ctx, src, UInt32(3)) :
+                          local_get!(b, ctx.memoryref_offset_locals[src.id])
         widen_length_to_i64!(b)
         i64_const!(b, 1)
         num!(b, Opcode.I64_ADD)
@@ -527,7 +574,8 @@ function allocate_memoryref_offset_locals!(ctx::AbstractCompilationContext)::Not
             !(_memoryref_operand_is_fixed(ctx, rec.node.operands[1]) &&
               _memoryref_operand_is_fixed(ctx, rec.node.operands[2]))) ||
            (rec.node isa NirPi && _is_memoryref_unbox(ctx, rec)) ||
-           _is_memoryref_store_result(ctx, rec) || _is_memoryref_field_read(ctx, rec)
+           _is_memoryref_store_result(ctx, rec) || _is_memoryref_field_read(ctx, rec) ||
+           _is_memoryref_call_result(ctx, rec)
             haskey(ctx.ssa_locals, i) || (ctx.ssa_locals[i] = allocate_local!(ctx,
                 ConcreteRef(get_array_type!(ctx.mod, ctx.type_registry, eltype(rec.julia_type)), true)))
             ctx.memoryref_offset_locals[i] = allocate_local!(ctx, I32)
@@ -702,6 +750,49 @@ function _is_memoryref_field_read(ctx::AbstractCompilationContext, rec::NirStmt)
 end
 
 """
+    _is_memoryref_call_result(ctx, rec) -> Bool
+
+Whether NIR statement `rec` is a call of a compiled function — an `:invoke`, or a `:call` of
+anything but a builtin, an intrinsic or `getproperty` (an Array's or a field's read) — whose
+result is a concrete MemoryRef: the result crosses as the ref's single-value struct
+(boundary_wasm_type), which the statement unpacks into its pair.
+parity(quarantine: Julia's MemoryRef is an inline immutable; a call returns its pair.)
+"""
+function _is_memoryref_call_result(ctx::AbstractCompilationContext, rec::NirStmt)::Bool
+    rec.slot == 0 || return false
+    T = rec.julia_type
+    (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) || return false
+    node = rec.node
+    node isa NirInvoke && return true
+    node isa NirCall || return false
+    callee = _nir_callee_object(node.callee)
+    return callee !== nothing && !(callee isa Core.Builtin) &&
+           !(callee isa Core.IntrinsicFunction) && callee !== Base.getproperty
+end
+
+"""
+    _store_memoryref_call_result!(b, ctx, idx) -> b
+
+Store the result of MemoryRef call statement `idx` into its snapshot pair: the ref's
+single-value struct is unpacked (emit_memoryref_unbox!). A lowering that answers the call
+with a bare Memory answers the ref at element offset 0, which stays offset 0 here.
+parity(quarantine: Julia's MemoryRef is an inline immutable; a call returns its pair.)
+"""
+function _store_memoryref_call_result!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int)::InstrBuilder
+    T = ctx.nir[idx].julia_type
+    top = b.v.stack[end]
+    if top isa ConcreteRef && top.type_idx in values(ctx.type_registry.memoryref_box_idxs)
+        return emit_memoryref_unbox!(b, ctx, idx, T)
+    end
+    local mem_local = ctx.ssa_locals[idx]
+    coerce_stack_top!(b, ctx.locals[mem_local - ctx.n_params + 1], ctx; from_julia=T)
+    local_set!(b, mem_local)
+    i32_const!(b, 0)
+    local_set!(b, ctx.memoryref_offset_locals[idx])
+    return b
+end
+
+"""
     _unpack_memoryref_field_read!(b, ctx, idx) -> b
 
 After a field read, when statement `idx` reads a MemoryRef out of a struct, closure or tuple
@@ -728,6 +819,9 @@ parity(code_generator.dart:6070 pushObjectHeaderFields): the Object header, then
 """
 function emit_memoryref_box!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode,
                              @nospecialize(T))::InstrBuilder
+    # an argument already is the ref's single-value struct (boundary_wasm_type)
+    first(_memoryref_source(ctx, ref)) === :boxed &&
+        return local_get!(b, _memoryref_argument_local(ctx, ref))
     box_idx = register_memoryref_box!(ctx.mod, ctx.type_registry, T)
     emit_object_prefix!(b, ctx.type_registry, T)
     emit_memoryref!(b, ctx, ref)

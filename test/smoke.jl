@@ -920,7 +920,15 @@ _g("memory", Any[
 struct _SmMRHolder; r::MemoryRef{Int64}; end
 @noinline _sm_mr_read(h::_SmMRHolder)::Int64 = h.r[] * 10 + Base.memoryrefoffset(h.r)
 @noinline _sm_mr_value(h::_SmMRHolder)::Int64 = h.r[]
+# A MemoryRef crossing a call — an argument or a result — is its single-value struct too
+# (boundary_wasm_type): its element offset crosses with it (it rejected unless provably 0).
+@noinline _sm_mr_arg(r::MemoryRef{Int64})::Int64 = r[] * 10 + Base.memoryrefoffset(r)
+@noinline _sm_mr_next(r::MemoryRef{Int64})::MemoryRef{Int64} = memoryref(r, 2)
+@noinline _sm_mr_same(r::MemoryRef{Int64})::MemoryRef{Int64} = r
 _g("memoryref_field", Any[
+    ("arg_at_offset", (n::Int64) -> (v = collect(1:n); _sm_mr_arg(memoryref(v.ref, 3))), Int64(5)),
+    ("result_at_offset", (n::Int64) -> (v = collect(1:n); r = _sm_mr_next(memoryref(v.ref, 2)); r[] * 10 + Base.memoryrefoffset(r)), Int64(5)),
+    ("result_is_argument", (n::Int64) -> (v = collect(1:n); r = _sm_mr_same(memoryref(v.ref, 4)); r[] * 10 + Base.memoryrefoffset(r)), Int64(5)),
     ("field_fresh", (n::Int64) -> (v = collect(10:10+n); _sm_mr_read(_SmMRHolder(v.ref))), Int64(3)),
     ("field_at_offset", (n::Int64) -> (v = collect(1:n); _sm_mr_read(_SmMRHolder(memoryref(v.ref, 3)))), Int64(5)),
     ("field_value_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); _sm_mr_value(_SmMRHolder(v.ref))), Int64(5)),

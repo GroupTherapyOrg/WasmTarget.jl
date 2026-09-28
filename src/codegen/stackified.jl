@@ -737,6 +737,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             local _mr_kind = first(_memoryref_source(ctx, val))
             if _mr_phi_t isa Type && _mr_phi_t !== Union{} && _mr_phi_t <: Core.GenericMemoryRef
                 if _mr_kind === :indexed || _mr_kind === :pair || _mr_kind === :snapshot ||
+                   _mr_kind === :boxed ||
                    (_mr_kind === :constant && !memoryref_offset_is_zero(ctx, val))
                     emit_memoryref_mem!(pvb, ctx, val; temp_map=temp_map)
                     return _cpv_ret()
@@ -1509,7 +1510,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     local target_pos = findlast(e -> e[3] === target_label, label_stack)
                     exits_outermost = target_pos == 1
                     if exits_outermost && ctx.return_type !== Nothing && ctx.return_type !== Union{}
-                        func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        func_ret_wasm = boundary_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
                         # Find the return phi local: look at the destination block
                         # for a ReturnNode whose value is a phi with a phi_local.
                         ret_local = nothing
@@ -1535,7 +1536,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 end
                             end
                         end
-                        if ret_local !== nothing
+                        # a MemoryRef result is its single-value struct, which the local's
+                        # bare Memory is not: that return goes through its ReturnNode
+                        if ret_local !== nothing && !(func_ret_wasm isa ConcreteRef &&
+                               func_ret_wasm.type_idx in values(ctx.type_registry.memoryref_box_idxs))
                             local_get!(b, ret_local)
                             if func_ret_wasm isa ConcreteRef
                                 ref_cast!(b, Int64(func_ret_wasm.type_idx), true)

@@ -858,7 +858,13 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
     # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
     # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an
     # ill-typed non-box concrete target now traps loudly instead of silently nulling).
-    func_ret_wasm = get_concrete_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+    func_ret_wasm = boundary_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+    # a MemoryRef result crosses as its single-value struct, its element offset with it
+    if func_ret_wasm isa ConcreteRef && func_ret_wasm.type_idx in values(ctx.type_registry.memoryref_box_idxs)
+        emit_value!(b, val, ctx, func_ret_wasm)
+        return_!(b)
+        return b
+    end
     # `nothing` into a ref return → typed null (dart returns null, never a boxed zero).
     if _wt_is_ref(func_ret_wasm) && is_nothing_value(val, ctx)
         if func_ret_wasm isa ConcreteRef
@@ -1148,7 +1154,7 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
     for i in 1:ctx.n_params
         i <= length(ctx.arg_types) || break
         builder_set_local_type!(b, i - 1,
-            get_concrete_wasm_type(ctx.arg_types[i], ctx.mod, ctx.type_registry))
+            boundary_wasm_type(ctx.arg_types[i], ctx.mod, ctx.type_registry))
     end
     for (k, t) in enumerate(ctx.locals)
         builder_set_local_type!(b, ctx.n_params + k - 1, t)
@@ -1201,7 +1207,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     if node isa NirSSA
         # A MemoryRef carrying an element offset in the pair channel (builtins.jl) is
         # one value here only at offset 0; any other crossing rejects, located.
-        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :snapshot)
+        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :snapshot, :boxed)
             emit_memoryref_single!(b, ctx, node)
             return b
         end

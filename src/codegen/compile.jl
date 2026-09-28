@@ -81,12 +81,28 @@ function function_wasm_signature(arg_types, return_type, global_args,
     pts = WasmValType[]
     for (j, T) in enumerate(arg_types)
         j in global_args && continue
-        push!(pts, T isa Union && needs_anyref_boxing(T) ? AnyRef :
-                   get_concrete_wasm_type(T, mod, type_registry))
+        push!(pts, boundary_wasm_type(T, mod, type_registry))
     end
     rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
-          WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+          WasmValType[boundary_wasm_type(return_type, mod, type_registry)]
     return pts, rts
+end
+
+"""
+    boundary_wasm_type(T, mod, registry) -> WasmValType
+
+The wasm type a value of Julia type T has where it crosses a call — a parameter or a result:
+a Union that boxes its numbers is anyref; a concrete MemoryRef is its single-value struct
+{mem, off0} (register_memoryref_box!), so its element offset crosses with it; anything else
+is its concrete wasm type.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2441 WasmI8ArrayBase): a typed-data view
+is an object, passed with its _data and _offsetInElements.
+"""
+function boundary_wasm_type(@nospecialize(T), mod::WasmModule, type_registry::TypeRegistry)::WasmValType
+    T isa Union && needs_anyref_boxing(T) && return AnyRef
+    (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) &&
+        return ConcreteRef(register_memoryref_box!(mod, type_registry, T), true)
+    return get_concrete_wasm_type(T, mod, type_registry)
 end
 
 """
