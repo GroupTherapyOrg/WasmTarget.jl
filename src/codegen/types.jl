@@ -1402,15 +1402,17 @@ Look up a function by reference and argument types (for dispatch).
 parity(functions.dart:25 FunctionCollector._functions / translator.dart:196
 staticParamInfo): the func_ref-keyed core — resolves a callee's identity to
 its compiled ABI, same shape as dart's `Reference` → `w.BaseFunction` map.
-The subtype/reverse-subtype passes below are Julia's dynamic-dispatch
-overload resolution filling in for dart's static single-target reference.
+An exact signature only: an `:invoke` names its MethodInstance's registered signature
+(`_invoke_registered_signatures`), and a call whose argument types match no compiled
+specialization exactly is dynamic dispatch, which the call site lowers as such or rejects.
+Matching by subtyping bound such a call to one specialization compiled for other types, and
+ran it on any value the cast admitted: `RW(::Any)` holding a Symbol ran `RW(::String)`
+(String and Symbol share one wasm struct).
 """
 function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
                       expected_return::Union{Nothing,Type}=nothing)::Union{FunctionInfo, Nothing}
-    # loose subtype passes could pick the WRONG same-name
-    # overload (e.g. getindex(Vector{Bool})::Bool for a Vector{String} site →
-    # i32 stored into an anyref local). When the caller knows the expected
-    # return type, candidates with incompatible returns are skipped.
+    # When the caller knows the expected return type, a registration with an incompatible
+    # return is skipped (two overloads can share loosely inferred argument types).
     _ret_ok(info) = expected_return === nothing || expected_return === Any ||
                     info.return_type === Any ||
                     info.return_type <: expected_return || expected_return <: info.return_type
@@ -1429,46 +1431,10 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
     infos = FunctionInfo[i for i in infos if !i.is_candidate]
     isempty(infos) && return nothing
 
-    # Find matching signature (exact match for now). Even exact arg matches are
-    # gated on return compatibility: two registered overloads can share loosely
-    # inferred arg types while returning different wasm classes.
+    # The exact signature, gated on return compatibility.
     for info in infos
         if info.arg_types == arg_types && _ret_ok(info)
             return info
-        end
-    end
-
-    # Try to find a compatible signature (subtype matching: actual <: registered)
-    for info in infos
-        if length(info.arg_types) == length(arg_types) && _ret_ok(info)
-            match = true
-            for (expected, actual) in zip(info.arg_types, arg_types)
-                if !(actual <: expected)
-                    match = false
-                    break
-                end
-            end
-            if match
-                return info
-            end
-        end
-    end
-
-    # Try reverse subtype match (registered <: actual).
-    # This handles cases where infer_value_type returns abstract types (e.g., Type)
-    # but the function was registered with concrete types (e.g., Type{SourceFile}).
-    for info in infos
-        if length(info.arg_types) == length(arg_types) && _ret_ok(info)
-            match = true
-            for (expected, actual) in zip(info.arg_types, arg_types)
-                if !(actual <: expected) && !(expected <: actual)
-                    match = false
-                    break
-                end
-            end
-            if match
-                return info
-            end
         end
     end
 

@@ -2308,6 +2308,16 @@ const LOCKS = [
         () -> length(unresolved_dart_anchors())),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
+    "L135_callee_by_exact_signature" => ("get_function binds a call to a compiled specialization only on its exact argument types (the return-compatibility gate aside): no subtype or reverse-subtype pass between argument types. An :invoke names its MethodInstance's registered signature; any other mismatch is dynamic dispatch, lowered as such or rejected. The reverse pass bound `RW(::Any)` holding a Symbol to `RW(::String)` and answered 1001 for 1100 (smoke xfail dynamic_constructor; dev/CHARTER.md C6)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "types.jl"), String)
+            m = match(r"(?s)\nfunction get_function\(registry::FunctionRegistry.*?\nend\n", src)
+            m === nothing && return 1
+            body = filter(l -> !_iscomment(l) && !occursin("_ret_ok(info) =", l) &&
+                               !occursin(r"^\s*info\.return_type <: expected_return", l),
+                          split(m.match, '\n'))
+            count(l -> occursin("<:", l), body)
+        end),
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
         () -> begin
             v = String[]

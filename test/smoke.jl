@@ -759,6 +759,18 @@ _xf("builtin_crashes", Any[
     # ("unresolved dynamic call Main.abs (Int64,)")
     ("invoke_in_world", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
 ])
+# A dynamic call binds to no specialization compiled for other argument types. `_RW(::Any)`
+# holding a Symbol once ran the compiled `_RW(::String)` (get_function matched the Any
+# argument by reverse subtyping; String and Symbol share one wasm struct, so the cast passed)
+# and answered 1001 for 1100. A constructor callee enrolls no dispatch candidates, so the call
+# rejects at its statement; answering wrong again is an outcome mismatch here.
+struct _RW; v::Int64; end
+@noinline _RW(x::String) = _RW(ncodeunits(x))
+@noinline _RW(x::Symbol) = _RW(100)
+_xf("dynamic_constructor", Any[
+    ("ctor_any_symbol", (x::Int64) -> (vs = Any["abc", :b]; _RW("z").v * 1000 + (_RW(vs[x])::_RW).v), Int64(2)),
+    ("ctor_any_string", (x::Int64) -> (vs = Any["abc", :b]; _RW("z").v * 1000 + (_RW(vs[x])::_RW).v), Int64(1)),
+])
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
 _xf("pointer_foreigncalls", Any[
     # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes

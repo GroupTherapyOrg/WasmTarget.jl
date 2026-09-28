@@ -45,6 +45,37 @@ function _invoke_callee_object(mi::Core.MethodInstance)::Any
     return _invoke_singleton_instance(st.parameters[1])
 end
 
+"""
+    _invoke_registered_signatures(mi) -> Vector{Tuple}
+
+The signatures under which trim_compile_plan registers the specialization an `:invoke` of `mi`
+calls, in the plan's own terms and order: its argument types (a runtime Vararg tail packed into
+its one tuple parameter), the canonical `Type{T}` → declared-formal collapse the plan applies to
+a transitive `Type{T}` copy, and last the callee's own type first (a closure registered with its
+self). The callee is Julia's MethodInstance, so it is found under one of these exactly — the
+operands' types matched loosely once bound a call to a specialization compiled for other types.
+parity(translator.dart:115 directCallMetadata): the call's target is the whole-program analysis's.
+"""
+function _invoke_registered_signatures(mi::Core.MethodInstance)::Vector{Tuple}
+    local sig = mi.specTypes
+    (sig isa DataType && sig <: Tuple && !isempty(sig.parameters)) || return Tuple[]
+    local params = collect(Any, sig.parameters)
+    local args = Tuple(params[2:end])
+    any(T -> T isa Core.TypeofVararg, args) && (args = (Tuple{args...},))
+    local out = Tuple[args]
+    local m = mi.def
+    if m isa Method
+        local msig = Base.unwrap_unionall(m.sig)
+        if msig isa DataType && length(msig.parameters) == length(args) + 1
+            local canon = Tuple(_canonical_type_object_arg(args[j], msig.parameters[j + 1])
+                                for j in eachindex(args))
+            canon == args || push!(out, canon)
+        end
+    end
+    push!(out, Tuple(params))
+    return out
+end
+
 # The function an invoked value names through a global binding: the invoke's own callee
 # when the IR wrote a global there (the NIR boundary resolved it to its object; an unbound
 # one stays a `GlobalRef`), or an SSA alias of a global (optionally through one π) — else
@@ -266,15 +297,17 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 end
             end
         end
-        if called_func_early !== nothing
-            call_arg_types_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
+        if called_func_early !== nothing && mi isa Core.MethodInstance
+            local _sigs_early = _invoke_registered_signatures(mi)
             _exp_ret = get(ctx.ssa_types, idx, nothing)
-            target_info_early = get_function(ctx.func_registry, called_func_early, call_arg_types_early;
-                                             expected_return=_exp_ret isa Type ? _exp_ret : nothing)
+            for _sig in _sigs_early[1:end-1]
+                target_info_early = get_function(ctx.func_registry, called_func_early, _sig;
+                                                 expected_return=_exp_ret isa Type ? _exp_ret : nothing)
+                target_info_early === nothing || break
+            end
             # Closure/kwarg functions are registered with self-type prepended
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
-                closure_arg_types_early = (typeof(called_func_early), call_arg_types_early...)
-                target_info_early = get_function(ctx.func_registry, called_func_early, closure_arg_types_early)
+                target_info_early = get_function(ctx.func_registry, called_func_early, _sigs_early[end])
                 # 453393ca4ba4: a CAPTURING closure entry takes the closure object as
                 # wasm param 1 — the call site must push it (Snapshot.jl newton C-W3:
                 # 6 values for a 7-param functype → "nothing on stack")
@@ -614,12 +647,16 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     # block; the closure object is already on the stack under the args
                     called_func = closure_self_to_push
                 end
-                if called_func !== nothing
-                    # Infer argument types for dispatch
-                    call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
+                if called_func !== nothing && mi isa Core.MethodInstance
+                    # the callee is the invoke's MethodInstance, under the plan's signature
+                    local _sigs = _invoke_registered_signatures(mi)
                     _exp_ret_l = get(ctx.ssa_types, idx, nothing)
-                    target_info = get_function(ctx.func_registry, called_func, call_arg_types;
-                                               expected_return=_exp_ret_l isa Type ? _exp_ret_l : nothing)
+                    target_info = nothing
+                    for _sig in _sigs[1:end-1]
+                        target_info = get_function(ctx.func_registry, called_func, _sig;
+                                                   expected_return=_exp_ret_l isa Type ? _exp_ret_l : nothing)
+                        target_info === nothing || break
+                    end
                     if target_info === nothing && closure_self_to_push !== nothing
                         target_info = target_info_early
                     end
@@ -627,8 +664,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     # Closure/kwarg functions are registered with self-type prepended
                     # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
                     if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
-                        closure_arg_types = (typeof(called_func), call_arg_types...)
-                        target_info = get_function(ctx.func_registry, called_func, closure_arg_types)
+                        target_info = get_function(ctx.func_registry, called_func, _sigs[end])
                     end
 
                     if target_info !== nothing

@@ -104,6 +104,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - A MemoryRef keeps its offset in a field and across a call (its single-value struct), and
   Vector growth runs Julia's own bodies and reallocating closures: the ten reallocating
   Vector overlays and the name-keyed grow stand-in are deleted, R37 = 0, C1 closed.
+- A call binds only to the specialization Julia selects (an invoke by its MethodInstance, L135);
+  the collector prunes by reachability, so a site that keeps an abstract invoke keeps its body.
 
 ## Why the archive was consolidated
 
