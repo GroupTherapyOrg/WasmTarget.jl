@@ -234,11 +234,6 @@ _xf(name, cases) = push!(XFAIL, name => cases)
 # exactly, so a loud reject cannot turn into a wrong answer unseen; R39 counts the table
 # (dev/CHARTER.md C6), terminal state 0.
 const XFAIL_RUNTIME = Dict{String,Symbol}(
-    "any_return_boundary/mutate_capture" => :unreadable,
-    "string_identity_gaps/boxed_memory_typeof" => :trap,
-    "builtin_crashes/ncodeunits_abstract_string" => :unreadable,
-    "builtin_crashes/ncodeunits_abstract_substring" => :trap,
-    "builtin_crashes/symbol_any_int" => :trap,
 )
 # What an xfail case does now: :pass, one of XFAIL_RUNTIME's outcomes, or :loud (the compile
 # rejects it).
@@ -252,6 +247,14 @@ function xfail_outcome(f, args)::Symbol
     status, val = WasmRunner.run_wasm_single(bytes, string(nameof(f)),
                                              join(map(format_js_arg, args), ", "))
     status === :ok && return unmarshal_result(val) == expected ? :pass : :wrong
+    if status === :trap && startswith(val, "unserializable result")
+        # read inside the module, through a typeassert to the native result's type
+        w = typed_result_wrapper(f, typeof(expected))
+        w === nothing && return :unreadable
+        wb = try WasmTarget.compile(w, Tuple(map(typeof, args)); optimize=false) catch; return :unreadable end
+        status, val = WasmRunner.run_wasm_single(wb, string(nameof(w)), join(map(format_js_arg, args), ", "))
+        status === :ok && return unmarshal_result(val) == expected ? :pass : :wrong
+    end
     status === :trap && return startswith(val, "unserializable result") ? :unreadable : :trap
     error("xfail lane: the runner answered $status: $val")
 end
@@ -266,9 +269,10 @@ end
 _g("mutable_capture", Any[
     ("mutate_capture_typed", (n::Int64) -> ((s = 0; foreach(i -> (s += i), 1:n); s)::Int64), Int64(5)),
 ])
-# The un-annotated variant returns Any (a classId box) — computes correctly in-wasm; the
-# JS harness can't unmarshal the boxed export (host-boundary limitation, not codegen).
-_xf("any_return_boundary", Any[
+# The un-annotated variant returns Any (a classId box), which the host cannot read; the harness
+# reads it inside the module, through a typeassert to the native result's type
+# (typed_result_wrapper, test/utils.jl).
+_g("any_return_boundary", Any[
     ("mutate_capture", (n::Int64) -> (s = 0; foreach(i -> (s += i), 1:n); s), Int64(5)),
 ])
 # Strings lack the $JlBase classId header (bare array<i32> refs), so abstract isa on a
@@ -420,8 +424,8 @@ _g("union_register", Any[
 ])
 
 # ---- symbol_class: a Symbol is its own class, sharing the classed string layout ----
-# Egal, isa, typeof and dispatch tell `"a"` from `:a`; a runtime Symbol (`jl_symbol_n`, the
-# `Symbol` builtin) is built under Symbol's class and hashes as Julia's interned symbol does.
+# Egal, isa, typeof and dispatch tell `"a"` from `:a`; a runtime Symbol (`jl_symbol_n`) is built
+# under Symbol's class and hashes as Julia's interned symbol does.
 @noinline _sym_of(x::Int64) = x > 0 ? :abc : :d
 @noinline _sym_dispatch(x::Symbol) = 1
 @noinline _sym_dispatch(x::String) = 2
@@ -509,11 +513,9 @@ _g("string_identity", Any[
     ("sprint_print_symbol", (x::Int64) -> length(sprint(print, Symbol(string('a', Char(x))))), Int64(98)),
 ])
 # IdDict's table is C (jl_eqtable_get/put, iddict.c); no lowering exists, so its methods reject
-# at compile time ("unsupported method: foreigncall"). A Memory held in Any is its bare array
-# (no classId), so typeof of it traps "illegal cast" (measured 2026-09-23).
+# at compile time ("unsupported method: foreigncall").
 _xf("string_identity_gaps", Any[
     ("iddict_string_key", (x::Int64) -> (d = IdDict{String,Int64}(); d["ab"] = 7; get(d, string('a', Char(x)), -1)), Int64(98)),
-    ("boxed_memory_typeof", (x::Int64) -> (v = Any[Memory{UInt8}(undef, x)]; Int64(typeof(_si_any(v, 1)) === Memory{UInt8})), Int64(3)),
 ])
 
 # ---- lowering-registry coverage (charter C5, test/registry_coverage.jl) ----
@@ -596,7 +598,8 @@ _g("builtins", Any[
     ("ifelse", (x::Int64) -> ifelse(x > 0, x, -x), Int64(-3)),                                                       # Core.ifelse
     ("sizeof_string", (x::Int64) -> sizeof(x > 0 ? "abcé" : "de"), Int64(1)),                                        # Core.sizeof
     ("ifelse_any_condition", (x::Int64) -> (v = Any[true, false]; ifelse(v[x], 1, 2)), Int64(2)),                  # Base.ifelse
-    ("symbol_any_string", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === :cde ? 1 : 0), Int64(2)),            # Symbol
+    # Symbol(::Int64) is Julia's `Symbol(string(x...))`: no builtin; Julia's methods answer it
+    ("symbol_int", (x::Int64) -> (Symbol(x) === Symbol("12") ? 1 : 0), Int64(12)),
     ("compilerbarrier_const", (x::Int64) -> Base.compilerbarrier(:const, x) + 1, Int64(1)),                         # Core.compilerbarrier
     ("inferencebarrier_ref", (x::Int64) -> (Base.inferencebarrier(Any[x])::Vector{Any})[1]::Int64, Int64(1)),     # Core.compilerbarrier
     ("getglobal_const_vector", (x::Int64) -> getglobal(Main, :_SMOKE_GLOBAL_VEC)[x], Int64(2)),                    # Core.getglobal
@@ -738,19 +741,30 @@ _g("isa_exact", Any[
 _xf("isa_runtime_type", Any[
     ("isa_runtime_type", (i::Int64) -> (ts = Any[Int64, Float64]; isa(i, ts[i]) ? 1 : 0), Int64(1)),
 ])
+# A value held abstractly: `ncodeunits` of an AbstractString element dispatches to the element's
+# own method (the builtin lowered every AbstractString as a String's byte array, which read a
+# SubString's parent or trapped at the cast), and `typeof` of a Memory held in Any is read off
+# its array type (a bare array carries no classId; the classId read trapped).
+_g("abstract_receivers", Any[
+    ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
+    ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
+    ("ncodeunits_substring", (x::Int64) -> ncodeunits(SubString("hello", 2, 1 + x)), Int64(3)),
+    ("ncodeunits_error_message", (x::Int64) -> (try; throw(ArgumentError(x > 0 ? "bad" : "no")); catch e; ncodeunits((e::ArgumentError).msg); end), Int64(1)),
+    ("boxed_memory_typeof", (x::Int64) -> (v = Any[Memory{UInt8}(undef, x)]; Int64(typeof(_si_any(v, 1)) === Memory{UInt8})), Int64(3)),
+])
 # BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
 _xf("builtin_crashes", Any[
     # Core.compilerbarrier on an Int64: WasmInternalError "numeric-to-reference conversion
     # lacks a concrete Julia source type"
     ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
-    # Base.ncodeunits on a Vector{AbstractString} element: the String element returns no
-    # value to the host ("undefined"), the SubString element traps "illegal cast"
-    ("ncodeunits_abstract_string", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(1)),
-    ("ncodeunits_abstract_substring", (x::Int64) -> (v = AbstractString["abc", SubString("hello", 2, 3)]; ncodeunits(v[x])), Int64(2)),
     # Base.sizeof on an Any element: WasmInternalError at `getfield(Any, :layout)`
     ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
-    # Symbol of an Any element holding an Int64: traps "illegal cast" (native Symbol("12"))
+    # Symbol of an Any element: `Symbol(::Any)` is Julia's dynamic dispatch, and a constructor
+    # callee enrolls no dispatch candidates, so it rejects at its statement. A `Symbol` builtin
+    # once cast the value to the classed string (a trap for an Int64), and get_function's
+    # reverse-subtype pass then bound it to a compiled `Symbol(::String)`.
     ("symbol_any_int", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === Symbol("12") ? 1 : 0), Int64(1)),
+    ("symbol_any_string", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === :cde ? 1 : 0), Int64(2)),
     # Base.getproperty on an Any element: the dispatch candidate getproperty(::UInt64,
     # ::Symbol) rejects "getfield call shape not lowerable"
     ("getproperty_any", (x::Int64) -> (v = Any[_Pt(x, 2)]; v[1].x::Int64), Int64(5)),
@@ -770,6 +784,14 @@ struct _RW; v::Int64; end
 _xf("dynamic_constructor", Any[
     ("ctor_any_symbol", (x::Int64) -> (vs = Any["abc", :b]; _RW("z").v * 1000 + (_RW(vs[x])::_RW).v), Int64(2)),
     ("ctor_any_string", (x::Int64) -> (vs = Any["abc", :b]; _RW("z").v * 1000 + (_RW(vs[x])::_RW).v), Int64(1)),
+])
+# `ncodeunits(e.msg)` of a caught ArgumentError: `msg` is an AbstractString, so the call is
+# dynamic dispatch over the closed world's AbstractString classes; with one class observed the
+# inline switch has one row, and a one-row switch traps wherever discovery missed a class (the
+# constructor cases above), so the call rejects until dispatch is dart's table (MARCH 13.4).
+# The builtin once read every AbstractString as a String, which was wrong for a SubString.
+_xf("dynamic_single_class", Any[
+    ("pop_empty_message", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? (ncodeunits(e.msg)::Int) : -1; end), Int64(0)),
 ])
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
 _xf("pointer_foreigncalls", Any[
@@ -1079,7 +1101,6 @@ _g("overlays", Any[
     ("rem_large_quotient", (x::Float64) -> reinterpret(Int64, rem(x, 1.41)), -5.4e7),
     # pop!/resize!(::Vector): Base's argument checks throw ArgumentError
     ("pop_empty_argumenterror", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? 1 : 2; end), Int64(0)),
-    ("pop_empty_message", (n::Int64) -> (v = collect(1:n); try; pop!(v); 0; catch e; e isa ArgumentError ? (ncodeunits(e.msg)::Int) : -1; end), Int64(0)),
     ("pop_sequence", (n::Int64) -> (v = collect(1:n); a = pop!(v); b = pop!(v); push!(v, 9); a * 100 + b * 10 + length(v) + sum(v)), Int64(5)),
     ("resize_negative_argumenterror", (n::Int64) -> (v = collect(1:3); try; resize!(v, n); 0; catch e; e isa ArgumentError ? 1 : 2; end), Int64(-1)),
     ("resize_grow", (n::Int64) -> (v = collect(1:3); resize!(v, n); v[n] = 7; length(v) * 100 + v[3] + v[n]), Int64(6)),

@@ -203,14 +203,16 @@ function _lower_sizeof!(b, fb, ctx, call, idx, args, callee)
     return nothing
 end
 
-# ncodeunits(s) → array.len for string byte arrays
-# Handles AbstractString fields from exception structs (e.g., e.msg)
+# ncodeunits(s) → array.len of a String's (or a Symbol's) byte array. Any other
+# AbstractString (a SubString, a LazyString, …) has its own ncodeunits, so the call is not this
+# builtin's: it lowered every AbstractString as a String, which read a SubString's parent
+# array (or trapped at the cast).
 # parity(intrinsics.dart:626 WasmArrayRef.length): `array.len` then `i64.extend_i32_u`.
 function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)
     length(args) == 1 || return nothing
     arg = args[1]
     arg_type = infer_value_type(arg, ctx)
-    if arg_type === String || arg_type <: AbstractString
+    if arg_type === String || arg_type === Symbol
         local _ncb = _ctx_builder(ctx, "compile_call")
         # ONE 4-arg wrap replaces the sniff+cast ladder
         emit_value!(_ncb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
@@ -1497,7 +1499,8 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
         # A TypeVar is its own struct; a DataType, Union or UnionAll is a $JlType whose $kind
         # names it (Union and UnionAll share one wasm struct).
         local reg = ctx.type_registry
-        if arg_type !== nothing && typeintersect(arg_type, Union{Type, TypeVar}) === Union{}
+        local bare = _bare_array_classes(reg, arg_type)
+        if arg_type !== nothing && typeintersect(arg_type, Union{Type, TypeVar}) === Union{} && isempty(bare)
             emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
         else
             local konst!(K) = (g = get_type_constant_global!(ctx.mod, reg, K);
@@ -1519,6 +1522,12 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
             end
             konst!(DataType); br!(_tofb, kdone)
             end_block!(_tofb)
+            # a Memory or a SimpleVector is a bare wasm array, which carries no classId: its
+            # class is the one closed-world class whose array type it is
+            for (C, arr) in bare
+                local_get!(_tofb, v); ref_test!(_tofb, Int64(arr), false)
+                if_!(_tofb); konst!(C); br!(_tofb, kdone); end_block!(_tofb)
+            end
             local_get!(_tofb, v)
             emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
             end_block!(_tofb)
@@ -1533,6 +1542,30 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)
     end
     append_builder!(fb, _tofb)
     return append_builder!(b, fb)
+end
+
+"""
+    _bare_array_classes(registry, T) -> Vector{Tuple{Type, UInt32}}
+
+The closed-world classes a value of static type `T` may be that are bare wasm arrays — a
+Memory, a SimpleVector — each with its array type, for the ones no other such class shares:
+an array type two classes share (Memory{Int64} and Memory{UInt64}) cannot tell them apart.
+parity(quarantine: WT represents a Memory and a SimpleVector as bare wasm arrays, outside the
+numbered classes, so their class is read off the array type.)
+"""
+function _bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Tuple{Type, UInt32}}
+    local all = Tuple{Type, UInt32}[]
+    reg.type_ids === nothing && return all
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
+        if C isa DataType && C <: GenericMemory
+            local arr = get(reg.arrays, eltype(C), nothing)
+            arr === nothing || push!(all, (C, arr))
+        elseif C === Core.SimpleVector && reg.jl_svec_idx !== nothing
+            push!(all, (C, reg.jl_svec_idx))
+        end
+    end
+    return Tuple{Type, UInt32}[(C, arr) for (C, arr) in all
+        if count(p -> p[2] == arr, all) == 1 && (T === nothing || typeintersect(T, C) !== Union{})]
 end
 
 # `typeassert` is NOT registered here: `_emit_typeerror_throw!(fb, args[1],
@@ -1660,28 +1693,6 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)
         append_builder!(fb, ib)
     end
 
-    return append_builder!(b, fb)
-end
-
-# `Symbol(x)` — the Symbol named by `x`: a Symbol is itself; a String (or an Any holding a
-# String or Symbol) has its byte array wrapped under Symbol's own class, and any other
-# runtime class traps at the cast to the classed string. A static type that holds neither
-# (Julia's `Symbol(string(x...))` fallback) rejects at the statement.
-# parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
-function _lower_symbol!(b, fb, ctx, call, idx, args, callee)
-    length(args) == 1 || return nothing
-    local T = get_ssa_type(ctx, args[1])
-    if T === Symbol
-        append_builder!(fb, _compile_value_b(args[1], ctx))
-    elseif T isa Type && typeintersect(T, Union{String,Symbol}) === Union{}
-        emit_unsupported_stub!(ctx, fb, :unsupported_method,
-            "Symbol(::$(T)) is Symbol(string(x)), which this builtin does not lower";
-            idx=idx, detail=call)
-    else
-        emit_value!(fb, args[1], ctx,
-                    ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-        emit_string_wrap!(fb, ctx, Symbol)
-    end
     return append_builder!(b, fb)
 end
 
@@ -2958,7 +2969,6 @@ _register_builtin!(Core.memoryrefnew, _lower_memoryrefnew!)
 _register_builtin!(Core.tuple, _lower_tuple!)
 _register_builtin!(Core.Intrinsics.atomic_pointerset, _lower_atomic_pointerset!)
 _register_builtin!(Core._expr, _lower_expr!)
-_register_builtin!(Symbol, _lower_symbol!)
 _register_builtin!(Core.donotdelete, _lower_donotdelete!)
 _register_builtin!(Core.compilerbarrier, _lower_compilerbarrier!)
 _register_builtin!(Core.apply_type, _lower_apply_type!)

@@ -337,7 +337,17 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 3. Run in Node.js to get actual result (no host imports)
     func_name = string(nameof(f))
     imports = Dict{String,Any}()
-    actual = run_wasm_with_imports(bytes, func_name, imports, args...)
+    actual = try
+        run_wasm_with_imports(bytes, func_name, imports, args...)
+    catch e
+        # a result the host cannot read (an Any result, a GC reference) is read inside the
+        # module, through a typeassert to the native result's type
+        (e isa ErrorException && occursin("unserializable result", e.msg)) || rethrow()
+        w = typed_result_wrapper(f, typeof(expected))
+        w === nothing && rethrow()
+        run_wasm_with_imports(WasmTarget.compile(w, arg_types; optimize=optimize),
+                              string(nameof(w)), imports, args...)
+    end
 
     # 4. Compare (skip if Node.js unavailable)
     if actual === nothing && NODE_CMD === nothing
@@ -345,6 +355,19 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     end
 
     return (pass=(expected == actual), expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+end
+
+"""
+    typed_result_wrapper(f, T) -> Union{Function, Nothing}
+
+A function computing `f(args...)::T`, for reading a result the host cannot serialize (an Any
+result is a GC reference): the typeassert unboxes it inside the module, to a value the host
+reads. `nothing` when `T` is not a concrete value type the host reads (a number, Bool, Char).
+"""
+function typed_result_wrapper(@nospecialize(f), @nospecialize(T))
+    (T <: Union{Number, Bool, Char} && isconcretetype(T)) || return nothing
+    name = gensym(:typed_result)
+    return Core.eval(@__MODULE__, :($name(args...) = $f(args...)::$T))
 end
 
 """
