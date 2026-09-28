@@ -114,6 +114,9 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
+        elseif lit isa TypeVar && ctx.type_registry.jl_typevar_idx !== nothing
+            # a TypeVar compiles to global.get of its constant (get_typevar_constant_global!)
+            return ConcreteRef(ctx.type_registry.jl_typevar_idx, true)
         elseif lit isa Type
             # a type object compiles to global.get of its constant, an instance of its kind
             # (typeof(Int64) is DataType). Checked BEFORE isstructtype: typeof(Type) is a struct.
@@ -1656,6 +1659,11 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # Previous behavior (i32.const 0) made all Types indistinguishable.
         global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
         global_get!(b, global_idx, AnyRef)
+
+    elseif val isa TypeVar
+        # one constant per TypeVar object, its name and bounds populated at startup
+        global_idx = get_typevar_constant_global!(ctx.mod, ctx.type_registry, val)
+        global_get!(b, global_idx, ctx.mod.globals[Int(global_idx) + 1].valtype)
 
     elseif val isa Core.TypeName
         # TypeName constant — look up or create the TypeName global.

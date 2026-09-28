@@ -140,6 +140,8 @@ mutable struct TypeRegistry
     # MemoryRef{T} -> its single-value struct {classId, identityHash, mem, off0}
     # (register_memoryref_box!, structs.jl)
     memoryref_box_idxs::Union{Nothing, Dict{Type, UInt32}}
+    # TypeVar -> its constant global, one per TypeVar object (get_typevar_constant_global!)
+    typevar_constant_globals::Union{Nothing, IdDict{TypeVar, UInt32}}
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -163,7 +165,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
-    Dict{Type, UInt32}()                                # MemoryRef single-value structs
+    Dict{Type, UInt32}(),                               # MemoryRef single-value structs
+    IdDict{TypeVar, UInt32}()                           # TypeVar constants
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -188,7 +191,8 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing,  # lazy_string_globals
     nothing, nothing, nothing,  # closure layouter
     nothing,                    # step5 class-DAG synthetics
-    nothing                     # MemoryRef single-value structs
+    nothing,                    # MemoryRef single-value structs
+    nothing                     # TypeVar constants
 )
 
 """
@@ -962,6 +966,53 @@ function type_object_struct_idx(registry::TypeRegistry, @nospecialize(X::Type)):
 end
 
 """
+    get_typevar_constant_global!(mod, registry, tv) -> UInt32
+
+The global holding TypeVar `tv`, one per TypeVar object (a TypeVar is mutable: its identity
+is its ===), a \$JlTypeVar whose name and bounds populate_type_constant_globals! fills; the
+bounds get their constants here.
+parity(constants.dart:399 _makeTypeParameterTypeConstant): a type parameter is a constant
+object of its own class.
+"""
+function get_typevar_constant_global!(mod::WasmModule, registry::TypeRegistry, tv::TypeVar)::UInt32
+    haskey(registry.typevar_constant_globals, tv) && return registry.typevar_constant_globals[tv]
+    idx = registry.jl_typevar_idx
+    idx === nothing && error("TypeVar constants require the canonical JlType hierarchy")
+    b = InstrBuilder(; func_name="get_typevar_constant_global!")
+    struct_new_default!(b, idx)
+    g = add_global_ref!(mod, idx, true, builder_code(b); nullable=false)
+    registry.typevar_constant_globals[tv] = g
+    _type_object_constant!(mod, registry, tv.lb)
+    _type_object_constant!(mod, registry, tv.ub)
+    return g
+end
+
+"""
+    _type_object_constant!(mod, registry, x) -> Union{UInt32, Nothing}
+
+The constant global of `x` when it is a type object or a TypeVar — the parts a type is made
+of — creating it; `nothing` for any other value (a value parameter such as the `1` of
+`Array{Int64,1}`).
+parity(constants.dart:361 _lowerTypeToConstant): each part of a type is its own constant.
+"""
+function _type_object_constant!(mod::WasmModule, registry::TypeRegistry, @nospecialize(x))::Union{UInt32, Nothing}
+    x isa TypeVar && return get_typevar_constant_global!(mod, registry, x)
+    (x isa DataType || x isa Union || x isa UnionAll || x === Union{}) &&
+        return get_type_constant_global!(mod, registry, x)
+    return nothing
+end
+
+"""
+    _type_object_global(registry, x) -> Union{UInt32, Nothing}
+
+The constant global already made for type object or TypeVar `x`, or `nothing`.
+parity(constants.dart:361 _lowerTypeToConstant): a constant is read from its global.
+"""
+_type_object_global(registry::TypeRegistry, @nospecialize(x))::Union{UInt32, Nothing} =
+    x isa TypeVar ? get(registry.typevar_constant_globals, x, nothing) :
+    x isa Type ? get(registry.type_constant_globals, x, nothing) : nothing
+
+"""
     type_value_struct_idx(registry, t) -> UInt32
 
 The struct every value of the static type `t <: Type` is at run time: `DataType`, `Union` and
@@ -990,7 +1041,7 @@ Hierarchy (from §3.2.5):
   \$JlType         = (struct (field \$kind i32))
   \$JlDataType     = (sub \$JlType (struct \$kind, \$name, \$super, \$parameters, \$hash, \$abstract, \$dfs_low, \$dfs_high, \$flags))
   \$JlUnion        = (sub \$JlType (struct \$kind, \$a, \$b))
-  \$JlUnionAll     = (sub \$JlType (struct \$kind, \$body, \$var))
+  \$JlUnionAll     = (sub \$JlType (struct \$kind, \$var, \$body))
   \$JlTypeVar      = (sub \$JlType (struct \$kind, \$name, \$lb, \$ub))
   \$JlModule       = (sub \$JlObject (struct \$classId, \$identityHash, \$name, \$parent))
   \$JlTypeName     = (sub \$JlObject (struct \$classId, \$identityHash,
@@ -1083,11 +1134,11 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
     jl_union_idx = add_type!(mod, jl_union)
     registry.jl_union_idx = jl_union_idx
 
-    # 6. $JlUnionAll: (sub $JlType (struct $kind, $body, $var))
+    # 6. $JlUnionAll: (sub $JlType (struct $kind, $var, $body)), Julia's field order
     jl_unionall = StructType([
         FieldType(I32, true),                                    # kind (mut i32) = TYPE_UNIONALL=2
-        FieldType(ConcreteRef(jl_type_idx, true), true),         # body (mut ref null $JlType)
         FieldType(ConcreteRef(jl_type_idx, true), true),         # var (mut ref null $JlType) — $JlTypeVar is a subtype
+        FieldType(ConcreteRef(jl_type_idx, true), true),         # body (mut ref null $JlType)
     ], jl_type_idx)
     jl_unionall_idx = add_type!(mod, jl_unionall)
     registry.jl_unionall_idx = jl_unionall_idx
@@ -1095,7 +1146,7 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
     # 7. $JlTypeVar: (sub $JlType (struct $kind, $name, $lb, $ub))
     jl_typevar = StructType([
         FieldType(I32, true),                                    # kind (mut i32) = TYPE_TYPEVAR=3
-        FieldType(ConcreteRef(str_arr_idx, true), true),         # name (mut string ref)
+        FieldType(ConcreteRef(string_struct_idx, true), true),   # name (mut Symbol ref)
         FieldType(ConcreteRef(jl_type_idx, true), true),         # lb (mut ref null $JlType)
         FieldType(ConcreteRef(jl_type_idx, true), true),         # ub (mut ref null $JlType)
     ], jl_type_idx)
@@ -1123,12 +1174,13 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
         UInt32(1)  # skip kind field
     )
 
-    # UnionAll: its body. Its var is a TypeVar, which has no representation (nor has Union{},
-    # a TypeVar's usual lower bound), so `var` is no readable field and reading it rejects.
+    # UnionAll: var, body, in Julia's field order (fieldnames(UnionAll)). The var is a TypeVar
+    # constant (get_typevar_constant_global!); both fields are declared Any, so the struct keeps
+    # its ref $JlType fields (a TypeVar is a $JlType).
     registry.structs[UnionAll] = StructInfo(
         UnionAll, jl_unionall_idx,
-        [:body],
-        Type[Any],
+        [:var, :body],
+        Type[Any, Any],
         UInt32(1)  # skip kind field
     )
 
@@ -1136,11 +1188,11 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
     registry.structs[Core.TypeofBottom] = StructInfo(
         Core.TypeofBottom, jl_type_idx, Symbol[], Type[], UInt32(1))
 
-    # TypeVar: fields name, lb, ub
+    # TypeVar: fields name (a Symbol, as Julia's), lb, ub
     registry.structs[TypeVar] = StructInfo(
         TypeVar, jl_typevar_idx,
         [:name, :lb, :ub],
-        Type[String, Any, Any],
+        Type[Symbol, Any, Any],
         UInt32(1)  # skip kind field
     )
 
@@ -1845,18 +1897,14 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
             get_type_constant_global!(mod, registry, type_val.super)
         end
 
-        # Ensure parameter type globals exist, a parameter of every type-object kind
-        for i in 1:length(type_val.parameters)
-            p = type_val.parameters[i]
-            if p isa DataType || p isa Union || p isa UnionAll
-                get_type_constant_global!(mod, registry, p)
-            end
+        # a parameter that is a type object or a TypeVar gets its constant
+        for p in type_val.parameters
+            _type_object_constant!(mod, registry, p)
         end
     elseif type_val isa Union || type_val isa UnionAll
-        # a Union's members and a UnionAll's body: a TypeVar among them has no representation,
-        # so its field stays unset
-        for m in (type_val isa Union ? (type_val.a, type_val.b) : (type_val.body,))
-            (m isa DataType || m isa Union || m isa UnionAll) && get_type_constant_global!(mod, registry, m)
+        # a Union's members; a UnionAll's var and body
+        for m in (type_val isa Union ? (type_val.a, type_val.b) : (type_val.var, type_val.body))
+            _type_object_constant!(mod, registry, m)
         end
     end
 
@@ -2070,8 +2118,8 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         else
             for i in 1:nparams
                 p = params[i]
-                if (p isa DataType || p isa Union || p isa UnionAll) && haskey(registry.type_constant_globals, p)
-                    p_global_idx = registry.type_constant_globals[p]
+                if _type_object_global(registry, p) !== nothing
+                    p_global_idx = _type_object_global(registry, p)
                     begin
             local _gvt = mod.globals[Int(p_global_idx) + 1].valtype
             global_get!(b, p_global_idx, _gvt)
@@ -2148,8 +2196,8 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         struct_set!(b, dt_type_idx, UInt32(8), I32)
     end
 
-    # a Union constant: its kind and its two members; a UnionAll: its kind and its body (its
-    # `var` is no readable field — a TypeVar has no representation here); Union{}: its kind
+    # a Union constant: its kind and its two members; a UnionAll: its kind, var and body;
+    # Union{}: its kind
     for (type_val, g) in ordered_type_constants(registry)
         (type_val isa Union || type_val isa UnionAll || type_val === Union{}) || continue
         local si = type_object_struct_idx(registry, type_val)
@@ -2159,13 +2207,30 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
                             type_val isa UnionAll ? JL_TYPE_KIND_UNIONALL : JL_TYPE_KIND_BOTTOM))
         struct_set!(b, si, UInt32(0), I32)
         local members = type_val isa Union ? ((UInt32(1), type_val.a), (UInt32(2), type_val.b)) :
-                        type_val isa UnionAll ? ((UInt32(1), type_val.body),) : ()
+                        type_val isa UnionAll ? ((UInt32(1), type_val.var), (UInt32(2), type_val.body)) : ()
         for (f, m) in members
-            (m isa Type && haskey(registry.type_constant_globals, m)) || continue
-            local mg = registry.type_constant_globals[m]
+            local mg = _type_object_global(registry, m)
+            mg === nothing && error("the type constant $type_val has a part $m with no constant")
             global_get!(b, g, self_t)
             global_get!(b, mg, mod.globals[Int(mg) + 1].valtype)
             struct_set!(b, si, f, ConcreteRef(jl_type_idx, true))
+        end
+    end
+
+    # a TypeVar constant: its name (a Symbol), lower and upper bound, in program order
+    local tv_idx = registry.jl_typevar_idx
+    local tv_string_idx = get_string_struct_type!(mod, registry)
+    for (tv, g) in sort!(collect(registry.typevar_constant_globals); by = p -> p.second)
+        local self_t = ConcreteRef(tv_idx, false)
+        global_get!(b, g, self_t)
+        emit_string_constant_ref!(b, mod, registry, tv.name, _pop_str_scratch, _pop_str_used)
+        struct_set!(b, tv_idx, UInt32(1), ConcreteRef(tv_string_idx, true))
+        for (f, bound) in ((UInt32(2), tv.lb), (UInt32(3), tv.ub))
+            local bg = _type_object_global(registry, bound)
+            bg === nothing && error("TypeVar $(tv)'s bound $bound has no constant")
+            global_get!(b, g, self_t)
+            global_get!(b, bg, mod.globals[Int(bg) + 1].valtype)
+            struct_set!(b, tv_idx, f, ConcreteRef(jl_type_idx, true))
         end
     end
 

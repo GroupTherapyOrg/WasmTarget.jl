@@ -709,6 +709,12 @@ _g("type_object_kinds", Any[
     ("unionall_body", (x::Int64) -> (v = Any[Vector, Int64]; u = v[x]; u isa UnionAll ? (u.body isa DataType ? 1 : 2) : 0), Int64(1)),
     ("datatype_param", (x::Int64) -> (v = Any[Vector{Int64}, Int64]; t = v[x]; t isa DataType ? (t.parameters[1] === Int64 ? 1 : 2) : 0), Int64(1)),
     ("datatype_param_union", (x::Int64) -> (v = Any[Vector{Union{Int64,Nothing}}, Int64]; t = v[x]; t isa DataType ? (t.parameters[1] isa Union ? 1 : 2) : 0), Int64(1)),
+    # a TypeVar is a constant object holding its name and bounds; a UnionAll holds its var
+    ("typevar_isa", (x::Int64) -> (v = Any[_SMOKE_TV, 1]; v[x] isa TypeVar ? 1 : 0), Int64(1)),
+    ("typeof_typevar", (x::Int64) -> (v = Any[_SMOKE_TV, 1]; typeof(v[x]) === TypeVar ? 1 : 0), Int64(1)),
+    ("typevar_ub_name", (x::Int64) -> (v = Any[_SMOKE_TV, 1]; t = v[x]; t isa TypeVar ? (t.ub === Any ? 10 : 20) + (t.name === :T ? 1 : 2) : 0), Int64(1)),
+    ("unionall_var_name", (x::Int64) -> (v = Any[Vector, Int64]; u = v[x]; u isa UnionAll ? (u.var.name === :T ? 1 : 2) : 0), Int64(1)),
+    ("unionall_var_lb", (x::Int64) -> (v = Any[Vector, Int64]; u = v[x]; u isa UnionAll ? (u.var.lb === Union{} ? 1 : 2) : 0), Int64(1)),
     # Union{} is the one instance of Core.TypeofBottom: a Type, not a DataType
     ("bottom_egal", (x::Int64) -> (v = Any[Union{}, Int64]; v[x] === Union{} ? 1 : 0), Int64(1)),
     ("bottom_isa_type", (x::Int64) -> (v = Any[Union{}, 5]; v[x] isa Type ? 1 : 0), Int64(1)),
