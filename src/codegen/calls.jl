@@ -3652,24 +3652,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 end
             end
         end
-        # parity(closures.dart:1365 Context): setfield!(%box::Core.Box, :contents, v) — WRITE the shared cell
-        # (dart Context variable write); the value wraps to anyref through the funnel.
-        if !_gfc_done && func === Core.setfield! && length(args) == 3 &&
-           args[1] isa NirSSA && nir_const(args[2]) === :contents &&
-           get(ctx.ssa_types, args[1].id, Any) === Core.Box
-            local _bxs_ib = _ctx_builder(ctx, "compile_call")
-            local _bxs_ty = emit_value!(_bxs_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
-            local _bxs_idx = _bxs_ty isa ConcreteRef ? _bxs_ty.type_idx :
-                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
-            !(_bxs_ty isa ConcreteRef) && ref_cast!(_bxs_ib, Int64(_bxs_idx), false)
-            local _bxs_ft = ctx.mod.types[_bxs_idx + 1].fields[2].valtype
-            emit_value!(_bxs_ib, args[3], ctx, _bxs_ft)
-            struct_set!(_bxs_ib, _bxs_idx, UInt32(1), _bxs_ft)
-            # setfield! evaluates to the VALUE; re-emit it (dup semantics via re-eval)
-            emit_value!(_bxs_ib, args[3], ctx, _bxs_ft)
-            append_builder!(fb, _bxs_ib)
-            _gfc_done = true
-        end
         # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
         # defined-check = a null test on the anyref contents.
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
@@ -3730,21 +3712,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     _gfc_done = true
                 end
             end
-        end
-        # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
-        # (dart Context variable read). The cell is the F3 anyref box struct.
-        if !_gfc_done && func === Core.getfield && length(args) == 2 &&
-           args[1] isa NirSSA && nir_const(args[2]) === :contents &&
-           get(ctx.ssa_types, args[1].id, Any) === Core.Box
-            local _bx_ib = _ctx_builder(ctx, "compile_call")
-            local _bx_ty = emit_value!(_bx_ib, args[1], ctx)  # R17-floor: box intrinsic branches on actual type
-            local _bx_idx = _bx_ty isa ConcreteRef ? _bx_ty.type_idx :
-                            UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
-            !( _bx_ty isa ConcreteRef) && ref_cast!(_bx_ib, Int64(_bx_idx), false)
-            local _bx_ft = ctx.mod.types[_bx_idx + 1].fields[2].valtype
-            struct_get!(_bx_ib, _bx_idx, UInt32(1), _bx_ft)
-            append_builder!(fb, _bx_ib)
-            _gfc_done = true
         end
         # parity(closures.dart:1365 Context): getfield(closure_value, :boxfield) — the box was born in a
         # callee; read the registered struct field here (the ONE shared cell).
@@ -3978,7 +3945,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
                         local _dqb = _ctx_builder(ctx, "compile_call")
                         for _dq_a in args
-                            emit_value!(_dqb, _dq_a, ctx)  # R17-floor: deep query traverses a runtime-selected node kind
+                            emit_value!(_dqb, _dq_a, ctx, AnyRef)  # every operand's local is anyref (checked above)
                             # unbox each boxed-i64 operand via THE single consumer, then compare
                             emit_classid_unbox!(_dqb, ctx, I64; nullable=true)
                         end
@@ -4114,9 +4081,10 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         if length(value_types) == length(names)
                             local _ntb = _ctx_builder(ctx, "compile_call")
                             # Compile the tuple argument - this pushes the tuple struct
-                            emit_value!(_ntb, tuple_arg, ctx)  # R17-floor: named-tuple source representation is polymorphic
+                            local _nt_src = ConcreteRef(tuple_info.wasm_type_idx, true)
+                            emit_value!(_ntb, tuple_arg, ctx, _nt_src)
                             # Create a temporary local to hold the tuple
-                            tuple_local = allocate_local!(ctx, ConcreteRef(tuple_info.wasm_type_idx, true))
+                            tuple_local = allocate_local!(ctx, _nt_src)
                             local_set!(_ntb, tuple_local)
 
                             emit_struct_prefix!(_ntb, ctx.type_registry, nt_type, info)

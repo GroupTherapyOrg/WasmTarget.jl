@@ -34,7 +34,9 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             local_idx = ctx.ssa_locals[val.id]
             local_array_idx = local_idx - ctx.n_params + 1
             if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
-                return ctx.locals[local_array_idx]
+                # the read narrows a generic local to the SSA's refined type (_narrow_generic_local!)
+                local narrowed = narrowed_local_type(ctx, local_idx, val.id)
+                return narrowed === nothing ? ctx.locals[local_array_idx] : narrowed
             end
         elseif haskey(ctx.phi_locals, val.id)
             local_idx = ctx.phi_locals[val.id]
@@ -114,25 +116,30 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
+        elseif lit isa Int128 || lit isa UInt128
+            # a 128-bit constant is its {classId, lo, hi} struct, built or read from its global
+            return ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(lit)), false)
+        # Every reference constant below is non-null, as every dart constant is
+        # (constants.dart:821 `assert(!type.nullable)`; TypeOfConstantVisitor's _typeOfClass).
         elseif lit isa TypeVar && ctx.type_registry.jl_typevar_idx !== nothing
             # a TypeVar compiles to global.get of its constant (get_typevar_constant_global!)
-            return ConcreteRef(ctx.type_registry.jl_typevar_idx, true)
+            return ConcreteRef(ctx.type_registry.jl_typevar_idx, false)
         elseif lit isa Type
             # a type object compiles to global.get of its constant, an instance of its kind
             # (typeof(Int64) is DataType). Checked BEFORE isstructtype: typeof(Type) is a struct.
             ctx.type_registry.jl_type_idx === nothing &&
-                return ConcreteRef(get_datatype_type_idx(ctx.type_registry), true)
-            return ConcreteRef(type_object_struct_idx(ctx.type_registry, lit), true)
+                return ConcreteRef(get_datatype_type_idx(ctx.type_registry), false)
+            return ConcreteRef(type_object_struct_idx(ctx.type_registry, lit), false)
         elseif lit isa Core.TypeName
             # TypeName constants compile to global.get ($JlTypeName struct ref)
             tn_idx = ctx.type_registry.jl_typename_idx
             if tn_idx !== nothing
-                return ConcreteRef(tn_idx, true)
+                return ConcreteRef(tn_idx, false)
             end
             return StructRef
         elseif isstructtype(typeof(lit))
-            # Struct values compile to struct_new (ConcreteRef)
-            return get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry)
+            # Struct values compile to struct_new or read their constant global
+            return _wt_drop_nullable(get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry))
         else
             return AnyRef
         end
@@ -878,7 +885,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         return_!(b)
         return b
     end
-    ty = emit_value!(b, val, ctx)  # R17-floor: actual type drives return compatibility
+    ty = emit_value!(b, val, ctx, static_wasm_type(val, ctx))
     # numeric→ref precedence (boxing) is checked before compatibility, as before.
     needs_box = ty !== nothing && !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
     if ty === nothing || (!needs_box && !return_type_compatible(ty, func_ret_wasm))
@@ -985,8 +992,9 @@ _is_type_operand(arg::NirNode)::Bool =
 """
     emit_call_operand!(b, ctx, arg) -> Union{WasmValType,Nothing}
 
-THE call-operand emission point: emit one call argument at its natural type and
-return the type it ACTUALLY pushed. parity(intrinsics.dart:995 `_binaryOperator
+THE call-operand emission point: emit one call argument at its static type and
+return that type — dart's `codeGen.translateExpression(x, typeOfExp(x))`
+(intrinsics.dart:981, :1250, :1522). parity(intrinsics.dart:995 `_binaryOperator
 Map` call sites / :1007 / :1018): in dart2wasm every intrinsic wraps its OWN
 operands (`codeGen.wrap(node.arguments.positional[i], …)`) — nothing is
 pre-pushed for it — so `compile_call!`'s generic loop and every self-contained
@@ -994,7 +1002,7 @@ pre-pushed for it — so `compile_call!`'s generic loop and every self-contained
 inheriting the other's stack.
 """
 emit_call_operand!(b::InstrBuilder, ctx::AbstractCompilationContext, arg)::Union{WasmValType,Nothing} =
-    emit_value!(b, arg, ctx)  # R17-floor: the operand's ACTUAL width drives the caller's normalisation
+    emit_value!(b, arg, ctx, static_wasm_type(arg, ctx))
 
 """
     emit_call_operands!(b, ctx, args; include_types=false) -> b
@@ -1101,7 +1109,7 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
             return expected
         end
     end
-    ty = emit_value!(b, val, ctx)  # R17-floor: this wrapper consumes the actual emission type
+    ty = emit_value!(b, val, ctx)  # parity(code_generator.dart:676 accept1): the one visitor call; convertType below
     ty === nothing && return expected
     if ty !== expected
         # Like dart's wrap(node, expectedType), the single wrap funnel owns both
@@ -1257,7 +1265,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_value!(b, def.value, ctx)  # R17-floor: Pi source representation selects unboxing
+                    emit_value!(b, def.value, ctx, static_wasm_type(def.value, ctx))
                     # Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
@@ -1443,7 +1451,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 ref_as_non_null!(b)
             end
         else
-            emit_value!(b, NirLiteral(actual_val), ctx) # R17-floor: GlobalRef delegates before its consumer supplies an expected type
+            local _gr_lit = NirLiteral(actual_val)
+            emit_value!(b, _gr_lit, ctx, static_wasm_type(_gr_lit, ctx))
         end
 
     else
@@ -1558,7 +1567,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             _ciir = register_struct_type!(ctx.mod, ctx.type_registry, typeof(inner))
             global_get!(b, _cgir, ConcreteRef(_ciir.wasm_type_idx, false))
         else
-            emit_value!(b, NirLiteral(inner), ctx)  # R17-floor: QuoteNode delegates before a consumer exists
+            local _qn_lit = NirLiteral(inner)
+            emit_value!(b, _qn_lit, ctx, static_wasm_type(_qn_lit, ctx))
         end
 
     elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&

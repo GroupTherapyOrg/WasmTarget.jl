@@ -1793,51 +1793,57 @@ function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
 end
 
 """
+    narrowed_local_type(ctx, local_idx, ssa_id) -> Union{WasmValType,Nothing}
+
+The type a read of SSA `ssa_id` from its local `local_idx` delivers when the local is
+generic (anyref/structref/externref/eqref) and the SSA's inferred type is one concrete type:
+the struct ref it is cast to (nullable) or the number it is unboxed to. `nothing` when the
+read delivers the local as it is. The one rule behind `_narrow_generic_local!`, which emits
+the cast or the unbox, and `static_wasm_type`, which answers it before emission.
+parity(translator.dart:2100 Translator.translateTypeOfLocalVariable)
+"""
+function narrowed_local_type(ctx::AbstractCompilationContext, local_idx::Integer,
+                             ssa_id::Integer)::Union{WasmValType,Nothing}
+    arr_idx = local_idx - ctx.n_params + 1
+    (1 <= arr_idx <= length(ctx.locals)) || return nothing
+    local_wasm_type = ctx.locals[arr_idx]
+    (local_wasm_type === AnyRef || local_wasm_type === StructRef ||
+     local_wasm_type === ExternRef || local_wasm_type === EqRef) || return nothing
+    ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
+    # A Union{Nothing, T} stays unnarrowed: the value may be nothing, and its narrowing is
+    # the PiNode after the null check.
+    (ssa_julia_type === Any || ssa_julia_type === Union{} || ssa_julia_type isa Union) &&
+        return nothing
+    concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
+    concrete_wasm isa ConcreteRef && return ConcreteRef(concrete_wasm.type_idx, true)
+    (concrete_wasm === I32 || concrete_wasm === I64 ||
+     concrete_wasm === F32 || concrete_wasm === F64) && return concrete_wasm
+    return nothing
+end
+
+"""
     _narrow_generic_local!(b, local_idx, ssa_id, ctx) -> Bool
 
 builder-native — THE implementation): when a local has generic type
 (anyref/structref/externref/eqref) but the SSA's Julia type maps to a concrete Wasm
-type, narrow the value on `b`'s stack (`ref.cast null` for refs — a no-op at runtime
-when correct, a trap on a real codegen bug — and THE funnel-unbox for join-refined
-numerics). Returns false when no narrowing applies.
+type (narrowed_local_type), narrow the value on `b`'s stack (`ref.cast null` for refs — a
+no-op at runtime when correct, a trap on a real codegen bug — and THE funnel-unbox for
+join-refined numerics). Returns false when no narrowing applies.
 """
 function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)::Bool
-    arr_idx = local_idx - ctx.n_params + 1
-    if arr_idx < 1 || arr_idx > length(ctx.locals)
-        return false
-    end
-    local_wasm_type = ctx.locals[arr_idx]
-    if !(local_wasm_type === AnyRef || local_wasm_type === StructRef || local_wasm_type === ExternRef || local_wasm_type === EqRef)
-        return false  # Local is already concrete — no narrowing needed
-    end
-    # Look up the SSA's Julia type to find a concrete Wasm type
-    ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
-    if ssa_julia_type === Any || ssa_julia_type === Union{}
-        return false  # Can't narrow — don't know the concrete type
-    end
-    # Don't narrow Union{Nothing, T} types — the value may be Nothing,
-    # and downstream code (e.g., === nothing comparison) needs the unnarrowed type.
-    # Narrowing happens via PiNode after the null check succeeds.
-    if ssa_julia_type isa Union
-        return false
-    end
-    concrete_wasm = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
-    if concrete_wasm isa ConcreteRef
-        if local_wasm_type === ExternRef
-            # ExternRef needs any_convert_extern before ref.cast
-            any_convert_extern!(b)
-        end
-        ref_cast!(b, Int64(concrete_wasm.type_idx), true)
-        return true
-    elseif concrete_wasm === I32 || concrete_wasm === I64 ||
-           concrete_wasm === F32 || concrete_wasm === F64
+    local narrowed = narrowed_local_type(ctx, local_idx, ssa_id)
+    narrowed === nothing && return false
+    if narrowed isa ConcreteRef
+        # ExternRef needs any_convert_extern before ref.cast
+        ctx.locals[local_idx - ctx.n_params + 1] === ExternRef && any_convert_extern!(b)
+        ref_cast!(b, Int64(narrowed.type_idx), true)
+    else
         # parity(translator.dart:1597 Translator.convertType): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
-        coerce_stack_top!(b, concrete_wasm, ctx; from_julia=ssa_julia_type)
-        return true
+        coerce_stack_top!(b, narrowed, ctx; from_julia=get(ctx.ssa_types, ssa_id, Any))
     end
-    return false
+    return true
 end
 
 """

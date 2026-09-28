@@ -98,6 +98,7 @@ function is_nothing_value(val::NirNode, ctx)::Bool
             rec = ctx.nir[val.id]
             def = rec.slot == 0 ? rec.node : nothing
             (def isa NirGlobalRef && def.name === :nothing) && return true
+            (def isa NirLiteral && def.value === nothing) && return true
             if def isa NirPi
                 def.typ === Nothing && return true
                 return is_nothing_value(def.value, ctx)

@@ -847,11 +847,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
                     return _cpv_ret()
                 end
-                # the defining statement can be re-emitted unless it is a phi or the
-                # `nothing` statement
+                # Every phi owns a local (allocate_phi_locals!) and a `nothing` definition
+                # took the `nothing` edge above (is_nothing_value), so the definition here
+                # is an ordinary statement the visitor re-emits.
                 def_rec = nir[val.id]
-                recomputable = !(def_rec.slot == 0 && def_rec.node isa NirLiteral &&
-                                 def_rec.node.value === nothing) && !(def_rec.node isa NirPhi)
+                (def_rec.node isa NirPhi ||
+                 (def_rec.slot == 0 && def_rec.node isa NirLiteral && def_rec.node.value === nothing)) &&
+                    error("phi edge source %$(val.id) is a phi or `nothing` without a local")
                 # Type compatibility for recomputed SSA values (the M10a fix lives in the
                 # ssa_types join-write, not here). Source = emit_value! (typed recompute).
                 ssa_julia_type = get(ctx.ssa_types, val.id, Any)
@@ -860,17 +862,15 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Revisit its real statement so the throw/unreachable terminator is
                     # preserved; the enclosing edge is then stack-polymorphic by Wasm
                     # validation, exactly as in dart's unreachable expression handling.
-                    recomputable ?
-                        compile_statement!(pvb, val.id, ctx) :
-                        emit_phi_failure!(pvb, "bottom phi source has no terminating statement";
-                                          idx=phi_idx)
+                    compile_statement!(pvb, val.id, ctx)
                     return _cpv_ret()
                 end
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = _ctx_builder(ctx, "phi_edge_src")
                     _seed_builder_locals!(_sb, ctx)
-                    emit_value!(_sb, val, ctx)  # R17-floor: phi converter consumes the actual recomputed type
+                    # the converter below is told the source is `ssa_wasm_type`; the emission states it
+                    emit_value!(_sb, val, ctx, ssa_wasm_type)
                     local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
                     if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
                                                 ssa_wasm_type, _sb, _src_julia, phi_idx)
@@ -881,11 +881,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
                     # handle the i64.extend_i32_s widening.
                     emit_value!(pvb, val, ctx, I32)
-                elseif recomputable
-                    compile_statement!(pvb, val.id, ctx)   # THE visitor — tracked
                 else
-                    # Can't recompute - try compile_value as fallback
-                    emit_value!(pvb, val, ctx)  # R17-floor: i32 phi widening is selected after actual emission
+                    compile_statement!(pvb, val.id, ctx)   # THE visitor — tracked
                 end
             end
         else
@@ -910,7 +907,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     return _cpv_ret()
                 end
             end
-            emit_value!(pvb, val, ctx)  # R17-floor: literal phi edge has no sink when destination is unavailable
+            emit_value!(pvb, val, ctx, static_wasm_type(val, ctx))
         end
         return _cpv_ret()
     end

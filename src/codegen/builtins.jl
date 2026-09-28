@@ -390,9 +390,9 @@ function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, r
                              temp_map::Dict{Int,Int}=Dict{Int,Int}())::InstrBuilder
     kind, src = _memoryref_source(ctx, ref)
     if kind === :zero
-        expected === nothing ?
-            emit_value!(b, ref, ctx) :  # R17-floor: a MemoryRef at offset 0 is its memory, at the emitted array type
-            emit_value!(b, ref, ctx, expected; from_julia=from_julia)
+        # a MemoryRef at offset 0 is its memory, at its own array type unless the caller names one
+        emit_value!(b, ref, ctx, expected === nothing ? static_wasm_type(ref, ctx) : expected;
+                    from_julia=from_julia)
         return b
     elseif kind === :boxed
         _emit_memoryref_box_field!(b, ctx, src, UInt32(2))
@@ -402,7 +402,8 @@ function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, r
         mem_local = ctx.ssa_locals[src.id]
         local_get!(b, get(temp_map, mem_local, mem_local))
     else
-        emit_value!(b, NirLiteral(getfield(src, :mem)), ctx)  # R17-floor: a constant's Memory is its array
+        local mem_lit = NirLiteral(getfield(src, :mem))
+        emit_value!(b, mem_lit, ctx, static_wasm_type(mem_lit, ctx))
     end
     expected === nothing || coerce_stack_top!(b, expected, ctx; from_julia=from_julia)
     return b

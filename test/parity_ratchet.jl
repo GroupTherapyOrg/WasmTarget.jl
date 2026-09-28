@@ -470,7 +470,56 @@ function count_silent_catches(root::String=SRC)::Int
     return n
 end
 
-
+"""
+The `emit_value!` calls under `root` that name no expected type (three positional
+arguments), as `(file, line, source line)`. dart2wasm has exactly one such emission: the
+visitor call inside `translateExpression` (code_generator.dart:676 `node.accept1(this,
+expectedType)`), which is `emit_value!(b, val, ctx)` in the body of the 4-argument
+`emit_value!`; that one call is not listed. Walks Meta.parseall's AST, so a call with nested
+parentheses, keywords or several lines is found like any other (R17, L35).
+"""
+function untyped_value_emissions(root::String=CODEGEN)::Vector{Tuple{String,Int,String}}
+    out = Tuple{String,Int,String}[]
+    positional(ex) = [a for a in ex.args[2:end] if !(a isa Expr && a.head in (:parameters, :kw))]
+    for (dir, _, files) in walkdir(root), f in sort(files)
+        endswith(f, ".jl") || continue
+        path = joinpath(dir, f)
+        lines = readlines(path)
+        claimed = Set{Int}()
+        line = Ref(0)
+        function visit(ex, in_funnel::Bool)
+            if ex isa LineNumberNode
+                line[] = ex.line
+            elseif ex isa Expr
+                if ex.head === :call && ex.args[1] === :emit_value!
+                    pos = positional(ex)
+                    if length(pos) == 3 && !(in_funnel && pos == Any[:b, :val, :ctx])
+                        needle = "emit_value!(" * string(pos[1])
+                        at = findfirst(k -> k >= line[] && !(k in claimed) &&
+                                            occursin(needle, lines[k]), eachindex(lines))
+                        at === nothing && (at = line[])
+                        push!(claimed, at)
+                        push!(out, (f, at, strip(lines[at])))
+                    end
+                end
+                if ex.head === :function || (ex.head === :(=) && ex.args[1] isa Expr &&
+                                             ex.args[1].head in (:call, :where))
+                    sig = _strip_where(ex.args[1])
+                    sig isa Expr && sig.head === :(::) && (sig = sig.args[1])
+                    funnel = sig isa Expr && sig.head === :call && sig.args[1] === :emit_value! &&
+                             length(positional(sig)) == 4
+                    for a in ex.args[2:end]
+                        visit(a, funnel)
+                    end
+                    return
+                end
+                foreach(a -> visit(a, in_funnel), ex.args)
+            end
+        end
+        visit(Meta.parseall(read(path, String); filename=path), false)
+    end
+    return out
+end
 
 
 """
@@ -796,8 +845,8 @@ const METRICS = [
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! outside the builder and the string/type creators — the long-string and Symbol paths that bypass the one constant funnel. Terminal state 0 (dev/CHARTER.md C9)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
-    "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType; dart's translateExpression always carries one (code_generator.dart). Terminal state 0 (dev/CHARTER.md C4)",
-        () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
+    "R17_unwrapped_value_emissions" => ("emit_value! calls with no expectedType, on the parse tree (untyped_value_emissions) — dart's only one is translateExpression's own accept1 call (code_generator.dart:676), which is not counted. Terminal state 0 (dev/CHARTER.md C4)",
+        () -> length(untyped_value_emissions())),
     "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
         () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
                           exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
@@ -1307,7 +1356,7 @@ const LOCKS = [
                 count(p -> !occursin(p, diag_src), diag_required) +
                 count(p -> !occursin(p, docs_ci), docs_required)
         end),
-    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("`UnionAll(v, t)` is the jl_type_unionall foreigncall, which constructs a type (boot.jl): its lowering is jltypes.c's jl_type_unionall over the runtime jl_has_typevar (get_has_typevar_function!), and nothing retypes its result (it was read as an `isa UnionAll` predicate, answered by a ref.test of v and typed Bool; restated 2026-09-27); bottom phi producers preserve their real terminator without inventing a runtime type",
+    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("`UnionAll(v, t)` is the jl_type_unionall foreigncall, which constructs a type (boot.jl): its lowering is jltypes.c's jl_type_unionall over the runtime jl_has_typevar (get_has_typevar_function!), and nothing retypes its result (it was read as an `isa UnionAll` predicate, answered by a ref.test of v and typed Bool; restated 2026-09-27); bottom phi producers preserve their real terminator without inventing a runtime type, and a phi source without a local that is a phi or `nothing` is a codegen bug (restated 2026-09-28)",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
@@ -1320,7 +1369,7 @@ const LOCKS = [
             required = [":jl_type_unionall => _fc_jl_type_unionall!",
                         "call!(b, get_has_typevar_function!(ctx.mod, reg)",
                         "A bottom producer has no runtime value to classify or coerce",
-                        "bottom phi source has no terminating statement"]
+                        "is a phi or `nothing` without a local"]
             all_src = context_src * stmts_src * stack_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
@@ -1755,18 +1804,7 @@ const LOCKS = [
                 for name in (:add_ptr, :sub_ptr, :pointerref, :pointerset))
         end),
     "L35_unwrapped_emissions_classified" => ("every intentional no-expectedType emission is explicitly classified by why its actual type is the consumer contract",
-        () -> begin
-            n = 0
-            for (dir, _, files) in walkdir(CODEGEN), f in files
-                endswith(f, ".jl") || continue
-                for line in eachline(joinpath(dir, f))
-                    occursin(r"emit_value!\([^()]*, ctx\)", line) || continue
-                    occursin("function emit_value!", line) && continue
-                    occursin("R17-floor:", line) || (n += 1)
-                end
-            end
-            n
-        end),
+        () -> count(site -> !occursin("R17-floor:", site[3]), untyped_value_emissions())),
     "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton, so two of them are egal without heap identity: the static egal arm answers one singleton type with 1, and the runtime egal function answers 1 for any singleton class once the two classIds match (dev/CHARTER.md C3)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
