@@ -744,14 +744,17 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             elseif cross_call_handled
                 # Already handled above
 
-            # Name-keyed; R37 counts it. Julia's own _growend!/_growbeg!/_growat! closure
-            # body stores `a.ref = memoryref(newmem, offset)`, and WT's Vector {data, size}
-            # carries no MemoryRef offset, so compiling that body rejects at array.jl:1156
-            # (measured 2026-09-22). The arm goes with the structural item "Vector/MemoryRef
-            # carries its offset", which also admits the invoked Base closures to the closed
-            # world and retires the reallocating Vector overlays.
+            # Name-keyed; R37 counts it. Julia's own _growend! closure reads its captured
+            # MemoryRef, which is not unpacked into the pair channel yet, so its body rejects
+            # (array.jl:1152, measured 2026-09-27); this stand-in grows at the end, keeping the
+            # offset. It goes with the structural item "a MemoryRef read from a field unpacks
+            # into the pair channel" (dev/MARCH.md 13.13), which admits the invoked Base
+            # closures to the closed world and retires the reallocating Vector overlays.
+            # _growbeg!'s closure grows at the FRONT (the data moves to the middle of a larger
+            # Memory); this stand-in answered it wrong (pushfirst!(v, 7, 8): native 7816, wasm
+            # 7836), so it no longer matches and the invoke rejects; _growat! has no closure.
             elseif meth.module === Base &&
-                   occursin(r"^#_(?:growend|growbeg|growat)!", string(name))
+                   occursin(r"^#_growend!", string(name))
                 # Clear any accumulated bytes from argument compilation
                 fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
 

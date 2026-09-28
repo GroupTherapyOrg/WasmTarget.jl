@@ -914,6 +914,15 @@ _g("memory", Any[
 # Julia's own _deletebeg!/_growbeg! compile only once a stored MemoryRef keeps its offset.
 # pushfirst! (Julia's offset 6, WT's 1) and a push!/popfirst! queue (5, WT's 1) are the
 # same gap.
+# Base._growbeg! reallocates in a capturing closure whose body reads its captured MemoryRef,
+# which is not unpacked into the pair channel yet; invoke.jl's name-keyed stand-in grew such a
+# vector at the END and answered wrong values (pushfirst!(v, 7, 8): native 7816, wasm 7836),
+# so the invoke now rejects: pushfirst! of several items, and any insertion through _growat!,
+# whose `i == 1` branch calls _growbeg!. They compile once the closure does (13.13).
+_xf("grow_front_closure", Any[
+    ("pushfirst_multi", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 7, 8); v[1] * 1000 + v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
+    ("splice_insert", (n::Int64) -> (v = collect(1:n); splice!(v, 2:1, [5, 6]); v[2] * 100 + v[3] * 10 + length(v)), Int64(4)),
+])
 _xf("memoryref_offset", Any[
     ("offset_after_popfirst", (n::Int64) -> (v = collect(1:n); popfirst!(v); popfirst!(v); Base.memoryrefoffset(v.ref)), Int64(5)),
     ("pushfirst_len_offset", (n::Int64) -> (v = collect(1:n); pushfirst!(v, 0); length(v) * 10 + Base.memoryrefoffset(v.ref)), Int64(5)),
