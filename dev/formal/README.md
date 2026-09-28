@@ -50,7 +50,7 @@ anchor in `src/` has a row.)
 | Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
 | Native sidecar protocol | test/sidecar | Sidecar |
 | Closure-local capture typing | `f3_self_box_joins` (box_capture.jl) | — none yet: an optimistic seed with a verify pass, the shape NumericJoin found unsound |
-| External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | — none yet: ClosedWorld abstracts it, although it removes methods from the plan |
+| External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_closure_dispatch_trampoline!` (closures.jl) | — none yet |
 | `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | — none yet: MARCH 13.4 replaces it with dart's `identical`; model it with that change |
 | Recursive type groups | `register_struct_type!` (structs.jl), `add_rec_group!` (instructions.jl) | — none yet: MARCH 13.4 replaces placeholder-and-patch with dart's define-then-fill; model it with that change |

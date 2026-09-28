@@ -186,7 +186,8 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                    mi !== original_mi
                     # Keep the optimized IR valid Julia while making its edge agree
                     # with the Wasm overlay dispatch selected for the concrete call.
-                    # The superseded abstract/native subtree is pruned below.
+                    # The superseded abstract/native subtree is pruned below
+                    # unless another site still invokes it.
                     nir_retarget_invoke!(src, nir, k, mi)
                     original_mi in protected || push!(superseded, original_mi)
                 end
@@ -550,10 +551,19 @@ const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
 const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 
-"""Keep only code reachable from roots when declared imports are external leaves."""
+"""Keep only code reachable from roots over the invoke edges as they stand, never the body of
+a declared import (an external leaf). With `unreachable=true` it prunes even when there is
+no import: after `_missing_explicit_invoke_mis` retargets sites, a superseded MethodInstance
+goes only if no remaining site invokes it (another site whose operands are not concrete still
+calls the original — pruning superseded MethodInstances as leaves dropped it).
+
+formal(dev/formal/InvokePrune.tla): after the collector retargets invokes and prunes, every
+invoke in a kept body names a kept body or an import, and every kept body is reachable.
+parity(quarantine: dart's calls name a fixed member; Julia's explicit invokes may name an
+abstract MethodInstance the closed-world subset specializes per site.)"""
 function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
-                                        external_leaves::Set{Any})
-    isempty(external_leaves) && return codeinfos
+                                        external_leaves::Set{Any}; unreachable::Bool=false)
+    isempty(external_leaves) && !unreachable && return codeinfos
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
     for i in 1:2:length(codeinfos)
@@ -701,11 +711,11 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # Selector candidates are genuine runtime roots even though their
             # incoming edges are dynamic calls rather than explicit invokes.
             # Preserve them—and their newly specialized invoke subgraphs—when
-            # pruning superseded abstract/native invoke trees.
+            # pruning what no site invokes any more.
             prune_roots = Any[entries...]
             append!(prune_roots, _DYNAMIC_ROOT_MIS[])
             codeinfos = _prune_external_leaf_subgraphs(
-                codeinfos, prune_roots, union(external_leaves, superseded_invokes))
+                codeinfos, prune_roots, external_leaves; unreachable=true)
             empty!(base_mis)
             empty!(base_mi_keys)
             for k in 1:2:length(codeinfos)
