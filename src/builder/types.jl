@@ -55,7 +55,7 @@ struct ConcreteRef
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
-ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
+ConcreteRef(type_idx::UInt32)::ConcreteRef = ConcreteRef(type_idx, true)  # Default nullable
 
 """
     NonNullAbstractRef
@@ -99,7 +99,7 @@ end
 
 # Convenience constructor for NumType-only signatures
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:974 FunctionType)
-FuncType(params::Vector{NumType}, results::Vector{NumType}) =
+FuncType(params::Vector{NumType}, results::Vector{NumType})::FuncType =
     FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
 
 # ============================================================================
@@ -119,7 +119,7 @@ struct FieldType
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
-FieldType(valtype::WasmValType) = FieldType(valtype, true)  # Default to mutable
+FieldType(valtype::WasmValType)::FieldType = FieldType(valtype, true)  # Default to mutable
 
 """
     StructType
@@ -134,7 +134,7 @@ end
 
 # Backward-compatible constructor (no supertype)
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1119 StructType)
-StructType(fields::Vector{FieldType}) = StructType(fields, nothing)
+StructType(fields::Vector{FieldType})::StructType = StructType(fields, nothing)
 
 """
     ArrayType
@@ -147,7 +147,7 @@ struct ArrayType
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1229 ArrayType)
-ArrayType(valtype::WasmValType) = ArrayType(FieldType(valtype, true))
+ArrayType(valtype::WasmValType)::ArrayType = ArrayType(FieldType(valtype, true))
 
 """
     CompositeType
@@ -180,7 +180,7 @@ const HEAP_NONE = HeapType(-8)      # none
 const HEAP_NOEXTERN = HeapType(-9)  # noextern
 const HEAP_NOFUNC = HeapType(-10)   # nofunc
 
-HeapType(idx::Integer) = HeapType(Int32(idx))
+HeapType(idx::Integer)::HeapType = HeapType(Int32(idx))
 
 """
     RefTypeGC
@@ -192,7 +192,7 @@ struct RefTypeGC
     heaptype::HeapType
 end
 
-RefTypeGC(ht::HeapType) = RefTypeGC(true, ht)  # Default to nullable
+RefTypeGC(ht::HeapType)::RefTypeGC = RefTypeGC(true, ht)  # Default to nullable
 
 # ============================================================================
 # Limits (for memories and tables)
@@ -203,8 +203,8 @@ struct Limits
     max::Union{Nothing, UInt32}
 end
 
-Limits(min::Integer) = Limits(UInt32(min), nothing)
-Limits(min::Integer, max::Integer) = Limits(UInt32(min), UInt32(max))
+Limits(min::Integer)::Limits = Limits(UInt32(min), nothing)
+Limits(min::Integer, max::Integer)::Limits = Limits(UInt32(min), UInt32(max))
 
 # ============================================================================
 # JS Interop Types

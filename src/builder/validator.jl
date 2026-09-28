@@ -76,7 +76,7 @@ WasmStackValidator(; func_name="", mod=nothing) =
 Push a type onto the validation stack. Mirrors dart2wasm's _stackTypes.addAll(outputs).
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun)
 """
-function validate_push!(v::WasmStackValidator, typ::WasmValType)
+function validate_push!(v::WasmStackValidator, typ::WasmValType)::Vector{WasmValType}
     push!(v.stack, typ)
 end
 
@@ -84,7 +84,7 @@ end
 # baseStackHeight — that would consume values belonging to an enclosing block, which
 # the wasm stack discipline forbids. `_base` returns that floor.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:462 InstructionsBuilder._topOfLabelStack)
-@inline _base(v::WasmStackValidator) = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
+@inline _base(v::WasmStackValidator)::Int64 = isempty(v.labels) ? 0 : v.labels[end].stack_height_at_entry
 
 """
     validate_pop!(v, expected) -> WasmValType
@@ -135,21 +135,21 @@ end
 Current number of values on the validation stack.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:472 InstructionsBuilder.stack)
 """
-stack_height(v::WasmStackValidator) = length(v.stack)
+stack_height(v::WasmStackValidator)::Int64 = length(v.stack)
 
 """
     has_errors(v) -> Bool
 
 Whether any validation errors have been collected.
 """
-has_errors(v::WasmStackValidator) = !isempty(v.errors)
+has_errors(v::WasmStackValidator)::Bool = !isempty(v.errors)
 
 """
     reset_validator!(v)
 
 Clear the stack and errors for reuse (e.g., between functions).
 """
-function reset_validator!(v::WasmStackValidator)
+function reset_validator!(v::WasmStackValidator)::Bool
     empty!(v.stack)
     empty!(v.errors)
     empty!(v.labels)
@@ -263,7 +263,7 @@ assertion checks for numeric/parametric/conversion instructions.
 
 For GC-prefixed instructions (0xFB), use validate_gc_instruction!.
 """
-function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)
+function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)::Union{Nothing, WasmValType, Vector{WasmValType}}
 
     # --- Numeric unary: pop T, push T (same type) ---
     if opcode in I32_UNARY_OPS
@@ -422,13 +422,13 @@ For blocks, `br` targets the block end (must have result_types on stack).
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:695 InstructionsBuilder._pushLabel)
 """
 validate_block_start!(v::WasmStackValidator, kind::Symbol,
-                      result_types::Vector{WasmValType}=WasmValType[]) =
+                      result_types::Vector{WasmValType}=WasmValType[])::ControlLabel =
     validate_block_start!(v, kind, WasmValType[], result_types)
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:695 InstructionsBuilder._pushLabel)
 function validate_block_start!(v::WasmStackValidator, kind::Symbol,
                                input_types::Vector{WasmValType},
-                               result_types::Vector{WasmValType})
+                               result_types::Vector{WasmValType})::ControlLabel
     for t in reverse(input_types); validate_pop!(v, t); end
     for t in input_types; validate_push!(v, t); end
     label = ValidatorLabel(kind, length(v.stack) - length(input_types),
@@ -449,7 +449,7 @@ entry was reachable, code after the block is reachable (even if the block body
 ended with an unconditional br).
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:566 InstructionsBuilder._verifyEndOfBlock)
 """
-function validate_block_end!(v::WasmStackValidator)
+function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
     if isempty(v.labels)
         push!(v.errors, "$(v.func_name): end without matching block/loop/if")
         return
@@ -493,7 +493,7 @@ Validate an unconditional branch. Checks that:
 After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
 """
-function validate_br!(v::WasmStackValidator, label_depth::Int)
+function validate_br!(v::WasmStackValidator, label_depth::Int)::Union{Nothing, Bool}
     if !v.reachable
         return  # Skip validation in unreachable code
     end
@@ -535,7 +535,7 @@ label like br. Unlike br, code after br_if remains reachable.
 Mirrors dart2wasm's `br_if(label)`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 """
-function validate_br_if!(v::WasmStackValidator, label_depth::Int)
+function validate_br_if!(v::WasmStackValidator, label_depth::Int)::Union{Nothing, Vector{String}}
     if !v.reachable
         return
     end
@@ -572,13 +572,13 @@ Validate an if instruction: pop i32 condition, push label for the then-branch.
 Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
 """
 validate_if_start!(v::WasmStackValidator,
-                   result_types::Vector{WasmValType}=WasmValType[]) =
+                   result_types::Vector{WasmValType}=WasmValType[])::ControlLabel =
     validate_if_start!(v, WasmValType[], result_types)
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 function validate_if_start!(v::WasmStackValidator,
                             input_types::Vector{WasmValType},
-                            result_types::Vector{WasmValType})
+                            result_types::Vector{WasmValType})::ControlLabel
     validate_pop!(v, I32)  # condition
     for t in reverse(input_types); validate_pop!(v, t); end
     for t in input_types; validate_push!(v, t); end
@@ -597,7 +597,7 @@ block entry height for the else-branch, restore reachability.
 Mirrors dart2wasm's `else_()`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:767 InstructionsBuilder.else_)
 """
-function validate_else!(v::WasmStackValidator)
+function validate_else!(v::WasmStackValidator)::Union{Nothing, Bool}
     if isempty(v.labels)
         push!(v.errors, "$(v.func_name): else without matching if")
         return
@@ -655,7 +655,7 @@ type context needed for validation (type index, field types, element types).
 
 Mirrors dart2wasm's InstructionsBuilder assertion checks for GC instructions.
 """
-function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_info=nothing)
+function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_info=nothing)::Union{WasmValType, Vector{WasmValType}}
 
     if gc_opcode == Opcode.STRUCT_NEW
         # struct.new $t: pop N field values (in reverse order), push (ref $t)

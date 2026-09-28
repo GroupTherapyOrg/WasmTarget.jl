@@ -1083,7 +1083,7 @@ const LOCKS = [
             stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["_invoke_kwerr_b"]
-            stmts_required = ["function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)\n    i64_const!(b, Int64(WASM_WORLD_AGE))"]
+            stmts_required = ["function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder\n    i64_const!(b, Int64(WASM_WORLD_AGE))"]
             test_required = ["err.args isa Tuple{NamedTuple{(:unsupported_keyword,), Tuple{Bool}}, typeof(identity)}",
                              "compare_julia_wasm(_wt_exact_kwerr_exception).pass"]
             count(p -> occursin(p, codegen_src), forbidden) +
@@ -1814,7 +1814,7 @@ const LOCKS = [
                 "recursive groups must be contiguous type-section intervals",
                 "recursive group indices must be in type-section order",
                 "sort!(rec_group_types)",
-                "_struct_reg_stack() = get!",
+                "_struct_reg_stack()::Vector{DataType} = get!",
                 "ft === T && return true",
                 "The wrapper's size tuple must precede the contiguous recursive group",
                 "The recursive struct's own superclass must also precede its reserved",

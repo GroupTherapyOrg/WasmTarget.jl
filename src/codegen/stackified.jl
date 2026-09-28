@@ -30,7 +30,7 @@ end
 
 """builder-native (THE implementation): value → classId box → externref.
 `nothing` values become ref.null extern (dart: null, not a boxed zero)."""
-function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
     if is_nothing_value(val, ctx)
         ref_null!(b, ExternRef)
         return b
@@ -56,7 +56,7 @@ Like emit_numeric_to_externref! but produces anyref (no extern_convert_any) —
 builder-native (THE implementation): value → real-classId box (already anyref).
 `nothing` values become ref.null any (dart: null, not a boxed zero).
 """
-function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)
+function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
     if is_nothing_value(val, ctx)
         ref_null!(b, AnyRef)  # any heap type (0x6E)
         return b

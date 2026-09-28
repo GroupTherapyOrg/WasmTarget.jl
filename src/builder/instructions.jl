@@ -384,7 +384,7 @@ struct WasmElemSegment
     declared::Bool           # flags=3 declarative segment (ref.func in const exprs)
 end
 # parity(pkg/wasm_builder/lib/src/ir/element.dart:20 ActiveFunctionElementSegment)
-WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32}) = WasmElemSegment(t, o, f, false)
+WasmElemSegment(t::UInt32, o::UInt32, f::Vector{UInt32})::WasmElemSegment = WasmElemSegment(t, o, f, false)
 
 """
     WasmMemory
@@ -412,7 +412,7 @@ struct WasmDataSegment
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/data_segment.dart:25 DataSegment)
-WasmDataSegment(memory_idx, offset, data) = WasmDataSegment(memory_idx, offset, data, false)
+WasmDataSegment(memory_idx, offset, data)::WasmDataSegment = WasmDataSegment(memory_idx, offset, data, false)
 
 """
     WasmTag
@@ -447,12 +447,12 @@ mutable struct WasmModule
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
 # TRUE-INT-002-impl2: Wrapper function for WASM self-hosting.
 # compile_invoke stubs WasmModule() (Type{T} dispatch) as unreachable.
 # This wrapper avoids the Type{T} pattern by being a regular function call.
-new_wasm_module() = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
+new_wasm_module()::WasmModule = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
 # ============================================================================
 # Module Building API
@@ -466,11 +466,11 @@ end
 Base.showerror(io::IO, e::ModuleValidationError) =
     print(io, "invalid WebAssembly module at ", e.operation, ": ", e.detail)
 
-@noinline _module_invalid(op::Symbol, detail::AbstractString) =
+@noinline _module_invalid(op::Symbol, detail::AbstractString)::Union{} =
     throw(ModuleValidationError(op, String(detail)))
 
 # parity(pkg/wasm_builder/lib/src/builder/functions.dart:10 FunctionsBuilder)
-@inline _function_count(mod::WasmModule) = num_imported_funcs(mod) + length(mod.functions)
+@inline _function_count(mod::WasmModule)::Int64 = num_imported_funcs(mod) + length(mod.functions)
 
 # parity(pkg/wasm_builder/lib/src/ir/function.dart:36 BaseFunction.type)
 function _function_type(mod::WasmModule, idx::Integer)::FuncType
@@ -488,7 +488,7 @@ function _function_type(mod::WasmModule, idx::Integer)::FuncType
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1136 StructType.isStructuralSubtypeOf)
-function _validate_struct_subtype!(mod::WasmModule, st::StructType)
+function _validate_struct_subtype!(mod::WasmModule, st::StructType)::Nothing
     st.supertype_idx === nothing && return
     si = Int(st.supertype_idx)
     0 <= si < length(mod.types) ||
@@ -526,11 +526,11 @@ function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/types.dart:406 _FunctionTypeKey.==)
-function types_equal(a::FuncType, b::FuncType)
+function types_equal(a::FuncType, b::FuncType)::Bool
     a.params == b.params && a.results == b.results
 end
 
-function types_equal(a::StructType, b::StructType)
+function types_equal(a::StructType, b::StructType)::Bool
     # step5: the SUPERTYPE is part of a struct type's identity — the class-DAG's
     # synthetic {classId} structs differ ONLY by their parent (dedup collapsed the
     # whole hierarchy into $JlBase otherwise). Matches wasm's nominal-ish subtyping:
@@ -540,13 +540,13 @@ function types_equal(a::StructType, b::StructType)
     all(fields_equal(af, bf) for (af, bf) in zip(a.fields, b.fields))
 end
 
-function types_equal(a::ArrayType, b::ArrayType)
+function types_equal(a::ArrayType, b::ArrayType)::Bool
     fields_equal(a.elem, b.elem)
 end
 
-types_equal(a::CompositeType, b::CompositeType) = false  # Different types
+types_equal(a::CompositeType, b::CompositeType)::Bool = false  # Different types
 
-function fields_equal(a::FieldType, b::FieldType)
+function fields_equal(a::FieldType, b::FieldType)::Bool
     a.valtype == b.valtype && a.mutable_ == b.mutable_
 end
 
@@ -576,7 +576,7 @@ end
 Mark the given type indices as belonging to the same recursive type group.
 Types in a rec group can reference each other (forward references allowed).
 """
-function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})
+function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})::Union{Nothing, Vector{Vector{UInt32}}}
     # Only add if not empty and not already a rec group
     if !isempty(type_indices)
         length(unique(type_indices)) == length(type_indices) ||
@@ -677,7 +677,7 @@ Add an export entry to the module.
 - kind: 0=func, 1=table, 2=memory, 3=global
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
-function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
     0 <= kind <= 3 || _module_invalid(:add_export, "unknown export kind $kind")
     limit = kind == 0 ? _function_count(mod) :
             kind == 1 ? length(mod.tables) :
@@ -763,7 +763,7 @@ end
 Export a global variable.
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
-function add_global_export!(mod::WasmModule, name::String, global_idx::Integer)
+function add_global_export!(mod::WasmModule, name::String, global_idx::Integer)::WasmModule
     add_export!(mod, name, 3, global_idx)  # kind 3 = global
 end
 
@@ -787,7 +787,7 @@ end
 Export a table.
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
-function add_table_export!(mod::WasmModule, name::String, table_idx::Integer)
+function add_table_export!(mod::WasmModule, name::String, table_idx::Integer)::WasmModule
     add_export!(mod, name, 1, table_idx)  # kind 1 = table
 end
 
@@ -797,7 +797,7 @@ end
 Add an element segment to initialize a table with function references.
 parity(pkg/wasm_builder/lib/src/builder/elements.dart:84 ActiveFunctionSegmentBuilder.setFunctionAt)
 """
-function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer, func_indices::Vector{<:Integer})
+function add_elem_segment!(mod::WasmModule, table_idx::Integer, offset::Integer, func_indices::Vector{<:Integer})::WasmModule
     0 <= table_idx < length(mod.tables) || _module_invalid(:add_elem_segment, "unknown table $table_idx")
     offset >= 0 || _module_invalid(:add_elem_segment, "offset must be nonnegative")
     all(i -> 0 <= i < _function_count(mod), func_indices) ||
@@ -814,7 +814,7 @@ A DECLARATIVE element segment (flags=3) — makes the functions legal
 `ref.func` targets in constant expressions (the vtable-global initializers).
 parity(pkg/wasm_builder/lib/src/builder/elements.dart:68 DeclarativeSegmentBuilder.declare)
 """
-function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})
+function declare_funcs!(mod::WasmModule, func_indices::Vector{UInt32})::Nothing
     isempty(func_indices) && return
     all(i -> Int(i) < _function_count(mod), func_indices) ||
         _module_invalid(:declare_funcs, "declaration contains an unknown function")
@@ -842,7 +842,7 @@ end
 Export a memory.
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
-function add_memory_export!(mod::WasmModule, name::String, memory_idx::Integer)
+function add_memory_export!(mod::WasmModule, name::String, memory_idx::Integer)::WasmModule
     add_export!(mod, name, 2, memory_idx)  # kind 2 = memory
 end
 
@@ -853,7 +853,7 @@ Add a data segment to initialize linear memory with constant data.
 Data can be a Vector{UInt8} or a String.
 parity(pkg/wasm_builder/lib/src/builder/data_segments.dart:24 DataSegmentsBuilder.define)
 """
-function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::Vector{UInt8})
+function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::Vector{UInt8})::WasmModule
     0 <= memory_idx < length(mod.memories) || _module_invalid(:add_data_segment, "unknown memory $memory_idx")
     offset >= 0 || _module_invalid(:add_data_segment, "offset must be nonnegative")
     push!(mod.data_segments, WasmDataSegment(UInt32(memory_idx), UInt32(offset), data))
@@ -861,7 +861,7 @@ function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/data_segments.dart:24 DataSegmentsBuilder.define)
-function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::String)
+function add_data_segment!(mod::WasmModule, memory_idx::Integer, offset::Integer, data::String)::WasmModule
     add_data_segment!(mod, memory_idx, offset, Vector{UInt8}(codeunits(data)))
 end
 
@@ -909,7 +909,7 @@ Set the start function for the module. This function is called automatically
 on module instantiation. The function must take no parameters and return nothing.
 parity(pkg/wasm_builder/lib/src/builder/module.dart:79 ModuleBuilder.startFunction)
 """
-function add_start_function!(mod::WasmModule, func_idx::Integer)
+function add_start_function!(mod::WasmModule, func_idx::Integer)::WasmModule
     ft = _function_type(mod, func_idx)
     (isempty(ft.params) && isempty(ft.results)) ||
         _module_invalid(:add_start_function, "start function must have type [] -> []")
@@ -1564,7 +1564,7 @@ end
 Write a section with automatic size calculation.
 parity(pkg/wasm_builder/lib/src/serialize/sections.dart:26 Section.serialize)
 """
-function write_section!(f::Function, w::WasmWriter, section_id::UInt8)
+function write_section!(f::Function, w::WasmWriter, section_id::UInt8)::Vector{UInt8}
     section = WasmWriter()
     f(section)
 
@@ -1577,7 +1577,7 @@ end
 Group consecutive locals of the same type.
 parity(pkg/wasm_builder/lib/src/ir/function.dart:101 DefinedFunction.serialize)
 """
-function group_locals(locals::Vector{<:WasmValType})
+function group_locals(locals::Vector{<:WasmValType})::Vector{Tuple{Int64, WasmValType}}
     isempty(locals) && return Tuple{Int, WasmValType}[]
 
     groups = Tuple{Int, WasmValType}[]
@@ -1624,7 +1624,7 @@ For function types, write directly (no sub wrapper needed for backward compat).
 For struct/array types, wrap in sub final.
 parity(pkg/wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner)
 """
-function write_composite_type!(w::WasmWriter, ft::FuncType)
+function write_composite_type!(w::WasmWriter, ft::FuncType)::Nothing
     write_byte!(w, FUNCTYPE_BYTE)
     # Write params as a vector of valtypes
     write_u32!(w, length(ft.params))
@@ -1638,7 +1638,7 @@ function write_composite_type!(w::WasmWriter, ft::FuncType)
     end
 end
 
-function write_composite_type!(w::WasmWriter, st::StructType)
+function write_composite_type!(w::WasmWriter, st::StructType)::Nothing
     if st.supertype_idx !== nothing
         # Non-final subtype with one supertype
         write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final, allows further subtyping)
@@ -1656,7 +1656,7 @@ function write_composite_type!(w::WasmWriter, st::StructType)
     end
 end
 
-function write_composite_type!(w::WasmWriter, at::ArrayType)
+function write_composite_type!(w::WasmWriter, at::ArrayType)::WasmWriter
     # WasmGC array types must be wrapped in "sub final" for the current spec
     write_byte!(w, SUB_FINAL_BYTE)  # 0x4F = sub final
     write_u32!(w, 0)                # 0 supertypes
@@ -1668,7 +1668,7 @@ end
 Write a field type (valtype + mutability).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize)
 """
-function write_field_type!(w::WasmWriter, ft::FieldType)
+function write_field_type!(w::WasmWriter, ft::FieldType)::WasmWriter
     write_valtype!(w, ft.valtype)
     write_byte!(w, ft.mutable_ ? 0x01 : 0x00)
 end
@@ -1677,11 +1677,11 @@ end
 Write a value type (NumType, RefType, or packed type).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:121 NumType.serialize)
 """
-function write_valtype!(w::WasmWriter, vt::NumType)
+function write_valtype!(w::WasmWriter, vt::NumType)::WasmWriter
     write_byte!(w, UInt8(vt))
 end
 
-function write_valtype!(w::WasmWriter, vt::RefType)
+function write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter
     # FuncRef (0x70) and ExternRef (0x6F) are nullable shorthand forms
     # Abstract GC heap types (StructRef, ArrayRef, etc.) need nullable wrapper
     # when used as locals/params: (ref null struct) = 0x63 + heaptype
@@ -1694,7 +1694,7 @@ function write_valtype!(w::WasmWriter, vt::RefType)
     end
 end
 
-function write_valtype!(w::WasmWriter, vt::HeapType)
+function write_valtype!(w::WasmWriter, vt::HeapType)::Union{}
     # HeapType values used as locals/params should be nullable
     # (ref null heaptype) = 0x63 followed by heaptype code
     write_byte!(w, 0x63)  # ref null prefix
@@ -1702,12 +1702,12 @@ function write_valtype!(w::WasmWriter, vt::HeapType)
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize)
-function write_valtype!(w::WasmWriter, vt::UInt8)
+function write_valtype!(w::WasmWriter, vt::UInt8)::WasmWriter
     write_byte!(w, vt)
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
-function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)
+function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)::WasmWriter
     # Non-nullable reference to an abstract heap type: (ref extern), (ref func), etc.
     # Binary: 0x64 (non-null ref prefix) + heap type byte
     write_byte!(w, 0x64)  # ref (non-null)
@@ -1715,7 +1715,7 @@ function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
-function write_valtype!(w::WasmWriter, vt::ConcreteRef)
+function write_valtype!(w::WasmWriter, vt::ConcreteRef)::WasmWriter
     # Concrete reference type: (ref null $typeidx) or (ref $typeidx)
     # Binary format: 0x63 (nullable) or 0x64 (non-nullable) followed by heap type index
     if vt.nullable

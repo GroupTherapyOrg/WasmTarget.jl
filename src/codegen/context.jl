@@ -168,7 +168,7 @@ For CompilableSignal/CompilableSetter pattern:
 - getfield(Signal, :value) -> actual value read (substitutes to global.get)
 - setfield!(Signal, :value, x) -> value write (substitutes to global.set)
 """
-function analyze_signal_captures!(ctx::AbstractCompilationContext)
+function analyze_signal_captures!(ctx::AbstractCompilationContext)::Nothing
     isempty(ctx.captured_signal_fields) && return
 
     nir = ctx.nir
@@ -406,7 +406,7 @@ end
 # then types as T, so the store and every load agree (the escaping-closure
 # i64-into-anyref invalid store). A genuinely-dynamic cast stays a loud reject
 # (correct-or-loud) until dart's emitAsCheck analog lands.
-function refine_checked_cast_types!(ctx::AbstractCompilationContext)
+function refine_checked_cast_types!(ctx::AbstractCompilationContext)::Nothing
     # a constant operand's value: a bound global's, or the literal's
     _cres(a) = a isa NirGlobalRef ? (a.bound ? a.value : nothing) :
                a isa NirLiteral ? a.value : a
@@ -685,7 +685,7 @@ We need locals when:
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext,
-                             _numeric_joins::Dict{Int,Type})
+                             _numeric_joins::Dict{Int,Type})::Nothing
     nir = ctx.nir
     refine_checked_cast_types!(ctx)   # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): dart `as T` — see the helper
 
@@ -1230,7 +1230,7 @@ Slots > n_params+1 are local variables that need dedicated WASM locals.
 This function scans for slot assignments, determines their types from the SSA types,
 and allocates WASM locals. The slot_locals dict maps SlotNumber.id → WASM local index.
 """
-function allocate_slot_locals!(ctx::AbstractCompilationContext)
+function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
     n_arg_slots = length(ctx.arg_types) + 1  # slot 1 = self, slot 2..n+1 = args
 
     for (i, rec) in enumerate(ctx.nir)
@@ -1488,7 +1488,7 @@ end
 Analyze the IR to determine types of SSA values.
 Uses Julia inference's own SSA types (the NIR boundary's widened answer).
 """
-function analyze_ssa_types!(ctx::AbstractCompilationContext)
+function analyze_ssa_types!(ctx::AbstractCompilationContext)::Nothing
     # Use Julia's type inference results when available. Store all concrete types
     # including Nothing (needed for function dispatch); only skip Any as it provides no
     # useful information. The boundary already widened inference lattice elements
@@ -1758,7 +1758,7 @@ function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)
 end
 
 """builder-native form: resolve the source's declared wasm type and narrow on `b`."""
-function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)
+function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)::InstrBuilder
     _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
     return b
 end

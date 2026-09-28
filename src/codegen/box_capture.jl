@@ -197,7 +197,7 @@ _f3_box_captors(nir::Vector{NirStmt}, box_id::Int)::Set{Type} =
 # MethodInstances its captors are invoked with; the join of their writes restores the type
 # `contents::Any` erased, where dart reads the variable's inferred type,
 # translator.dart:2100 translateTypeOfLocalVariable)
-function _f3_capturing_closure_bodies(nir::Vector{NirStmt}, box_id::Int)
+function _f3_capturing_closure_bodies(nir::Vector{NirStmt}, box_id::Int)::Vector{Tuple{Vector{NirStmt}, Any}}
     out = Tuple{Vector{NirStmt}, Any}[]
     _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id)
     return out
@@ -302,7 +302,7 @@ end
 # `Core.Box` is inferred `Any`; recompute it through the one inference path with the restored
 # operand types)
 function _f3_call_result_type(node::NirCall, nir::Vector{NirStmt}, out::Dict{Int,Type},
-                              boxT::Dict{Int,Type}, ssa_types, spectypes)
+                              boxT::Dict{Int,Type}, ssa_types, spectypes)::Union{Nothing, Type}
     local operands = node.operands
     if node.callee === getfield && length(operands) >= 2 && _f3_is_contents(operands[2])
         boxref = operands[1]
@@ -406,7 +406,7 @@ end
 # parity(quarantine: the numeric-accumulator candidate of a Julia `Core.Box` capture whose writes
 # are not visible in the closure body, f3_self_box_joins; the Julia scalar types WT lowers to one
 # wasm number)
-_f3_is_numeric_jl(T) = T isa DataType && isconcretetype(T) &&
+_f3_is_numeric_jl(T)::Bool = T isa DataType && isconcretetype(T) &&
     (T <: Integer || T <: AbstractFloat) && T !== Bool && sizeof(T) <= 8 && !(T <: BigInt)
 
 """

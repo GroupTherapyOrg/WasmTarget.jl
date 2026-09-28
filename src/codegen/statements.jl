@@ -15,7 +15,7 @@ MIGRATED to InstrBuilder: emits typed struct.get/ref.cast directly onto the
 caller's builder `b`; compile_value splices bridge via emit_raw!. Byte-identical
 (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 """
-function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)
+function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)::InstrBuilder
     vt = infer_value_type(vec, ctx)
     # parity(translator.dart:1597 convertType): a String/Symbol backing is the classed struct (constants.dart:872 visitStringConstant, :1556 visitSymbolConstant) — the funnel reads .data
     if vt === String || vt === Symbol
@@ -379,7 +379,7 @@ diagnostic through record_unsupported! (already attributed), and any OTHER
 exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
 the same statement and inline chain, so nothing surfaces without a site.
 """
-function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)
+function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
     try
         return _compile_statement_located!(b, idx, ctx)
@@ -389,7 +389,7 @@ function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationC
     end
 end
 
-function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)
+function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     rec = ctx.nir[idx]     # THE statement's node — the visitor never re-reads the raw IR
     node = rec.node
     # Reset dead code guard at basic block boundaries.
@@ -828,7 +828,7 @@ end
 
 """The collected IR of an `:invoke` target, from the trim collector's cache, keyed by the
 callee FUNCTION OBJECT the node carries and the MethodInstance's argument types."""
-function _cached_invoke_ir(node::NirInvoke)
+function _cached_invoke_ir(node::NirInvoke)::Union{Nothing, Core.CodeInfo}
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
     f = _nir_callee_object(node.callee)
@@ -880,7 +880,7 @@ end
 
 """dart visitConstructorInvocation shape (): emits the struct construction
 INTO the caller's builder and returns it — THE implementation."""
-function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractCompilationContext)
+function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The constructed type was resolved ONCE at the boundary, from whichever operand shape
     # named it (a type literal, a Core.apply_type result's Type{T}, or the constructor's
     # own #self# argument). A failed resolution is type instability — a loud reject, never
@@ -1270,7 +1270,7 @@ end
 # registration text as a structural invariant.
 # ============================================================================
 
-function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # Extract element type from return type
             # args[2] is like Ref{Memory{Int32}}
             # args[7] is Memory{Int32}
@@ -1312,7 +1312,7 @@ end
 # a byte array takes memset's value as C does, `(unsigned char)val`, which is what
 # array.fill stores into a packed i8 array. A wider element is set only to its all-zero
 # bit pattern (the zero of that primitive); any other shape is loud, never skipped.
-function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 3 || return nothing
     ptr_arg, value_arg, nbytes_arg = node.operands[1], node.operands[2], node.operands[3]
     backing = _trace_memmove_ptr(ptr_arg, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES)
@@ -1342,7 +1342,7 @@ function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     return b
 end
 
-function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
             # compile-time type literals, fold to a constant (gap 01c21040d51f:
@@ -1359,7 +1359,7 @@ function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
     return nothing
 end
 
-function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
             # assign a non-zero module-local identity on first observation.
             local object_arg = length(node.operands) >= 1 ? node.operands[1] : nothing
@@ -1412,7 +1412,7 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
             return b
 end
 
-function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
             # So this is essentially just passing through the underlying array
@@ -1428,7 +1428,7 @@ function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, 
             return b
 end
 
-function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
             # Create a zero-filled array of the requested size.
@@ -1446,7 +1446,7 @@ function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, c
             return b
 end
 
-function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
             # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
@@ -1498,7 +1498,7 @@ function _emit_cstring_extent!(b::InstrBuilder, ptr_arg::NirNode, source::NirNod
     return (arr_local, off_local, len_local)
 end
 
-function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
@@ -1511,7 +1511,7 @@ function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     return nothing
 end
 
-function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
             # The underlying WasmGC array may have more capacity than n
@@ -1555,7 +1555,7 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, 
             return b
 end
 
-function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
             if traced !== nothing
@@ -1585,7 +1585,7 @@ function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int,
             return b
 end
 
-function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
             # the pointer back to the underlying array, then copy exactly n bytes.
@@ -1648,7 +1648,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
             return b
 end
 
-function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
             # The pointer arg traces back through bitcast/getfield(:ptr) to a Memory
@@ -1698,7 +1698,7 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int
     return nothing
 end
 
-function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 3 || return nothing
         ptr_arg = node.operands[1]   # Ptr{UInt8} — traces back to string + offset
         byte_arg = node.operands[2]  # Int32 — the byte to search for
@@ -1862,7 +1862,7 @@ own class. Symbols compare by content (`_emit_string_egal!`), which is Julia's i
 identity, so a fresh object per call is exact. An untraceable pointer rejects at the statement.
 parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
 """
-function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
     local ptr_arg, len_arg = node.operands[1], node.operands[2]
     local arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -1901,7 +1901,7 @@ function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
     return b
 end
 
-function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The Task value is phantom (no bytecode): sound ONLY for rand()'s
     # rngState field pattern — any other consumer rejects loudly.
     if _task_ssa_used_unsafely(ctx, idx)
@@ -1914,7 +1914,7 @@ function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::In
     return b
 end
 
-function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
         perf_now_idx = ensure_perf_now_import!(ctx.mod)
         call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
         # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
@@ -1927,7 +1927,7 @@ function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Ab
 end
 
 
-function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 5 || return nothing
         local _gmc_mt = infer_value_type(node.operands[1], ctx)
         local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
@@ -1954,7 +1954,7 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx
     return nothing
 end
 
-function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         # P4-stdlib (Random hash_seed): dispatch guards compare
         # typeintersect(T1, T2) === Union{} with CONSTANT type args — fold on
@@ -1972,7 +1972,7 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
     return nothing
 end
 
-function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
         # Internal pointer_from_objref is representable only when its entire use
         # graph stays inside the storage-relative pointer algebra proved above.
         # The backing storage is recovered by the consuming array operation, and
@@ -1988,12 +1988,12 @@ function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
         return b
 end
 
-function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     i64_const!(b, Int64(WASM_WORLD_AGE))
     return b
 end
 
-function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         module_owner = _trace_field_owner(node.operands[1], :module, ctx)
         name_owner = _trace_field_owner(node.operands[2], :singletonname, ctx)
@@ -2006,7 +2006,7 @@ function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
     return nothing
 end
 
-function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         module_owner = _trace_field_owner(node.operands[1], :module, ctx)
         symbol_owner = _trace_typename_symbol_owner(node.operands[2], ctx)
@@ -2018,7 +2018,7 @@ function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, id
     return nothing
 end
 
-function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         # Julia's GenericMemory owner is the memory allocation itself. Memory is
         # represented directly by its non-null WasmGC array, so ownership is an
@@ -2027,7 +2027,7 @@ function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx:
         return b
 end
 
-function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         # datatype_storedinline(T) — pure layout predicate; fold when the
         # type argument is a compile-time constant.
@@ -2039,7 +2039,7 @@ function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return nothing
 end
 
-function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=node)
             emit_value!(b, node.operands[1], ctx, I32)
@@ -2051,7 +2051,7 @@ function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
             return b
 end
 
-function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_char missing codepoint"; idx=idx, detail=node)
             emit_value!(b, node.operands[1], ctx, I32)
@@ -2063,7 +2063,7 @@ function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::A
             return b
 end
 
-function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
     # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
     # In WasmGC, we emit array.copy between the underlying array<i32> representations.
@@ -2201,7 +2201,7 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
     return nothing
 end
 
-function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
         emit_value!(b, node.operands[1], ctx, ConcreteRef(module_info.wasm_type_idx, false))
@@ -2210,7 +2210,7 @@ function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
         return b
 end
 
-function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
         string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
@@ -2226,7 +2226,7 @@ end
 # body; anything else is a new UnionAll of v and the body. (It used to answer a
 # `ref.test $JlUnionAll` of v, a predicate in the constructed type's place.)
 # parity(quarantine: Julia's UnionAll constructor is its C runtime's jl_type_unionall, ported.)
-function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
     reg = ctx.type_registry
     jt, ua, tv = reg.jl_type_idx, reg.jl_unionall_idx, reg.jl_typevar_idx
@@ -2263,7 +2263,7 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return b
 end
 
-function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
         i32_const!(b, 0)
@@ -2274,7 +2274,7 @@ function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int
         return b
 end
 
-function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
         i32_const!(b, 0)
@@ -2413,7 +2413,7 @@ Trace a pointerref argument back through add_ptr/sub_ptr to find a jl_string_ptr
 Returns (string_node, index_node) if found, or nothing if not a string pointer pattern.
 The index node is the offset argument to add_ptr (the 1-based codeunit index).
 """
-function _trace_string_ptr(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+function _trace_string_ptr(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Tuple{NirNode, Nothing}, Tuple{NirNode, NirNode}}
     ptr = ptr_ssa
     ptr isa NirSSA || return nothing
     (1 <= ptr.id <= length(ctx.nir)) || return nothing
@@ -2461,7 +2461,7 @@ The typical IR pattern is:
 
 We trace from %ptr2 back to %data (the Memory reference).
 """
-function _trace_ptr_to_data(ptr_val::NirNode, ctx::AbstractCompilationContext)
+function _trace_ptr_to_data(ptr_val::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     current = ptr_val
     for _ in 1:10  # max depth to prevent infinite loops
         current isa NirSSA || return nothing
@@ -2510,7 +2510,7 @@ IR pattern:
   %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
   memmove(%159, ...)
 """
-function _trace_memmove_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+function _trace_memmove_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Tuple{NirNode, Nothing}, Tuple{NirNode, NirNode}}
     ptr = ptr_ssa
     ptr isa NirSSA || return nothing
     (1 <= ptr.id <= length(ctx.nir)) || return nothing
@@ -2586,7 +2586,7 @@ In WasmGC:
   - memoryrefnew(base) → the base IS the array
 Returns the node whose emission produces the array ref, or nothing.
 """
-function _resolve_memref_to_array(ssa::NirNode, ctx::AbstractCompilationContext)
+function _resolve_memref_to_array(ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     val = ssa
     val isa NirSSA || return nothing
     (1 <= val.id <= length(ctx.nir)) || return nothing
@@ -2628,7 +2628,7 @@ Ryu pattern:
 
 Returns the node that produces the Memory/array ref, or nothing.
 """
-function _trace_ptr_to_memory_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)
+function _trace_ptr_to_memory_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     current = ptr_ssa
     current isa NirSSA || return nothing
     for _ in 1:15  # max depth

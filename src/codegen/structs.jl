@@ -60,7 +60,7 @@ function is_struct_type(T::Type)::Bool
     return isconcretetype(T) && isstructtype(T) && !(T <: Tuple)
 end
 
-is_struct_type(::Any) = false
+is_struct_type(::Any)::Bool = false
 
 """
 Check if type is a closure (subtype of Function with captured fields).
@@ -82,14 +82,14 @@ end
 
 # parity(quarantine: Julia type slots in IR also hold TypeVar and Vararg objects, which are
 # never a closure struct; see is_closure_type(::Type).)
-is_closure_type(::Any) = false
+is_closure_type(::Any)::Bool = false
 
 """
 Register a closure type as a WasmGC struct.
 formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
 parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.
 """
-function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::StructInfo
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -195,10 +195,10 @@ Julia's realizable self-recursive layouts take the reserved rec-group path
 below; this guard catches unbounded registration algorithms without sharing
 mutable state between concurrent compilation tasks.
 """
-_struct_reg_stack() = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
+_struct_reg_stack()::Vector{DataType} = get!(() -> DataType[], task_local_storage(), :_wt_struct_reg_stack)::Vector{DataType}
 
 # parity(class_info.dart:420 _createStructForClass): one wasm struct per class, with its supertype.
-function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Union{Nothing, StructInfo}
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -225,7 +225,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     end
 end
 
-function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Union{Nothing, StructInfo}
 
     # MemoryRef/Memory should NOT be registered as struct types.
     # They map to array types in WasmGC. Guard against callers that use
@@ -460,7 +460,7 @@ end
 Register a self-referential struct type using a pre-reserved type index.
 The placeholder struct was already added; we update it with the correct fields.
 """
-function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::TypeRegistry, T::DataType, reserved_idx::UInt32)
+function _register_struct_type_impl_with_reserved!(mod::WasmModule, registry::TypeRegistry, T::DataType, reserved_idx::UInt32)::StructInfo
     field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
 
@@ -626,7 +626,7 @@ function _nullable_field_storage_type!(mod::WasmModule, registry::TypeRegistry,
 end
 
 # parity(class_info.dart:539 _generateFields): the class's field list after the inherited prefix.
-function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+function _register_struct_type_impl!(mod::WasmModule, registry::TypeRegistry, T::DataType)::StructInfo
     # Get field information
     field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
     field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
@@ -786,7 +786,7 @@ every spelling of a type-object-carrying tuple shares one registry entry / wasm 
 parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as its
 kind; a Dart record's field types have one spelling.)
 """
-function _canonical_tuple_type(T::DataType)
+function _canonical_tuple_type(T::DataType)::Type
     changed = false
     ps = Any[]
     for P in T.parameters
@@ -803,7 +803,7 @@ end
 
 # parity(quarantine: Julia's Tuple{Vararg{E}} is a tuple type whose length is a runtime value;
 # a Dart record type has a static field count.)
-is_vararg_tuple_type(@nospecialize(T)) =
+is_vararg_tuple_type(@nospecialize(T))::Bool =
     T isa DataType && T <: Tuple && any(p -> typeof(p) === Core.TypeofVararg, T.parameters)
 
 """
@@ -814,7 +814,7 @@ value, so the same layout (`runtime_vararg_canonical`).
 
 parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)
 """
-function is_runtime_vararg_tuple_type(@nospecialize(T))
+function is_runtime_vararg_tuple_type(@nospecialize(T))::Bool
     (T isa DataType && T <: Tuple && length(T.parameters) >= 1) || return false
     local v = T.parameters[end]
     typeof(v) === Core.TypeofVararg || return false
@@ -846,7 +846,7 @@ end
 type; a non-empty narrowing of the same layout aliases the canonical entry).
 
 parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)"""
-function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)
+function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::StructInfo
     is_runtime_vararg_tuple_type(T) ||
         error("cannot register unsupported runtime Vararg tuple layout $T")
     haskey(registry.structs, T) && return registry.structs[T]
@@ -875,7 +875,7 @@ function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T:
 end
 
 # parity(class_info.dart:510 _createStructForRecordClass): a Julia tuple is dart's record.
-function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})
+function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})::Union{Nothing, StructInfo}
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -1004,7 +1004,7 @@ This matches Julia's internal representation where Matrix{T} has :ref and :size 
 parity(quarantine: Julia's Array{T,N} is a mutable struct {ref::MemoryRef, size::NTuple{N,Int}}
 over a Memory buffer, read and written by field name in Base; the wasm struct copies it.)
 """
-function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
+function register_matrix_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::StructInfo
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -1098,7 +1098,7 @@ The size field is mutable to support setfield!(v, :size, (n,)) for push!/resize!
 parity(quarantine: Julia's Array{T,1} layout {ref::MemoryRef, size::Tuple{Int}}, see
 register_matrix_type!.)
 """
-function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
+function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::StructInfo
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -1215,7 +1215,7 @@ This is the standard representation used by most WASM compilers for 128-bit inte
 parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one 64-bit value — so
 the 128-bit value is a struct of two i64 halves.)
 """
-function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
+function register_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::StructInfo
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
@@ -1249,7 +1249,7 @@ Get or create the 128-bit integer struct type.
 
 parity(quarantine: Int128/UInt128, see register_int128_type!.)
 """
-function get_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)
+function get_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::UInt32
     if haskey(registry.structs, T)
         return registry.structs[T].wasm_type_idx
     else
@@ -1269,7 +1269,7 @@ that were registered before the hierarchy existed. Fixes two issues:
    (e.g., TypeVar field was registered as ConcreteRef(7) but JlType hierarchy re-registered
    TypeVar at index 25 as \$JlTypeVar)
 """
-function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeRegistry)
+function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Nothing
     registry.jl_type_idx === nothing && return
 
     # Patch SimpleVector StructInfo to use $JlSVec array type from hierarchy.
@@ -1367,7 +1367,7 @@ Pre-register Core IR node types as WasmGC structs for self-hosting dispatch.
 These types are used in compile_statement's isa chain (ReturnNode, GotoNode, etc.).
 Registration order: dependencies first (SlotNumber before NewvarNode).
 """
-function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)
+function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)::Nothing
     for T in (Core.SlotNumber, Core.SSAValue, Core.Argument, Core.GotoNode,
               Core.ReturnNode, Core.UpsilonNode, Core.PiNode, Core.GotoIfNot,
               Core.EnterNode, Core.NewvarNode, Core.PhiNode, Core.PhiCNode, Expr)

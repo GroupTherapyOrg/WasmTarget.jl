@@ -26,7 +26,7 @@
 # though a closed-world call-site value of that type has exactly one possible
 # runtime identity: `T`. Treat these singleton type-object slots as exact for
 # specialization alongside ordinary concrete value types.
-@inline _closed_world_exact_type(@nospecialize(T)) =
+@inline _closed_world_exact_type(@nospecialize(T))::Bool =
     T isa Type && (isconcretetype(T) ||
         (T isa DataType && T <: Type && length(T.parameters) == 1 &&
          !(T.parameters[1] isa TypeVar)))
@@ -88,7 +88,7 @@ end
 
 """Return explicit `:invoke` MethodInstances missing from a collected world."""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}())
+                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}())::Vector{Any}
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
@@ -250,7 +250,7 @@ CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
 Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 """
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                         entry_mis::Vector{Any}=Any[])
+                                         entry_mis::Vector{Any}=Any[])::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -769,7 +769,7 @@ end
 Resolve the `MethodInstance` for `f(::arg_types...)` — the entry handle
 `collect_closed_world` consumes.
 """
-function entry_method_instance(f, arg_types::Tuple)
+function entry_method_instance(f, arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
     m = which(f, arg_types)
     return CC.specialize_method(m, tt, Core.svec())

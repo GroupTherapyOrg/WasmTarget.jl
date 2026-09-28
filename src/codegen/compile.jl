@@ -77,7 +77,7 @@ end
 
 """The one Julia-signature → physical Wasm-signature derivation."""
 function function_wasm_signature(arg_types, return_type, global_args,
-                                 mod::WasmModule, type_registry::TypeRegistry)
+                                 mod::WasmModule, type_registry::TypeRegistry)::Tuple{Vector{WasmValType}, Vector{WasmValType}}
     pts = WasmValType[]
     for (j, T) in enumerate(arg_types)
         j in global_args && continue
@@ -138,7 +138,7 @@ end
 const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
 
 """Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use."""
-function _build_standalone_intrinsic_bodies!()
+function _build_standalone_intrinsic_bodies!()::Nothing
     isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
     for m in methods(Base.rethrow)
         STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body
@@ -198,7 +198,7 @@ are host imports by contract).
 """
 function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegistry,
                                              name::AbstractString, arg_types::Tuple,
-                                             wasm_idx::Integer, return_type::Type)
+                                             wasm_idx::Integer, return_type::Type)::Nothing
     Int(wasm_idx) < num_imported_funcs(mod) || return nothing
     ft = _function_type(mod, Int(wasm_idx))
     required_params = WasmValType[translate_external_type(T, mod, registry) for T in arg_types]
@@ -780,7 +780,7 @@ end
 # Julia may discover several specialized functions with the same source-level name.
 # Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
 # ExportsBuilder, rejects duplicate names instead of silently repairing the request.
-function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
     final = name
     if any(e -> e.name == final, mod.exports)
         local k = 2

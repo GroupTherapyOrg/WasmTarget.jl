@@ -1115,13 +1115,13 @@ end
 
 """Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result.
 parity(intrinsics.dart:1498 getIdentityHashField): struct.get identityHash; i64.extend_i32_u (:1503)."""
-extend_identity_hash_to_u64!(b::InstrBuilder) = num!(b, Opcode.I64_EXTEND_I32_U)
+extend_identity_hash_to_u64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
 
 # Physical collection lengths are i32 in WasmGC and Int64 in Julia. Keep these
 # representation conversions beside the central value/conversion machinery so
 # collection lowerers do not grow independent coercion ladders.
 # parity(intrinsics.dart:1223 wasmArrayIndex): an i64 index/length wraps to i32 before the array op (:1232).
-narrow_length_to_i32!(b::InstrBuilder) = num!(b, Opcode.I32_WRAP_I64)
+narrow_length_to_i32!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I32_WRAP_I64)
 # parity(intrinsics.dart:626 WasmArrayRef.length): array.len; i64.extend_i32_u (:631).
 widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
 

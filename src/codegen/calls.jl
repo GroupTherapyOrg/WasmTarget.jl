@@ -112,7 +112,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
 end
 
 function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilationContext,
-                                      signed::Bool, julia_width::Int)
+                                      signed::Bool, julia_width::Int)::InstrBuilder
     julia_width < 32 || return fb
     bld = _sub_builder(fb, ctx, "_emit_normalise_narrow_pair!", 2)
     li = UInt32(allocate_local!(ctx, I32))
@@ -134,7 +134,7 @@ end
 # mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
 """builder-native (THE implementation): build the error struct, stash, throw."""
-function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))
+function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
@@ -148,7 +148,7 @@ end
 
 """Emit Julia's exact `FieldError(type, field)` through the typed exception tag."""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
-                            @nospecialize(owner_type), field::Symbol)
+                            @nospecialize(owner_type), field::Symbol)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, FieldError)
@@ -170,7 +170,7 @@ end
 """Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot."""
 function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                                     arg_types::Tuple, physical_offset::Integer,
-                                    index_local::Integer)
+                                    index_local::Integer)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     tuple_type = Tuple{arg_types...}
@@ -284,7 +284,7 @@ end
 # Bit width of the Julia integer operand being shifted (8/16/32/64). Falls back to
 # the wasm register width for non-concrete / non-bitsinteger operand types so the
 # guard is a no-op (behaviour unchanged) unless we positively know it's narrow.
-function _julia_int_width(@nospecialize(T), is32::Bool)
+function _julia_int_width(@nospecialize(T), is32::Bool)::Int64
     if T isa Type && isconcretetype(T) && T <: Base.BitInteger
         return sizeof(T) * 8
     end
@@ -374,7 +374,7 @@ end
 # guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
 # shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
-function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)
+function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)::InstrBuilder
     amt = UInt32(allocate_local!(ctx, I64))
     bld = _sub_builder(fb, ctx, "_emit_wrap_shift_amount_saturating!", 1)
     local_tee!(bld, amt)                         # [amount]
@@ -1238,7 +1238,7 @@ function _getfield_parts(node)::Union{Tuple{NirNode,Any},Nothing}
     return (node.operands[1], nir_const(node.operands[2]))
 end
 
-function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilationContext)
+function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     def = _ssa_def(value, ctx)
     if def isa NirPi
         return _trace_field_owner(def.value, field, ctx)
@@ -1267,7 +1267,7 @@ end
 
 function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
                                         name_field::UInt32, singleton_field::UInt32,
-                                        ctx::AbstractCompilationContext)
+                                        ctx::AbstractCompilationContext)::InstrBuilder
     tn_idx = ctx.type_registry.jl_typename_idx
     str_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     symbol_struct_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
@@ -2285,7 +2285,7 @@ end
 # Returns the bytes (result left in the inferred SSA wasm type), or nothing if the
 # call doesn't qualify (caller then falls back to the `unreachable` stub).
 function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
-                                     args, call_arg_types, idx::Int)
+                                     args, call_arg_types, idx::Int)::Union{Nothing, InstrBuilder}
     (ctx.func_registry === nothing || ctx.type_registry.base_struct_idx === nothing) && return nothing
     base_idx = ctx.type_registry.base_struct_idx
     n = length(args)
@@ -2413,7 +2413,7 @@ Compile a function call expression — dart visitor shape; emits INTO the caller
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that clear/replace it re-init; exits merge typed).
 """
-function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompilationContext)
+function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompilationContext)::InstrBuilder
     tn_idx = ctx.type_registry.jl_typename_idx
     range_info = haskey(ctx.type_registry.structs, UnitRange{Int64}) ?
                  ctx.type_registry.structs[UnitRange{Int64}] :
@@ -2435,7 +2435,7 @@ function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompil
 end
 
 function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, owner,
-                                      ctx::AbstractCompilationContext)
+                                      ctx::AbstractCompilationContext)::InstrBuilder
     module_info = ctx.type_registry.structs[Module]
     module_ref = ConcreteRef(module_info.wasm_type_idx, false)
     parent_local = allocate_local!(ctx, module_ref)
@@ -2493,7 +2493,7 @@ parity(target.dart:719 DiagnosticReporter.report): a located diagnostic names it
 _callee_label(f)::String = f isa GlobalRef ? string(f.mod, ".", f.name) :
     (f isa Function || f isa Core.Builtin) ? string(parentmodule(f), ".", nameof(f)) : string(f)
 
-function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCompilationContext)
+function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(_nir_text(node), 80))   # errors name the call
     # A call may consume values stack-threaded by the enclosing statement fragment.
@@ -4213,7 +4213,7 @@ end
 
 """Allocate the valid-Julia `_RuntimeComposition{V}` captured context."""
 function _emit_runtime_composition_context!(fb::InstrBuilder, container_arg,
-                                            container_type::DataType, ctx)
+                                            container_type::DataType, ctx)::InstrBuilder
     local CT = _RuntimeComposition{container_type}
     local info = get(ctx.type_registry.structs, CT, nothing)
     info === nothing && error("runtime composition type was not registered: $CT")
@@ -4282,7 +4282,7 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
 end
 
 """Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""
-function _apply_iterate_svec_values(arg::NirNode, ctx)
+function _apply_iterate_svec_values(arg::NirNode, ctx)::Union{Nothing, Vector{Any}}
     def = _ssa_def(arg, ctx)
     def isa NirCall || return nothing
     (isdefined(Core, :svec) && _nir_callee_object(def.callee) === Core.svec) || return nothing
@@ -4291,7 +4291,7 @@ end
 
 """Lower `Base.vect(prefix..., tail...)` where `tail` is one `Vector{T}`."""
 function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
-                                           container_arg, container_type::DataType, ctx)
+                                           container_arg, container_type::DataType, ctx)::Union{Nothing, InstrBuilder}
     vec_info = get(ctx.type_registry.structs, container_type, nothing)
     elem_type = eltype(container_type)
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
@@ -4403,7 +4403,7 @@ operator. An all-empty input throws a real MethodError with Julia's `(f, (), wor
 payload instead of fabricating an identity value.
 """
 function _emit_apply_method_error!(bld::InstrBuilder, target_value,
-                                   ctx::AbstractCompilationContext)
+                                   ctx::AbstractCompilationContext)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     local exn_global = ensure_exception_global!(ctx.mod)
     local error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
@@ -4429,7 +4429,7 @@ end
 
 function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
                                       container_types::Vector{DataType}, elem_type::Type,
-                                      reduce_op::UInt8, target_value, ctx)
+                                      reduce_op::UInt8, target_value, ctx)::Union{Nothing, InstrBuilder}
     bld = _ctx_builder(ctx, "_emit_apply_iterate_reduce!")
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
@@ -4612,7 +4612,7 @@ end
 
 # Emit a SimpleVector as its actual WasmGC array representation.
 function _emit_svec_values!(b::InstrBuilder, values::AbstractVector{<:NirNode},
-                            ctx::AbstractCompilationContext)
+                            ctx::AbstractCompilationContext)::InstrBuilder
     info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
     arr_idx = info.wasm_type_idx
     arr_def = ctx.mod.types[arr_idx + 1]
@@ -4627,7 +4627,7 @@ end
 
 # Resolve an IR value to a HOST SimpleVector constant when its definition is
 # compile-time evaluable. Consumers may fold length/index operations directly.
-function _try_host_svec(arg::NirNode, ctx::AbstractCompilationContext)
+function _try_host_svec(arg::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Core.SimpleVector}
     st = _ssa_def(arg, ctx)
     if st isa NirCall || st isa NirInvoke
         a1 = _nir_callee_object(st.callee)
@@ -4657,7 +4657,7 @@ materialization, or nothing if the chain doesn't match.
 parity(quarantine: a DataType's layout is Julia's host metadata, read through a pointer; dart
 has no layout pointers.)
 """
-function _try_fold_layout_pointerref(ptr_arg::NirNode, ctx::AbstractCompilationContext)
+function _try_fold_layout_pointerref(ptr_arg::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Base.DataTypeLayout}
     cur = ptr_arg
     for _ in 1:4
         cur isa NirSSA || return nothing
