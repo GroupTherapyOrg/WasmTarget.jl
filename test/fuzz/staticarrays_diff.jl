@@ -79,7 +79,6 @@ _sa_collect3(x::Float64) = collect(SVector{3,Float64}(x, 2x, 3x))
 _sa_addvec(x::Float64)   = collect(SVector{3,Float64}(x, 2x, 3x) + SVector{3,Float64}(1.0, 2.0, 3.0))
 
 function run_staticarrays_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x57A6)
     sc() = [ (2rand(rng) - 1 + 1.5,) for _ in 1:reps ]   # positive-ish scalars
     @testset "construction (positional/tuple/converting, all N≥1)" begin

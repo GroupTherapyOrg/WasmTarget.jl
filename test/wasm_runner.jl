@@ -20,27 +20,28 @@ module WasmRunner
 
 using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
 
-export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, runner_available, enc_wasm
+export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE
 
 const RUNNER_MJS = joinpath(@__DIR__, "runner.mjs")
 
 # ── Node detection ──────────────────────────────────────────────────────────
-# Node ≥ 22 runs wasm-gc with no flag; older needs --experimental-wasm-gc.
-function _node_invocation()
+# Node is the wasm runtime every differential lane executes on (the soundness oracle), so a
+# missing or too-old Node is an error at load: a lane that skipped without it would report a
+# pass it never measured. Node ≥ 22 runs wasm-gc with no flag; 20–21 needs
+# --experimental-wasm-gc.
+function _node_invocation()::Cmd
     for exe in ("node", "nodejs")
-        try
-            v = strip(read(`$exe --version`, String))   # "v25.2.0"
-            major = parse(Int, split(strip(v, 'v'), '.')[1])
-            flag = major < 22 ? `--experimental-wasm-gc` : ``
-            return `$exe $flag`
-        catch
-        end
+        path = Sys.which(exe)
+        path === nothing && continue
+        v = strip(read(`$path --version`, String))   # "v25.2.0"
+        major = parse(Int, split(strip(v, 'v'), '.')[1])
+        major >= 20 || error("the wasm runtime is Node.js ≥ 20 (wasm-gc); $path is $v")
+        return major < 22 ? `$path --experimental-wasm-gc` : `$path`
     end
-    return nothing
+    error("the wasm runtime is Node.js ≥ 20 (wasm-gc), and neither `node` nor `nodejs` is on PATH: every differential lane runs its wasm there")
 end
 
-const _NODE = _node_invocation()
-runner_available() = _NODE !== nothing
+const NODE = _node_invocation()
 
 enc_wasm(bytes::Vector{UInt8}) = bytes2hex(bytes)
 
@@ -52,7 +53,7 @@ end
 
 function _start_worker()::Worker
     # `open(cmd, "r+")` returns a Process usable as IO: write = stdin, read = stdout.
-    proc = open(pipeline(`$_NODE $RUNNER_MJS`; stderr = devnull), "r+")
+    proc = open(pipeline(`$NODE $RUNNER_MJS`; stderr = devnull), "r+")
     w = Worker(proc, true)
     ready = readline(proc)                       # readiness handshake ({"ready":true})
     occursin("ready", ready) || error("runner worker failed to start: $ready")
@@ -97,8 +98,7 @@ single-threaded, so this is 1–2 per process rather than one-per-core."""
 default_k() = max(1, min(8, Threads.nthreads() + 1))
 
 const _POOL_INIT_LOCK = ReentrantLock()
-function get_pool(; k::Int = default_k())::Union{RunnerPool,Nothing}
-    runner_available() || return nothing
+function get_pool(; k::Int = default_k())::RunnerPool
     _POOL[] !== nothing && return _POOL[]   # fast path
     lock(_POOL_INIT_LOCK) do                 # double-checked: only one thread builds the pool
         if _POOL[] === nothing
@@ -204,7 +204,7 @@ const enc = (key,value) => {
 """
 
 """
-    run_wasm_single(bytes, fname, js_args; import_js) -> (:ok,val) | (:trap,msg) | (:error,msg) | (:nonode,nothing)
+    run_wasm_single(bytes, fname, js_args; import_js) -> (:ok,val) | (:trap,msg) | (:error,msg)
 
 Instantiate `bytes`, call `fname(js_args)` once, and return the JSON-decoded
 result. `js_args` is a JS argument string (e.g. `BigInt("5"), 3`). `import_js`
@@ -213,7 +213,6 @@ is a JS statement defining `const importObject = {…}`.
 function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::AbstractString;
         import_js::AbstractString = "const importObject = {};")
     pool = get_pool()
-    pool === nothing && return (:nonode, nothing)
     src = """
     $_ENC_JS
     $import_js
@@ -244,7 +243,6 @@ build their own JS (the differential fuzzer's scalar/vector bridges).
 """
 function run_driver_batch(bytes::Vector{UInt8}, src::AbstractString; deadline::Real = 8.0, ninputs::Int = 1)
     pool = get_pool()
-    pool === nothing && return (:nonode, nothing)
     return run_driver(pool, enc_wasm(bytes), src; deadline = deadline, ninputs = ninputs)
 end
 

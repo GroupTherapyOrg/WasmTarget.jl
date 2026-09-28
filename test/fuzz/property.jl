@@ -89,7 +89,7 @@ const OPT_LEVELS = (:size, :speed)   # -Os, -O3
 function _run_variant(fn, argtypes, samples, natives, body, src, runner, opt;
                       cmp = vals_match, dec = identity)
     wres = runner(fn, argtypes, samples; opt = opt)
-    if wres === :no_node || wres === :unsupported
+    if wres === :unsupported
         return Outcome(:skip, src, nothing, nothing, nothing, nothing)
     elseif wres isa Pair && wres.first === :compile_error
         return Outcome(:compile_error, src, samples[1], natives[1], (:trap, "compile"), wres.second)
@@ -247,7 +247,7 @@ function _differential_args(fn, argtypes::Tuple, samples, body, src, rt::Type; c
     end
     function variant(opt)
         wres = bridge_run_args(fn, argtypes, samples; rettype = rt, opt = opt)
-        (wres === :no_node || wres === :unsupported) &&
+        wres === :unsupported &&
             return Outcome(:skip, src, nothing, nothing, nothing, nothing)
         wres isa Pair && wres.first === :compile_error &&
             return Outcome(:compile_error, src, samples[1], natpairs[1][1], (:trap, "compile"), wres.second)

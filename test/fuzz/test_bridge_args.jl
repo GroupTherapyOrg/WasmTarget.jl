@@ -64,7 +64,6 @@ function check_case(fn, argtypes, inputs)
     rdesc = descriptor(rt)[1]
     pdescs = [FuzzBridgeArgs.ismutable_shape(T) ? descriptor(T)[1] : nothing for T in argtypes]
     res = bridge_run_args(fn, argtypes, [deepcopy(t) for t in inputs]; rettype = rt)
-    res === :no_node && return (:no_node, nothing)
     res === :unsupported && return (:unsupported, nothing)
     res isa Pair && return (res.first, res.second)
     for (i, tup) in enumerate(inputs)
@@ -82,10 +81,6 @@ function check_case(fn, argtypes, inputs)
         end
     end
     return (:ok, nothing)
-end
-
-if !FuzzHarness.NODE_OK
-    @info "Node.js unavailable"; exit(0)
 end
 
 println("== CORE (args + mutation parity) ==")

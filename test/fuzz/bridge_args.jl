@@ -15,7 +15,7 @@ using WasmTarget
 using WasmTarget.Bridge
 using WasmTarget.Bridge: WALK_JS, BUILD_JS, _acc!
 using JSON
-using ..FuzzHarness: NODE_OK, DEFAULT_TIMEOUT, run_driver_batch
+using ..FuzzHarness: DEFAULT_TIMEOUT, run_driver_batch
 using ..FuzzBridge
 
 # back-compat alias
@@ -27,12 +27,11 @@ const _BUILD_JS = BUILD_JS
 Full-generality runner: every arg AND the return value cross via the bit-exact
 bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:trap, msg)`, where
 `post_trees[j]` is the post-call re-read of the j-th MUTABLE arg (`nothing` for
-immutable args) — or `:unsupported` / `(:compile_error => e)` / `:no_node`.
+immutable args) — or `:unsupported` / `(:compile_error => e)`.
 """
 function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
                          timeout::Real = DEFAULT_TIMEOUT, opt = false,
                          discovery::Symbol = :trim)
-    NODE_OK || return :no_node
     rp = Bridge.descriptor(rettype)
     rp === nothing && return :unsupported
     rdesc, raccs = rp
@@ -98,7 +97,6 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     });
     """
     status, results = run_driver_batch(bytes, driver; deadline = timeout, ninputs = length(inputs))
-    status === :nonode && return :no_node
     status === :error && return (:exec_error => results)
     out = Vector{Any}(undef, length(results))
     for (i, r) in enumerate(results)

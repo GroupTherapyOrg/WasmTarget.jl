@@ -8,43 +8,6 @@ import JSON
 # with long-lived workers (~0.2ms/run). Shared with the differential fuzzer.
 include(joinpath(@__DIR__, "wasm_runner.jl"));  using .WasmRunner
 
-# ============================================================================
-# Node.js Detection
-# ============================================================================
-
-"""
-Check if Node.js is available and get the command.
-Returns a tuple of (command, needs_experimental_flag).
-Requires Node.js v20+ for WasmGC support.
-- v20-22: WasmGC is experimental (needs --experimental-wasm-gc flag)
-- v23+: WasmGC is stable (no flag needed)
-"""
-function detect_node()
-    try
-        version_str = read(`node --version`, String)
-        # Parse version (format: v20.x.x)
-        m = match(r"v(\d+)\.", version_str)
-        if m !== nothing
-            major_version = Base.parse(Int, m.captures[1])
-            if major_version >= 22
-                # WasmGC is stable in v22+ (flag removed)
-                return (`node`, false)
-            elseif major_version >= 20
-                # WasmGC is experimental in v20-21
-                return (`node`, true)
-            else
-                @warn "Node.js version $version_str found, but v20+ required for WasmGC"
-                return (nothing, false)
-            end
-        end
-        return (nothing, false)
-    catch
-        @warn "Node.js not found. Wasm execution tests will be skipped."
-        return (nothing, false)
-    end
-end
-
-const (NODE_CMD, NEEDS_EXPERIMENTAL_FLAG) = detect_node()
 
 # ============================================================================
 # Wasm Execution
@@ -65,13 +28,8 @@ The result of the function call, parsed from JSON.
 Returns `nothing` if Node.js is not available.
 """
 function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...)
-    if !WasmRunner.runner_available()
-        @warn "Node.js not available. Skipping Wasm execution."
-        return nothing
-    end
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
     status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args)
-    status === :nonode && return nothing
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -162,14 +120,9 @@ run_wasm_with_imports(bytes, "main", imports, Int32(42))
 """
 function run_wasm_with_imports(wasm_bytes::Vector{UInt8}, func_name::String,
                                imports::Dict, args...)
-    if !WasmRunner.runner_available()
-        @warn "Node.js not available. Skipping Wasm execution."
-        return nothing
-    end
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
     status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args;
                                              import_js = build_imports_js(imports))
-    status === :nonode && return nothing
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -224,11 +177,7 @@ macro test_compile(func_call)
         actual = run_wasm(wasm_bytes, string(nameof(f)), args...)
 
         # 5. Verify
-        if actual !== nothing
-            @test actual == expected
-        else
-            @warn "Skipped Wasm verification (Node.js not available)"
-        end
+        @test actual == expected
     end
 end
 
@@ -241,11 +190,7 @@ Useful for testing hand-crafted Wasm binaries.
 macro test_wasm_output(wasm_bytes, func_name, args, expected)
     quote
         actual = run_wasm($(esc(wasm_bytes)), $(esc(func_name)), $(esc(args))...)
-        if actual !== nothing
-            @test actual == $(esc(expected))
-        else
-            @warn "Skipped Wasm verification (Node.js not available)"
-        end
+        @test actual == $(esc(expected))
     end
 end
 
@@ -260,11 +205,6 @@ Validate a WebAssembly module by attempting to instantiate it in Node.js.
 Returns true if the module is valid, false otherwise.
 """
 function validate_wasm(wasm_bytes::Vector{UInt8})
-    if NODE_CMD === nothing
-        @warn "Node.js not available. Skipping Wasm validation."
-        return true  # Assume valid if we can't check
-    end
-
     dir = mktempdir()
     wasm_path = joinpath(dir, "module.wasm")
     js_path = joinpath(dir, "validator.mjs")
@@ -299,7 +239,7 @@ validate();
 
     # Run Node.js
     try
-        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+        node_cmd = `$NODE $js_path`
         output = read(pipeline(node_cmd; stderr=stderr), String)
         return strip(output) == "VALID"
     catch e
@@ -349,12 +289,9 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
                               string(nameof(w)), imports, args...)
     end
 
-    # 4. Compare (skip if Node.js unavailable)
-    if actual === nothing && NODE_CMD === nothing
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
-    end
+    # 4. Compare
 
-    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+    return (pass=(expected == actual), expected=expected, actual=actual, wasm_size=length(bytes))
 end
 
 """
@@ -505,7 +442,7 @@ function compare_batch(f, test_cases::Vector)
     results = NamedTuple[]
     for args in test_cases
         r = compare_julia_wasm(f, args...)
-        push!(results, (args=args, expected=r.expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=r.expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -543,11 +480,8 @@ function compare_julia_wasm_manual(f, args::Tuple, expected)
     actual = run_wasm_with_imports(bytes, func_name, imports, args...)
 
     # 3. Compare against pre-computed expected value
-    if actual === nothing && NODE_CMD === nothing
-        return (pass=true, expected=expected, actual=nothing, skipped=true)
-    end
 
-    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false)
+    return (pass=(expected == actual), expected=expected, actual=actual)
 end
 
 """
@@ -572,7 +506,7 @@ function compare_batch_manual(f, test_cases::Vector)
     results = NamedTuple[]
     for (args, expected) in test_cases
         r = compare_julia_wasm_manual(f, args, expected)
-        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -677,7 +611,7 @@ end
     compare_against_ground_truth(name::String, f) -> Vector{NamedTuple}
 
 Compile `f` to Wasm and compare its output against saved ground truth snapshots.
-Returns a vector of `(args, expected, actual, pass, skipped)` named tuples.
+Returns a vector of `(args, expected, actual, pass)` named tuples.
 
 The ground truth must have been generated with `generate_ground_truth` first.
 
@@ -704,7 +638,7 @@ function compare_against_ground_truth(name::String, f; dir::AbstractString=GROUN
         args = Tuple(Int32(a) for a in args_raw)
 
         r = compare_julia_wasm_manual(f, args, expected isa Integer ? Int32(expected) : expected)
-        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -874,11 +808,6 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # WASM bridge if we don't copy first.
     args_for_wasm = deepcopy(args)
 
-    if !WasmRunner.runner_available()
-        expected = f(args...)
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=0)
-    end
-
     # 1. Run natively in Julia (may mutate args)
     expected = f(args...)
 
@@ -913,14 +842,12 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # 6. Execute
     let
         status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-        if status === :nonode
-            return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
-        elseif status === :error
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+        if status === :error
+            return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(bytes))
         end
         r = results[1]
         if haskey(r, "trap")
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+            return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(bytes))
         end
         actual = unmarshal_result(r["ok"])
 
@@ -944,7 +871,7 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
             pass = (expected == actual)
         end
 
-        return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+        return (pass=pass, expected=expected, actual=actual, wasm_size=length(bytes))
     end
 end
 
@@ -1032,32 +959,27 @@ boundary — compared element-wise (via `_approx_equal`) against the
 compiled `main_bytes` module, with the `sidecar_bytes` module instantiated
 first and wired in as `importObject[sidecar_module_name]`.
 
-Returns `(pass, expected, actual, skipped, wasm_size)`, matching every other
+Returns `(pass, expected, actual, wasm_size)`, matching every other
 `compare_julia_wasm_*` helper's shape.
 """
 function compare_sidecar_wasm_vec(main_bytes::Vector{UInt8}, sidecar_bytes::Vector{UInt8},
                                    sidecar_module_name::AbstractString, func_name::AbstractString,
                                    expected::Vector{Float64}, args...)
-    if !WasmRunner.runner_available()
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(main_bytes))
-    end
     arg_types = map(typeof, args)
     driver = _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types)
     status, results = WasmRunner.run_driver_batch(main_bytes, driver; ninputs=1)
-    if status === :nonode
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(main_bytes))
-    elseif status === :error
-        return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(main_bytes))
+    if status === :error
+        return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(main_bytes))
     end
     r = results[1]
     if haskey(r, "trap")
-        return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(main_bytes))
+        return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(main_bytes))
     end
     actual_raw = unmarshal_result(r["ok"])
     actual = actual_raw isa Vector ? [_parse_f64(x) for x in actual_raw] : actual_raw
     pass = actual isa Vector && length(actual) == length(expected) &&
            all(i -> _approx_equal(actual[i], expected[i]), 1:length(expected))
-    return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(main_bytes))
+    return (pass=pass, expected=expected, actual=actual, wasm_size=length(main_bytes))
 end
 
 """
@@ -1074,13 +996,9 @@ exercised directly in WT's own unit suite instead of only in downstream CI: the
 plain harness `JSON.stringify`s a WasmGC array/struct ref to `"undefined"`, while
 the bridge walks it field-by-field.
 
-Returns `(pass, expected, actual, skipped, wasm_size)`. When Node is unavailable,
-`skipped=true, pass=true`. A native throw is matched by a wasm trap.
+Returns `(pass, expected, actual, wasm_size)`. A native throw is matched by a wasm trap.
 """
 function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, optimize::Bool=false)
-    if !WasmRunner.runner_available()
-        return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
-    end
     arg_types = map(typeof, args)
     nat = try (true, f(args...)) catch e; (false, e) end
     rt = rettype === nothing ?
@@ -1110,21 +1028,19 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     });
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-    status === :nonode && return (pass=true, expected=(nat[1] ? nat[2] : :throw),
-                                  actual=nothing, skipped=true, wasm_size=length(bytes))
     if status === :error
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+                actual="WASM_ERROR", wasm_size=length(bytes))
     end
     r = results[1]
     if haskey(r, "trap")
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="trap: " * string(get(r, "trap", "?")), skipped=false, wasm_size=length(bytes))
+                actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
     pass = nat[1] && WasmTarget.Bridge.tree_matches(desc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
-            actual=walked, skipped=false, wasm_size=length(bytes))
+            actual=walked, wasm_size=length(bytes))
 end
 
 """
@@ -1136,12 +1052,9 @@ return. This lets island cells whose `@bind` inputs are non-scalar (`String`,
 `Bool`, `Char`, `Symbol`, structs, `Vector`/`Tuple`/`NamedTuple`) be exercised in
 WT's unit suite. (Port of the fuzzer's `bridge_run_args`, return-compare only —
 PI island cells are pure functions of their bonds, so no mutable-arg re-reads.)
-Returns `(pass, expected, actual, skipped, wasm_size)`; native throw ⇒ wasm trap.
+Returns `(pass, expected, actual, wasm_size)`; native throw ⇒ wasm trap.
 """
 function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothing, optimize::Bool=false)
-    if !WasmRunner.runner_available()
-        return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
-    end
     arg_types = map(typeof, args)
     nat = try (true, f(args...)) catch e; (false, e) end
     rt = rettype === nothing ?
@@ -1185,21 +1098,19 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     } catch (e) { return [{ trap: String(e && e.message || e) }]; }
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-    status === :nonode && return (pass=true, expected=(nat[1] ? nat[2] : :throw),
-                                  actual=nothing, skipped=true, wasm_size=length(bytes))
     if status === :error
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+                actual="WASM_ERROR", wasm_size=length(bytes))
     end
     r = results[1]
     if haskey(r, "trap")
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="trap: " * string(get(r, "trap", "?")), skipped=false, wasm_size=length(bytes))
+                actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
     pass = nat[1] && WasmTarget.Bridge.tree_matches(rdesc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
-            actual=walked, skipped=false, wasm_size=length(bytes))
+            actual=walked, wasm_size=length(bytes))
 end
 
 """

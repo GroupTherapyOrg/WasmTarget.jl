@@ -102,7 +102,6 @@ _sp_cmb6(A)        = Matrix(permutedims(permutedims(sparse(A))))               #
 _sp_cmb7(A, Bm)    = Matrix(permutedims(blockdiag(sparse(A), sparse(A) * sparse(Bm))))  # matmul→blockdiag→transpose
 
 function run_sparse_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x5A11)
     sq()  = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n),)) for _ in 1:reps ]
     sqv() = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n), _sp_rvec(rng, n))) for _ in 1:reps ]

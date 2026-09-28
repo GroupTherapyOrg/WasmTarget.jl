@@ -33,13 +33,11 @@ end
 
 @testset "isa: primitives outside the hardcoded baseline (Char, Int128, a user primitive type)" begin
     M = LazyClassIdIsa
-    if WasmRunner.runner_available()
-        for (f, a) in ((M.count_chars, 7), (M.count_l1, 7), (M.count_l4, 7),
-                       (M.count_l3_none, 7), (M.count_int128, 7))
-            r = compare_julia_wasm(f, Int64(a))
-            @test r.pass
-            r.pass || println("  isa: ", nameof(f), " native=", r.expected, " wasm=", r.actual)
-        end
+    for (f, a) in ((M.count_chars, 7), (M.count_l1, 7), (M.count_l4, 7),
+                   (M.count_l3_none, 7), (M.count_int128, 7))
+        r = compare_julia_wasm(f, Int64(a))
+        @test r.pass
+        r.pass || println("  isa: ", nameof(f), " native=", r.expected, " wasm=", r.actual)
     end
     # the structural shape of the old counterexample no longer exists: P64 and Char are
     # numbered by the SAME DFS as everything else, so every ancestor on the chain has a

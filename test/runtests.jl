@@ -1352,15 +1352,11 @@ begin
             ]
 
             # Test that the harness can execute this binary
-            if NODE_CMD !== nothing
-                result = run_wasm(hardcoded_wasm, "add", Int32(2), Int32(3))
-                @test result == 5
+            result = run_wasm(hardcoded_wasm, "add", Int32(2), Int32(3))
+            @test result == 5
 
-                result = run_wasm(hardcoded_wasm, "add", Int32(100), Int32(-50))
-                @test result == 50
-            else
-                @warn "Skipping Wasm execution tests (Node.js not available)"
-            end
+            result = run_wasm(hardcoded_wasm, "add", Int32(100), Int32(-50))
+            @test result == 50
         end
 
         @testset "Hardcoded Wasm Binary - i64.add" begin
@@ -1409,18 +1405,14 @@ begin
                 0x0B,
             ]
 
-            if NODE_CMD !== nothing
-                result = run_wasm(hardcoded_wasm_i64, "add64", Int64(10), Int64(20))
-                @test result == 30
+            result = run_wasm(hardcoded_wasm_i64, "add64", Int64(10), Int64(20))
+            @test result == 30
 
-                # Test with large numbers that would overflow JS Number
-                large_a = Int64(9007199254740993)  # 2^53 + 1
-                large_b = Int64(1)
-                result = run_wasm(hardcoded_wasm_i64, "add64", large_a, large_b)
-                @test result == large_a + large_b
-            else
-                @warn "Skipping Wasm execution tests (Node.js not available)"
-            end
+            # Test with large numbers that would overflow JS Number
+            large_a = Int64(9007199254740993)  # 2^53 + 1
+            large_b = Int64(1)
+            result = run_wasm(hardcoded_wasm_i64, "add64", large_a, large_b)
+            @test result == large_a + large_b
         end
     end
 
@@ -1453,10 +1445,8 @@ begin
             wasm_bytes = WasmTarget.to_bytes(mod)
 
             # Verify we can execute it
-            if NODE_CMD !== nothing
-                result = run_wasm(wasm_bytes, "add", Int32(7), Int32(8))
-                @test result == 15
-            end
+            result = run_wasm(wasm_bytes, "add", Int32(7), Int32(8))
+            @test result == 15
         end
 
         @testset "WasmModule - i64.add generation" begin
@@ -1481,10 +1471,8 @@ begin
 
             wasm_bytes = WasmTarget.to_bytes(mod)
 
-            if NODE_CMD !== nothing
-                result = run_wasm(wasm_bytes, "add64", Int64(100), Int64(200))
-                @test result == 300
-            end
+            result = run_wasm(wasm_bytes, "add64", Int64(100), Int64(200))
+            @test result == 300
         end
 
         @testset "WasmModule - Multiple functions" begin
@@ -1519,10 +1507,8 @@ begin
 
             wasm_bytes = WasmTarget.to_bytes(mod)
 
-            if NODE_CMD !== nothing
-                @test run_wasm(wasm_bytes, "add", Int32(10), Int32(5)) == 15
-                @test run_wasm(wasm_bytes, "sub", Int32(10), Int32(5)) == 5
-            end
+            @test run_wasm(wasm_bytes, "add", Int32(10), Int32(5)) == 15
+            @test run_wasm(wasm_bytes, "sub", Int32(10), Int32(5)) == 5
         end
     end
 
@@ -1535,26 +1521,22 @@ begin
             # Define a simple function
             simple_add(a, b) = a + b
 
-            if NODE_CMD !== nothing
-                # Compile and run
-                wasm_bytes = WasmTarget.compile(simple_add, (Int64, Int64))
+            # Compile and run
+            wasm_bytes = WasmTarget.compile(simple_add, (Int64, Int64))
 
-                # Debug: dump the bytes
-                # dump_wasm(wasm_bytes, "/tmp/simple_add.wasm")
+            # Debug: dump the bytes
+            # dump_wasm(wasm_bytes, "/tmp/simple_add.wasm")
 
-                result = run_wasm(wasm_bytes, "simple_add", Int64(5), Int64(7))
-                @test result == 12
-            end
+            result = run_wasm(wasm_bytes, "simple_add", Int64(5), Int64(7))
+            @test result == 12
         end
 
         @testset "TDD Macro - @test_compile" begin
             my_add(x, y) = x + y
 
-            if NODE_CMD !== nothing
-                @test_compile my_add(Int64(10), Int64(20))
-                @test_compile my_add(Int64(-5), Int64(5))
-                @test_compile my_add(Int64(0), Int64(0))
-            end
+            @test_compile my_add(Int64(10), Int64(20))
+            @test_compile my_add(Int64(-5), Int64(5))
+            @test_compile my_add(Int64(0), Int64(0))
         end
 
     end
@@ -1572,56 +1554,50 @@ begin
             is_lte(x, y) = x <= y
             is_gte(x, y) = x >= y
 
-            if NODE_CMD !== nothing
-                # Test is_positive
-                @test_compile is_positive(Int64(5))
-                @test_compile is_positive(Int64(-5))
-                @test_compile is_positive(Int64(0))
+            # Test is_positive
+            @test_compile is_positive(Int64(5))
+            @test_compile is_positive(Int64(-5))
+            @test_compile is_positive(Int64(0))
 
-                # Test is_negative
-                @test_compile is_negative(Int64(5))
-                @test_compile is_negative(Int64(-5))
+            # Test is_negative
+            @test_compile is_negative(Int64(5))
+            @test_compile is_negative(Int64(-5))
 
-                # Test is_zero
-                @test_compile is_zero(Int64(0))
-                @test_compile is_zero(Int64(1))
+            # Test is_zero
+            @test_compile is_zero(Int64(0))
+            @test_compile is_zero(Int64(1))
 
-                # Test is_not_zero
-                @test_compile is_not_zero(Int64(0))
-                @test_compile is_not_zero(Int64(42))
+            # Test is_not_zero
+            @test_compile is_not_zero(Int64(0))
+            @test_compile is_not_zero(Int64(42))
 
-                # Test is_lte and is_gte
-                @test_compile is_lte(Int64(3), Int64(5))
-                @test_compile is_lte(Int64(5), Int64(5))
-                @test_compile is_lte(Int64(7), Int64(5))
-                @test_compile is_gte(Int64(7), Int64(5))
-                @test_compile is_gte(Int64(5), Int64(5))
-            end
+            # Test is_lte and is_gte
+            @test_compile is_lte(Int64(3), Int64(5))
+            @test_compile is_lte(Int64(5), Int64(5))
+            @test_compile is_lte(Int64(7), Int64(5))
+            @test_compile is_gte(Int64(7), Int64(5))
+            @test_compile is_gte(Int64(5), Int64(5))
         end
 
         @testset "Simple conditional - ternary" begin
             # x < 0 ? -x : x  (absolute value)
             my_abs(x) = x < 0 ? -x : x
 
-            if NODE_CMD !== nothing
-                @test_compile my_abs(Int64(5))
-                @test_compile my_abs(Int64(-5))
-                @test_compile my_abs(Int64(0))
-            end
+            @test_compile my_abs(Int64(5))
+            @test_compile my_abs(Int64(-5))
+            @test_compile my_abs(Int64(0))
         end
 
         @testset "Max/Min functions" begin
             my_max(a, b) = a > b ? a : b
             my_min(a, b) = a < b ? a : b
 
-            if NODE_CMD !== nothing
-                @test_compile my_max(Int64(10), Int64(20))
-                @test_compile my_max(Int64(20), Int64(10))
-                @test_compile my_max(Int64(5), Int64(5))
+            @test_compile my_max(Int64(10), Int64(20))
+            @test_compile my_max(Int64(20), Int64(10))
+            @test_compile my_max(Int64(5), Int64(5))
 
-                @test_compile my_min(Int64(10), Int64(20))
-                @test_compile my_min(Int64(20), Int64(10))
-            end
+            @test_compile my_min(Int64(10), Int64(20))
+            @test_compile my_min(Int64(20), Int64(10))
         end
 
         @testset "If-else blocks" begin
@@ -1675,34 +1651,28 @@ begin
             my_sub(a, b) = a - b
             my_mul(a, b) = a * b
 
-            if NODE_CMD !== nothing
-                @test_compile my_sub(Int64(10), Int64(3))
-                @test_compile my_sub(Int64(3), Int64(10))
-                @test_compile my_mul(Int64(6), Int64(7))
-                @test_compile my_mul(Int64(-3), Int64(4))
-            end
+            @test_compile my_sub(Int64(10), Int64(3))
+            @test_compile my_sub(Int64(3), Int64(10))
+            @test_compile my_mul(Int64(6), Int64(7))
+            @test_compile my_mul(Int64(-3), Int64(4))
         end
 
         @testset "Division and Remainder" begin
             my_div(a, b) = a ÷ b  # Integer division
             my_rem(a, b) = a % b  # Remainder
 
-            if NODE_CMD !== nothing
-                @test_compile my_div(Int64(10), Int64(3))
-                @test_compile my_div(Int64(20), Int64(4))
-                @test_compile my_rem(Int64(10), Int64(3))
-                @test_compile my_rem(Int64(20), Int64(4))
-            end
+            @test_compile my_div(Int64(10), Int64(3))
+            @test_compile my_div(Int64(20), Int64(4))
+            @test_compile my_rem(Int64(10), Int64(3))
+            @test_compile my_rem(Int64(20), Int64(4))
         end
 
         @testset "Negation" begin
             my_neg(x) = -x
 
-            if NODE_CMD !== nothing
-                @test_compile my_neg(Int64(5))
-                @test_compile my_neg(Int64(-5))
-                @test_compile my_neg(Int64(0))
-            end
+            @test_compile my_neg(Int64(5))
+            @test_compile my_neg(Int64(-5))
+            @test_compile my_neg(Int64(0))
         end
 
         @testset "Bitwise operations" begin
@@ -1711,12 +1681,10 @@ begin
             my_xor(a, b) = a ⊻ b
             my_not(x) = ~x
 
-            if NODE_CMD !== nothing
-                @test_compile my_and(Int64(0b1100), Int64(0b1010))
-                @test_compile my_or(Int64(0b1100), Int64(0b1010))
-                @test_compile my_xor(Int64(0b1100), Int64(0b1010))
-                @test_compile my_not(Int64(0))
-            end
+            @test_compile my_and(Int64(0b1100), Int64(0b1010))
+            @test_compile my_or(Int64(0b1100), Int64(0b1010))
+            @test_compile my_xor(Int64(0b1100), Int64(0b1010))
+            @test_compile my_not(Int64(0))
         end
 
         @testset "Shift operations" begin
@@ -1746,31 +1714,25 @@ begin
         @testset "Int32 to Int64" begin
             widen32(x::Int32) = Int64(x)
 
-            if NODE_CMD !== nothing
-                @test_compile widen32(Int32(42))
-                @test_compile widen32(Int32(-42))
-                @test_compile widen32(Int32(0))
-            end
+            @test_compile widen32(Int32(42))
+            @test_compile widen32(Int32(-42))
+            @test_compile widen32(Int32(0))
         end
 
         @testset "Int64 to Int32 (truncate)" begin
             narrow64(x::Int64) = Int32(x % Int32)
 
-            if NODE_CMD !== nothing
-                @test_compile narrow64(Int64(42))
-                @test_compile narrow64(Int64(-42))
-            end
+            @test_compile narrow64(Int64(42))
+            @test_compile narrow64(Int64(-42))
         end
 
         @testset "Int to Float" begin
             int_to_f64(x::Int64) = Float64(x)
             int_to_f32(x::Int32) = Float32(x)
 
-            if NODE_CMD !== nothing
-                @test_compile int_to_f64(Int64(42))
-                @test_compile int_to_f64(Int64(-42))
-                @test_compile int_to_f32(Int32(42))
-            end
+            @test_compile int_to_f64(Int64(42))
+            @test_compile int_to_f64(Int64(-42))
+            @test_compile int_to_f32(Int32(42))
         end
 
         @testset "Float arithmetic" begin
@@ -1779,12 +1741,10 @@ begin
             sub_f64(a::Float64, b::Float64) = a - b
             div_f64(a::Float64, b::Float64) = a / b
 
-            if NODE_CMD !== nothing
-                @test_compile add_f64(1.5, 2.5)
-                @test_compile mul_f64(3.0, 4.0)
-                @test_compile sub_f64(10.0, 3.0)
-                @test_compile div_f64(10.0, 4.0)
-            end
+            @test_compile add_f64(1.5, 2.5)
+            @test_compile mul_f64(3.0, 4.0)
+            @test_compile sub_f64(10.0, 3.0)
+            @test_compile div_f64(10.0, 4.0)
         end
 
     end
@@ -1840,124 +1800,118 @@ begin
         end
 
         @testset "Hand-crafted: Struct creation and field access" begin
-            if NODE_CMD !== nothing
 
-                # Create a module that:
-                # 1. Defines a struct type { i32, i32 }
-                # 2. Has a function that creates a struct and reads field 0
+            # Create a module that:
+            # 1. Defines a struct type { i32, i32 }
+            # 2. Has a function that creates a struct and reads field 0
 
-                mod = WasmModule()
+            mod = WasmModule()
 
-                # Add struct type: { field0: i32, field1: i32 }
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            # Add struct type: { field0: i32, field1: i32 }
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                # Function: () -> i32
-                # Creates struct with values (42, 99), returns field 0
-                body = UInt8[]
+            # Function: () -> i32
+            # Creates struct with values (42, 99), returns field 0
+            body = UInt8[]
 
-                # Push field values for struct.new (i32.const uses signed LEB128!)
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))  # field 0 value
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(99))  # field 1 value
+            # Push field values for struct.new (i32.const uses signed LEB128!)
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))  # field 0 value
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(99))  # field 1 value
 
-                # struct.new $type
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            # struct.new $type
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # struct.get $type $field
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(0))  # field index
+            # struct.get $type $field
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(0))  # field index
 
-                # End function
-                push!(body, Opcode.END)
+            # End function
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "get_field0", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "get_field0", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                result = run_wasm(wasm_bytes, "get_field0")
+            wasm_bytes = to_bytes(mod)
+            result = run_wasm(wasm_bytes, "get_field0")
 
-                @test result == 42
-            end
+            @test result == 42
         end
 
         @testset "Hand-crafted: Struct field 1 access" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            mod = WasmModule()
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create struct with (42, 99) - use signed LEB128 for i32.const
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(99))
+            # Create struct with (42, 99) - use signed LEB128 for i32.const
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(99))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # Get field 1
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(1))  # field 1
+            # Get field 1
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(1))  # field 1
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "get_field1", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "get_field1", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                result = run_wasm(wasm_bytes, "get_field1")
+            wasm_bytes = to_bytes(mod)
+            result = run_wasm(wasm_bytes, "get_field1")
 
-                @test result == 99
-            end
+            @test result == 99
         end
 
         @testset "Hand-crafted: Struct with parameters" begin
-            if NODE_CMD !== nothing
 
-                # Function: (a: i32, b: i32) -> i32
-                # Creates struct(a, b), returns field y (b)
-                mod = WasmModule()
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            # Function: (a: i32, b: i32) -> i32
+            # Creates struct(a, b), returns field y (b)
+            mod = WasmModule()
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push function args for struct
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)  # arg a
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)  # arg b
+            # Push function args for struct
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)  # arg a
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)  # arg b
 
-                # struct.new
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            # struct.new
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # struct.get field 1 (y)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(1))
+            # struct.get field 1 (y)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(1))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "create_and_get_y", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            add_export!(mod, "create_and_get_y", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
+            wasm_bytes = to_bytes(mod)
 
-                @test run_wasm(wasm_bytes, "create_and_get_y", Int32(10), Int32(20)) == 20
-                @test run_wasm(wasm_bytes, "create_and_get_y", Int32(100), Int32(200)) == 200
-            end
+            @test run_wasm(wasm_bytes, "create_and_get_y", Int32(10), Int32(20)) == 20
+            @test run_wasm(wasm_bytes, "create_and_get_y", Int32(100), Int32(200)) == 200
         end
 
     end
@@ -1968,114 +1922,108 @@ begin
     @pphase "Phase 8: Tuples" begin
 
         @testset "Hand-crafted: Tuple creation and access" begin
-            if NODE_CMD !== nothing
 
-                # Function: (a: i32, b: i32) -> i32
-                # Creates tuple (a, b), returns first element
-                mod = WasmModule()
+            # Function: (a: i32, b: i32) -> i32
+            # Creates tuple (a, b), returns first element
+            mod = WasmModule()
 
-                # Tuple is represented as struct { field0: i32, field1: i32 }
-                tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
+            # Tuple is represented as struct { field0: i32, field1: i32 }
+            tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push tuple elements
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)
+            # Push tuple elements
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)
 
-                # struct.new
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            # struct.new
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                # Get element 0
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(0))
+            # Get element 0
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(0))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_first", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            add_export!(mod, "tuple_first", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_first", Int32(10), Int32(20)) == 10
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_first", Int32(10), Int32(20)) == 10
         end
 
         @testset "Hand-crafted: Tuple second element" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
+            mod = WasmModule()
+            tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                # Get element 1 (second)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(1))
+            # Get element 1 (second)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(1))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_second", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            add_export!(mod, "tuple_second", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_second", Int32(10), Int32(20)) == 20
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_second", Int32(10), Int32(20)) == 20
         end
 
         @testset "Hand-crafted: 3-element tuple" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                # Tuple{Int32, Int32, Int32}
-                tuple_type_idx = add_struct_type!(mod, [
-                    FieldType(I32, false),
-                    FieldType(I32, false),
-                    FieldType(I32, false)
-                ])
+            mod = WasmModule()
+            # Tuple{Int32, Int32, Int32}
+            tuple_type_idx = add_struct_type!(mod, [
+                FieldType(I32, false),
+                FieldType(I32, false),
+                FieldType(I32, false)
+            ])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create tuple (10, 20, 30), return third element
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(10))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(20))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(30))
+            # Create tuple (10, 20, 30), return third element
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(10))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(20))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(30))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(2))  # third element
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(2))  # third element
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_third", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "tuple_third", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_third") == 30
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_third") == 30
         end
 
     end
@@ -2097,113 +2045,107 @@ begin
         end
 
         @testset "Hand-crafted: Array length" begin
-            if NODE_CMD !== nothing
 
-                # Function: () -> i32
-                # Creates array of length 5, returns the length
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Function: () -> i32
+            # Creates array of length 5, returns the length
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create array with init value 0 and length 5
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(0))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(5))
+            # Create array with init value 0 and length 5
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(0))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(5))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                # Get array length
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_LEN)
+            # Get array length
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_LEN)
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_len", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "arr_len", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_len") == 5
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_len") == 5
         end
 
         @testset "Hand-crafted: Array get element" begin
-            if NODE_CMD !== nothing
 
-                # Create array with init value 42, get element at index 0
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Create array with init value 42, get element at index 0
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create array with init value 42 and length 3
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))  # all elements will be 42
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(3))
+            # Create array with init value 42 and length 3
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))  # all elements will be 42
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(3))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                # Get element at index 1
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(1))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_GET)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            # Get element at index 1
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(1))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_GET)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_get", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "arr_get", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_get") == 42
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_get") == 42
         end
 
         @testset "Hand-crafted: Array new_fixed" begin
-            if NODE_CMD !== nothing
 
-                # Create array with fixed elements [10, 20, 30], get middle element
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Create array with fixed elements [10, 20, 30], get middle element
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push elements for array.new_fixed
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(10))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(20))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(30))
+            # Push elements for array.new_fixed
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(10))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(20))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(30))
 
-                # array.new_fixed $type $count
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW_FIXED)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
-                append!(body, encode_leb128_unsigned(3))  # count
+            # array.new_fixed $type $count
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW_FIXED)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
+            append!(body, encode_leb128_unsigned(3))  # count
 
-                # Get element at index 1 (should be 20)
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(1))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_GET)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            # Get element at index 1 (should be 20)
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(1))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_GET)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_fixed_get", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            add_export!(mod, "arr_fixed_get", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_fixed_get") == 20
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_fixed_get") == 20
         end
 
     end
@@ -2238,33 +2180,31 @@ begin
         end
 
         @testset "Execute: Import and call JavaScript function" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
+            mod = WasmModule()
 
-                # Import: env.double(i32) -> i32
-                import_idx = add_import!(mod, "env", "double_it", NumType[I32], NumType[I32])
+            # Import: env.double(i32) -> i32
+            import_idx = add_import!(mod, "env", "double_it", NumType[I32], NumType[I32])
 
-                # Local function: (param i32) -> i32
-                # Calls the imported double_it function
-                body = UInt8[]
-                push!(body, Opcode.LOCAL_GET)
-                append!(body, encode_leb128_unsigned(0))
-                push!(body, Opcode.CALL)
-                append!(body, encode_leb128_unsigned(0))  # call import at index 0
-                push!(body, Opcode.END)
+            # Local function: (param i32) -> i32
+            # Calls the imported double_it function
+            body = UInt8[]
+            push!(body, Opcode.LOCAL_GET)
+            append!(body, encode_leb128_unsigned(0))
+            push!(body, Opcode.CALL)
+            append!(body, encode_leb128_unsigned(0))  # call import at index 0
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body)
-                add_export!(mod, "call_double", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body)
+            add_export!(mod, "call_double", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
+            wasm_bytes = to_bytes(mod)
 
-                # Run with imports
-                result = run_wasm_with_imports(wasm_bytes, "call_double",
-                    Dict("env" => Dict("double_it" => "(x) => x * 2")),
-                    Int32(21))
-                @test result == 42
-            end
+            # Run with imports
+            result = run_wasm_with_imports(wasm_bytes, "call_double",
+                Dict("env" => Dict("double_it" => "(x) => x * 2")),
+                Int32(21))
+            @test result == 42
         end
 
     end
@@ -2514,10 +2454,8 @@ begin
         @testset "String literal length — i32.const signed-LEB" begin
             wasm_bytes = WasmTarget.compile(str_mid_literal, (Int64,))
             @test validate_wasm(wasm_bytes)
-            if NODE_CMD !== nothing
-                for xv in (Int64(5), Int64(42), Int64(123456))
-                    @test run_wasm(wasm_bytes, "str_mid_literal", xv) == str_mid_literal(xv)
-                end
+            for xv in (Int64(5), Int64(42), Int64(123456))
+                @test run_wasm(wasm_bytes, "str_mid_literal", xv) == str_mid_literal(xv)
             end
         end
 
@@ -3193,114 +3131,100 @@ begin
     @pphase "Phase 22: Math Functions (WASM-native)" begin
 
         @testset "sqrt (via llvm intrinsic)" begin
-            if NODE_CMD !== nothing
-                # Use the raw llvm intrinsic to avoid domain checking
-                function test_sqrt_fast(x::Float64)::Float64
-                    return Base.Math.sqrt_llvm(x)
-                end
-
-                bytes = compile(test_sqrt_fast, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[4.0]) ≈ 2.0
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[9.0]) ≈ 3.0
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[2.0]) ≈ sqrt(2.0)
+            # Use the raw llvm intrinsic to avoid domain checking
+            function test_sqrt_fast(x::Float64)::Float64
+                return Base.Math.sqrt_llvm(x)
             end
+
+            bytes = compile(test_sqrt_fast, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_sqrt_fast", Float64[4.0]) ≈ 2.0
+            @test run_wasm(bytes, "test_sqrt_fast", Float64[9.0]) ≈ 3.0
+            @test run_wasm(bytes, "test_sqrt_fast", Float64[2.0]) ≈ sqrt(2.0)
         end
 
         @testset "abs" begin
-            if NODE_CMD !== nothing
-                function test_abs(x::Float64)::Float64
-                    return abs(x)
-                end
-
-                bytes = compile(test_abs, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_abs", Float64[-5.0]) ≈ 5.0
-                @test run_wasm(bytes, "test_abs", Float64[3.0]) ≈ 3.0
-                @test run_wasm(bytes, "test_abs", Float64[-0.0]) ≈ 0.0
+            function test_abs(x::Float64)::Float64
+                return abs(x)
             end
+
+            bytes = compile(test_abs, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_abs", Float64[-5.0]) ≈ 5.0
+            @test run_wasm(bytes, "test_abs", Float64[3.0]) ≈ 3.0
+            @test run_wasm(bytes, "test_abs", Float64[-0.0]) ≈ 0.0
         end
 
         @testset "floor" begin
-            if NODE_CMD !== nothing
-                function test_floor(x::Float64)::Float64
-                    return floor(x)
-                end
-
-                bytes = compile(test_floor, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_floor", Float64[3.7]) ≈ 3.0
-                @test run_wasm(bytes, "test_floor", Float64[-2.3]) ≈ -3.0
-                @test run_wasm(bytes, "test_floor", Float64[5.0]) ≈ 5.0
+            function test_floor(x::Float64)::Float64
+                return floor(x)
             end
+
+            bytes = compile(test_floor, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_floor", Float64[3.7]) ≈ 3.0
+            @test run_wasm(bytes, "test_floor", Float64[-2.3]) ≈ -3.0
+            @test run_wasm(bytes, "test_floor", Float64[5.0]) ≈ 5.0
         end
 
         @testset "ceil" begin
-            if NODE_CMD !== nothing
-                function test_ceil(x::Float64)::Float64
-                    return ceil(x)
-                end
-
-                bytes = compile(test_ceil, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_ceil", Float64[3.2]) ≈ 4.0
-                @test run_wasm(bytes, "test_ceil", Float64[-2.7]) ≈ -2.0
-                @test run_wasm(bytes, "test_ceil", Float64[5.0]) ≈ 5.0
+            function test_ceil(x::Float64)::Float64
+                return ceil(x)
             end
+
+            bytes = compile(test_ceil, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_ceil", Float64[3.2]) ≈ 4.0
+            @test run_wasm(bytes, "test_ceil", Float64[-2.7]) ≈ -2.0
+            @test run_wasm(bytes, "test_ceil", Float64[5.0]) ≈ 5.0
         end
 
         @testset "round" begin
-            if NODE_CMD !== nothing
-                function test_round(x::Float64)::Float64
-                    return round(x)
-                end
-
-                bytes = compile(test_round, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_round", Float64[3.2]) ≈ 3.0
-                @test run_wasm(bytes, "test_round", Float64[3.7]) ≈ 4.0
-                @test run_wasm(bytes, "test_round", Float64[-2.5]) ≈ -2.0  # Round to even
+            function test_round(x::Float64)::Float64
+                return round(x)
             end
+
+            bytes = compile(test_round, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_round", Float64[3.2]) ≈ 3.0
+            @test run_wasm(bytes, "test_round", Float64[3.7]) ≈ 4.0
+            @test run_wasm(bytes, "test_round", Float64[-2.5]) ≈ -2.0  # Round to even
         end
 
         @testset "trunc" begin
-            if NODE_CMD !== nothing
-                function test_trunc(x::Float64)::Float64
-                    return trunc(x)
-                end
-
-                bytes = compile(test_trunc, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_trunc", Float64[3.7]) ≈ 3.0
-                @test run_wasm(bytes, "test_trunc", Float64[-3.7]) ≈ -3.0
-                @test run_wasm(bytes, "test_trunc", Float64[5.0]) ≈ 5.0
+            function test_trunc(x::Float64)::Float64
+                return trunc(x)
             end
+
+            bytes = compile(test_trunc, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test run_wasm(bytes, "test_trunc", Float64[3.7]) ≈ 3.0
+            @test run_wasm(bytes, "test_trunc", Float64[-3.7]) ≈ -3.0
+            @test run_wasm(bytes, "test_trunc", Float64[5.0]) ≈ 5.0
         end
 
         @testset "Float32 variants" begin
-            if NODE_CMD !== nothing
-                function test_abs_f32(x::Float32)::Float32
-                    return abs(x)
-                end
-
-                function test_floor_f32(x::Float32)::Float32
-                    return floor(x)
-                end
-
-                bytes_abs = compile(test_abs_f32, (Float32,))
-                @test length(bytes_abs) > 0
-                @test validate_wasm(bytes_abs)
-
-                bytes_floor = compile(test_floor_f32, (Float32,))
-                @test length(bytes_floor) > 0
-                @test validate_wasm(bytes_floor)
+            function test_abs_f32(x::Float32)::Float32
+                return abs(x)
             end
+
+            function test_floor_f32(x::Float32)::Float32
+                return floor(x)
+            end
+
+            bytes_abs = compile(test_abs_f32, (Float32,))
+            @test length(bytes_abs) > 0
+            @test validate_wasm(bytes_abs)
+
+            bytes_floor = compile(test_floor_f32, (Float32,))
+            @test length(bytes_floor) > 0
+            @test validate_wasm(bytes_floor)
         end
 
     end
@@ -4033,51 +3957,41 @@ begin
         @testset "compare_julia_wasm — Int32 add" begin
             add_one(x::Int32) = x + Int32(1)
             r = compare_julia_wasm(add_one, Int32(5))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(6)
-                @test r.actual == 6
-            end
+            @test r.pass
+            @test r.expected == Int32(6)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm — Int32 multiply" begin
             mul_two(x::Int32) = x * Int32(2)
             r = compare_julia_wasm(mul_two, Int32(7))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(14)
-                @test r.actual == 14
-            end
+            @test r.pass
+            @test r.expected == Int32(14)
+            @test r.actual == 14
         end
 
         @testset "compare_julia_wasm — Int32 two args" begin
             my_add(a::Int32, b::Int32) = a + b
             r = compare_julia_wasm(my_add, Int32(3), Int32(4))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(7)
-                @test r.actual == 7
-            end
+            @test r.pass
+            @test r.expected == Int32(7)
+            @test r.actual == 7
         end
 
         @testset "compare_julia_wasm — negative numbers" begin
             negate(x::Int32) = -x
             r = compare_julia_wasm(negate, Int32(42))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(-42)
-                @test r.actual == -42
-            end
+            @test r.pass
+            @test r.expected == Int32(-42)
+            @test r.actual == -42
         end
 
         @testset "compare_julia_wasm — zero" begin
             identity_fn(x::Int32) = x
             r = compare_julia_wasm(identity_fn, Int32(0))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(0)
-                @test r.actual == 0
-            end
+            @test r.pass
+            @test r.expected == Int32(0)
+            @test r.actual == 0
         end
 
         @testset "compare_batch — multiple inputs" begin
@@ -4090,9 +4004,7 @@ begin
             ])
             @test length(results) == 4
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4105,9 +4017,7 @@ begin
             ])
             @test length(results) == 3
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4122,49 +4032,37 @@ begin
 
         @testset "compare_julia_wasm_manual — correct expected" begin
             r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(6))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(6)
-                @test r.actual == 6
-            end
+            @test r.pass
+            @test r.expected == Int32(6)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm_manual — wrong expected detects mismatch" begin
             r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(99))
-            if !r.skipped
-                @test !r.pass
-                @test r.expected == Int32(99)
-                @test r.actual == 6
-            end
+            @test !r.pass
+            @test r.expected == Int32(99)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm_manual — multiply" begin
             r = compare_julia_wasm_manual(x -> x * Int32(3), (Int32(4),), Int32(12))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — two args" begin
             my_sub(a::Int32, b::Int32) = a - b
             r = compare_julia_wasm_manual(my_sub, (Int32(10), Int32(3)), Int32(7))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — zero" begin
             r = compare_julia_wasm_manual(x -> x, (Int32(0),), Int32(0))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — negative" begin
             r = compare_julia_wasm_manual(x -> -x, (Int32(42),), Int32(-42))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_batch_manual — multiple inputs" begin
@@ -4176,9 +4074,7 @@ begin
             ])
             @test length(results) == 4
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4188,19 +4084,15 @@ begin
                 ((Int32(5),), Int32(99)),   # wrong
             ])
             @test length(results) == 2
-            if !results[1].skipped
-                @test results[1].pass
-                @test !results[2].pass
-            end
+            @test results[1].pass
+            @test !results[2].pass
         end
 
         @testset "compare_julia_wasm_wrapper — basic" begin
             r = compare_julia_wasm_wrapper(x -> x + Int32(10), Int32(5))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(15)
-                @test r.actual == 15
-            end
+            @test r.pass
+            @test r.expected == Int32(15)
+            @test r.actual == 15
         end
 
         # Ground truth snapshot tests — exercise the MACHINERY in a temp dir so
@@ -4227,9 +4119,7 @@ begin
             results = compare_against_ground_truth("gt_double", x -> x * Int32(2); dir=gtdir)
             @test length(results) == 3
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4240,9 +4130,7 @@ begin
             # Intentionally use wrong function to get mismatch
             results = compare_against_ground_truth("gt_negate", x -> x + Int32(1); dir=gtdir)
             @test length(results) == 2
-            if !results[1].skipped
-                @test !results[1].pass  # -5 != 6
-            end
+            @test !results[1].pass  # -5 != 6
         end
 
         @testset "load_ground_truth — error on missing" begin
@@ -4776,7 +4664,7 @@ begin
             js_path = joinpath(dirname(wasm_path), "test.mjs")
             write(js_path, js_code)
 
-            node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+            node_cmd = `$NODE $js_path`
             output = strip(read(node_cmd, String))
             results = JSON.parse(output)
 
@@ -4827,66 +4715,62 @@ begin
         end
 
         @testset "Overlay dispatch: user method overrides base" begin
-            if NODE_CMD === nothing
-                @test_skip "Node.js not available"
-            else
-                # Compile base + overlay functions with a dispatcher
-                functions = [
-                    (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
-                    (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
-                    (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
-                    (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
-                    (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
-                    (disp_val, (DispOverlay1,)),
-                    (disp_val, (DispOverlay2,)),
-                    (disp_caller, (Any,)),
-                    (make_disp_s1, (Int32,)),
-                    (make_disp_s5, (Int32,)),
-                    (make_disp_overlay1, (Int32,)),
-                    (make_disp_overlay2, (Int32,)),
-                ]
+            # Compile base + overlay functions with a dispatcher
+            functions = [
+                (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+                (disp_val, (DispOverlay1,)),
+                (disp_val, (DispOverlay2,)),
+                (disp_caller, (Any,)),
+                (make_disp_s1, (Int32,)),
+                (make_disp_s5, (Int32,)),
+                (make_disp_overlay1, (Int32,)),
+                (make_disp_overlay2, (Int32,)),
+            ]
 
-                bytes = to_bytes(compile_module(functions))
+            bytes = to_bytes(compile_module(functions))
 
-                wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
-                write(wasm_path, bytes)
+            wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
+            write(wasm_path, bytes)
 
-                js_code = """
-                import fs from 'fs';
-                const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-                const importObject = {};
-                async function run() {
-                    const mod = await WebAssembly.instantiate(bytes, importObject);
-                    const e = mod.instance.exports;
-                    const results = [];
-                    // Base dispatch: DispS1(10) → 10+1=11, DispS5(10) → 10+5=15
-                    results.push(e.disp_caller(e.make_disp_s1(10)));
-                    results.push(e.disp_caller(e.make_disp_s5(10)));
-                    // Overlay dispatch: DispOverlay1(10) → 10+100=110, DispOverlay2(10) → 10+200=210
-                    results.push(e.disp_caller(e.make_disp_overlay1(10)));
-                    results.push(e.disp_caller(e.make_disp_overlay2(10)));
-                    console.log(JSON.stringify(results));
-                }
-                run();
-                """
-                js_path = joinpath(dirname(wasm_path), "test.mjs")
-                write(js_path, js_code)
+            js_code = """
+            import fs from 'fs';
+            const bytes = fs.readFileSync('$(escape_string(wasm_path))');
+            const importObject = {};
+            async function run() {
+                const mod = await WebAssembly.instantiate(bytes, importObject);
+                const e = mod.instance.exports;
+                const results = [];
+                // Base dispatch: DispS1(10) → 10+1=11, DispS5(10) → 10+5=15
+                results.push(e.disp_caller(e.make_disp_s1(10)));
+                results.push(e.disp_caller(e.make_disp_s5(10)));
+                // Overlay dispatch: DispOverlay1(10) → 10+100=110, DispOverlay2(10) → 10+200=210
+                results.push(e.disp_caller(e.make_disp_overlay1(10)));
+                results.push(e.disp_caller(e.make_disp_overlay2(10)));
+                console.log(JSON.stringify(results));
+            }
+            run();
+            """
+            js_path = joinpath(dirname(wasm_path), "test.mjs")
+            write(js_path, js_code)
 
-                node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
-                output = strip(read(node_cmd, String))
-                results = JSON.parse(output)
+            node_cmd = `$NODE $js_path`
+            output = strip(read(node_cmd, String))
+            results = JSON.parse(output)
 
-                # Ground truth comparison: native Julia
-                native_s1 = Int(disp_caller(DispS1(Int32(10))))           # 11
-                native_s5 = Int(disp_caller(DispS5(Int32(10))))           # 15
-                native_o1 = Int(disp_caller(DispOverlay1(Int32(10))))     # 110
-                native_o2 = Int(disp_caller(DispOverlay2(Int32(10))))     # 210
+            # Ground truth comparison: native Julia
+            native_s1 = Int(disp_caller(DispS1(Int32(10))))           # 11
+            native_s5 = Int(disp_caller(DispS5(Int32(10))))           # 15
+            native_o1 = Int(disp_caller(DispOverlay1(Int32(10))))     # 110
+            native_o2 = Int(disp_caller(DispOverlay2(Int32(10))))     # 210
 
-                @test results[1] == native_s1   # Base: DispS1(10) → 11
-                @test results[2] == native_s5   # Base: DispS5(10) → 15
-                @test results[3] == native_o1   # Overlay: DispOverlay1(10) → 110
-                @test results[4] == native_o2   # Overlay: DispOverlay2(10) → 210
-            end
+            @test results[1] == native_s1   # Base: DispS1(10) → 11
+            @test results[2] == native_s5   # Base: DispS5(10) → 15
+            @test results[3] == native_o1   # Overlay: DispOverlay1(10) → 110
+            @test results[4] == native_o2   # Overlay: DispOverlay2(10) → 210
         end
 
         @testset "the FNV hash-dispatch apparatus is DELETED (LOCK L10)" begin
@@ -4932,43 +4816,41 @@ begin
         end
 
         @testset "typeof(x) returns correct type via ref.eq" begin
-            if NODE_CMD !== nothing
-                funcs = [
-                    (typeof_check_s1, (TypeHierS1,)),
-                    (typeof_check_s2, (TypeHierS2,)),
-                    (typeof_cross_check, (TypeHierS1,)),
-                    (make_th_s1, (Int32,)),
-                    (make_th_s2, (Int32,)),
-                ]
-                mod = compile_module(funcs)
-                bytes = to_bytes(mod)
-                wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
-                write(wasm_path, bytes)
+            funcs = [
+                (typeof_check_s1, (TypeHierS1,)),
+                (typeof_check_s2, (TypeHierS2,)),
+                (typeof_cross_check, (TypeHierS1,)),
+                (make_th_s1, (Int32,)),
+                (make_th_s2, (Int32,)),
+            ]
+            mod = compile_module(funcs)
+            bytes = to_bytes(mod)
+            wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
+            write(wasm_path, bytes)
 
-                js_code = """
-                const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
-                WebAssembly.instantiate(bytes, {}).then(m => {
-                    const exp = m.instance.exports;
-                    const s1 = exp.make_th_s1(42);
-                    const s2 = exp.make_th_s2(42);
-                    const r1 = exp.typeof_check_s1(s1);
-                    const r2 = exp.typeof_check_s2(s2);
-                    const r3 = exp.typeof_cross_check(s1);
-                    console.log(JSON.stringify([r1, r2, r3]));
-                }).catch(e => { console.error(e.message); process.exit(1); });
-                """
-                result = read(`$NODE_CMD -e $js_code`, String)
-                results = JSON.parse(strip(result))
+            js_code = """
+            const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
+            WebAssembly.instantiate(bytes, {}).then(m => {
+                const exp = m.instance.exports;
+                const s1 = exp.make_th_s1(42);
+                const s2 = exp.make_th_s2(42);
+                const r1 = exp.typeof_check_s1(s1);
+                const r2 = exp.typeof_check_s2(s2);
+                const r3 = exp.typeof_cross_check(s1);
+                console.log(JSON.stringify([r1, r2, r3]));
+            }).catch(e => { console.error(e.message); process.exit(1); });
+            """
+            result = read(`$NODE -e $js_code`, String)
+            results = JSON.parse(strip(result))
 
-                # Ground truth
-                native_s1 = typeof_check_s1(TypeHierS1(Int32(42)))    # 1 (TypeHierS1 === TypeHierS1)
-                native_s2 = typeof_check_s2(TypeHierS2(Int32(42)))    # 1 (TypeHierS2 === TypeHierS2)
-                native_cross = typeof_cross_check(TypeHierS1(Int32(42)))  # 0 (TypeHierS1 !== TypeHierS2)
+            # Ground truth
+            native_s1 = typeof_check_s1(TypeHierS1(Int32(42)))    # 1 (TypeHierS1 === TypeHierS1)
+            native_s2 = typeof_check_s2(TypeHierS2(Int32(42)))    # 1 (TypeHierS2 === TypeHierS2)
+            native_cross = typeof_cross_check(TypeHierS1(Int32(42)))  # 0 (TypeHierS1 !== TypeHierS2)
 
-                @test results[1] == native_s1   # typeof(s1) === TypeHierS1 → 1
-                @test results[2] == native_s2   # typeof(s2) === TypeHierS2 → 1
-                @test results[3] == native_cross # typeof(s1) === TypeHierS2 → 0
-            end
+            @test results[1] == native_s1   # typeof(s1) === TypeHierS1 → 1
+            @test results[2] == native_s2   # typeof(s2) === TypeHierS2 → 1
+            @test results[3] == native_cross # typeof(s1) === TypeHierS2 → 0
         end
 
         @testset "Type hierarchy: super chain matches Julia's" begin
@@ -5056,15 +4938,12 @@ begin
             ])
 
             @test length(bytes) > 0
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "ws_int_num") == 1        # Int64 <: Number
-                @test run_wasm(bytes, "ws_int_str") == 0        # Int64 !<: AbstractString
-                @test run_wasm(bytes, "ws_int_int") == 1        # Int64 <: Int64
-                @test run_wasm(bytes, "ws_f64_num") == 1        # Float64 <: Number
-                @test run_wasm(bytes, "ws_int_signed") == 1     # Int64 <: Signed
-                @test run_wasm(bytes, "ws_bool_int") == 1       # Bool <: Integer
-            end
+            @test run_wasm(bytes, "ws_int_num") == 1        # Int64 <: Number
+            @test run_wasm(bytes, "ws_int_str") == 0        # Int64 !<: AbstractString
+            @test run_wasm(bytes, "ws_int_int") == 1        # Int64 <: Int64
+            @test run_wasm(bytes, "ws_f64_num") == 1        # Float64 <: Number
+            @test run_wasm(bytes, "ws_int_signed") == 1     # Int64 <: Signed
+            @test run_wasm(bytes, "ws_bool_int") == 1       # Bool <: Integer
         end
 
         @testset "SVec parameter access on DataType" begin
@@ -5084,11 +4963,8 @@ begin
             ])
 
             @test length(bytes) > 0
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "svec_len_int64") == 0    # Int64.parameters is empty
-                @test run_wasm(bytes, "svec_len_vec") == 2      # Vector{Int64}.parameters has 2 elements
-            end
+            @test run_wasm(bytes, "svec_len_int64") == 0    # Int64.parameters is empty
+            @test run_wasm(bytes, "svec_len_vec") == 2      # Vector{Int64}.parameters has 2 elements
         end
 
         @testset "Full wasm_subtype chain compiles and validates" begin
@@ -5137,12 +5013,8 @@ begin
 
             bytes = WasmTarget.compile_multi(funcs)
             @test length(bytes) > 0
-
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "test_fee_eq") == 1     # Int64 ≡ Int64 (invariant)
-                @test run_wasm(bytes, "test_fee_neq") == 0    # Int64 ≢ Number (invariant)
-            end
+            @test run_wasm(bytes, "test_fee_eq") == 1     # Int64 ≡ Int64 (invariant)
+            @test run_wasm(bytes, "test_fee_neq") == 0    # Int64 ≢ Number (invariant)
         end
 
         @testset "wasm_subtype ground truth: 100+ DataType pairs" begin
@@ -5332,128 +5204,124 @@ begin
             all_funcs = vcat(wrapper_funcs, all_subtype_funcs)
             bytes = WasmTarget.compile_multi(all_funcs)
             @test length(bytes) > 0
-
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                # Ground truth: each test matches native Julia <:
-                # Concrete numeric identity
-                @test run_wasm(bytes, "gt_i64_i64") == 1      # Int64 <: Int64
-                @test run_wasm(bytes, "gt_i32_i32") == 1      # Int32 <: Int32
-                @test run_wasm(bytes, "gt_f64_f64") == 1      # Float64 <: Float64
-                @test run_wasm(bytes, "gt_f32_f32") == 1      # Float32 <: Float32
-                @test run_wasm(bytes, "gt_bool_bool") == 1    # Bool <: Bool
-                # Numeric hierarchy (true)
-                @test run_wasm(bytes, "gt_i64_num") == 1      # Int64 <: Number
-                @test run_wasm(bytes, "gt_i64_real") == 1     # Int64 <: Real
-                @test run_wasm(bytes, "gt_i64_int") == 1      # Int64 <: Integer
-                @test run_wasm(bytes, "gt_i64_signed") == 1   # Int64 <: Signed
-                @test run_wasm(bytes, "gt_i64_any") == 1      # Int64 <: Any
-                @test run_wasm(bytes, "gt_i32_signed") == 1   # Int32 <: Signed
-                @test run_wasm(bytes, "gt_i32_num") == 1      # Int32 <: Number
-                @test run_wasm(bytes, "gt_f64_num") == 1      # Float64 <: Number
-                @test run_wasm(bytes, "gt_f64_real") == 1     # Float64 <: Real
-                @test run_wasm(bytes, "gt_f64_absfloat") == 1 # Float64 <: AbstractFloat
-                @test run_wasm(bytes, "gt_f32_num") == 1      # Float32 <: Number
-                @test run_wasm(bytes, "gt_bool_int") == 1     # Bool <: Integer
-                @test run_wasm(bytes, "gt_bool_num") == 1     # Bool <: Number
-                @test run_wasm(bytes, "gt_u64_unsigned") == 1 # UInt64 <: Unsigned
-                @test run_wasm(bytes, "gt_u64_num") == 1      # UInt64 <: Number
-                @test run_wasm(bytes, "gt_u8_unsigned") == 1  # UInt8 <: Unsigned
-                @test run_wasm(bytes, "gt_u8_num") == 1       # UInt8 <: Number
-                # Numeric hierarchy (false)
-                @test run_wasm(bytes, "gt_i64_unsigned") == 0 # Int64 !<: Unsigned
-                @test run_wasm(bytes, "gt_i64_absfloat") == 0 # Int64 !<: AbstractFloat
-                @test run_wasm(bytes, "gt_i64_absstr") == 0   # Int64 !<: AbstractString
-                @test run_wasm(bytes, "gt_i32_i64") == 0      # Int32 !<: Int64
-                @test run_wasm(bytes, "gt_f64_signed") == 0   # Float64 !<: Signed
-                @test run_wasm(bytes, "gt_f32_f64") == 0      # Float32 !<: Float64
-                @test run_wasm(bytes, "gt_bool_signed") == 0  # Bool !<: Signed
-                @test run_wasm(bytes, "gt_u64_signed") == 0   # UInt64 !<: Signed
-                # Reverse direction (abstract !<: concrete)
-                @test run_wasm(bytes, "gt_num_i64") == 0      # Number !<: Int64
-                @test run_wasm(bytes, "gt_real_i64") == 0     # Real !<: Int64
-                @test run_wasm(bytes, "gt_signed_i64") == 0   # Signed !<: Int64
-                @test run_wasm(bytes, "gt_any_i64") == 0      # Any !<: Int64
-                @test run_wasm(bytes, "gt_any_num") == 0      # Any !<: Number
-                # Any <: Any
-                @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
-                # String types
-                @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
-                @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — FOUND-5003: fixed Union{Type{T}} phi local allocation
-                @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
-                @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
-                @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
-                # Parametric types — invariant
-                @test run_wasm(bytes, "gt_vi64_vi64") == 1    # Vector{Int64} <: Vector{Int64}
-                @test run_wasm(bytes, "gt_vi64_vnum") == 0    # Vector{Int64} !<: Vector{Number} (invariant!)
-                @test run_wasm(bytes, "gt_vf64_vf64") == 1    # Vector{Float64} <: Vector{Float64}
-                @test run_wasm(bytes, "gt_vf64_vnum") == 0    # Vector{Float64} !<: Vector{Number}
-                @test run_wasm(bytes, "gt_vi32_vi32") == 1    # Vector{Int32} <: Vector{Int32}
-                @test run_wasm(bytes, "gt_vi32_vi64") == 0    # Vector{Int32} !<: Vector{Int64}
-                @test run_wasm(bytes, "gt_di64_di64") == 1    # Dict{String,Int64} <: Dict{String,Int64}
-                @test run_wasm(bytes, "gt_di64_dnum") == 0    # Dict{String,Int64} !<: Dict{String,Number}
-                @test run_wasm(bytes, "gt_pi_pi") == 1        # Pair{Int64,Int64} <: Pair{Int64,Int64}
-                @test run_wasm(bytes, "gt_pi_pn") == 0        # Pair{Int64,Int64} !<: Pair{Int64,Number}
-                # Tuple types — covariant
-                @test run_wasm(bytes, "gt_ti64_ti64") == 1    # Tuple{Int64} <: Tuple{Int64}
-                @test run_wasm(bytes, "gt_ti64_tnum") == 1    # Tuple{Int64} <: Tuple{Number} (covariant!)
-                @test run_wasm(bytes, "gt_tif_tnn") == 1      # Tuple{Int64,Float64} <: Tuple{Number,Number}
-                @test run_wasm(bytes, "gt_t0_t0") == 1        # Tuple{} <: Tuple{}
-                @test run_wasm(bytes, "gt_t1_t2") == 0        # Tuple{Int64} !<: Tuple{Int64,Float64}
-                @test run_wasm(bytes, "gt_tf_ti") == 0        # Tuple{Float64} !<: Tuple{Int64}
-                # More numerics
-                @test run_wasm(bytes, "gt_i8_signed") == 1    # Int8 <: Signed
-                @test run_wasm(bytes, "gt_i8_int") == 1       # Int8 <: Integer
-                @test run_wasm(bytes, "gt_i8_num") == 1       # Int8 <: Number
-                @test run_wasm(bytes, "gt_i8_i64") == 0       # Int8 !<: Int64
-                @test run_wasm(bytes, "gt_i16_signed") == 1   # Int16 <: Signed
-                @test run_wasm(bytes, "gt_i16_num") == 1      # Int16 <: Number
-                @test run_wasm(bytes, "gt_u16_unsigned") == 1 # UInt16 <: Unsigned
-                @test run_wasm(bytes, "gt_u16_num") == 1      # UInt16 <: Number
-                @test run_wasm(bytes, "gt_i128_signed") == 1  # Int128 <: Signed
-                @test run_wasm(bytes, "gt_i128_num") == 1     # Int128 <: Number
-                @test run_wasm(bytes, "gt_u128_unsigned") == 1 # UInt128 <: Unsigned
-                @test run_wasm(bytes, "gt_f16_absfloat") == 1 # Float16 <: AbstractFloat
-                @test run_wasm(bytes, "gt_f16_real") == 1     # Float16 <: Real
-                @test run_wasm(bytes, "gt_f16_f64") == 0      # Float16 !<: Float64
-                # Cross-category false
-                @test run_wasm(bytes, "gt_i64_str") == 0      # Int64 !<: String
-                @test run_wasm(bytes, "gt_str_i64") == 0      # String !<: Int64
-                @test run_wasm(bytes, "gt_f64_str") == 0      # Float64 !<: String
-                @test run_wasm(bytes, "gt_bool_str") == 0     # Bool !<: String
-                @test run_wasm(bytes, "gt_num_str") == 0      # Number !<: String
-                # Abstract hierarchy
-                @test run_wasm(bytes, "gt_signed_int") == 1   # Signed <: Integer
-                @test run_wasm(bytes, "gt_int_real") == 1     # Integer <: Real
-                @test run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — FOUND-5003: fixed Union{Type{T}} phi local allocation
-                @test run_wasm(bytes, "gt_num_any") == 1      # Number <: Any
-                @test run_wasm(bytes, "gt_unsigned_int") == 1 # Unsigned <: Integer
-                @test run_wasm(bytes, "gt_absfloat_real") == 1 # AbstractFloat <: Real
-                @test run_wasm(bytes, "gt_signed_unsigned") == 0 # Signed !<: Unsigned
-                @test run_wasm(bytes, "gt_unsigned_signed") == 0 # Unsigned !<: Signed
-                @test run_wasm(bytes, "gt_absfloat_int") == 0 # AbstractFloat !<: Integer
-                @test run_wasm(bytes, "gt_int_absfloat") == 0 # Integer !<: AbstractFloat
-                # Nothing
-                @test run_wasm(bytes, "gt_nothing_nothing") == 1 # Nothing <: Nothing
-                @test run_wasm(bytes, "gt_nothing_any") == 1    # Nothing <: Any
-                @test run_wasm(bytes, "gt_nothing_i64") == 0    # Nothing !<: Int64
-                @test run_wasm(bytes, "gt_i64_nothing") == 0    # Int64 !<: Nothing
-                # Type{T}
-                @test run_wasm(bytes, "gt_typei_typei") == 1  # Type{Int64} <: Type{Int64}
-                @test run_wasm(bytes, "gt_typei_typen") == 0  # Type{Int64} !<: Type{Number}
-                @test run_wasm(bytes, "gt_typei_dt") == 1     # Type{Int64} <: DataType
-                # Char
-                @test run_wasm(bytes, "gt_char_char") == 1    # Char <: Char
-                @test run_wasm(bytes, "gt_char_any") == 1     # Char <: Any
-                @test run_wasm(bytes, "gt_char_num") == 0     # Char !<: Number
-                # More cross-type
-                @test run_wasm(bytes, "gt_absstr_any") == 1   # AbstractString <: Any
-                @test run_wasm(bytes, "gt_absstr_num") == 0   # AbstractString !<: Number
-                @test run_wasm(bytes, "gt_i64_bool") == 0     # Int64 !<: Bool
-                @test run_wasm(bytes, "gt_bool_i64") == 0     # Bool !<: Int64
-                @test run_wasm(bytes, "gt_f64_i64") == 0      # Float64 !<: Int64
-                @test run_wasm(bytes, "gt_i64_f64") == 0      # Int64 !<: Float64
-            end
+            # Ground truth: each test matches native Julia <:
+            # Concrete numeric identity
+            @test run_wasm(bytes, "gt_i64_i64") == 1      # Int64 <: Int64
+            @test run_wasm(bytes, "gt_i32_i32") == 1      # Int32 <: Int32
+            @test run_wasm(bytes, "gt_f64_f64") == 1      # Float64 <: Float64
+            @test run_wasm(bytes, "gt_f32_f32") == 1      # Float32 <: Float32
+            @test run_wasm(bytes, "gt_bool_bool") == 1    # Bool <: Bool
+            # Numeric hierarchy (true)
+            @test run_wasm(bytes, "gt_i64_num") == 1      # Int64 <: Number
+            @test run_wasm(bytes, "gt_i64_real") == 1     # Int64 <: Real
+            @test run_wasm(bytes, "gt_i64_int") == 1      # Int64 <: Integer
+            @test run_wasm(bytes, "gt_i64_signed") == 1   # Int64 <: Signed
+            @test run_wasm(bytes, "gt_i64_any") == 1      # Int64 <: Any
+            @test run_wasm(bytes, "gt_i32_signed") == 1   # Int32 <: Signed
+            @test run_wasm(bytes, "gt_i32_num") == 1      # Int32 <: Number
+            @test run_wasm(bytes, "gt_f64_num") == 1      # Float64 <: Number
+            @test run_wasm(bytes, "gt_f64_real") == 1     # Float64 <: Real
+            @test run_wasm(bytes, "gt_f64_absfloat") == 1 # Float64 <: AbstractFloat
+            @test run_wasm(bytes, "gt_f32_num") == 1      # Float32 <: Number
+            @test run_wasm(bytes, "gt_bool_int") == 1     # Bool <: Integer
+            @test run_wasm(bytes, "gt_bool_num") == 1     # Bool <: Number
+            @test run_wasm(bytes, "gt_u64_unsigned") == 1 # UInt64 <: Unsigned
+            @test run_wasm(bytes, "gt_u64_num") == 1      # UInt64 <: Number
+            @test run_wasm(bytes, "gt_u8_unsigned") == 1  # UInt8 <: Unsigned
+            @test run_wasm(bytes, "gt_u8_num") == 1       # UInt8 <: Number
+            # Numeric hierarchy (false)
+            @test run_wasm(bytes, "gt_i64_unsigned") == 0 # Int64 !<: Unsigned
+            @test run_wasm(bytes, "gt_i64_absfloat") == 0 # Int64 !<: AbstractFloat
+            @test run_wasm(bytes, "gt_i64_absstr") == 0   # Int64 !<: AbstractString
+            @test run_wasm(bytes, "gt_i32_i64") == 0      # Int32 !<: Int64
+            @test run_wasm(bytes, "gt_f64_signed") == 0   # Float64 !<: Signed
+            @test run_wasm(bytes, "gt_f32_f64") == 0      # Float32 !<: Float64
+            @test run_wasm(bytes, "gt_bool_signed") == 0  # Bool !<: Signed
+            @test run_wasm(bytes, "gt_u64_signed") == 0   # UInt64 !<: Signed
+            # Reverse direction (abstract !<: concrete)
+            @test run_wasm(bytes, "gt_num_i64") == 0      # Number !<: Int64
+            @test run_wasm(bytes, "gt_real_i64") == 0     # Real !<: Int64
+            @test run_wasm(bytes, "gt_signed_i64") == 0   # Signed !<: Int64
+            @test run_wasm(bytes, "gt_any_i64") == 0      # Any !<: Int64
+            @test run_wasm(bytes, "gt_any_num") == 0      # Any !<: Number
+            # Any <: Any
+            @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
+            # String types
+            @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
+            @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — FOUND-5003: fixed Union{Type{T}} phi local allocation
+            @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
+            @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
+            @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
+            # Parametric types — invariant
+            @test run_wasm(bytes, "gt_vi64_vi64") == 1    # Vector{Int64} <: Vector{Int64}
+            @test run_wasm(bytes, "gt_vi64_vnum") == 0    # Vector{Int64} !<: Vector{Number} (invariant!)
+            @test run_wasm(bytes, "gt_vf64_vf64") == 1    # Vector{Float64} <: Vector{Float64}
+            @test run_wasm(bytes, "gt_vf64_vnum") == 0    # Vector{Float64} !<: Vector{Number}
+            @test run_wasm(bytes, "gt_vi32_vi32") == 1    # Vector{Int32} <: Vector{Int32}
+            @test run_wasm(bytes, "gt_vi32_vi64") == 0    # Vector{Int32} !<: Vector{Int64}
+            @test run_wasm(bytes, "gt_di64_di64") == 1    # Dict{String,Int64} <: Dict{String,Int64}
+            @test run_wasm(bytes, "gt_di64_dnum") == 0    # Dict{String,Int64} !<: Dict{String,Number}
+            @test run_wasm(bytes, "gt_pi_pi") == 1        # Pair{Int64,Int64} <: Pair{Int64,Int64}
+            @test run_wasm(bytes, "gt_pi_pn") == 0        # Pair{Int64,Int64} !<: Pair{Int64,Number}
+            # Tuple types — covariant
+            @test run_wasm(bytes, "gt_ti64_ti64") == 1    # Tuple{Int64} <: Tuple{Int64}
+            @test run_wasm(bytes, "gt_ti64_tnum") == 1    # Tuple{Int64} <: Tuple{Number} (covariant!)
+            @test run_wasm(bytes, "gt_tif_tnn") == 1      # Tuple{Int64,Float64} <: Tuple{Number,Number}
+            @test run_wasm(bytes, "gt_t0_t0") == 1        # Tuple{} <: Tuple{}
+            @test run_wasm(bytes, "gt_t1_t2") == 0        # Tuple{Int64} !<: Tuple{Int64,Float64}
+            @test run_wasm(bytes, "gt_tf_ti") == 0        # Tuple{Float64} !<: Tuple{Int64}
+            # More numerics
+            @test run_wasm(bytes, "gt_i8_signed") == 1    # Int8 <: Signed
+            @test run_wasm(bytes, "gt_i8_int") == 1       # Int8 <: Integer
+            @test run_wasm(bytes, "gt_i8_num") == 1       # Int8 <: Number
+            @test run_wasm(bytes, "gt_i8_i64") == 0       # Int8 !<: Int64
+            @test run_wasm(bytes, "gt_i16_signed") == 1   # Int16 <: Signed
+            @test run_wasm(bytes, "gt_i16_num") == 1      # Int16 <: Number
+            @test run_wasm(bytes, "gt_u16_unsigned") == 1 # UInt16 <: Unsigned
+            @test run_wasm(bytes, "gt_u16_num") == 1      # UInt16 <: Number
+            @test run_wasm(bytes, "gt_i128_signed") == 1  # Int128 <: Signed
+            @test run_wasm(bytes, "gt_i128_num") == 1     # Int128 <: Number
+            @test run_wasm(bytes, "gt_u128_unsigned") == 1 # UInt128 <: Unsigned
+            @test run_wasm(bytes, "gt_f16_absfloat") == 1 # Float16 <: AbstractFloat
+            @test run_wasm(bytes, "gt_f16_real") == 1     # Float16 <: Real
+            @test run_wasm(bytes, "gt_f16_f64") == 0      # Float16 !<: Float64
+            # Cross-category false
+            @test run_wasm(bytes, "gt_i64_str") == 0      # Int64 !<: String
+            @test run_wasm(bytes, "gt_str_i64") == 0      # String !<: Int64
+            @test run_wasm(bytes, "gt_f64_str") == 0      # Float64 !<: String
+            @test run_wasm(bytes, "gt_bool_str") == 0     # Bool !<: String
+            @test run_wasm(bytes, "gt_num_str") == 0      # Number !<: String
+            # Abstract hierarchy
+            @test run_wasm(bytes, "gt_signed_int") == 1   # Signed <: Integer
+            @test run_wasm(bytes, "gt_int_real") == 1     # Integer <: Real
+            @test run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — FOUND-5003: fixed Union{Type{T}} phi local allocation
+            @test run_wasm(bytes, "gt_num_any") == 1      # Number <: Any
+            @test run_wasm(bytes, "gt_unsigned_int") == 1 # Unsigned <: Integer
+            @test run_wasm(bytes, "gt_absfloat_real") == 1 # AbstractFloat <: Real
+            @test run_wasm(bytes, "gt_signed_unsigned") == 0 # Signed !<: Unsigned
+            @test run_wasm(bytes, "gt_unsigned_signed") == 0 # Unsigned !<: Signed
+            @test run_wasm(bytes, "gt_absfloat_int") == 0 # AbstractFloat !<: Integer
+            @test run_wasm(bytes, "gt_int_absfloat") == 0 # Integer !<: AbstractFloat
+            # Nothing
+            @test run_wasm(bytes, "gt_nothing_nothing") == 1 # Nothing <: Nothing
+            @test run_wasm(bytes, "gt_nothing_any") == 1    # Nothing <: Any
+            @test run_wasm(bytes, "gt_nothing_i64") == 0    # Nothing !<: Int64
+            @test run_wasm(bytes, "gt_i64_nothing") == 0    # Int64 !<: Nothing
+            # Type{T}
+            @test run_wasm(bytes, "gt_typei_typei") == 1  # Type{Int64} <: Type{Int64}
+            @test run_wasm(bytes, "gt_typei_typen") == 0  # Type{Int64} !<: Type{Number}
+            @test run_wasm(bytes, "gt_typei_dt") == 1     # Type{Int64} <: DataType
+            # Char
+            @test run_wasm(bytes, "gt_char_char") == 1    # Char <: Char
+            @test run_wasm(bytes, "gt_char_any") == 1     # Char <: Any
+            @test run_wasm(bytes, "gt_char_num") == 0     # Char !<: Number
+            # More cross-type
+            @test run_wasm(bytes, "gt_absstr_any") == 1   # AbstractString <: Any
+            @test run_wasm(bytes, "gt_absstr_num") == 0   # AbstractString !<: Number
+            @test run_wasm(bytes, "gt_i64_bool") == 0     # Int64 !<: Bool
+            @test run_wasm(bytes, "gt_bool_i64") == 0     # Bool !<: Int64
+            @test run_wasm(bytes, "gt_f64_i64") == 0      # Float64 !<: Int64
+            @test run_wasm(bytes, "gt_i64_f64") == 0      # Int64 !<: Float64
         end
 
     end
@@ -5860,7 +5728,7 @@ const a = e.tf5_make_alpha(42);
 const r = e.tf5_dispatch_ab(a);
 console.log(JSON.stringify({result: Number(r)}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -5915,7 +5783,7 @@ const cg = e.tf5_dispatch_3way(g);
 const ok = Number(ca)===1 && Number(cb)===2 && Number(cg)===3;
 console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -5952,7 +5820,7 @@ const cd = e.tf5_classify_pet(dog);
 const ok = Number(cc)===1 && Number(cd)===2;
 console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6058,7 +5926,7 @@ console.log(JSON.stringify({
     ok: Number(d_rn)===1 && Number(d_gn)===2 && Number(d_gif)===3 && Number(d_ssa)===4
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6134,7 +6002,7 @@ console.log(JSON.stringify({
     ok: v_ssa===42n && v_arg===7n && v_gn===99n
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6224,7 +6092,7 @@ console.log(JSON.stringify({
     ok: d_call===10 && d_invoke===11 && d_new===12
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6474,7 +6342,7 @@ console.log(JSON.stringify({
             _t60_cosh(x::Float64)::Float64 = cosh(x)
             _t60_tanh(x::Float64)::Float64 = tanh(x)
             _hyp_close(f, x) = (r = compare_julia_wasm(f, x);
-                !r.skipped && isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
+                isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
             for x in (0.0, 0.34, 0.35, 0.5, 1.0, -1.0, 2.0, -2.0, 5.0, 20.0, 21.0,
                       30.0, 710.0, 1e-8, 1e-300)
                 @test _hyp_close(_t60_sinh, x)
@@ -6589,30 +6457,27 @@ console.log(JSON.stringify({
             # tracked, passing or failing. The loop's product KPI is "PI pieces green:
             # N/total". To update after a (re-)harvest or codegen fix that flips a piece:
             # `julia --project=. test/integration/regen_snapshot_lock.jl` and commit the lock.
-            # Node-gated (skips cleanly when the wasm runner is unavailable).
-            if WasmRunner.runner_available() && isfile(SNAP_FIX)
-                statuses = pi_all_statuses()
-                @test !isempty(statuses)
-                lock = isfile(SNAP_LOCK) ? JSON.parsefile(SNAP_LOCK) : Dict{String,Any}()
-                @info "Snapshot.jl island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
-                for s in statuses
-                    rec = get(lock, s.key, nothing)
-                    if rec === nothing
-                        @warn "PI island piece missing from lock — run test/integration/regen_snapshot_lock.jl" key = s.key status = s.status
-                        @test false
+            statuses = pi_all_statuses()
+            @test !isempty(statuses)
+            lock = JSON.parsefile(SNAP_LOCK)
+            @info "Snapshot.jl island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
+            for s in statuses
+                rec = get(lock, s.key, nothing)
+                if rec === nothing
+                    @warn "PI island piece missing from lock — run test/integration/regen_snapshot_lock.jl" key = s.key status = s.status
+                    @test false
+                else
+                    _ok = s.status == rec["status"]
+                    _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
+                    # The lock (snapshot_island_status.json) is generated on the stable
+                    # release Julia (1.12). On a moving prerelease (~1.13.0-rc) a few
+                    # pieces legitimately classify differently; that shouldn't redden
+                    # CI on the unstable target. Enforce strictly on stable, tolerate
+                    # flips on prerelease (regen the lock once 1.13 ships stable).
+                    if _ok || VERSION < v"1.13-"
+                        @test _ok
                     else
-                        _ok = s.status == rec["status"]
-                        _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
-                        # The lock (snapshot_island_status.json) is generated on the stable
-                        # release Julia (1.12). On a moving prerelease (~1.13.0-rc) a few
-                        # pieces legitimately classify differently; that shouldn't redden
-                        # CI on the unstable target. Enforce strictly on stable, tolerate
-                        # flips on prerelease (regen the lock once 1.13 ships stable).
-                        if _ok || VERSION < v"1.13-"
-                            @test _ok
-                        else
-                            @test_broken _ok
-                        end
+                        @test_broken _ok
                     end
                 end
             end

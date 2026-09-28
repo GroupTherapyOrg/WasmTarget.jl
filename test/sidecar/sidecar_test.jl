@@ -182,8 +182,6 @@ end
 const SIDECAR_WT_BYTES, SIDECAR_IMPORT_IDXS = _build_sidecar_wt_module()
 
 @testset "sidecar: WT wiring" begin
-    @test WasmRunner.runner_available() || true   # informational; cases below skip gracefully
-
     # Confirm every import stub firing through translate_external_type/
     # _check_import_stub_external_types! unchanged: all 5 declared import
     # signatures are plain numeric (Int32/Float64), so no coercion happens.
@@ -231,8 +229,7 @@ end
         r = compare_sidecar_wasm_vec(SIDECAR_WT_BYTES, SIDECAR_BYTES, SIDECAR_MODULE_NAME,
                                       "sidecar_daxpy", expected, c.a, c.x, c.y)
         @testset "$(c.name)" begin
-            @test r.skipped || r.pass
-            r.skipped && @warn "sidecar daxpy case skipped (no Node)" case = c.name
+            @test r.pass
         end
     end
 end
@@ -249,6 +246,5 @@ end
     expected = vcat(a1 .* x1 .+ y1, a2 .* x2 .+ y2)
     r = compare_sidecar_wasm_vec(SIDECAR_WT_BYTES, SIDECAR_BYTES, SIDECAR_MODULE_NAME,
                                   "sidecar_daxpy_twice", expected, a1, x1, y1, a2, x2, y2)
-    @test r.skipped || r.pass
-    r.skipped && @warn "sidecar double-call case skipped (no Node)"
+    @test r.pass
 end

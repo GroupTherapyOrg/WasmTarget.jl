@@ -100,7 +100,6 @@ _fd_b_hess(u::Vector{Float64})  = (o = Matrix{Float64}(undef, length(u), length(
 _fd_b_der(u::Vector{Float64})   = (o = Vector{Float64}(undef, 3); ForwardDiff.derivative!(o, t -> [t^2, sin(t), exp(t)], u[1]); o)  # f: R→R³
 
 function run_forwarddiff_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0xF0D1)
     sc()  = [ (2rand(rng) - 1 + 0.05,) for _ in 1:reps ]                       # scalar inputs (avoid exact 0)
     v2()  = [ (Float64[2rand(rng) - 1, 2rand(rng) - 1],) for _ in 1:reps ]      # length-2 vectors

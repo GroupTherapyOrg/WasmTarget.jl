@@ -49,7 +49,6 @@ _st_cor1(v)    = cor(v)
 _st_cor2(a, b) = cor(a, b)
 
 function run_stats_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x57A7)
     @testset "in-place median!/quantile!" begin
         @test _st_diff(_st_medb, (Vector{Float64},),

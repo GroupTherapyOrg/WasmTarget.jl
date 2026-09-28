@@ -2308,6 +2308,8 @@ const LOCKS = [
         () -> length(unresolved_dart_anchors())),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
+    "L134_the_wasm_runtime_is_required" => ("no test branches on the wasm runtime's absence: test/wasm_runner.jl's one Node detection errors at load when Node ≥ 20 is missing, and no test skips, reports a pass, or answers `skipped` without it (runner_available, :nonode, :no_node, NODE_OK, a `skipped` result field) — every differential lane either runs its wasm or fails (dev/CHARTER.md C5)",
+        () -> count_sites(r"runner_available|:nonode\b|:no_node\b|\bNODE_OK\b|NODE_CMD|NEEDS_(EXPERIMENTAL_)?FLAG|\bdetect_node\b|\.skipped\b|\bskipped\s*="; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])),
     "L135_callee_by_exact_signature" => ("get_function binds a call to a compiled specialization only on its exact argument types (the return-compatibility gate aside): no subtype or reverse-subtype pass between argument types. An :invoke names its MethodInstance's registered signature; any other mismatch is dynamic dispatch, lowered as such or rejected. The reverse pass bound `RW(::Any)` holding a Symbol to `RW(::String)` and answered 1001 for 1100 (smoke xfail dynamic_constructor; dev/CHARTER.md C6)",
         () -> begin
             src = read(joinpath(CODEGEN, "types.jl"), String)

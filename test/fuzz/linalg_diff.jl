@@ -15,7 +15,7 @@
 #
 # Loaded by fuzz_suite.jl AFTER fuzz/run.jl, so `bridge_run_args`
 # (FuzzBridgeArgs) and `WasmTarget` are already in scope. Entry:
-# `run_linalg_matrix_tests()` (asserts via @test; skips cleanly without Node).
+# `run_linalg_matrix_tests()` (asserts via @test).
 
 using LinearAlgebra
 using Random
@@ -182,7 +182,6 @@ _la_rdivb(A, U)   = rdiv!(A, UpperTriangular(U))                  # X U = A
 _la_copytritob(d, s) = LinearAlgebra.copytrito!(d, s, 'U')
 
 function run_linalg_matrix_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x1AA0)
     sq   = [ (n = rand(rng, 2:4); (_rmat(rng, n, n),)) for _ in 1:reps ]
     rect = [ (r = rand(rng, 2:4); c = rand(rng, 2:4); (_rmat(rng, r, c),)) for _ in 1:reps ]

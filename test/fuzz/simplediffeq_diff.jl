@@ -88,7 +88,6 @@ for S in _SDE_SOLVERS
 end
 
 function run_simplediffeq_tests(; reps::Int = 30)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x5DE0)
     ic() = [ (0.5 + rand(rng),) for _ in 1:reps ]   # initial conditions in (0.5, 1.5)
     for S in _SDE_SOLVERS

@@ -72,7 +72,6 @@ _rx_subseqb(s, v) = randsubseq!(Xoshiro(s), Int64[], v, 0.4)
 _rx_rstr(s)       = randstring(Xoshiro(s), 10)
 
 function run_random_tests(; reps::Int = 60)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     if VERSION >= v"1.13-"
         # The seeded-Xoshiro differential is broadly UNRELIABLE on Julia 1.13-rc1:
         # CI shows flaky wasm↔native divergences across ALL seeded streams (even

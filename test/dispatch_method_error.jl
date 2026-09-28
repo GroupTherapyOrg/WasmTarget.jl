@@ -68,7 +68,6 @@ end
         @test get(owner, p, g) === g
     end
 
-    WasmRunner.runner_available() || return
     native(fn, args...) = try; (:ok, fn(args...)); catch e; (:err, typeof(e)); end
     wasm(name, js) = WasmRunner.run_wasm_single(bytes, name, js)
     v = Int32(0)
