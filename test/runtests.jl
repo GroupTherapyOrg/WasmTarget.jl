@@ -9633,21 +9633,14 @@ console.log(JSON.stringify({
     _rand_bool(x::Int64)::Bool = rand(Random.Xoshiro(x), Bool)
 
     @pphase "Random stdlib" begin
-        # 1.13's Random IR shapes hit the ledgered memoryrefnew pair-to-local
-        # family (a517b4c8372d) across the board — the whole phase is gated
-        # until pair-locals land. 1.12: all seeded streams bit-exact.
-        @static if VERSION < v"1.13-"
-            @test compare_julia_wasm(_rand_i64, 42).pass
-            @test compare_julia_wasm(_rand_i64, -3).pass
-            @test compare_julia_wasm(_rand_f64, 42).pass
-            @test compare_julia_wasm(_rand_range, 7).pass
-            @test compare_julia_wasm(_rand_randn, 42).pass
-            @test compare_julia_wasm(_rand_stream, 7).pass
-            @test compare_julia_wasm(_rand_bool, 42).pass
-            @test compare_julia_wasm(_rand_bool, -3).pass
-        else
-            @test_skip false
-        end
+        @test compare_julia_wasm(_rand_i64, 42).pass
+        @test compare_julia_wasm(_rand_i64, -3).pass
+        @test compare_julia_wasm(_rand_f64, 42).pass
+        @test compare_julia_wasm(_rand_range, 7).pass
+        @test compare_julia_wasm(_rand_randn, 42).pass
+        @test compare_julia_wasm(_rand_stream, 7).pass
+        @test compare_julia_wasm(_rand_bool, 42).pass
+        @test compare_julia_wasm(_rand_bool, -3).pass
     end
 
     # top-level so they're singleton functions, not capturing closures —

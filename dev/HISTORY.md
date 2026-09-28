@@ -92,23 +92,22 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 ## Phase 13 — closing the charter (2026-09-23 …)
 
 - R34 → 0: every catch that swallowed a failure became Julia's own non-throwing query or a
-  located reject; the compiled-bytes cache went with its catch (its key missed a redefined
-  callee). C6 then gained R39, the smoke xfails that compile and fail at run time.
+  located reject (the compiled-bytes cache went with its catch). C6 gained R39.
 - L130 (every file outside src consumed), L131 (every algorithm mapped to its model),
   L132 (every dart anchor resolves at the pin), L133 (the standalone bodies are exact), R38.
-- Host imports precede every defined function (time_ns() once renumbered them); rand() is
-  seeded by the host at startup, as Julia's Random.__init__ seeds it from RandomDevice.
-- Type objects are instances of their kind (Union, UnionAll, Union{}, TypeVar), keyed by
-  identity and populated in program order on every machine.
+- Host imports precede every defined function; rand() is seeded by the host at startup.
+- Type objects are instances of their kind, keyed by identity and populated in program order.
 - The builder checks an `if`'s then-branch value types at `else`, as dart's else_ does.
-- A MemoryRef keeps its offset in a field and across a call (its single-value struct), and
-  Vector growth runs Julia's own bodies and reallocating closures: the ten reallocating
-  Vector overlays and the name-keyed grow stand-in are deleted, R37 = 0, C1 closed.
-- R39 = 0, C6 closed: `ncodeunits` and `Symbol` lower only String and Symbol (a SubString's
-  length had read its parent's array), `typeof` names a bare Memory by its array type, and the
-  harness reads an `Any`-returning export through a typed wrapper.
-- A call binds only to the specialization Julia selects (an invoke by its MethodInstance, L135);
-  the collector prunes by reachability, so a site that keeps an abstract invoke keeps its body.
+- A MemoryRef keeps its offset in a field and across a call; Vector growth runs Julia's own
+  bodies (ten overlays and the grow stand-in deleted), R37 = 0, C1 closed.
+- R39 = 0, C6 closed: `ncodeunits` and `Symbol` are Julia's methods beyond String and Symbol.
+- A call binds only to the specialization Julia selects (L135); the collector prunes by
+  reachability, so a site that keeps an abstract invoke keeps its body (InvokePrune).
+- The wasm runtime is required: no test passes without running its wasm (L134).
+- Int128 limbs are modeled (Int128Limbs): raw shifts past 128 answered wrong; division and
+  the byte swap compile. One storage-pointer offset serves every load and store (a byte
+  store ignored its index; String loads and stores were off by one).
+- Seeded Random runs on 1.13 (its SHA-512 seeding); objectid of an immutable rejects.
 
 ## Why the archive was consolidated
 

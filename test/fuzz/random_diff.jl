@@ -30,22 +30,13 @@ function _rnd_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     return true
 end
 
-# Random names this file verifies (for stdlib_coverage.jl).
-# The whole seeded-Xoshiro differential is a valid oracle only on Julia ≤1.12:
-# on 1.13-rc1 it is broadly UNRELIABLE (CI shows flaky wasm↔native divergences
-# across ALL seeded streams — even basic rand(Xoshiro(s)) — and across platforms;
-# a prior commit passed 1.13-ubuntu, the next failed it). 1.13 reworked Xoshiro
-# seeding (the new SeedHasher path) in a way the differential can't reproduce
-# stably. So nothing in Random is differentially verified on ≥1.13 (see
-# run_random_tests). Random = 100% on
-# ≤1.12 (the stable release the campaign targets).
-const RANDOM_VERIFIED = if VERSION < v"1.13-"
-    Set{Symbol}([
-        :rand, :randn, :randexp, :randperm, :randcycle, :shuffle, :Xoshiro,
-        :randperm!, :randcycle!, :shuffle!, :seed!, :randsubseq, :randsubseq!, :randstring])
-else
-    Set{Symbol}()
-end
+# Random names this file verifies (for stdlib_coverage.jl), on every Julia the suite runs.
+# (1.13 seeds Xoshiro through SHA-512, which needed 128-bit division, the 128-bit byte swap and
+# store, and writes into a fresh String through its pointer; the differential was once skipped
+# there as an "unstable oracle".)
+const RANDOM_VERIFIED = Set{Symbol}([
+    :rand, :randn, :randexp, :randperm, :randcycle, :shuffle, :Xoshiro,
+    :randperm!, :randcycle!, :shuffle!, :seed!, :randsubseq, :randsubseq!, :randstring])
 
 # seed → draw (the draw is a CALLEE so the seeded-stream path compiles)
 _rx_f(s)    = rand(Xoshiro(s))
@@ -72,18 +63,6 @@ _rx_subseqb(s, v) = randsubseq!(Xoshiro(s), Int64[], v, 0.4)
 _rx_rstr(s)       = randstring(Xoshiro(s), 10)
 
 function run_random_tests(; reps::Int = 60)
-    if VERSION >= v"1.13-"
-        # The seeded-Xoshiro differential is broadly UNRELIABLE on Julia 1.13-rc1:
-        # CI shows flaky wasm↔native divergences across ALL seeded streams (even
-        # basic rand(Xoshiro(s))) and all platforms (a prior commit passed
-        # 1.13-ubuntu, the next failed it). 1.13's reworked Xoshiro seeding (the
-        # new SeedHasher path) isn't reproduced stably by the differential, so the
-        # oracle isn't valid here. Verified bit-exact on ≤1.12 (the stable release
-        # the campaign targets); gated on 1.13 pending root-cause.
-        @info "Random seeded-Xoshiro differential skipped on Julia ≥1.13 (unstable oracle)"
-        @test_skip true
-        return
-    end
     rng = MersenneTwister(0x5EED)
     seeds = [ (rand(rng, Int64),) for _ in 1:reps ]
     @testset "Xoshiro seeded rand" begin
@@ -112,7 +91,6 @@ function run_random_tests(; reps::Int = 60)
         @test _rnd_diff(_rx_shufb, (Int64, Vector{Int64}), ivecs(), Vector{Int64})
     end
     @testset "Xoshiro seed!/randsubseq/randstring" begin
-        # (≤1.12 only — run_random_tests early-returns on ≥1.13.)
         ivecs() = [ (rand(rng, Int64), collect(1:rand(rng, 4:12))) for _ in 1:reps ]
         @test _rnd_diff(_rx_seedb,   (Int64,), [ (rand(rng, Int64),) for _ in 1:reps ], Float64)
         @test _rnd_diff(_rx_subseq,  (Int64, Vector{Int64}), ivecs(), Vector{Int64})

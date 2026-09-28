@@ -525,11 +525,9 @@ _xf("string_identity_gaps", Any[
 # FOREIGN_LOWERINGS. The seeded stream reaches `jl_type_intersection` through
 # Random.hash_seed's dispatch guards: a total break of that lowering on 2026-09-08 failed
 # every seeded Random differential in the full suite while smoke and probes stayed green.
-# On Julia 1.13 the seeded stream does not compile (measured 2026-09-23): 1.13 seeds through
-# Random.SeedHasher, whose rehash! feeds SHA2_512 — `update!` reduces its UInt128 byte count
-# with `rem(::UInt128, ::UInt64)`, and both cases reject located at that `checked_urem_int`
-# (128-bit division has no lowering).
-(VERSION >= v"1.13-" ? _xf : _g)("seeded_random", Any[
+# On 1.13 the stream seeds through Random.SeedHasher and SHA2_512 (128-bit division, byte swap
+# and store; writes into a fresh String through its pointer).
+_g("seeded_random", Any[
     ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
     ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
 ])
