@@ -100,7 +100,6 @@ const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function/isvisible, which fail to compile first)",
     (:FOREIGN_LOWERINGS, "jl_is_const") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function; isconst(Base, runtime Symbol) reaches it, it declines, and the call rejects 'no lowering')",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "fires for unsafe_wrap(Array, pointer(v), n) and declines (pointer not traced) — smoke xfail pointer_foreigncalls/unsafe_wrap_pointer (measured 2026-09-22)",
-    (:FOREIGN_LOWERINGS, "jl_type_unionall") => "fires for UnionAll(v, t) and rejects: the constructor is not ported — smoke xfail unionall_constructor (measured 2026-09-27)",
     (:FOREIGN_LOWERINGS, "jl_value_ptr") => "every measured spelling (pointer_from_objref of a Ref, graphemes, isgraphemebreak!) rejects 'escapes storage-relative WasmGC operations' — smoke xfail pointer_foreigncalls/ref_pointer_load (measured 2026-09-22)",
 )
 

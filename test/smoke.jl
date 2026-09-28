@@ -672,15 +672,22 @@ _xf("apply_type_union", Any[
 _g("memory_length", Any[
     ("memory_undef_length", (n::Int64) -> length(Memory{Int64}(undef, n)), Int64(3)),
 ])
-# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type (jl_type_unionall);
-# that is not ported, so the call rejects (statements.jl `_fc_jl_type_unionall!`). It used to
-# emit `ref.test $JlUnionAll` on the TypeVar operand, a predicate in the constructed type's
-# place (native 1, wasm 0 for both).
+# FOREIGN_LOWERINGS jl_type_unionall: `UnionAll(v, t)` constructs a type (jltypes.c
+# jl_type_unionall, statements.jl `_fc_jl_type_unionall!`): a body without v is the body,
+# `T where T<:S` is S, a non-type body is Julia's TypeError, anything else a new UnionAll —
+# the mention test is jl_has_typevar, ported (get_has_typevar_function!). It used to emit
+# `ref.test $JlUnionAll` on the TypeVar, a predicate in the constructed type's place.
 const _SMOKE_TV = TypeVar(:T)
+const _SMOKE_TV_S = TypeVar(:S, Integer)
 @noinline _sm_unionall(t::TypeVar, @nospecialize(b)) = UnionAll(t, b)
-_xf("unionall_constructor", Any[
+_g("unionall_constructor", Any[
     ("unionall_body_without_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) === Int64 ? 1 : 0), Int64(1)),
     ("unionall_body_with_var", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; _sm_unionall(_SMOKE_TV, b) isa UnionAll ? 1 : 0), Int64(2)),
+    ("unionall_body_is_var", (x::Int64) -> (b = Any[_SMOKE_TV_S, Int64][x]; _sm_unionall(_SMOKE_TV_S, b) === Integer ? 1 : 0), Int64(1)),
+    ("unionall_new_node_parts", (x::Int64) -> (b = Any[Int64, Vector{_SMOKE_TV}][x]; u = _sm_unionall(_SMOKE_TV, b); u isa UnionAll ? ((u.var === _SMOKE_TV ? 10 : 20) + (u.body === Vector{_SMOKE_TV} ? 1 : 2)) : 0), Int64(2)),
+    ("unionall_union_body", (x::Int64) -> (b = Any[Int64, Union{_SMOKE_TV, Nothing}][x]; _sm_unionall(_SMOKE_TV, b) isa UnionAll ? 1 : 0), Int64(2)),
+    ("unionall_type_error", (x::Int64) -> (b = Any[Int64, 5][x]; try; _sm_unionall(_SMOKE_TV, b); 0; catch e; e isa TypeError ? 1 : 2; end), Int64(2)),
+    ("supertype_of_unionall", (x::Int64) -> (v = Any[Vector, Int64]; t = v[x]; t isa UnionAll ? (s = supertype(t); s isa UnionAll ? ((s.var === t.var ? 10 : 20) + (s.body isa DataType ? 1 : 2)) : 0) : 5), Int64(1)),
 ])
 # A type object is an instance of its kind, typeof(X) (constants.dart:361 _lowerTypeToConstant):
 # a Union constant is a $JlUnion holding its members, a UnionAll a $JlUnionAll holding its

@@ -2217,15 +2217,46 @@ function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
         return b
 end
 
-# `UnionAll(v, t)` (boot.jl) is this foreigncall, and it CONSTRUCTS a type: jl_type_unionall
-# answers t itself when t does not mention v, v's upper bound for `T where T<:S`, and a new
-# UnionAll otherwise, which needs jl_has_typevar's walk of t. That is not ported, so the call
-# rejects (it used to answer a `ref.test $JlUnionAll` of v, a predicate in the constructed
-# type's place).
+# `UnionAll(v, t)` (boot.jl) is this foreigncall, and it constructs a type (jltypes.c
+# jl_type_unionall): a body that is not a type or TypeVar is Julia's TypeError; `T where T<:S`
+# is S; a body that does not mention v (jl_has_typevar, get_has_typevar_function!) is the
+# body; anything else is a new UnionAll of v and the body. (It used to answer a
+# `ref.test $JlUnionAll` of v, a predicate in the constructed type's place.)
+# parity(quarantine: Julia's UnionAll constructor is its C runtime's jl_type_unionall, ported.)
 function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
-    emit_unsupported_stub!(ctx, b, :unsupported_method,
-        "UnionAll(v, t) builds a type at run time (jl_type_unionall), which this lowering " *
-        "does not port"; idx=idx, detail=node)
+    length(node.operands) >= 2 || return nothing
+    reg = ctx.type_registry
+    jt, ua, tv = reg.jl_type_idx, reg.jl_unionall_idx, reg.jl_typevar_idx
+    jtr = ConcreteRef(UInt32(jt), true)
+    v, t = allocate_local!(ctx, AnyRef), allocate_local!(ctx, AnyRef)
+    emit_value!(b, node.operands[1], ctx, AnyRef); local_set!(b, v)
+    emit_value!(b, node.operands[2], ctx, AnyRef); local_set!(b, t)
+    # a body that is neither a type nor a TypeVar (a TypeVar is a $JlType)
+    local_get!(b, t); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
+    if_!(b)
+    _emit_typeerror_throw!(b, node.operands[2], Type, idx, ctx; func=:UnionAll)
+    end_block!(b)
+    done = block!(b, AnyRef)
+    # `T where T<:S` is S
+    local_get!(b, t); ref_cast!(b, EqRef, true); local_get!(b, v); ref_cast!(b, EqRef, true)
+    num!(b, Opcode.REF_EQ)
+    if_!(b)
+    local_get!(b, v); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, UInt32(3), jtr)
+    br!(b, done)
+    end_block!(b)
+    # a body that does not mention v is the body
+    local_get!(b, t); local_get!(b, v); i32_const!(b, 0)
+    call!(b, get_has_typevar_function!(ctx.mod, reg), WasmValType[AnyRef, AnyRef, I32], WasmValType[I32])
+    num!(b, Opcode.I32_EQZ)
+    if_!(b)
+    local_get!(b, t); br!(b, done)
+    end_block!(b)
+    # otherwise a new UnionAll(var = v, body = t)
+    i32_const!(b, Int64(JL_TYPE_KIND_UNIONALL))
+    local_get!(b, v); ref_cast!(b, Int64(jt), true)
+    local_get!(b, t); ref_cast!(b, Int64(jt), true)
+    struct_new!(b, ua, WasmValType[I32, jtr, jtr])
+    end_block!(b)
     return b
 end
 

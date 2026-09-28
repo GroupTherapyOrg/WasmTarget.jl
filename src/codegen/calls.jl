@@ -1655,6 +1655,104 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
 end
 
 """
+    get_has_typevar_function!(mod, registry) -> UInt32
+
+The runtime `jl_has_typevar(t, v)`: whether type object or TypeVar `t` mentions TypeVar `v`
+free (jltypes.c jl_has_bound_typevars with `v` alone in its environment). A TypeVar is `v`
+itself unless an enclosing UnionAll binds `v` (the `shadowed` parameter); a UnionAll's var
+bounds and body, a Union's members and a DataType's parameters are walked; anything else
+mentions none — Union{}, a value parameter, and so a Vararg parameter, which has no
+representation here (its slot is null). Params: t (anyref), v (anyref), shadowed (i32).
+parity(quarantine: jl_has_typevar is Julia's C runtime; its walk is ported over WT's type
+objects, as the runtime egal function ports jl_egal.)
+"""
+function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.has_typevar_func_idx !== nothing && return registry.has_typevar_func_idx
+    local jt, dt, un, ua = registry.jl_type_idx, registry.jl_datatype_idx,
+                           registry.jl_union_idx, registry.jl_unionall_idx
+    local tv, sv = registry.jl_typevar_idx, registry.jl_svec_idx
+    local params = WasmValType[AnyRef, AnyRef, I32]
+    local results = WasmValType[I32]
+    local fidx = add_function!(mod, params, results, WasmValType[],
+                               UInt8[Opcode.UNREACHABLE, Opcode.END])
+    registry.has_typevar_func_idx = fidx
+    local b = InstrBuilder(params, results; func_name="jl_has_typevar", mod=mod)
+    local extra = WasmValType[]
+    local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
+    local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
+    local has!() = call!(b, fidx, params, results)
+    local jtr = ConcreteRef(UInt32(jt), true)
+    local eq!(l1, l2) = (local_get!(b, l1); ref_cast!(b, EqRef, true);
+                         local_get!(b, l2); ref_cast!(b, EqRef, true); num!(b, Opcode.REF_EQ))
+    # null (an unrepresented value parameter) mentions nothing
+    local_get!(b, 0); ref_is_null!(b)
+    ret!(() -> i32_const!(b, 0))
+    # a TypeVar is v itself, unless shadowed
+    local_get!(b, 0); ref_test!(b, Int64(tv), false)
+    ret!(() -> (local_get!(b, 2); num!(b, Opcode.I32_EQZ); eq!(0, 1); num!(b, Opcode.I32_AND)))
+    # a value, not a type object, mentions nothing
+    local_get!(b, 0); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
+    ret!(() -> i32_const!(b, 0))
+    local k = alloc(I32)
+    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    local_set!(b, k)
+    # a UnionAll: its var's bounds, then its body, with v shadowed when its var is v
+    local_get!(b, k); i32_const!(b, Int64(JL_TYPE_KIND_UNIONALL)); num!(b, Opcode.I32_EQ)
+    ret!(() -> begin
+        local var = alloc(AnyRef)
+        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(1), jtr)
+        local_set!(b, var)
+        for f in (UInt32(2), UInt32(3))   # lb, ub
+            local_get!(b, var); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, f, jtr)
+            local_get!(b, 1); local_get!(b, 2); has!()
+            ret!(() -> i32_const!(b, 1))
+        end
+        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(2), jtr)
+        local_get!(b, 1)
+        local_get!(b, 2); eq!(var, 1); num!(b, Opcode.I32_OR)
+        has!()
+    end)
+    # a Union: either member
+    local_get!(b, k); i32_const!(b, Int64(JL_TYPE_KIND_UNION)); num!(b, Opcode.I32_EQ)
+    ret!(() -> begin
+        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(1), jtr)
+        local_get!(b, 1); local_get!(b, 2); has!()
+        ret!(() -> i32_const!(b, 1))
+        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(2), jtr)
+        local_get!(b, 1); local_get!(b, 2); has!()
+    end)
+    # a DataType: any parameter
+    local_get!(b, k); i32_const!(b, Int64(JL_TYPE_KIND_DATATYPE)); num!(b, Opcode.I32_EQ)
+    ret!(() -> begin
+        local ps = alloc(ConcreteRef(UInt32(sv), true))
+        local n, i = alloc(I32), alloc(I32)
+        local_get!(b, 0); ref_cast!(b, Int64(dt), false)
+        struct_get!(b, dt, UInt32(3), ConcreteRef(UInt32(sv), true)); local_tee!(b, ps)
+        ref_is_null!(b)
+        ret!(() -> i32_const!(b, 0))
+        local_get!(b, ps); array_len!(b); local_set!(b, n)
+        i32_const!(b, 0); local_set!(b, i)
+        local done = block!(b)
+        local again = loop!(b)
+        local_get!(b, i); local_get!(b, n); num!(b, Opcode.I32_GE_U); br_if!(b, done)
+        local_get!(b, ps); local_get!(b, i); array_get!(b, sv, AnyRef)
+        local_get!(b, 1); local_get!(b, 2); has!()
+        ret!(() -> i32_const!(b, 1))
+        local_get!(b, i); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i)
+        br!(b, again)
+        end_block!(b)
+        end_block!(b)
+        i32_const!(b, 0)
+    end)
+    # Union{}: nothing
+    i32_const!(b, 0)
+    end_block!(b)
+    local slot = fidx - num_imported_funcs(mod) + 1
+    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
+    return fidx
+end
+
+"""
     _emit_egal_class!(b, mod, registry, alloc, C, single) -> b
 
 Inside the runtime egal function, with both anyref operands (locals 0 and 1) known to carry
@@ -2333,13 +2431,13 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
 end
 
 function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
-                                ctx::AbstractCompilationContext)
+                                ctx::AbstractCompilationContext; func::Symbol=:typeassert)
     ensure_exception_tag!(ctx.mod)
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
     def isa StructType || error("TypeError did not register as a Wasm struct")
     emit_struct_prefix!(b, ctx.type_registry, TypeError, info)
-    local values = NirNode[NirLiteral(:typeassert), NirLiteral(""), NirLiteral(target), got]
+    local values = NirNode[NirLiteral(func), NirLiteral(""), NirLiteral(target), got]
     for i in 1:4
         local expected = def.fields[wasm_field_idx(info, i) + 1].valtype
         local source_type = i == 4 ? get_ssa_type(ctx, got) : fieldtype(TypeError, i)

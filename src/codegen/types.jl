@@ -142,6 +142,8 @@ mutable struct TypeRegistry
     memoryref_box_idxs::Union{Nothing, Dict{Type, UInt32}}
     # TypeVar -> its constant global, one per TypeVar object (get_typevar_constant_global!)
     typevar_constant_globals::Union{Nothing, IdDict{TypeVar, UInt32}}
+    # the runtime jl_has_typevar (get_has_typevar_function!)
+    has_typevar_func_idx::Union{Nothing, UInt32}
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -166,7 +168,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing, Dict{Int, UInt32}(), Dict{Any, UInt32}(),  # closure layouter
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
-    IdDict{TypeVar, UInt32}()                           # TypeVar constants
+    IdDict{TypeVar, UInt32}(),                          # TypeVar constants
+    nothing                                             # has_typevar_func_idx
 )
 
 # TRUE-INT-002: Dict-free constructor for WASM self-hosting.
@@ -192,7 +195,8 @@ TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing,  # closure layouter
     nothing,                    # step5 class-DAG synthetics
     nothing,                    # MemoryRef single-value structs
-    nothing                     # TypeVar constants
+    nothing,                    # TypeVar constants
+    nothing                     # has_typevar_func_idx
 )
 
 """
