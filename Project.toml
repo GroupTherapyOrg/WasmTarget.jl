@@ -16,7 +16,6 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SimpleDiffEq = "05bca326-078c-5bf0-a5bf-ce7c7982d7fd"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [extensions]
 WasmTargetDatesExt = "Dates"
@@ -24,7 +23,6 @@ WasmTargetForwardDiffExt = "ForwardDiff"
 WasmTargetLinearAlgebraExt = "LinearAlgebra"
 WasmTargetSimpleDiffEqExt = ["SimpleDiffEq", "SciMLBase", "DiffEqBase", "LinearAlgebra"]
 WasmTargetStaticArraysExt = "StaticArrays"
-WasmTargetStatisticsExt = "Statistics"
 
 [compat]
 # Tilde specifiers pin to supported minor lines only: the typed-IR format the

@@ -9549,9 +9549,7 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_stats_mean_literal, 2.75).pass
         @test compare_julia_wasm_vec(_stats_var, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_std, Float64[3.0, 1.5, 2.5, 4.0]).pass
-        # median/quantile: native shapes on 1.12; on 1.13 the
-        # WasmTargetStatisticsExt overlays reroute the wrapper
-        # specializations through their literal definitions.
+        # median/quantile: Julia's own wrappers, on 1.12 and 1.13.
         @test compare_julia_wasm_vec(_stats_median, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_median, Float64[9.0, -2.0, 7.5, 0.0, 1.0, 3.25, -8.0]).pass
         @test compare_julia_wasm_vec(_stats_quantile, Float64[1.0, 2.0, 3.0, 4.0]).pass

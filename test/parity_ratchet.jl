@@ -1524,15 +1524,12 @@ const LOCKS = [
                         "f === _wt_type_name_str"]
             count(p -> !occursin(p, interp_src), required)
         end),
-    "L54_pure_dense_statistics_correlation" => ("dense float correlation retains Statistics corm arithmetic over one explicitly length-validated index domain",
+    "L54_statistics_compiles_from_its_source" => ("Statistics compiles from its own source: no extension and no overlay of a Statistics method anywhere in ext/ or src/. Until 2026-09-29 six overlays replaced cor, corm, _quantilesort!, mean! and (on 1.13) the median and quantile wrappers; deleted, Julia's bodies matched native in every case of the Statistics lane on 1.12 and 1.13 (dev/CHARTER.md C3)",
         () -> begin
-            stats_src = read(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl"), String)
-            required = ["Statistics.corm(", "x::Vector{T}, mx::T, y::Vector{T}, my::T",
-                        "length(y) == n", "@simd for i in eachindex(x)",
-                        "Statistics.clampcor("]
-            forbidden = ["@simd for i in eachindex(x, y)"]
-            count(p -> !occursin(p, stats_src), required) +
-                count(p -> occursin(p, stats_src), forbidden)
+            project = read(joinpath(ROOT, "Project.toml"), String)
+            isfile(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl")) +
+                occursin("WasmTargetStatisticsExt", project) +
+                count_sites(r"@overlay\s+\S+\s+(?:function\s+)?Statistics\."; roots=[SRC, joinpath(ROOT, "ext")])
         end),
     "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain (rotate!/reflect! compile Julia's own bodies since 2026-09-29, so they are no longer overlays)",
         () -> begin
