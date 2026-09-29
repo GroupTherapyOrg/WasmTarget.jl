@@ -105,6 +105,7 @@ end
     return String(bytes)
 end
 
+# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Float64})
     n = length(v)
     bytes = UInt8[]
@@ -135,6 +136,7 @@ end
     return String(bytes)
 end
 
+# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{String})
     n = length(v)
     bytes = UInt8[]
@@ -413,6 +415,8 @@ end
     end
 end
 
+# parity(quarantine: Julia's check_world_bounded walks the TypeName's binding partitions at run
+# time; the closed module has one world, WASM_WORLD_AGE, and answers from compile-time metadata.)
 @noinline @overlay WASM_METHOD_TABLE function Base.check_world_bounded(tn::Core.TypeName)
     return _closed_world_type_bounds(tn)
 end
@@ -438,6 +442,8 @@ end
     return false
 end
 
+# parity(quarantine: Julia's isvisible walks binding partitions at the current world; the closed
+# module has one world and answers from compile-time binding metadata.)
 @noinline @overlay WASM_METHOD_TABLE function Base.isvisible(sym::Symbol, parent::Module,
                                                               from::Module)
     return _closed_world_isvisible(sym, parent, from)

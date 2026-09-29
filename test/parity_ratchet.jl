@@ -573,7 +573,8 @@ function overlays_without_reason()::Vector{String}
     for path in paths
         L = _lines(path)
         for (i, l) in enumerate(L)
-            occursin(r"^\s*@overlay\s+[A-Za-z_.]*WASM_METHOD_TABLE", l) || continue
+            # any macro prefix (`@noinline @overlay …`) is still an overlay
+            occursin(r"^\s*(?:@\w+\s+)*@overlay\s+[A-Za-z_.]*WASM_METHOD_TABLE", l) || continue
             ok = occursin("parity(", l)
             j = i - 1
             while !ok && j >= 1 && startswith(strip(L[j]), "#")
@@ -812,7 +813,7 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
+    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`: those went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
         () -> length(overlays_without_reason())),
     "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
         () -> smoke_runtime_xfails()),
