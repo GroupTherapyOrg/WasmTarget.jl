@@ -361,11 +361,6 @@ end
 br!(b::InstrBuilder, target::ControlLabel)::InstrBuilder = _br_depth!(b, _label_depth(b, target))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 br_if!(b::InstrBuilder, target::ControlLabel)::InstrBuilder = _br_if_depth!(b, _label_depth(b, target))
-function br_table!(b::InstrBuilder, targets::Vector{ControlLabel}, default::ControlLabel)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); b.v.reachable = false; end
-    _emit!(b, InstrIR.BrTable(UInt32[UInt32(_label_depth(b, t)) for t in targets],
-                              UInt32(_label_depth(b, default))))
-end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:933 InstructionsBuilder.return_)
 return_!(b::InstrBuilder)::InstrBuilder = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
 
@@ -427,25 +422,48 @@ function call_ref!(b::InstrBuilder, type_idx::Integer, params::Vector{<:Any}, re
     _emit!(b, InstrIR.CallRef(UInt32(type_idx)))
 end
 
-# br_on_null: [(ref null ht)] -> [(ref ht)] on fallthrough; branches to `depth` with the
-# null stripped (dart2wasm br_on_null). On fallthrough the top becomes non-null; reachability
-# stays true (conditional). Validate the branch target like br_if! (without popping the value).
+# The reference operand of br_on_null / br_on_non_null, and the type it has once not null: a
+# concrete ref loses its null; an abstract one keeps WT's nullable spelling (a supertype of
+# dart's `withNullability(false)`, so the model can only reject, never accept, wrongly).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1622 RefType.common)
+function _branch_ref_operand(b::InstrBuilder, op::String)::WasmValType
+    if isempty(b.v.stack)
+        push!(b.v.errors, "$(b.func_name): $op needs a reference operand, the stack is empty")
+        return AnyRef
+    end
+    t = b.v.stack[end]
+    if !(t isa RefType || t isa ConcreteRef || t isa NonNullAbstractRef)
+        push!(b.v.errors, "$(b.func_name): $op needs a reference operand, found $t")
+        return AnyRef
+    end
+    return t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : t
+end
+
+# br_on_null: [(ref null ht)] -> [(ref ht)] on fallthrough; branches to `depth` carrying what
+# lies under the operand. On fallthrough the top becomes non-null; reachability stays true.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1619 InstructionsBuilder.br_on_null)
 function _br_on_null_depth!(b::InstrBuilder, depth::Int)::InstrBuilder
     if b.v.reachable
-        t = validate_pop_any!(b.v)
-        nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
+        nn = _branch_ref_operand(b, "br_on_null")
+        validate_branch_types!(b.v, depth, 1)
+        validate_pop_any!(b.v)
         validate_push!(b.v, nn)
     end
     _emit!(b, InstrIR.BrOnNull(UInt32(depth)))
 end
 
 # br_on_non_null: [(ref null ht)] -> [] on fallthrough; branches to `depth` carrying the
-# non-null ref (dart2wasm br_on_non_null). On fallthrough the ref is consumed; reachable stays.
+# non-null ref. On fallthrough the ref is consumed; reachability stays true.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1644 InstructionsBuilder.br_on_non_null)
 function _br_on_non_null_depth!(b::InstrBuilder, depth::Int)::InstrBuilder
-    b.v.reachable && validate_pop_any!(b.v)
+    if b.v.reachable
+        nn = _branch_ref_operand(b, "br_on_non_null")
+        validate_branch_types!(b.v, depth, 1, WasmValType[nn])
+        validate_pop_any!(b.v)
+    end
     _emit!(b, InstrIR.BrOnNonNull(UInt32(depth)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1619 InstructionsBuilder.br_on_null)
 br_on_null!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     _br_on_null_depth!(b, _label_depth(b, target))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1644 InstructionsBuilder.br_on_non_null)
@@ -477,12 +495,6 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:116 Catch)
 catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
     SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
-catch_ref_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
-    SymbolicTryCatch(Opcode.CATCH_REF, UInt32(tag), label)
-catch_all_clause(label::ControlLabel)::SymbolicTryCatch =
-    SymbolicTryCatch(Opcode.CATCH_ALL, typemax(UInt32), label)
-catch_all_ref_clause(label::ControlLabel)::SymbolicTryCatch =
-    SymbolicTryCatch(Opcode.CATCH_ALL_REF, typemax(UInt32), label)
 
 # try_table: a block opener carrying catch clauses (dart2wasm `try_table`). Blocktype is a
 # void byte 0x40 or a WasmValType; `results` feeds the validator's end-balance check. The
@@ -535,11 +547,6 @@ function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValTyp
     b.v.reachable = false
     _emit!(b, InstrIR.Throw(UInt32(tag)))
 end
-# throw_ref: pop the exnref operand, then unreachable (dart2wasm throw_ref).
-throw_ref!(b::InstrBuilder)::InstrBuilder = (b.v.reachable && validate_pop_any!(b.v); b.v.reachable = false; _emit!(b, InstrIR.ThrowRef()))
-# rethrow label: no stack change, then unreachable (dart2wasm rethrow_).
-rethrow_!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
-    (b.v.reachable = false; _emit!(b, InstrIR.Rethrow(UInt32(_label_depth(b, target)))))
 
 # ── Reference ───────────────────────────────────────────────────────────────────
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1570 InstructionsBuilder.ref_null)
@@ -550,12 +557,6 @@ ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType)::InstrBuilde
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1570 InstructionsBuilder.ref_null)
 ref_null!(b::InstrBuilder, rt::RefType)::InstrBuilder =
     (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
-# ref.null none (heaptype 0x71, the bottom of the any hierarchy — not a RefType enum
-# value; tracked as anyref, which every none ref is a subtype of).
-ref_null_none!(b::InstrBuilder)::InstrBuilder =
-    (validate_push!(b.v, AnyRef); _emit!(b, InstrIR.RefNullAbstract(0x71)))
-ref_func!(b::InstrBuilder, func_idx::Integer, reftype::WasmValType)::InstrBuilder =
-    (validate_push!(b.v, reftype); _emit!(b, InstrIR.RefFunc(UInt32(func_idx))))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1582 InstructionsBuilder.ref_is_null)
 ref_is_null!(b::InstrBuilder)::InstrBuilder = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
 # dart2wasm: ref_as_non_null output = actual top-of-stack with nullability=false.
@@ -619,10 +620,6 @@ end
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)::InstrBuilder
     validate_gc_instruction!(b.v, Opcode.STRUCT_SET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructSet(UInt32(type_idx), UInt32(field_idx)))
-end
-function array_new!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)::InstrBuilder
-    validate_gc_instruction!(b.v, Opcode.ARRAY_NEW, (type_idx, _true_elem_type(b, type_idx, elem_type)))
-    _emit!(b, InstrIR.ArrayNew(UInt32(type_idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1827 InstructionsBuilder.array_new_default)
 function array_new_default!(b::InstrBuilder, type_idx::Integer)::InstrBuilder
@@ -692,9 +689,6 @@ end
 any_convert_extern!(b::InstrBuilder)::InstrBuilder = (validate_gc_instruction!(b.v, Opcode.ANY_CONVERT_EXTERN); _emit!(b, InstrIR.AnyConvertExtern()))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2040 InstructionsBuilder.extern_convert_any)
 extern_convert_any!(b::InstrBuilder)::InstrBuilder = (validate_gc_instruction!(b.v, Opcode.EXTERN_CONVERT_ANY); _emit!(b, InstrIR.ExternConvertAny()))
-ref_i31!(b::InstrBuilder)::InstrBuilder = (validate_gc_instruction!(b.v, Opcode.REF_I31); _emit!(b, InstrIR.RefI31()))
-i31_get_s!(b::InstrBuilder)::InstrBuilder = (validate_gc_instruction!(b.v, Opcode.I31_GET_S); _emit!(b, InstrIR.I31GetS()))
-i31_get_u!(b::InstrBuilder)::InstrBuilder = (validate_gc_instruction!(b.v, Opcode.I31_GET_U); _emit!(b, InstrIR.I31GetU()))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1852 InstructionsBuilder.array_copy)
 function array_copy!(b::InstrBuilder, dst_type_idx::Integer, src_type_idx::Integer)::InstrBuilder
     validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx))
@@ -703,60 +697,6 @@ end
 function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)::InstrBuilder
     validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type))
     _emit!(b, InstrIR.ArrayFill(UInt32(type_idx)))
-end
-
-# br_on_cast / br_on_cast_fail: a cast that branches on success/failure (dart2wasm br_on_cast).
-# `src_heap`/`dst_heap` are the EXACT on-wire source/target heaptype bytes the caller already
-# has (a single byte for an abstract heaptype, or `encode_leb128_signed(type_idx)` for a
-# concrete type index). `src_nullable`/`dst_nullable` build the flags byte (bit0 src, bit1 dst).
-# Stack model (fallthrough): the top ref takes the *fallthrough* result type; the branch edge's
-# arity is checked at the target label exactly as br!/br_if! do. Reachability stays true.
-function _br_on_cast_flags(src_nullable::Bool, dst_nullable::Bool)::UInt8
-    UInt8((src_nullable ? 0x01 : 0x00) | (dst_nullable ? 0x02 : 0x00))
-end
-function br_on_cast!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
-                     dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)::InstrBuilder
-    # br_on_cast: branches when the cast SUCCEEDS; on fallthrough the value FAILED the cast, so
-    # the top keeps the source ref type (we leave it untouched). dart2wasm verifies the branch
-    # carries dst_reftype; here we model fallthrough (no net stack change) + record the op.
-    flags = _br_on_cast_flags(src_nullable, dst_nullable)
-    _emit!(b, InstrIR.BrOnCast(flags, UInt32(depth), copy(src_heap), copy(dst_heap)))
-end
-function br_on_cast_fail!(b::InstrBuilder, depth::Integer, src_heap::Vector{UInt8}, dst_heap::Vector{UInt8},
-                          dst_reftype::WasmValType; src_nullable::Bool=true, dst_nullable::Bool=false)::InstrBuilder
-    # br_on_cast_fail: branches when the cast FAILS; on fallthrough the value SUCCEEDED, so the
-    # top is refined to dst_reftype.
-    if b.v.reachable
-        validate_pop_any!(b.v); validate_push!(b.v, dst_reftype)
-    end
-    flags = _br_on_cast_flags(src_nullable, dst_nullable)
-    _emit!(b, InstrIR.BrOnCastFail(flags, UInt32(depth), copy(src_heap), copy(dst_heap)))
-end
-
-# ── Table ─────────────────────────────────────────────────────────────────────────
-# table.get $t : [i32] -> [elemtype]; the caller supplies the table's element type.
-function table_get!(b::InstrBuilder, table_idx::Integer, elem_type::WasmValType)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_push!(b.v, elem_type); end
-    _emit!(b, InstrIR.TableGet(UInt32(table_idx)))
-end
-# table.set $t : [i32 elemtype] -> []
-function table_set!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
-    if b.v.reachable; validate_pop_any!(b.v); validate_pop!(b.v, I32); end
-    _emit!(b, InstrIR.TableSet(UInt32(table_idx)))
-end
-# table.size $t : [] -> [i32]
-table_size!(b::InstrBuilder, table_idx::Integer)::InstrBuilder = (validate_push!(b.v, I32); _emit!(b, InstrIR.TableSize(UInt32(table_idx))))
-# table.fill $t : [i32 elemtype i32] -> []
-function table_fill!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_pop_any!(b.v); validate_pop!(b.v, I32); end
-    _emit!(b, InstrIR.TableFill(UInt32(table_idx)))
-end
-
-# ── Bulk memory ───────────────────────────────────────────────────────────────────
-# memory.fill $mem : [dst:i32 val:i32 len:i32] -> []
-function memory_fill!(b::InstrBuilder, mem_idx::Integer=0)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
-    _emit!(b, InstrIR.MemoryFill(UInt32(mem_idx)))
 end
 
 

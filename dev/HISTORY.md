@@ -143,6 +143,10 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 
 - A concrete struct is laid out by its fields whatever it subtypes (L142): a Diagonal took the
   Matrix layout, and a struct's Matrix field the Vector one. Six LinearAlgebra overlays went.
+- The builder carries what codegen emits, each node anchored to its dart class: 20 unused
+  emitters and emit_raw! (L13) went; br_on_null/br_on_non_null check their target (dart).
+- SimpleDiffEq's oracle allows muladd's rounding in every case, checked against each solver's
+  step; on Julia 1.13.1 the Vector-state RK4/Tsit5 solves compile and run bit-exact.
 
 ## Why the archive was consolidated
 

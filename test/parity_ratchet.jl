@@ -2045,9 +2045,8 @@ const LOCKS = [
         () -> count_sites(r"emit_box_type_id!\(";
                           exclude_files=["codegen/values.jl", "codegen/types.jl"],
                           exclude_line=r"function emit_box_type_id!")),
-    "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
-        () -> count_sites(r"ref_i31!\(";
-                          exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L2_ref_i31_callers" => ("no i31 value representation: the ref_i31!/i31_get_s!/i31_get_u! emitters and their RefI31/I31GetS/I31GetU nodes are deleted (the i31 box family went 2026-06-30; the emitters, left without a caller, went 2026-09-29) — a value is boxed through its class",
+        () -> count_sites(r"ref_i31!|i31_get_[su]!|\bRefI31\b|\bI31Get[SU]\b")),
     "L9_no_unjustified_untyped_emission" => ("every untyped compile_value splice carries the god-fn-seam annotation; unjustified untyped emission is DEAD (M4; locked 2026-07-02)",
         () -> count_sites(r"compile_value\("; exclude_line=r"function compile_value\(|god-fn seam")),
     "L8_no_silent_traps" => ("every unreachable! is record_unsupported!-routed OR an annotated structural trap — NO silent stubs (M5; locked 2026-07-01)",
@@ -2104,8 +2103,8 @@ const LOCKS = [
     "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
-    "L101_catch_all_clauses_extinct" => ("catch_all_clause emissions — EXTINCT; the typed (exn,stackTrace) tag catches all exceptions (march 6 → locked 2026-09-01)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
+    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause: the typed (exn, stackTrace) tag catches every exception (march 6, 2026-09-01), and the catch_all/catch_all_ref/catch_ref clause constructors, left without a caller, are deleted (2026-09-29)",
+        () -> count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause")),
     "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
@@ -2450,7 +2449,7 @@ const LOCKS = [
             count(p -> !occursin(p, trim * inv * types), required) +
                 count(p -> occursin(p, trim), ["seen_sigs", "(f, arg_types) in seen_sigs"])
         end),
-    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===` — and the result transports carry -0.0 (JSON writes it as 0). The one tolerance (a relative 1e-9) applies only where tree_matches is told why the native value's last bits are not Julia's portable answer, and only four per-case allowlists say so: linalg_diff.jl's _LA_C_LIBRARY (each a BLAS or LAPACK routine), stats_diff.jl's _ST_NONPORTABLE and staticarrays_diff.jl's _SA_NONPORTABLE (each an @simd reduction, whose order and contraction Julia leaves to the target), and simplediffeq_diff.jl's _SDE_NONPORTABLE (each a muladd, which Julia leaves free to round once or twice). Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which passed a last-bit error in Julia's own math and a -0.0 read as 0.0 (dev/CHARTER.md C3)",
+    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===` — and the result transports carry -0.0 (JSON writes it as 0). The one tolerance (a relative 1e-9) applies only where tree_matches is told why the native value's last bits are not Julia's portable answer, and only four per-case allowlists say so: linalg_diff.jl's _LA_C_LIBRARY (each a BLAS or LAPACK routine), stats_diff.jl's _ST_NONPORTABLE and staticarrays_diff.jl's _SA_NONPORTABLE (each an @simd reduction, whose order and contraction Julia leaves to the target), and simplediffeq_diff.jl's _SDE_NONPORTABLE (each a muladd, which Julia leaves free to round once or twice — every case, since every solver's step is @muladd, and the lane checks that of each solver's step method, _sde_step_calls_muladd). Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which passed a last-bit error in Julia's own math and a -0.0 read as 0.0 (dev/CHARTER.md C3)",
         () -> begin
             bridge = read(joinpath(SRC, "bridge.jl"), String)
             utils = read(joinpath(ROOT, "test", "utils.jl"), String)
@@ -2464,6 +2463,9 @@ const LOCKS = [
                         "pass=isequal(expected, actual)", "return isequal(a, b)",
                         "if (Object.is(value, -0)) return \"__-0__\";", "out.push('__-0__')",
                         "result == \"__-0__\" && return -0.0"])
+            # a SimpleDiffEq allowance is checked against the solver's own step, not believed
+            n += occursin("calls = _sde_step_calls_muladd(S)",
+                          read(joinpath(ROOT, "test", "fuzz", "simplediffeq_diff.jl"), String)) ? 0 : 1
             for (file, dict, rx) in (("linalg_diff.jl", "_LA_C_LIBRARY", r"^(BLAS|LAPACK) [a-z]"),
                                      ("stats_diff.jl", "_ST_NONPORTABLE", r"^@simd [A-Za-z]"),
                                      ("staticarrays_diff.jl", "_SA_NONPORTABLE", r"^@simd [A-Za-z]"),

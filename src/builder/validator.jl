@@ -530,6 +530,40 @@ function validate_br!(v::WasmStackValidator, label_depth::Int)::Union{Nothing, B
 end
 
 """
+    validate_branch_types!(v, label_depth, popped = 0, pushed = WasmValType[])
+
+The values a branching instruction carries to the label at `label_depth`, once it pops
+`popped` operands and pushes `pushed`: the top of that stack must match the label's target
+types (a loop's inputs, a block's results), above the label's base. `br_on_null` carries what
+lies under its operand; `br_on_non_null` carries that plus the operand made non-null.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:532 InstructionsBuilder._verifyBranchTypes)
+"""
+function validate_branch_types!(v::WasmStackValidator, label_depth::Int, popped::Int = 0,
+                                pushed::Vector{WasmValType} = WasmValType[])::Nothing
+    v.reachable || return nothing
+    if label_depth < 0 || label_depth >= length(v.labels)
+        push!(v.errors, "$(v.func_name): branch label depth $(label_depth) out of range ($(length(v.labels)) labels)")
+        return nothing
+    end
+    label = v.labels[end - label_depth]
+    inputs = label.kind === :loop ? label.input_types : label.result_types
+    n = length(v.stack)
+    if n - popped + length(pushed) - length(inputs) < label.stack_height_at_entry
+        push!(v.errors, "$(v.func_name): branch underflows the base stack of its target $(label.kind) " *
+              "[ctx: $(v.context_hint)]")
+        return nothing
+    end
+    stack = length(inputs) <= length(pushed) ? pushed[end - length(inputs) + 1:end] :
+            WasmValType[v.stack[n - popped + length(pushed) - length(inputs) + 1:n - popped]; pushed]
+    for (i, expected) in enumerate(inputs)
+        wasm_subtype(stack[i], expected, v.mod) ||
+            push!(v.errors, "$(v.func_name): branch to $(label.kind) type mismatch at position $i — " *
+                  "expected $(expected), found $(stack[i]) [ctx: $(v.context_hint)]")
+    end
+    return nothing
+end
+
+"""
     validate_br_if!(v, label_depth)
 
 Validate a conditional branch: pop i32 condition, then verify the target
@@ -684,13 +718,6 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         validate_pop!(v, field_type)
         validate_pop!(v, ConcreteRef(UInt32(type_idx), true))
 
-    elseif gc_opcode == Opcode.ARRAY_NEW
-        # array.new $t: pop init_value, pop i32 length, push (ref $t)
-        type_idx, elem_type = type_info
-        validate_pop!(v, I32)       # length
-        validate_pop!(v, elem_type) # init value
-        validate_push!(v, ConcreteRef(UInt32(type_idx), false))
-
     elseif gc_opcode == Opcode.ARRAY_NEW_DEFAULT
         # array.new_default $t: pop i32 length, push (ref $t)
         type_idx = type_info isa Tuple ? type_info[1] : type_info
@@ -783,14 +810,6 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
 
     elseif gc_opcode == Opcode.REF_TEST || gc_opcode == Opcode.REF_TEST_NULL
         # ref.test (ref $t): pop ref, push i32
-        validate_pop_any!(v); validate_push!(v, I32)
-
-    elseif gc_opcode == Opcode.REF_I31
-        # ref.i31: pop i32, push (ref i31)
-        validate_pop!(v, I32); validate_push!(v, I31Ref)
-
-    elseif gc_opcode == Opcode.I31_GET_S || gc_opcode == Opcode.I31_GET_U
-        # i31.get_s/u: pop (ref null i31), push i32
         validate_pop_any!(v); validate_push!(v, I32)
 
     else

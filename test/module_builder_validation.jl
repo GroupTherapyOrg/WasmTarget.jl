@@ -103,6 +103,32 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test sub == 1
     end
 
+    @testset "a branch carries its target label's types (dart _verifyBranchTypes)" begin
+        m = MBV.WasmModule()
+        s1 = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        s2 = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        r1, r2 = MBV.ConcreteRef(s1, true), MBV.ConcreteRef(s2, true)
+        mk() = MBV.InstrBuilder(MBV.WasmValType[r1, r2], MBV.WasmValType[]; func_name = "branch", mod = m)
+        # br_on_non_null carries its operand made non-null
+        b = mk(); l = MBV.block!(b, MBV.ConcreteRef(s1, false))
+        MBV.local_get!(b, 0)
+        @test MBV.br_on_non_null!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b, MBV.ConcreteRef(s1, false))
+        MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_non_null!(b, l)
+        # br_on_null carries what lies under its operand
+        b = mk(); l = MBV.block!(b, r1)
+        MBV.local_get!(b, 0); MBV.local_get!(b, 1)
+        @test MBV.br_on_null!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b, r1)
+        MBV.local_get!(b, 1); MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_null!(b, l)
+        # the operand is a reference
+        b = mk(); l = MBV.block!(b)
+        MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_null!(b, l)
+    end
+
     @testset "calls derive imported signatures from the module" begin
         m = MBV.WasmModule()
         imported = MBV.add_import!(m, "host", "measure", MBV.WasmValType[],

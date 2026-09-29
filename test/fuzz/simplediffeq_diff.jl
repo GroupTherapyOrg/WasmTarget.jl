@@ -30,14 +30,22 @@ const _SDE_B = WasmTarget.Bridge
 
 function _sde_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     res = bridge_run_args(fn, argTs, inputs; rettype = rettype)
-    res isa Vector || return false
+    if !(res isa Vector)
+        @error("SimpleDiffEq differential compile/run failure", function_name = string(nameof(fn)),
+               argument_types = argTs, return_type = rettype, result = res)
+        return false
+    end
     rdesc = _SDE_B.descriptor(rettype)[1]
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
         ok = r[1] === :ok ? (nat[1] && _SDE_B.tree_matches(rdesc, nat[2], r[2];
                                                           nonportable = get(_SDE_NONPORTABLE, fn, nothing))) : !nat[1]
-        ok || return false
+        if !ok
+            @error("SimpleDiffEq differential mismatch", function_name = string(nameof(fn)),
+                   input = a, native = nat, wasm = r)
+            return false
+        end
     end
     return true
 end
@@ -88,18 +96,54 @@ for S in _SDE_SOLVERS
                              (sig, 28.0, 2.6666666666666665)), $S(); dt = 0.01).u[end])
 end
 
-# The cases whose native value's last bits are not Julia's portable answer: SimpleEuler's and
-# SimpleTsit5's out-of-place steps are `@muladd` (euler.jl:173, tsit5.jl:303), and StaticArrays'
-# muladd over an SVector is a per-element muladd_float, which Julia leaves free to round once
-# or twice. The module rounds once, as Base.fma_emulated; native's last bits differ from it in
-# these solves (the Euler one on arm64, the Tsit5 one on x86_64). Every other case is compared
-# bit-exact.
+# The cases whose native value's last bits are not Julia's portable answer: every one. Each
+# solver's step is `@muladd` (euler.jl:173, rk4.jl:160, tsit5.jl:303, loopeuler.jl:55,
+# looprk4.jl:55), and Julia leaves a muladd_float free to round once or twice: LLVM contracts
+# it or not instruction by instruction, per target. The module rounds once, as
+# Base.fma_emulated. Native differed from it in the last bits in single cases on arm64 and
+# x86_64 hosts with FMA, and in 34 of 40 cases on an x86_64 host without FMA. Each entry is
+# checked, not believed: run_simplediffeq_tests asserts that its solver's step method calls
+# muladd (_sde_step_calls_muladd).
+const _SDE_CASES = (:_sde_decay_, :_sde_logistic_, :_sde_osc_, :_sde_lv_, :_sde_pend_,
+                    :_sde_oscS_, :_sde_pdecay_, :_sde_plorenz_)
 const _SDE_NONPORTABLE = Dict{Function,String}(
-    getfield(@__MODULE__, Symbol("_sde_oscS_", :SimpleEuler)) => "muladd SimpleDiffEq SimpleEuler step!",
-    getfield(@__MODULE__, Symbol("_sde_oscS_", :SimpleTsit5)) => "muladd SimpleDiffEq SimpleTsit5 step!",
+    getfield(@__MODULE__, Symbol(c, S)) => "muladd SimpleDiffEq $(S) step!" for S in _SDE_SOLVERS for c in _SDE_CASES
 )
 
+# The step each solver runs, where its reason says the muladd is: SimpleEuler, SimpleRK4 and
+# SimpleTsit5 step an integrator (DiffEqBase.step!); LoopEuler and LoopRK4 loop inside __solve.
+const _SDE_STEP_METHOD = Dict{Symbol,Tuple{Function,String}}(
+    :SimpleEuler => (SimpleDiffEq.DiffEqBase.step!, "euler.jl"),
+    :SimpleRK4   => (SimpleDiffEq.DiffEqBase.step!, "rk4.jl"),
+    :SimpleTsit5 => (SimpleDiffEq.DiffEqBase.step!, "tsit5.jl"),
+    :LoopEuler   => (SimpleDiffEq.SciMLBase.__solve, "loopeuler.jl"),
+    :LoopRK4     => (SimpleDiffEq.SciMLBase.__solve, "looprk4.jl"))
+
+# whether the solver's step, as SimpleDiffEq defines it in its file, calls muladd (the claim
+# each _SDE_NONPORTABLE entry makes). Native solve reaches the step by dynamic dispatch, so no
+# typed IR walk from the case can; the method's lowered code is where @muladd put the calls.
+function _sde_step_calls_muladd(S::Symbol)::Bool
+    f, file = _SDE_STEP_METHOD[S]
+    ismuladd(g) = g === Base.muladd || (g isa GlobalRef && g.name === :muladd)
+    calls(x) = x isa Expr && ((x.head === :call && ismuladd(x.args[1])) || any(calls, x.args))
+    # a keyword method's body is its generated `#f#N` function, defined in the same file
+    fs = Any[f; [getfield(SimpleDiffEq, n) for n in names(SimpleDiffEq; all = true)
+                 if isdefined(SimpleDiffEq, n) && getfield(SimpleDiffEq, n) isa Function]]
+    for g in fs, m in methods(g)
+        (m.module === SimpleDiffEq && basename(string(m.file)) == file) || continue
+        any(calls, Base.uncompressed_ast(m).code) && return true
+    end
+    return false
+end
+
 function run_simplediffeq_tests(; reps::Int = 30)
+    @testset "every solver's step calls muladd (the nonportable reason)" begin
+        for S in _SDE_SOLVERS
+            calls = _sde_step_calls_muladd(S)
+            calls || @error "a SimpleDiffEq solver marked nonportable has no muladd in its step" S
+            @test calls
+        end
+    end
     rng = MersenneTwister(0x5DE0)
     ic() = [ (0.5 + rand(rng),) for _ in 1:reps ]   # initial conditions in (0.5, 1.5)
     for S in _SDE_SOLVERS
@@ -107,17 +151,11 @@ function run_simplediffeq_tests(; reps::Int = 30)
             # scalar states → Float64
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_decay_", S)),    (Float64,), ic(), Float64)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_logistic_", S)), (Float64,), ic(), Float64)
-            # Vector states → Vector{Float64}. On 1.13, SimpleRK4's and SimpleTsit5's `__solve` has a
-            # control region the stackifier does not nest ("crossing control regions ... forward
-            # label is not the innermost open control label"): the compile rejects, asserted here
-            # (MARCH 13.10), never a wrong value. Every other solver runs them on both Julias.
+            # Vector states → Vector{Float64}, every solver on both Julias. (On 1.13.0 SimpleRK4's
+            # and SimpleTsit5's `__solve` had a control region the stackifier rejected; 1.13.1's IR
+            # compiles and runs bit-exact.)
             for sys in (:_sde_osc_, :_sde_lv_, :_sde_pend_)
-                local f = getfield(@__MODULE__, Symbol(sys, S))
-                if VERSION >= v"1.13-" && S in (:SimpleRK4, :SimpleTsit5)
-                    @test_throws r"crossing control regions" WasmTarget.compile(f, (Float64,))
-                else
-                    @test _sde_diff(f, (Float64,), ic(), Vector{Float64})
-                end
+                @test _sde_diff(getfield(@__MODULE__, Symbol(sys, S)), (Float64,), ic(), Vector{Float64})
             end
             # SVector state → Float64 (reduction)
             @test _sde_diff(getfield(@__MODULE__, Symbol("_sde_oscS_", S)), (Float64,), ic(), Float64)

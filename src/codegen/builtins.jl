@@ -2758,11 +2758,10 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     # literal lets emit_value! null a ref-typed field with its EXACT physical
                     # type (ConcreteRef → typed `ref.null $T`) instead of falling through to a
                     # numeric zero that then gets classId-boxed and ref.cast into the field's
-                    # unrelated concrete struct type — invalid at runtime. (Previously this site
-                    # used `ref_null_none!`, whose bottom-type null is tracked as AnyRef — sound
-                    # only when the field's physical type IS exactly AnyRef; a narrower
-                    # ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
-                    # `single_variable::Union{Nothing,VariableIndex}`, then rejected it.)
+                    # unrelated concrete struct type — invalid at runtime. (A bottom-type `ref.null none`
+                    # tracked as AnyRef is sound only for a field whose physical type is exactly
+                    # AnyRef; a narrower ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
+                    # `single_variable::Union{Nothing,VariableIndex}`, rejected it.)
                     local _sf_val = is_nothing_value(value_arg, ctx) ? NirLiteral(nothing) : value_arg
                     local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
                     emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
