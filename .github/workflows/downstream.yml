@@ -27,7 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pkg: [WasmMakie.jl, Therapy.jl, Snapshot.jl]
+        # Therapy.jl is paused until PR #122 lands in full (Dale, 2026-09-29): it adopts the
+        # rewrite's API after it lands, and until then its known failure is noise. Its steps
+        # below stay; dev/MARCH.md 13.16 restores it to this list.
+        pkg: [WasmMakie.jl, Snapshot.jl]
     steps:
       # This WasmTarget checkout is the version under test. The downstream test
       # environments resolve it via a sibling path (WasmMakie's test [sources]
