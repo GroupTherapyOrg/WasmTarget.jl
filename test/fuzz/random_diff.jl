@@ -3,8 +3,8 @@
 # ============================================================================
 # Seeded RNG state is a struct the catalogue generator can't produce, so it's
 # verified HERE: f(seed) constructs Xoshiro(seed) and draws — wasm vs native must
-# be the SAME stream (bit-exact), which works because the Random ext makes
-# hash_seed seeding bit-identical. Mirrors linalg_diff.jl / dates_diff.jl.
+# be the SAME stream (bit-exact), seeded by Random's own hash_seed (no overlay).
+# Mirrors linalg_diff.jl / dates_diff.jl.
 #
 # CAN'T be fuzzed (documented, not silent): MersenneTwister (its larger state +
 # seeding emit invalid wasm — a codegen gap), and OS-entropy RNGs (RandomDevice,

@@ -12,7 +12,7 @@
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
 # ============================================================================
 using WasmTarget
-using Random, SHA   # seeded streams, as the full suite loads them (WasmTargetRandomExt active)
+using Random, SHA   # seeded streams, as the full suite loads them
 include(joinpath(@__DIR__, "utils.jl"))
 
 const FILTER = lowercase.(ARGS)
@@ -527,6 +527,8 @@ _xf("string_identity_gaps", Any[
 _g("seeded_random", Any[
     ("seeded_rand_range", (s::Int64) -> rand(Xoshiro(s), 1:1000), Int64(42)),       # jl_type_intersection
     ("seeded_rand_float", (s::Int64) -> rand(Xoshiro(s)), Int64(7)),                # jl_type_intersection
+    # a negative seed hashes one more constant, `(0x01,)`: it once read randperm's `(1,)` global
+    ("seeded_randperm_negative", (s::Int64) -> (p = randperm(Xoshiro(s), 9); sum(p[i] * i for i in 1:9)), Int64(-7)),
 ])
 _g("foreign_calls", Any[
     ("typeintersect_runtime", (x::Int64) -> typeintersect(x > 0 ? Int64 : String, Integer) === Int64 ? 1 : 0, Int64(1)),  # jl_type_intersection
@@ -1316,6 +1318,41 @@ _g("recursive_types", Any[
     ("tuple_cycle", (n::Int64) -> (l = _SmRT(nothing, n); r = _SmRT((l, 2n), 1); t = r.t::Tuple{_SmRT,Int64}; r.v + t[1].v * 10 + t[2] * 100), Int64(3)),
     ("abstract_cycle", (n::Int64) -> (a = _SmRN1(nothing, n); b = _SmRN2(a, 3); a.next = b; (a.next::_SmRN2).other.v * 10 + (a.next::_SmRN2).w), Int64(7)),
     ("vector_tree", (n::Int64) -> (t = _SmMRRec(1, [_SmMRRec(n, _SmMRRec[]), _SmMRRec(2n, _SmMRRec[])]); s = t.value; for k in t.children; s += k.value; end; s), Int64(4)),
+])
+# A constant is interned by `===` (dev/formal/Constants.tla SharedOnlyIfEgal): `(1,)` and
+# `(0x01,)` are `isequal` but two constants of two types, and a map keyed by `isequal` gave the
+# `Tuple{UInt8}` site the `Tuple{Int64}` global (Random's hash_seed trapped on the cast);
+# `(true,)` and `(0x01,)` share a layout, so the same conflation passed the cast and carried
+# the wrong type; `1.0` and `1`, `0.0` and `-0.0` likewise.
+@noinline _sm_ce_push(v::Vector{Any}, t) = (push!(v, t); length(v))
+function _sm_ce_tuples(n::Int64)::Int64
+    v = Any[]
+    _sm_ce_push(v, (1,))
+    n < 0 && _sm_ce_push(v, (0x01,))
+    _sm_ce_push(v, (true,))
+    _sm_ce_push(v, (0x01,))
+    s = 0
+    for x in v
+        s = s * 10 + (x isa Tuple{Int64} ? 1 : x isa Tuple{UInt8} ? 2 : x isa Tuple{Bool} ? 3 : 9)
+    end
+    return s
+end
+function _sm_ce_floats(n::Int64)::Int64
+    v = Any[]
+    _sm_ce_push(v, (1,))
+    _sm_ce_push(v, (1.0,))
+    _sm_ce_push(v, (0.0,))
+    _sm_ce_push(v, (-0.0,))
+    s = 0
+    for x in v
+        s = s * 10 + (x isa Tuple{Int64} ? 1 : x isa Tuple{Float64} ? (signbit(x[1]) ? 3 : 2) : 9)
+    end
+    return s + n
+end
+_g("constant_identity", Any[
+    ("tuple_int_byte", _sm_ce_tuples, Int64(-1)),
+    ("tuple_int_byte_pos", _sm_ce_tuples, Int64(1)),
+    ("tuple_int_float_zero", _sm_ce_floats, Int64(0)),
 ])
 # The storage algebra (dev/formal/StorageRef.tla): a MemoryRef's ptr_or_offset counts in
 # Julia's stride — an element index for an isbits-union element, the inline struct's size

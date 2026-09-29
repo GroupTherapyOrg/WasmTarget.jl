@@ -136,6 +136,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   the method it names (L139): unique(::Vector{Float64}) had compiled to infinite recursion.
 - A type-structure foreigncall folds, so SparseArrays compiles from its own source (its
   extension is gone); BLAS/LAPACK overlay reasons are checked against Julia's methods (L140).
+- A constant is interned by `===` (L141): the isequal key gave `(0x01,)` the `(1,)` global,
+  so Random's own hash_seed trapped; with it fixed the Random extension is gone.
 
 ## Why the archive was consolidated
 

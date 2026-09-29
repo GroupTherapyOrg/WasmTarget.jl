@@ -2399,6 +2399,15 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L141_constants_intern_by_egal" => ("a constant is interned by `===`, Julia's egal and dart's Constant equality (a dart Constant equals only one of its own class with equal fields, constants.dart:154 constantInfo): every `*constant_globals` map of the TypeRegistry is an IdDict, or a Dict whose key type is one where isequal is `===` (String, Symbol, Core.TypeName). Until 2026-09-29 constant_globals was a Dict{Any} keyed by isequal: the constant `(0x01,)` read the `(1,)` global randperm had made, and Random's own hash_seed trapped on the cast for a negative seed; a same-layout pair such as `(true,)` and `(0x01,)` passed the cast carrying the wrong type (dev/formal/Constants.tla SharedOnlyIfEgal; dev/CHARTER.md C3)",
+        () -> begin
+            types = read(joinpath(CODEGEN, "types.jl"), String)
+            maps = collect(eachmatch(r"^\s+(\w*constant_globals)::([^#\n]+?)\s*(?:#.*)?$"m, types))
+            egal_keys = ("Dict{Union{String,Symbol},", "Dict{Core.TypeName,", "Dict{String,", "Dict{Symbol,")
+            (length(maps) < 6 ? 1 : 0) +
+                count(m -> !(startswith(m.captures[2], "IdDict{") ||
+                             any(k -> startswith(m.captures[2], k), egal_keys)), maps)
+        end),
     "L140_overlay_reasons_are_verified" => ("an overlay's quarantine reason that names a BLAS or LAPACK routine is checked, not believed: test/overlay_reasons.jl (shard 0) finds, for each such overlay, that Julia's own method at the overlay's signature reaches that routine's foreigncall through its invokes, and every such reason in ext/ uses the one form it parses, `parity(quarantine: BLAS gemm: …)`. The first run found a reason naming BLAS trsv where Julia's ldiv! calls LAPACK trtrs (dev/CHARTER.md C3)",
         () -> begin
             n = isfile(joinpath(ROOT, "test", "overlay_reasons.jl")) ? 0 : 1

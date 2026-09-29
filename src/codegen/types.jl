@@ -132,10 +132,12 @@ mutable struct TypeRegistry
     # of a closure body or a closure value are typed from it (capture_read_types).
     box_contents_types::Dict{Tuple{Type,Symbol}, Type}
     # THE ensureConstant funnel's registry (dart constants.dart:154 constantInfo — ONE
-    # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
-    # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
-    # identity that structural keying would wrongly merge.
-    constant_globals::Dict{Any, UInt32}
+    # constantInfo map for ALL constant kinds). Keyed by the constant under `===` (a dart
+    # Constant equals only one of its own class with equal fields): `isequal` holds across
+    # types — `(0x01,)` and `(1,)`, `1.0` and `1` — and would hand one type's site the other's
+    # global (Constants.tla SharedOnlyIfEgal). IMMUTABLE constants only — a mutable constant
+    # (Vector/Dict) has per-object identity and never reaches this map.
+    constant_globals::IdDict{Any, UInt32}
     # Closed-world mutable bindings retain object identity too, but must never be
     # structurally deduplicated. IdDict keys by host identity; nullable mutable
     # storage is published once by module start, then all reads share the object.
@@ -188,7 +190,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Tuple{Type,Symbol}, Type}(),  # box_contents_types (record_capture_contents)
-    Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
+    IdDict{Any, UInt32}(),        # constant_globals (ensureConstant), keyed by ===
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions
     Dict{Union{String,Symbol}, UInt32}(),  # string_constant_globals (census F3)
@@ -248,7 +250,7 @@ map deduplicating EVERY constant kind). Returns the interned global for `val`, c
 it eagerly (a pure constant-expression initializer) on first use; `nothing` when `val`
 is not eager-internable (mutable kinds keep per-object identity; non-constant fields
 keep the inline path). IMMUTABLE kinds only.
-formal(dev/formal/Constants.tla): two structurally-equal immutable constants intern to exactly one global and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
+formal(dev/formal/Constants.tla): two egal immutable constants intern to exactly one global, constants that are not egal never share one, and a mutable-kind constant never shares one; eagerness is the AND of a constant's children's, so a non-eager child always yields a fresh construction, never a partially-interned global; an unresolvable field either rejects compilation or takes its type's physical default, never a fabricated value; global numbering is a deterministic function of interning order
 parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global per constant value.
 """
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
@@ -2020,8 +2022,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
     for (tn, _) in ordered_pairs(registry.typename_constant_globals, typename_order_key)
         tn.module !== nothing && get_module_constant_global!(mod, registry, tn.module)
     end
-    for (value, module_global) in ordered_pairs(registry.constant_globals, v -> v isa Module ? string(v) : "")
-        value isa Module || continue
+    for (value, module_global) in ordered_pairs(registry.constant_globals, string, v -> v isa Module)
         parent_global = get_module_constant_global!(mod, registry, parentmodule(value))
         module_idx = registry.structs[Module].wasm_type_idx
         global_get!(b, module_global, ConcreteRef(module_idx, false))

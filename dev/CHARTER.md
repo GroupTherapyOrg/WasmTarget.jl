@@ -58,7 +58,8 @@ with the per-clause status. A clause is never closed by argument.
   reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `L138` (the differential
   oracle is bit-exact; a tolerance only where the native value comes from a named BLAS or
   LAPACK routine) `L140` (an overlay's BLAS/LAPACK reason is verified against Julia's own
-  method) `R38` (each `@overlay` states why Julia's body cannot compile, or goes).
+  method) `L141` (a constant is interned by `===`, never by `isequal`) `R38` (each
+  `@overlay` states why Julia's body cannot compile, or goes).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.

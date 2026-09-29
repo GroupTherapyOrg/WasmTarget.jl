@@ -14,16 +14,21 @@
 (*     (the mutable kinds).                                                 *)
 (*                                                                          *)
 (* WHAT THE REAL ALGORITHM DOES.                                            *)
-(*   (1) THE MAP. `registry.constant_globals::Dict{Any,UInt32}`             *)
-(*       (types.jl:99) is keyed by the constant VALUE itself, so Julia's    *)
-(*       default `isequal`/`hash` decide membership: `ensure_constant_      *)
-(*       global!` (types.jl:221-230) does `haskey(constant_globals, val) && *)
-(*       return constant_globals[val]` BEFORE building anything -- two      *)
-(*       DISTINCT value objects that are structurally `isequal` collide on  *)
-(*       the SAME dict key and therefore the SAME global, exactly like      *)
-(*       dart2wasm's `Map<Constant, ConstantInfo> constantInfo`             *)
-(*       (constants.dart:154) keyed by `Constant`'s own structural          *)
-(*       equality. `add_global_ref!` (src/builder/instructions.jl:700-710)  *)
+(*   (1) THE MAP. `registry.constant_globals::IdDict{Any,UInt32}` is keyed *)
+(*       by the constant under `===` (Julia's egal: the same type and egal  *)
+(*       fields, a float by its bits): `ensure_constant_global!` does       *)
+(*       `haskey(constant_globals, val) && return constant_globals[val]`    *)
+(*       BEFORE building anything -- two value objects that are egal share  *)
+(*       ONE global, exactly like dart2wasm's `Map<Constant, ConstantInfo>  *)
+(*       constantInfo` (constants.dart:154) keyed by `Constant`'s own       *)
+(*       equality (an InstanceConstant equals another of the SAME class,    *)
+(*       type arguments and field constants; an IntConstant never equals a  *)
+(*       DoubleConstant). `isequal` is NOT that key: `isequal((0x01,),(1,))`*)
+(*       and `isequal(1, 1.0)` hold across types, and a map keyed by it     *)
+(*       handed a `Tuple{UInt8}` site the `Tuple{Int64}` global (Random's    *)
+(*       hash_seed trapped on the cast; a same-layout pair such as          *)
+(*       `(true,)`/`(0x01,)` would pass the cast and carry the wrong type). *)
+(*       `add_global_ref!` (src/builder/instructions.jl:700-710)            *)
 (*       assigns the number: `push!(mod.globals, ...); return length(mod.  *)
 (*       globals) - 1` -- a plain APPEND, so the number is a pure function  *)
 (*       of CALL ORDER (how many prior calls actually pushed a NEW entry),  *)
@@ -141,14 +146,19 @@
 (*    has a case you cannot map, say so" -- forcing a kind correlation      *)
 (*    here would encode a distinction the claim does not depend on.         *)
 (*  - `eqclass` is an unconstrained per-occurrence label standing in for    *)
-(*    Julia's real `isequal`/`hash`: TLC is not asked to reprove that       *)
-(*    Julia's equality is itself correct, only that the FUNNEL'S reaction   *)
-(*    to two occurrences sharing (or not sharing) a class is right --       *)
-(*    exactly like Stackifier.tla leaving `target`/`phifree` free within    *)
-(*    their supported class rather than deriving them from a real CFG.      *)
-(*  - Four historical-shaped bug classes are wired in as CONSTANT flags,    *)
-(*    each isolating exactly one of the four claims below; only one is ever *)
-(*    TRUE in a given run (the real algorithm is all four FALSE):           *)
+(*    Julia's `isequal` (the value, across types), and `ty` for the         *)
+(*    constant's type: two occurrences are egal exactly when both agree.    *)
+(*    TLC is not asked to reprove that Julia's equality is itself correct,  *)
+(*    only that the FUNNEL'S reaction to two occurrences sharing (or not    *)
+(*    sharing) a class is right -- exactly like Stackifier.tla leaving      *)
+(*    `target`/`phifree` free within their supported class rather than     *)
+(*    deriving them from a real CFG.                                        *)
+(*  - Five historical-shaped bug classes are wired in as CONSTANT flags,    *)
+(*    each isolating exactly one of the claims below; only one is ever      *)
+(*    TRUE in a given run (the real algorithm is all five FALSE):           *)
+(*      KeyByIsequal -- claim (1c): the map is keyed by `isequal`/`hash`    *)
+(*        (a `Dict{Any}`), so constants of two types that are `isequal`     *)
+(*        share the first one's global -- the bug Random's hash_seed hit.   *)
 (*      InternMutableKind   -- claim (1): the funnel's `!ismutabletype(T)`  *)
 (*        gate (types.jl:254) is dropped, so a `kind="Mut"` occurrence      *)
 (*        becomes eager-eligible like any struct -- the shape of "someone   *)
@@ -175,12 +185,12 @@
 (* Like Stackifier.tla, every action below is atomic and single-threaded    *)
 (* (`ensure_constant_global!` has no concurrency to interleave); TLC's      *)
 (* exploration is over the INITIAL CHOICE of the occurrence class (kind /   *)
-(* fstat / child / eqclass, chosen once in Init) and, only under            *)
+(* fstat / child / eqclass / ty, chosen once in Init) and, only under       *)
 (* HashOrderNumbering, over which leftover slot a new class draws.          *)
 (*                                                                          *)
-(* formal(dev/formal/Constants.tla): two structurally-equal immutable       *)
-(* constants intern to exactly one global and a mutable-kind constant never *)
-(* shares one; a constant's eagerness is the AND of its children's, so a    *)
+(* formal(dev/formal/Constants.tla): two egal immutable constants intern    *)
+(* to exactly one global, constants that are not egal never share one, and  *)
+(* a mutable-kind constant never shares one; a constant's eagerness is the AND of its children's, so a    *)
 (* non-eager child always yields a fresh construction, never a partially-   *)
 (* interned global; an unresolvable field either rejects compilation or     *)
 (* takes its type's physical default, never a fabricated Julia value; and   *)
@@ -191,7 +201,9 @@ EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     N,                      \* number of constant occurrences, processed in program order 1..N
-    EqIds,                  \* finite universe of structural-equality classes (stand-in for isequal/hash)
+    EqIds,                  \* finite universe of isequal classes (the value, across types)
+    Types,                  \* finite universe of constant types; egal = same type and same class
+    KeyByIsequal,           \* BOOLEAN: TRUE = key the map by isequal, not egal (claim 1c bug)
     InternMutableKind,      \* BOOLEAN: TRUE = drop the "!ismutabletype" gate (claim 1 bug)
     SkipChildEagerCheck,    \* BOOLEAN: TRUE = decide eagerness from self only, ignore children (claim 2 bug)
     FabricateUndefFields,   \* BOOLEAN: TRUE = treat an UndefReject field as though defined (claim 3 bug)
@@ -199,6 +211,8 @@ CONSTANTS
 
 ASSUME N \in Nat /\ N >= 1
 ASSUME IsFiniteSet(EqIds) /\ EqIds # {}
+ASSUME IsFiniteSet(Types) /\ Types # {}
+ASSUME KeyByIsequal \in BOOLEAN
 ASSUME InternMutableKind \in BOOLEAN
 ASSUME SkipChildEagerCheck \in BOOLEAN
 ASSUME FabricateUndefFields \in BOOLEAN
@@ -208,7 +222,10 @@ Occurrences == 1..N
 Kinds == {"Imm", "Mut"}
 FStats == {"Def", "UndefReject", "UndefSentinel"}
 
-MaxClasses == Cardinality(EqIds)
+\* the map's key: Julia's egal (the type and the value); the broken variant drops the type
+Keys == Types \X EqIds
+AnyType == CHOOSE t \in Types : TRUE
+MaxClasses == Cardinality(Keys)
 AvailableIds == {n \in 0..(MaxClasses - 1) : TRUE}
 \* Every element of GlobalVal is uniformly a 2-tuple, tagged by shape: TLC's
 \* SetEnum \cup normalizes by comparing elements pairwise, and a raw Nat has
@@ -223,7 +240,8 @@ VARIABLES
     kind,       \* [Occurrences -> Kinds] -- "Imm" (struct/tuple/Int128 shape) or "Mut" (Vector/Dict/Memory/Box shape)
     fstat,      \* [Occurrences -> FStats] -- this occurrence's OWN field-definedness fact
     child,      \* [Occurrences -> {0} \cup Occurrences] -- one nested constant-expressible field, or none
-    eqclass,    \* [Occurrences -> EqIds] -- structural-equality class (stand-in for isequal/hash)
+    eqclass,    \* [Occurrences -> EqIds] -- isequal class (the value, across types)
+    ty,         \* [Occurrences -> Types] -- the constant's type
     cur,        \* the occurrence currently being (or about to be) processed
     pc,         \* "Run" | "Done" | "Reject"
     globalOf,   \* [Occurrences -> GlobalVal] -- this occurrence's compiled outcome
@@ -233,10 +251,15 @@ VARIABLES
     \* raw String nor a raw Nat vs. a tuple has a defined comparison (both
     \* throw mid-union) -- so "no global yet" is BOOLEAN, never a sentinel
     \* sharing a set with the Nat ids.
-    classAssigned,  \* [EqIds -> BOOLEAN] -- has this class been given a global yet?
-    classId         \* [EqIds -> AvailableIds] -- meaningful only where classAssigned[e]
+    classAssigned,  \* [Keys -> BOOLEAN] -- has this key been given a global yet?
+    classId         \* [Keys -> AvailableIds] -- meaningful only where classAssigned[k]
 
-vars == <<kind, fstat, child, eqclass, cur, pc, globalOf, classAssigned, classId>>
+vars == <<kind, fstat, child, eqclass, ty, cur, pc, globalOf, classAssigned, classId>>
+
+\* ground truth: two constants are egal when they have one type and one value
+Egal(v) == <<ty[v], eqclass[v]>>
+\* the key the (possibly bugged) map uses
+KeyAlgo(v) == IF KeyByIsequal THEN <<AnyType, eqclass[v]>> ELSE Egal(v)
 
 ----------------------------------------------------------------------------
 (* Ground truth: what the REAL (unbugged) algorithm decides. Every claim    *)
@@ -279,11 +302,12 @@ Init ==
     /\ child \in {f \in [Occurrences -> {0} \cup Occurrences] :
                     \A v \in Occurrences : f[v] \in ({0} \cup 1..(v - 1))}
     /\ eqclass \in [Occurrences -> EqIds]
+    /\ ty \in [Occurrences -> Types]
     /\ cur = 1
     /\ pc = "Run"
     /\ globalOf = [v \in Occurrences |-> <<"Unprocessed", 0>>]
-    /\ classAssigned = [e \in EqIds |-> FALSE]
-    /\ classId = [e \in EqIds |-> 0]
+    /\ classAssigned = [k \in Keys |-> FALSE]
+    /\ classId = [k \in Keys |-> 0]
 
 ----------------------------------------------------------------------------
 (* Next: process one occurrence per atomic step, in strict program order --  *)
@@ -295,13 +319,13 @@ Init ==
 ProcessOccurrence(v) ==
     /\ pc = "Run"
     /\ cur = v
-    /\ UNCHANGED <<kind, fstat, child, eqclass>>
+    /\ UNCHANGED <<kind, fstat, child, eqclass, ty>>
     /\ IF HasUndefAlgo(v)
        THEN /\ pc' = "Reject"
             /\ cur' = v
             /\ UNCHANGED <<globalOf, classAssigned, classId>>
        ELSE LET eagerNow == EagerAlgo(v)
-                ec == eqclass[v]
+                ec == KeyAlgo(v)
             IN /\ pc' = IF v = N THEN "Done" ELSE "Run"
                /\ cur' = IF v = N THEN v ELSE v + 1
                /\ IF ~eagerNow
@@ -311,11 +335,11 @@ ProcessOccurrence(v) ==
                        THEN /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", classId[ec]>>]
                             /\ UNCHANGED <<classAssigned, classId>>
                        ELSE IF ~HashOrderNumbering
-                            THEN LET newid == Cardinality({e \in EqIds : classAssigned[e]})
+                            THEN LET newid == Cardinality({k \in Keys : classAssigned[k]})
                                  IN /\ classAssigned' = [classAssigned EXCEPT ![ec] = TRUE]
                                     /\ classId' = [classId EXCEPT ![ec] = newid]
                                     /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", newid>>]
-                            ELSE \E newid \in AvailableIds \ {classId[e] : e \in {e2 \in EqIds : classAssigned[e2]}} :
+                            ELSE \E newid \in AvailableIds \ {classId[k] : k \in {k2 \in Keys : classAssigned[k2]}} :
                                     /\ classAssigned' = [classAssigned EXCEPT ![ec] = TRUE]
                                     /\ classId' = [classId EXCEPT ![ec] = newid]
                                     /\ globalOf' = [globalOf EXCEPT ![v] = <<"Table", newid>>]
@@ -334,19 +358,28 @@ TypeOK ==
     /\ fstat \in [Occurrences -> FStats]
     /\ child \in [Occurrences -> {0} \cup Occurrences]
     /\ eqclass \in [Occurrences -> EqIds]
+    /\ ty \in [Occurrences -> Types]
     /\ cur \in Occurrences
     /\ pc \in {"Run", "Done", "Reject"}
     /\ globalOf \in [Occurrences -> GlobalVal]
-    /\ classAssigned \in [EqIds -> BOOLEAN]
-    /\ classId \in [EqIds -> AvailableIds]
+    /\ classAssigned \in [Keys -> BOOLEAN]
+    /\ classId \in [Keys -> AvailableIds]
 
 (* (1a) CANONICALIZATION: two occurrences that are BOTH really eager and     *)
-(* share a structural-equality class intern to the SAME global -- the       *)
+(* egal intern to the SAME global -- the                                    *)
 (* `haskey(constant_globals, val) && return constant_globals[val]` reuse.   *)
 Canonicalization ==
     pc = "Done" =>
         \A i, j \in Occurrences :
-            (Eager(i) /\ Eager(j) /\ eqclass[i] = eqclass[j]) => globalOf[i] = globalOf[j]
+            (Eager(i) /\ Eager(j) /\ Egal(i) = Egal(j)) => globalOf[i] = globalOf[j]
+
+(* (1c) SHARED ONLY IF EGAL: two occurrences that share a global are egal -- *)
+(* a site never reads a constant of another type, however `isequal` the two *)
+(* values are (dart: a Constant equals only a constant of its own class).   *)
+SharedOnlyIfEgal ==
+    pc = "Done" =>
+        \A i, j \in Occurrences :
+            globalOf[i] = globalOf[j] => Egal(i) = Egal(j)
 
 (* (1b) MUTABLE NEVER ALIASES: any two DISTINCT occurrences where at least   *)
 (* one is really non-eager (in particular every "Mut"-kind occurrence, which *)
@@ -383,15 +416,15 @@ NoFabrication ==
 (* of anything hash-bucket-shaped. Ground truth, computed without reference  *)
 (* to `classId`/`globalOf` at all. *)
 EagerOccs == {v \in Occurrences : Eager(v)}
-EagerClasses == {eqclass[v] : v \in EagerOccs}
+EagerClasses == {Egal(v) : v \in EagerOccs}
 FirstOccOfClass(ec) ==
     CHOOSE v \in EagerOccs :
-        /\ eqclass[v] = ec
-        /\ \A w \in EagerOccs : eqclass[w] = ec => v <= w
+        /\ Egal(v) = ec
+        /\ \A w \in EagerOccs : Egal(w) = ec => v <= w
 ClassRank(ec) == Cardinality({ec2 \in EagerClasses : FirstOccOfClass(ec2) < FirstOccOfClass(ec)})
 
 DeterministicNumbering ==
-    pc = "Done" => \A v \in Occurrences : Eager(v) => globalOf[v] = <<"Table", ClassRank(eqclass[v])>>
+    pc = "Done" => \A v \in Occurrences : Eager(v) => globalOf[v] = <<"Table", ClassRank(Egal(v))>>
 
 (* Once rejected, the compile stays rejected -- no further label event or    *)
 (* global emission occurs (mirrors `soundness_fatal=true` unwinding the      *)

@@ -9606,9 +9606,8 @@ console.log(JSON.stringify({
     end
 
     # ── P4-stdlib: Random (stdlib #3) ──────────────────────────────────────
-    # Seeded Xoshiro streams compile from the real implementations and match
-    # native bit-exactly; WasmTargetRandomExt reroutes hash_seed through
-    # SHA's type-stable byte-vector path (identical digests). Unseeded RNGs
+    # Seeded Xoshiro streams compile from the real implementations, Random's
+    # own hash_seed included, and match native bit-exactly. Unseeded RNGs
     # (TaskLocalRNG, OS entropy) defer to embedding-side imports.
     _rand_i64(x::Int64)::Int64 = rand(Random.Xoshiro(x), Int64)
     _rand_f64(x::Int64)::Float64 = rand(Random.Xoshiro(x))
