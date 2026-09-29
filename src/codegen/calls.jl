@@ -2284,6 +2284,8 @@ end
 # heterogeneous AST nodes (md"…" rendering) and any `Any[…]`-of-structs + g(elt).
 # Returns the bytes (result left in the inferred SSA wasm type), or nothing if the
 # call doesn't qualify (caller then falls back to the `unreachable` stub).
+# formal(dev/formal/ClassIdSwitch.tla): the call runs the specialization Julia selects, or
+# traps where Julia has none or the class cannot be told apart.
 function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
                                      args, call_arg_types, idx::Int)::Union{Nothing, InstrBuilder}
     (ctx.func_registry === nothing || ctx.type_registry.base_struct_idx === nothing) && return nothing

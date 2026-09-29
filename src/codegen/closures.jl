@@ -219,6 +219,8 @@ argument must carry the classId the candidate's Julia parameter type has (a clas
 is a `\$JlTop` subtype whose field 0 is its classId; a box, a string, a struct alike) —
 and the first match is narrowed, called and its result converted exactly as a single-body
 entry's, then returned. No match traps: Julia would throw MethodError for the same call.
+formal(dev/formal/ClassIdSwitch.tla): the entry runs the specialization Julia selects, or
+traps where Julia has none or a bare-array argument's class cannot be told apart.
 parity(quarantine: a Julia generic function used as a value carries every reachable
 specialization of one arity (`string` as a value), chosen by the erased arguments' runtime
 classes; a dart closure has exactly one body per FunctionNode, so one vtable entry per arity
