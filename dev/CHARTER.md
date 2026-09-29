@@ -57,7 +57,8 @@ with the per-clause status. A clause is never closed by argument.
   `L133` (each bespoke body in `STANDALONE_INTRINSIC_BODIES` is on an exact allowlist with the
   reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `L138` (the differential
   oracle is bit-exact; a tolerance only where the native value comes from a named BLAS or
-  LAPACK routine) `R38` (each `@overlay` states why Julia's body cannot compile, or goes).
+  LAPACK routine) `L140` (an overlay's BLAS/LAPACK reason is verified against Julia's own
+  method) `R38` (each `@overlay` states why Julia's body cannot compile, or goes).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.

@@ -1533,14 +1533,13 @@ const LOCKS = [
             count(p -> !occursin(p, stats_src), required) +
                 count(p -> occursin(p, stats_src), forbidden)
         end),
-    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain",
+    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain (rotate!/reflect! compile Julia's own bodies since 2026-09-29, so they are no longer overlays)",
         () -> begin
             linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
             required = ["LinearAlgebra.norm(x::Array{T,N})",
                         "LinearAlgebra.opnorm(", "_wt_osj_svdvals(A)",
                         "a::T, x::Vector{T}, y::Vector{T}",
                         "a::T, x::Vector{T}, b::T, y::Vector{T}",
-                        "LinearAlgebra.rotate!(", "LinearAlgebra.reflect!(",
                         "length(x) == length(y)", "for i in eachindex(x)"]
             forbidden = ["for i in eachindex(x, y)",
                          "LinearAlgebra.norm(x::Vector{T})"]
@@ -2398,6 +2397,19 @@ const LOCKS = [
                                !occursin(r"^\s*info\.return_type <: expected_return", l),
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
+        end),
+    "L140_overlay_reasons_are_verified" => ("an overlay's quarantine reason that names a BLAS or LAPACK routine is checked, not believed: test/overlay_reasons.jl (shard 0) finds, for each such overlay, that Julia's own method at the overlay's signature reaches that routine's foreigncall through its invokes, and every such reason in ext/ uses the one form it parses, `parity(quarantine: BLAS gemm: …)`. The first run found a reason naming BLAS trsv where Julia's ldiv! calls LAPACK trtrs (dev/CHARTER.md C3)",
+        () -> begin
+            n = isfile(joinpath(ROOT, "test", "overlay_reasons.jl")) ? 0 : 1
+            n += occursin("include(\"overlay_reasons.jl\")", read(joinpath(ROOT, "test", "runtests.jl"), String)) ? 0 : 1
+            for (d, _, fs) in walkdir(joinpath(ROOT, "ext")), f in fs
+                endswith(f, ".jl") || continue
+                for l in eachline(joinpath(d, f))
+                    occursin(r"quarantine:\s*(BLAS|LAPACK)\b", l) || continue
+                    occursin(r"^# parity\(quarantine: (BLAS|LAPACK) [a-z0-9]+: ", l) || (n += 1)
+                end
+            end
+            n
         end),
     "L139_invoke_names_its_method" => ("an :invoke calls the method its MethodInstance names: the closed-world plan keeps one function per MethodInstance (never one per (f, arg_types): two methods share a specialization's argument types when Base calls a less specific one with `invoke(f, Tuple{Super}, x)`), marks the one dispatch does not select invoke-only, the collector's re-specialization keeps the invoked method (or its same-signature overlay) even where a more specific method fully covers it, and codegen decides self-recursion and the callee by the MethodInstance's function. Until 2026-09-28 the rebuild took dispatch's choice and the plan deduplicated by (f, arg_types): unique(::Vector{Float64}) compiled to a function that called itself forever (dev/CHARTER.md C6)",
         () -> begin

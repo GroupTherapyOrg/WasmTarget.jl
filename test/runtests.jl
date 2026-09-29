@@ -153,6 +153,7 @@ include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl
 _wt_shard0() && include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
 _wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
 _wt_shard0() && include("recursive_groups.jl")
+_wt_shard0() && include("overlay_reasons.jl")
 _wt_shard0() && include("apply_iterate_soundness.jl")
 
 # Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
