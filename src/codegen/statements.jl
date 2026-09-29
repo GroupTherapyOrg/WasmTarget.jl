@@ -128,6 +128,13 @@ end
 struct _EveryEltype end
 Base.in(@nospecialize(_), ::_EveryEltype)::Bool = true
 
+# parity(quarantine: Julia stores an isbits struct inline in its Memory; WT stores a reference to
+# its immutable struct, so a byte copy of that storage is a copy of the references.)
+struct _ImmutableIsbitsStruct end
+# parity(quarantine: the element types whose storage WT copies as references, see _ImmutableIsbitsStruct.)
+Base.in(@nospecialize(T), ::_ImmutableIsbitsStruct)::Bool =
+    T isa DataType && isbitstype(T) && isstructtype(T) && !isprimitivetype(T) && !ismutabletype(T)
+
 """
     _storage_pointer_backing(ctx, operand) -> backing | nothing
 
@@ -205,6 +212,18 @@ function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
     narrow_length_to_i32!(b)
     i32_const!(b, Int64(shift))
     num!(b, Opcode.I32_SHR_U)
+    return b
+end
+
+# The element index a storage-relative byte pointer or byte count names, for Julia's element
+# stride `elsize` (Base.aligned_sizeof): the shift for a power of two, else the division.
+# parity(intrinsics.dart:1254 wasmArrayCopy): element offsets and sizes, narrowed to i32.
+function _emit_storage_element_index!(b::InstrBuilder, ptr_or_count, backing,
+                                      ctx::AbstractCompilationContext, elsize::Integer)::InstrBuilder
+    ispow2(elsize) && return _emit_storage_element_offset!(b, ptr_or_count, backing, ctx, trailing_zeros(elsize))
+    _emit_storage_element_offset!(b, ptr_or_count, backing, ctx, 0)
+    i32_const!(b, Int64(elsize))
+    num!(b, Opcode.I32_DIV_U)
     return b
 end
 
@@ -2094,6 +2113,27 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
                 _emit_storage_element_offset!(b, nbytes_arg, nothing, ctx, _mmv_sh)
                 array_copy!(b, _mmv_arr, _mmv_arr)
                 # C memmove returns its destination pointer.
+                emit_value!(b, dest_ptr_arg, ctx, I64)
+                return b
+            end
+        end
+
+        # An isbits struct element (Base.unsafe_copyto! of a Vector{Dual}): WT stores a
+        # reference to its immutable struct, so copying the references is Julia's by-value
+        # copy; offsets and the count are in Julia's element stride.
+        local _mmr_d = _trace_memmove_ptr(dest_ptr_arg, ctx; eltypes = _ImmutableIsbitsStruct())
+        local _mmr_s = _mmr_d !== nothing ? _trace_memmove_ptr(src_ptr_arg, ctx; eltypes = _ImmutableIsbitsStruct()) : nothing
+        if _mmr_d !== nothing && _mmr_s !== nothing
+            local _mmr_te = _storage_element_type(_mmr_d, ctx)
+            if _mmr_te === _storage_element_type(_mmr_s, ctx)
+                local _mmr_arr = get_array_type!(ctx.mod, ctx.type_registry, _mmr_te)
+                local _mmr_sz = Base.aligned_sizeof(_mmr_te)
+                _emit_backing_array!(b, _mmr_d, ctx, _mmr_arr)
+                _emit_storage_element_index!(b, dest_ptr_arg, _mmr_d, ctx, _mmr_sz)
+                _emit_backing_array!(b, _mmr_s, ctx, _mmr_arr)
+                _emit_storage_element_index!(b, src_ptr_arg, _mmr_s, ctx, _mmr_sz)
+                _emit_storage_element_index!(b, nbytes_arg, nothing, ctx, _mmr_sz)
+                array_copy!(b, _mmr_arr, _mmr_arr)
                 emit_value!(b, dest_ptr_arg, ctx, I64)
                 return b
             end

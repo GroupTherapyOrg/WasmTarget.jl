@@ -941,12 +941,6 @@ _g("immutable_objectid", Any[
     ("vector_from_string", (n::Int64) -> length(Vector{UInt8}(n > 0 ? "hello" : "ab")), Int64(1)),
 ])
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
-# Julia's sort with `lt` over a vector of tuples takes ScratchQuickSort, whose scratch
-# copy is a memmove through cmem.jl:28 that WT rejects (it rejected under the old
-# insertion-sort overlay too).
-_xf("sort_scratch_memmove", Any[
-    ("sort_stable_lt", (n::Int64) -> (v = sort([(2, 1), (1, 2), (2, 3), (1, n)]; lt=(a, b) -> a[1] < b[1]); v[2][2] * 10 + v[4][2]), Int64(4)),
-])
 _xf("pointer_foreigncalls", Any[
     # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
     # storage-relative WasmGC operations" (also the first reject in isgraphemebreak!,
@@ -1205,7 +1199,12 @@ _g("memoryref_array_offset", Any[
 # Julia's own collection bodies, compiled instead of bespoke overlays (dev/CHARTER.md C3), at
 # the inputs where a re-implementation drifts: signed zeros, NaN, ties, negative integers, an
 # empty generator's element type.
+struct _SmPair; a::Float64; b::Float64; end
+struct _SmTrip; a::Float64; b::Float64; c::Float64; end   # a 24-byte stride
 _g("julia_collection_bodies", Any[
+    # Julia's copy of an isbits-struct vector is a memmove of its inline storage
+    ("copy_isbits_struct_vector", (n::Int64) -> (v = [_SmPair(1.0, 2.0), _SmPair(3.0, n)]; w = copy(v); w[2].b * 10 + w[1].a + length(w)), Int64(4)),
+    ("copy_isbits_struct_stride24", (n::Int64) -> (v = [_SmTrip(1.0, 2.0, 3.0), _SmTrip(4.0, 5.0, n), _SmTrip(7.0, 8.0, 9.0)]; w = copy(v); w[2].c * 100 + w[3].a * 10 + length(w)), Int64(6)),
     ("splice_index", (n::Int64) -> (v = collect(1:n); x = splice!(v, 2); x * 100 + length(v)), Int64(5)),
     ("unique_int", (n::Int64) -> (u = unique([3, 1, 3, n, 1]); sum(u) * 10 + length(u)), Int64(7)),
     ("unique_f64_zero_nan", (n::Int64) -> (u = unique([0.0, -0.0, NaN, NaN, Float64(n)]); length(u) * 10 + (signbit(u[2]) ? 1 : 0)), Int64(2)),
@@ -1261,6 +1260,8 @@ _g("julia_string_bodies", Any[
     ("sort_signed_zero", (n::Int64) -> (v = sort([0.0, -0.0, Float64(n), -1.0]); (signbit(v[2]) ? 1 : 0) + (signbit(v[3]) ? 10 : 0)), Int64(2)),
     ("sortperm_rev", (n::Int64) -> (p = sortperm([3, 1, n, 2]; rev=true); p[1] * 10 + p[end]), Int64(4)),
     ("partialsort_k", (n::Int64) -> partialsort([5, 3, n, 1, 4], 2), Int64(2)),
+    # ScratchQuickSort's scratch copy of a tuple vector is a memmove of isbits-struct storage
+    ("sort_stable_lt", (n::Int64) -> (v = sort([(2, 1), (1, 2), (2, 3), (1, n)]; lt=(a, b) -> a[1] < b[1]); v[2][2] * 10 + v[4][2]), Int64(4)),
     # two String literals compared in a function no String type names (the scratch locals
     # are allocated at the comparison)
     ("string_literal_eq", (n::Int64) -> (repeat("hello", 1) == "hello" ? 1 : 0) + n, Int64(2)),

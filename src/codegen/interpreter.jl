@@ -1200,6 +1200,28 @@ end
 end
 
 
+# On 1.13 Julia inlines in(::UInt8/Int8, dense byte vector)'s findfirst into a C memchr over
+# the vector's memory (pointer.jl:77), a raw pointer WT does not lower; on 1.12 Julia's own
+# body compiles. These are the same membership as a loop over the elements.
+# parity(quarantine: Julia 1.13 finds a byte through a C memchr over the vector's memory; a WT
+# vector has no address.)
+@static if VERSION >= v"1.13-"
+    # parity(quarantine: Julia 1.13's memchr over the vector's memory, as above.)
+    @overlay WASM_METHOD_TABLE function Base.in(a::UInt8, b::Base.DenseUInt8)
+        for x in b
+            x == a && return true
+        end
+        return false
+    end
+    # parity(quarantine: as above, Julia 1.13's memchr.)
+    @overlay WASM_METHOD_TABLE function Base.in(a::Int8, b::Base.DenseInt8)
+        for x in b
+            x == a && return true
+        end
+        return false
+    end
+end
+
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
 struct WasmInterpreter <: CC.AbstractInterpreter
