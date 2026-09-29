@@ -28,8 +28,9 @@ The method:
 
 ## 2026-09-29 — audited through 7acc21c9 (4fc785d2~1..7acc21c9: batches 51–59)
 
-The first audit, done because none had been: 45 findings, two of them silent wrong values.
-The fix batches run in the order below, before any new work.
+The first audit, done because none had been: 45 findings. Two were read as silent wrong
+values; measured (batch 61), neither was: E1 raised a codegen bug where a rejection belongs,
+and E7 did not reproduce. The fix batches run in the order below, before any new work.
 
 Area: builder — (B1) `StatementTrace` and `WasmModule.trace` put Julia's CodeInfo and
 MethodInstance in the builder; dart's ModuleBuilder holds wasm parts only. (B2) a block's type
@@ -113,8 +114,14 @@ validation without wasm-tools throws. `discovery` is gone. P5: interrupts and ou
 pass through both catch-alls. L9, L10: README and the stale reasons corrected. M4, M5:
 proposed to Dale, who answered "don't wait on me" (2026-09-29): C1, C3, C6, C7, C8 and C10
 now name their open findings as `Planned:` and read OPEN until those land; a citation L125
-requires for a new check is added with the check. Next, in order: batch 61 E1, E7, E8 (the silent
-values and the trap, each with a planted differential case); 62 H1, H2, P7, E9 (one module
+requires for a new check is added with the check. Batch 61 — E1: a runtime-name getfield rejects at its statement, with
+why, on a Module (Julia reads the global binding; WT threw FieldError where Julia returns) and
+on a layout that does not hold Julia's fields in Julia's order (DataType, TypeName: measured,
+the original raised a WasmInternalError, not a silent value) or a MemoryRef field. E7: the
+call's result is detected by stack height (not reproduced by a planted Nothing-returning
+callee; the height is the exact test). E8: a runtime tuple or vararg index is taken only when
+its type is an integer (a Symbol on a vararg pack raised a WasmInternalError; it now throws
+FieldError as Julia does). Next, in order: 62 H1, H2, P7, E9 (one module
 shape: the exception tag carries (exception, stack), rethrow keeps the caught stack, a source
 map is output only); 63 B2, B3, B4 (the block type from its label, one branch check, typed
 pops); 64 H3 (the native reference computes muladd as fma: bit-exact); 65 M7, L11; then P3

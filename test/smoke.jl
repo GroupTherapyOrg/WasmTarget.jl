@@ -900,6 +900,13 @@ _g("abstract_receivers", Any[
 ])
 # BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
 _xf("builtin_crashes", Any[
+    # getfield by a runtime name where WT's layout does not hold Julia's fields in Julia's
+    # order (DataType, TypeName are projections) or the read is not a field (a Module's is a
+    # global binding): the read rejects at its statement, with why. Until 2026-09-29 the
+    # DataType read raised a codegen bug and the Module read threw FieldError where Julia
+    # returns (dev/AUDIT.md E1); answering, wrong or right, is an outcome mismatch here.
+    ("datatype_runtime_name", (x::Int64) -> (v = _sm_dt_getfield(x > 0 ? Int64 : Float64, x > 2 ? :hash : :flags); v isa Int32 ? Int64(v::Int32) : -1), Int64(3)),
+    ("module_runtime_name", (x::Int64) -> (getfield(x > 0 ? Base : Core, x > 2 ? :pi : :nothing) === nothing ? 1 : 2), Int64(3)),
     # Core.compilerbarrier on an Int64: WasmInternalError "numeric-to-reference conversion
     # lacks a concrete Julia source type"
     ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
@@ -1451,6 +1458,9 @@ _g("invoke_in_world", Any[
     ("argument_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
     ("ssa_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), +, x * 2, 1)::Int64, Int64(4)),
     ("float_result", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), sqrt, Float64(x))::Float64 > 2.0 ? 1 : 0, Int64(5)),
+    # a callee returning `nothing` pushes no value: what is below it on the stack is not its
+    # result (dev/AUDIT.md E7)
+    ("nothing_result", (x::Int64) -> (r = Ref(x); y = x * 3 + (Base.invoke_in_world(Base.tls_world_age(), _sm_iiw_set!, r, x + 1); r[]); y), Int64(4)),
 ])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
@@ -1467,7 +1477,13 @@ _g("getfield_runtime_name", Any[
     ("string_field", (x::Int64) -> (v = getfield(_SmMix(x, 1.5, "qq"), x > 0 ? :s : :a); v isa String ? ncodeunits(v) : -1), Int64(1)),
     ("primitive_has_no_fields", (x::Int64) -> (try; getfield(UInt64(x), _sm_rn_name(x)); 0; catch e; e isa FieldError && e.type === UInt64 ? 7 : 8; end), Int64(1)),
     ("tuple_names_are_integers", (x::Int64) -> (try; getfield((x, 2), _sm_rn_name(x)); 0; catch e; e isa FieldError ? 1 : 2; end), Int64(3)),
+    # a vararg pack indexed by a Symbol is a Tuple read by name: FieldError, not an integer
+    # cast of the Symbol (the vararg arm once emitted it as I64 and trapped)
+    ("vararg_names_are_integers", (x::Int64) -> (try; _sm_va_getfield(_sm_rn_name(x), x, 2); 0; catch e; e isa FieldError ? 1 : 2; end), Int64(3)),
 ])
+@noinline _sm_va_getfield(s::Symbol, xs...) = getfield(xs, s)
+@noinline _sm_iiw_set!(r::Base.RefValue{Int64}, v::Int64) = (r[] = v; nothing)
+@noinline _sm_dt_getfield(@nospecialize(T::DataType), s::Symbol) = getfield(T, s)
 _g("sizeof_values", Any[
     ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),
     ("sizeof_memory_float32", (n::Int64) -> sizeof(Memory{Float32}(undef, n)), Int64(3)),

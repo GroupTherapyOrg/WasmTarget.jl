@@ -227,3 +227,21 @@ end
     @test any(r -> occursin("dispatch candidate for runtime class", r) &&
                    occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(world.enrolled_as))
 end
+
+# getfield by a name known only at run time answers as jl_f_getfield or rejects with why: WT's
+# layouts of DataType and TypeName are projections (reading by Julia's field order would read
+# another field), and a Module's getfield reads a global binding. Until 2026-09-29 the first
+# raised a codegen bug and the second threw FieldError where Julia returns (dev/AUDIT.md E1).
+module DiagRuntimeName
+@noinline dt_getfield(@nospecialize(T::DataType), s::Symbol) = getfield(T, s)
+dt_use(x::Int64) = (v = dt_getfield(x > 0 ? Int64 : Float64, x > 2 ? :hash : :flags); v isa Int32 ? Int64(v::Int32) : -1)
+mod_use(x::Int64) = getfield(x > 0 ? Base : Core, x > 2 ? :pi : :nothing) === nothing ? 1 : 2
+end
+@testset "diagnostics: getfield by a runtime name rejects where WT's layout is not Julia's" begin
+    for (f, why) in ((DiagRuntimeName.dt_use, "WT's layout of DataType holds"),
+                     (DiagRuntimeName.mod_use, "a Module's getfield reads the global binding"))
+        err = try WasmTarget.compile(f, (Int64,)); nothing catch e; e end
+        @test err isa WasmTarget.WasmCompileError
+        @test occursin(why, sprint(showerror, err))
+    end
+end

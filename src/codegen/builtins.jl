@@ -93,12 +93,15 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Not
     local had_result = haskey(ctx.ssa_types, idx)
     local old_result = get(ctx.ssa_types, idx, Any)
     ctx.ssa_types[idx] = R
+    # the call's own result is what it pushes above the values already on the stack (a
+    # fragment's stack starts with its parent's)
+    local height = length(b.v.stack)
     try
         compile_call!(b, nir_call(args[2], args[3:end]), idx, ctx)
     finally
         had_result ? (ctx.ssa_types[idx] = old_result) : delete!(ctx.ssa_types, idx)
     end
-    (ctx.last_stmt_was_stub || R === Union{} || isempty(b.v.stack)) && return b
+    (ctx.last_stmt_was_stub || R === Union{} || length(b.v.stack) == height) && return b
     # a numeric result stored under a non-concrete statement type is boxed by its own type,
     # the value the call returns (statement storage has only the statement's type to box by)
     (!_wt_is_ref(b.v.stack[end]) && !isconcretetype(old_result)) &&
@@ -2402,13 +2405,12 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 field_idx = if nir_const(field_ref) isa Integer
                     nir_const(field_ref)
                 elseif (field_ref isa NirSSA || field_ref isa NirArgument) &&
-                       typeintersect(get_ssa_type(ctx, field_ref), Integer) !== Union{}
-                    # Dynamic index - will be handled below for homogeneous tuples. A field
-                    # operand that cannot be an integer (a Symbol name) is not an index: the
-                    # call declines here and compile_call! reads it by name
-                    # (_emit_getfield_runtime_name!: a Tuple's names are integers, so it
-                    # throws FieldError). Until 2026-09-29 a Symbol was cast to an Int box
-                    # here and trapped (smoke getfield_runtime_name/tuple_names_are_integers).
+                       get_ssa_type(ctx, field_ref) <: Integer
+                    # Dynamic index - will be handled below for homogeneous tuples. Only an
+                    # operand whose type is an integer is an index: a Symbol name declines
+                    # here and compile_call! reads it by name (_emit_getfield_runtime_name!: a
+                    # Tuple's names are integers, so it throws FieldError), and an operand
+                    # that admits other values rejects rather than casting them.
                     # `Core.Argument`: the index is a bare function parameter, e.g.
                     # `f(x) = (31,28,…)[x]` → `getfield(tuple, _2, boundscheck)` (gap
                     # d4409a896f5b — daysinmonth's DAYSINMONTH[m] lookup table). Without

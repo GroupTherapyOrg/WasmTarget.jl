@@ -178,14 +178,24 @@ end
 the field whose name equals `name`, compared in declaration order (jl_field_index), else
 `FieldError(T, name)`. A type with no fields, or a Tuple (its field names are integers),
 always throws. The value lands at the statement's type: a concrete statement type is every
-field's own (each field read as the constant-name read reads it); otherwise each field is
-boxed into anyref by its field type. False, leaving the call to reject, for a layout this
-does not read by field (an array, a NamedTuple, a MemoryRef) or fields of mixed types
-under a concrete statement type.
+field's own; otherwise each field is boxed into anyref by its field type. Where this read
+cannot answer as Julia does, the statement rejects with the reason (true): a Module (its
+getfield reads a global binding), a registered layout that does not hold Julia's fields in
+Julia's order (DataType and TypeName are projections: reading by Julia's order would read
+another field), a MemoryRef field (its read unpacks a pair). False, leaving the call to
+reject, for a layout that is not a struct or fields of mixed types under a concrete statement
+type.
 parity(quarantine: jl_f_getfield with a runtime field name (builtins.c, jl_field_index); a dart member is selected statically or by a dynamic invocation forwarder's selector, never by a runtime name.)
 """
 function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilationContext, idx::Int,
                                       obj::NirNode, name::NirNode, T::DataType)::Bool
+    local reject = (why::String) -> begin
+        record_unsupported!(ctx, :unsupported_method, "getfield of a $(T) by a name known only at run time: $(why)";
+                            idx=idx, detail=ctx.nir[idx].node)
+        ctx.last_stmt_was_stub = true
+        true
+    end
+    T === Module && return reject("a Module's getfield reads the global binding of that name, which WT does not look up at run time")
     local names = fieldcount(T) == 0 || T <: Tuple ? () : fieldnames(T)
     if isempty(names)
         local eb = _ctx_builder(ctx, "compile_call.fielderror")
@@ -197,6 +207,10 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
     local info = haskey(ctx.type_registry.structs, T) ? ctx.type_registry.structs[T] :
                  register_struct_type!(ctx.mod, ctx.type_registry, T)
     info === nothing && return false
+    Tuple(info.field_names) == names ||
+        return reject("WT's layout of $(T) holds $(join(info.field_names, ", ")), not Julia's fields $(join(names, ", ")) in order")
+    local mref = findfirst(i -> fieldtype(T, i) <: Core.GenericMemoryRef, eachindex(names))
+    mref === nothing || return reject("field $(names[mref]) is a MemoryRef, whose read unpacks a pair")
     local flds = ctx.mod.types[info.wasm_type_idx + 1].fields
     local R = get(ctx.ssa_types, idx, Any)
     local out = if isconcretetype(R)
@@ -209,7 +223,7 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
     for (i, fname) in enumerate(names)
         append_builder!(ib, compile_string_equal_b(name, NirLiteral(fname), ctx))
         if_!(ib, out)
-        local wfi = UInt32(i - 1 + Int(info.field_offset))
+        local wfi = wasm_field_idx(info, i)
         emit_value!(ib, obj, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
         struct_get!(ib, info.wasm_type_idx, wfi, flds[Int(wfi) + 1].valtype)
         out === AnyRef && coerce_stack_top!(ib, AnyRef, ctx; from_julia=fieldtype(T, i))
@@ -3657,9 +3671,12 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # the registered tuple layout instead of requiring an SSA+Symbol shape.
         local _gft_index = length(args) >= 2 ?
                            nir_const(args[2]) : nothing
+        # the index is a runtime integer: a Symbol is a field name (a Tuple has none, so the
+        # name read below throws FieldError), and an index whose type admits other values
+        # rejects at its statement rather than casting them to an integer
         if func === Core.getfield && length(args) >= 2 &&
            args[1] isa NirArgument && !ctx.is_compiled_closure &&
-           !(_gft_index isa Integer)
+           !(_gft_index isa Integer) && get_ssa_type(ctx, args[2]) <: Integer
             local _gft_slot_T = get_ssa_type(ctx, args[1])
             local _gft_fixed = args[1].n - 2
             local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
