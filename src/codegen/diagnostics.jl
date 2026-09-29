@@ -68,12 +68,15 @@ function _show_frames(io::IO, d::WasmDiagnostic)::Nothing
 end
 
 """
-    WasmInternalError(func_name, stmt_idx, stmt, frames, cause)
+    WasmInternalError(func_name, stmt_idx, stmt, frames, cause, stacktrace)
 
 The internal tier: a codegen bug — a builder stack imbalance, an `error(...)`, a
 MethodError inside the compiler — raised while a statement was being compiled. It is NOT a diagnostic about the user's program, so it
 does not enter the ledger; but it is located exactly like one, so a compiler bug names
-the statement and inline chain it surfaced at. `cause` is the original exception.
+the statement and inline chain it surfaced at. `cause` is the original exception and
+`stacktrace` the compiler frames it was raised through, innermost first, out to the frame
+that caught it (`_raised_frames`) — so the bug names the compiler source line as well as
+the statement.
 
 parity(compile.dart:113 CFECrashError)
 """
@@ -83,11 +86,51 @@ struct WasmInternalError <: Exception
     stmt::String
     frames::Vector{String}
     cause::Any
+    stacktrace::Vector{Base.StackTraces.StackFrame}
+end
+
+# the package's src directory, which a frame's file is shown relative to
+# parity(compile.dart:120 CFECrashError.toString)
+const _WT_SRC_DIR = dirname(@__DIR__)
+
+# is a frame in WT's own source?
+# parity(compile.dart:120 CFECrashError.toString)
+_in_wt_src(f::Base.StackTraces.StackFrame)::Bool = (file = String(f.file); startswith(file, _WT_SRC_DIR))
+
+"""
+    _raised_frames(bt, entry) -> Vector{StackFrame}
+
+The frames of backtrace `bt` (a `catch_backtrace()`) from where its exception was raised out to
+the first frame of function `entry` — the frame that caught it — innermost first. The frames
+past `entry` are the compilation pipeline, the same for every statement.
+parity(compile.dart:345 CFECrashError): the crash carries the stack it was raised on.
+"""
+function _raised_frames(bt, entry::Symbol)::Vector{Base.StackTraces.StackFrame}
+    local st = Base.stacktrace(bt)
+    local k = findfirst(f -> f.func === entry, st)
+    return k === nothing ? st : st[1:k]
+end
+
+# the innermost frame in WT's own source: where the codegen bug was raised
+# parity(compile.dart:120 CFECrashError.toString)
+function _wt_raise_site(st::Vector{Base.StackTraces.StackFrame})::Union{Base.StackTraces.StackFrame,Nothing}
+    local k = findfirst(_in_wt_src, st)
+    return k === nothing ? nothing : st[k]
+end
+
+# a frame as `function @ path:line`, the path relative to src/ for WT's own frames
+# parity(compile.dart:120 CFECrashError.toString)
+function _frame_text(f::Base.StackTraces.StackFrame)::String
+    local file = String(f.file)
+    _in_wt_src(f) && (file = "src/" * relpath(file, _WT_SRC_DIR))
+    return string(f.func, " @ ", file, ":", f.line, f.inlined ? " [inlined]" : "")
 end
 
 # parity(compile.dart:120 CFECrashError.toString)
 function Base.showerror(io::IO, e::WasmInternalError)
     print(io, "WasmInternalError: codegen bug while compiling `", e.func_name, "`")
+    local site = _wt_raise_site(e.stacktrace)
+    site === nothing || print(io, ", raised at ", _frame_text(site))
     if e.stmt_idx > 0
         print(io, "\n  statement %", e.stmt_idx, ": ", e.stmt)
         for (i, f) in enumerate(e.frames)
@@ -96,6 +139,11 @@ function Base.showerror(io::IO, e::WasmInternalError)
     end
     print(io, "\n  cause: ")
     showerror(io, e.cause)
+    isempty(e.stacktrace) && return
+    print(io, "\n  raised through:")
+    for f in e.stacktrace
+        print(io, "\n    ", _frame_text(f))
+    end
 end
 
 # parity(pkg/_fe_analyzer_shared/lib/src/messages/codes.dart:91 MessageCode)
@@ -255,16 +303,18 @@ function julia_loc(ctx, idx::Int)::Union{Nothing,String}
 end
 
 """
-    located_internal_error(ctx, idx, cause) -> WasmInternalError
+    located_internal_error(ctx, idx, cause, bt) -> WasmInternalError
 
 Wrap a non-diagnostic exception raised while statement `idx` was being compiled
-with the statement and its inline chain.
+with the statement, its inline chain, and the compiler frames it was raised through
+(`bt`, the `catch_backtrace()` of the catch in compile_statement!).
 
 parity(compile.dart:345 CFECrashError)
 """
-function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
+function located_internal_error(ctx, idx::Int, cause, bt)::WasmInternalError
     return WasmInternalError(_ctx_func_name(ctx), idx, _stmt_text(ctx, idx),
-                             stmt_frames(_ctx_debuginfo(ctx), idx), cause)
+                             stmt_frames(_ctx_debuginfo(ctx), idx), cause,
+                             _raised_frames(bt, :compile_statement!))
 end
 
 # parity(pkg/dart2wasm/lib/target.dart:719 DiagnosticReporter.report)

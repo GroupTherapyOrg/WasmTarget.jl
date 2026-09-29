@@ -208,7 +208,8 @@ function _closure_layout_error(@nospecialize(closure_type), bodies::Vector{Closu
     end
     local text = "closure vtable for $closure_type: $msg" *
                  (isempty(sigs) ? "" : "\n    specializations:\n      " * join(sigs, "\n      "))
-    return WasmInternalError(string(closure_type), 0, "", String[], ErrorException(text))
+    return WasmInternalError(string(closure_type), 0, "", String[], ErrorException(text),
+                             Base.stacktrace()[2:end])
 end
 
 """

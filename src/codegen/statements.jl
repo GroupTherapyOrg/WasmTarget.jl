@@ -406,7 +406,7 @@ function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationC
         return _compile_statement_located!(b, idx, ctx)
     catch err
         (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
-        throw(located_internal_error(ctx, idx, err))
+        throw(located_internal_error(ctx, idx, err, catch_backtrace()))
     end
 end
 

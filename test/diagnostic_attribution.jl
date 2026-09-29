@@ -104,6 +104,16 @@ end
         @test err.cause isa ErrorException && occursin("simulated", err.cause.msg)
         msg = sprint(showerror, err)
         @test occursin("codegen bug", msg) && occursin("bug_helper", msg) && occursin("cause:", msg)
+        # the compiler frames it was raised through (dart CFECrashError.stackTrace): from the
+        # injected emitter out to the catching statement entry, the innermost WT frame in the
+        # headline — the compiler line a bug surfaced at, without instrumenting the compiler
+        @test !isempty(err.stacktrace)
+        @test err.stacktrace[1].func === :error &&
+              any(f -> occursin("diagnostic_attribution.jl", string(f.file)), err.stacktrace[1:3])
+        @test err.stacktrace[end].func === :compile_statement!
+        headline = first(split(msg, '\n'))
+        @test occursin(", raised at ", headline) && occursin(" @ src/codegen/", headline)
+        @test occursin("raised through:", msg)
     finally
         WasmTarget.INTRINSIC_BINOPS[k] = saved
     end

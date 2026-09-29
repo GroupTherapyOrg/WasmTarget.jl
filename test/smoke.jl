@@ -1554,6 +1554,18 @@ _g("overlays", Any[
 ])
 
 # ============================================================================
+
+# An error's located lines — the headline (for a codegen bug, the compiler source line it was
+# raised at), the statement, its innermost inline frame, and the cause — so a failing case
+# names where to look without rerunning it; the full trace prints when the case runs alone.
+function _smoke_error_text(e)::String
+    local lines = split(sprint(showerror, e), '\n')
+    local keep = [strip(l) for l in lines if !isempty(strip(l)) &&
+                  !startswith(strip(l), "←") && !startswith(strip(l), "raised through")]
+    local text = join(first(keep, 4), " | ")
+    return length(text) > 600 ? first(text, 600) * "…" : text
+end
+
 function main()
     t0 = time()
     npass = 0; nfail = 0; nerr = 0
@@ -1571,7 +1583,7 @@ function main()
                     nfail += 1; push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)")
                 end
             catch e
-                nerr += 1; push!(failures, "ERROR $tag  $(first(sprint(showerror, e), 90))")
+                nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
             end
         end
     end

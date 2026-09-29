@@ -2245,12 +2245,12 @@ const LOCKS = [
     "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions (locked 2026-09-02)",
         () -> count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
                           exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])),
-    "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement and inline chain; _compile_statement_located! has no other caller (locked 2026-09-02)",
+    "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement, its inline chain, and the compiler frames it was raised through (its catch_backtrace(), dart's CFECrashError.stackTrace), whose innermost WT frame heads the message; _compile_statement_located! has no other caller (locked 2026-09-02; the raising frames since 2026-09-29, when finding a codegen bug still meant patching a stack print into the compiler)",
         () -> begin
             src = read(joinpath(CODEGEN, "statements.jl"), String)
             required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, idx, ctx)",
                         "(err isa WasmCompileError || err isa WasmInternalError) && rethrow()",
-                        "throw(located_internal_error(ctx, idx, err))"]
+                        "throw(located_internal_error(ctx, idx, err, catch_backtrace()))"]
             callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")
             count(p -> !occursin(p, src), required) + abs(callers - 1)
         end),

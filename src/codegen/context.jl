@@ -160,7 +160,8 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         allocate_scratch_locals!(ctx)  # Extra locals for complex operations
     catch e
         (e isa WasmCompileError || e isa WasmInternalError) && rethrow()
-        throw(WasmInternalError(_ctx_func_name(ctx), 0, "", String[], e))
+        throw(WasmInternalError(_ctx_func_name(ctx), 0, "", String[], e,
+                                _raised_frames(catch_backtrace(), :CompilationContext)))
     end
     return ctx
 end
