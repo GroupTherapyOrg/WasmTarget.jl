@@ -33,6 +33,7 @@ struct I64Const <: WasmInstr; value::Int64; end  # parity(pkg/wasm_builder/lib/s
 struct F32Const <: WasmInstr; value::Float32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3097 F32Const)
 struct F64Const <: WasmInstr; value::Float64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3119 F64Const)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:615 SingleByteInstruction)
 struct NumOp    <: WasmInstr; op::UInt8; end   # generic no-immediate numeric/cmp/conv op
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 
@@ -63,6 +64,7 @@ struct End   <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction
 struct Br    <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1110 Br)
 struct BrIf  <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1134 BrIf)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1158 BrTable)
 struct BrTable <: WasmInstr; targets::Vector{UInt32}; default::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct Return  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1193 Return)
@@ -73,6 +75,7 @@ struct CallIndirect <: WasmInstr; type_idx::UInt32; table_idx::UInt32; end  # pa
 struct CallRef <: WasmInstr; type_idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1262 CallRef)
 # end parity-region
 # br_on_null (0xD5) / br_on_non_null (0xD6): branch on the nullability of the top ref.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2195 BrOnNull)
 struct BrOnNull    <: WasmInstr; depth::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct BrOnNonNull <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2228 BrOnNonNull)
@@ -94,7 +97,9 @@ end
 struct TryTable <: WasmInstr; blocktype::BlockTypeArg; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
 struct Throw    <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1032 Throw)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1058 ThrowRef)
 struct ThrowRef <: WasmInstr; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1072 Rethrow)
 struct Rethrow  <: WasmInstr; depth::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 
@@ -104,6 +109,7 @@ struct RefNullAbstract <: WasmInstr; heaptype_byte::UInt8; end  # parity(pkg/was
 # ref.null with a concrete type index: encoded as a signed-LEB heaptype.
 struct RefNullConcrete <: WasmInstr; heaptype::Int64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2111 RefNull)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2155 RefFunc)
 struct RefFunc      <: WasmInstr; idx::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct RefIsNull    <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2146 RefIsNull)
@@ -115,6 +121,7 @@ struct StructNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builde
 struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET/_S/_U; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
 struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2358 StructSet)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2633 ArrayNew)
 struct ArrayNew        <: WasmInstr; idx::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct ArrayNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2666 ArrayNewDefault)
@@ -125,6 +132,7 @@ struct ArraySet <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/sr
 struct ArrayLen  <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2579 ArrayLen)
 struct ArrayCopy <: WasmInstr; dst::UInt32; src::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2739 ArrayCopy)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2776 ArrayFill)
 struct ArrayFill <: WasmInstr; idx::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 # ref.cast to a concrete type index (signed-LEB heaptype) vs an abstract heaptype byte.
@@ -138,36 +146,38 @@ struct RefTest <: WasmInstr; idx::Int64; nullable::Bool; end  # parity(pkg/wasm_
 # and the TARGET heaptype, each written as `s.write(heapType)` — a single on-wire byte for
 # an abstract heaptype or a signed-LEB s33 for a concrete type index. The caller already
 # has those heaptype bytes (exactly as for ref.cast / ref.null), so carry them verbatim.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2915 BrOnCast)
 struct BrOnCast     <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2963 BrOnCastFail)
 struct BrOnCastFail <: WasmInstr; flags::UInt8; depth::UInt32; src_heap::Vector{UInt8}; dst_heap::Vector{UInt8}; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct AnyConvertExtern <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3013 ExternInternalize)
 struct ExternConvertAny <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3033 ExternExternalize)
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2806 I31New)
 struct RefI31  <: WasmInstr; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2824 I31GetS)
 struct I31GetS <: WasmInstr; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2839 I31GetU)
 struct I31GetU <: WasmInstr; end
 
 # ── table ──────────────────────────────────────────────────────────────────────────
-# dart2wasm Table{Get,Set,Size,Grow,Fill}.serialize. get/set are unprefixed (0x25/0x26);
-# size/grow/fill are FC-prefixed (0xFC 0x10/0x0F/0x11). All write an unsigned table index.
+# dart2wasm Table{Get,Set,Size,Fill}.serialize. get/set are unprefixed (0x25/0x26);
+# size/fill are FC-prefixed (0xFC 0x10/0x11). All write an unsigned table index.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1508 TableGet)
 struct TableGet  <: WasmInstr; idx::UInt32; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1483 TableSet)
 struct TableSet  <: WasmInstr; idx::UInt32; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1559 TableSize)
 struct TableSize <: WasmInstr; idx::UInt32; end
-struct TableGrow <: WasmInstr; idx::UInt32; end
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1533 TableFill)
 struct TableFill <: WasmInstr; idx::UInt32; end
 
 # ── bulk memory (0xFC prefix) ────────────────────────────────────────────────────────
-# dart2wasm Memory{Init,Copy,Fill}/DataDrop.serialize: FC_PREFIX, then an UNSIGNED sub-op
-# (note: dart2wasm writes the sub-op via writeUnsigned, single-byte LEB == the raw byte for
-# these small values), then the immediates. memory.init writes seg then mem; data.drop seg;
-# memory.copy dst-mem then src-mem; memory.fill mem.
-struct MemoryInit <: WasmInstr; seg::UInt32; mem::UInt32; end
-struct DataDrop   <: WasmInstr; seg::UInt32; end
-struct MemoryCopy <: WasmInstr; dst_mem::UInt32; src_mem::UInt32; end
+# dart2wasm MemoryFill.serialize: FC_PREFIX, then an UNSIGNED sub-op (dart2wasm writes the
+# sub-op via writeUnsigned, single-byte LEB == the raw byte), then the memory index.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2085 MemoryFill)
 struct MemoryFill <: WasmInstr; mem::UInt32; end
-# array.new_elem (0xFB 0x0A): [offset:i32 length:i32] -> [(ref $type)] from an elem segment.
-struct ArrayNewElem <: WasmInstr; idx::UInt32; seg::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 
 # ── saturating truncation (0xFC prefix, sub-op 0x00–0x07) ────────────────────────
@@ -175,10 +185,6 @@ struct ArrayNewElem <: WasmInstr; idx::UInt32; seg::UInt32; end
 struct TruncSat <: WasmInstr; sub_op::UInt8; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4321 I32TruncSatF32S)
 
 # end parity-region
-# ── transitional bridge (deleted when every emitter is migrated) ──────────────────
-# Pre-encoded bytes spliced from an un-migrated callee (compile_value, etc.). A real
-# instruction in the stream that just carries already-serialized bytes.
-struct RawBytes <: WasmInstr; bytes::Vector{UInt8}; end
 
 end # module InstrIR
 
@@ -190,11 +196,11 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
     TryCatch, TryTable, Throw, ThrowRef, Rethrow,
     RefNullAbstract, RefNullConcrete, RefFunc, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
-    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayNewElem, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
+    ArrayNew, ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
     RefCastConcrete, RefCastAbstract, RefTest, BrOnCast, BrOnCastFail, AnyConvertExtern, ExternConvertAny,
     RefI31, I31GetS, I31GetU,
-    TableGet, TableSet, TableSize, TableGrow, TableFill,
-    MemoryInit, DataDrop, MemoryCopy, MemoryFill, TruncSat, RawBytes
+    TableGet, TableSet, TableSize, TableFill,
+    MemoryFill, TruncSat
 
 # encode!(code, instr): append this instruction's exact on-wire bytes (dart2wasm `serialize`).
 # parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
@@ -209,6 +215,7 @@ encode!(c::Vector{UInt8}, i::I64Const)::Vector{UInt8} = (push!(c, Opcode.I64_CON
 encode!(c::Vector{UInt8}, i::F32Const)::Vector{UInt8} = (push!(c, Opcode.F32_CONST); append!(c, reinterpret(UInt8, [i.value])))
 encode!(c::Vector{UInt8}, i::F64Const)::Vector{UInt8} = (push!(c, Opcode.F64_CONST); append!(c, reinterpret(UInt8, [i.value])))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:621 SingleByteInstruction.serialize)
 encode!(c::Vector{UInt8}, i::NumOp)::Vector{UInt8}    = push!(c, i.op)
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, ::Drop)::Vector{UInt8}      = push!(c, Opcode.DROP)
@@ -230,6 +237,7 @@ encode!(c::Vector{UInt8}, ::End)::Vector{UInt8}    = push!(c, Opcode.END)
 encode!(c::Vector{UInt8}, i::Br)::Vector{UInt8}    = (push!(c, Opcode.BR);    _u!(c, i.depth))
 encode!(c::Vector{UInt8}, i::BrIf)::Vector{UInt8}  = (push!(c, Opcode.BR_IF); _u!(c, i.depth))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1169 BrTable.serialize)
 function encode!(c::Vector{UInt8}, i::BrTable)::Vector{UInt8}
     push!(c, Opcode.BR_TABLE); _u!(c, length(i.targets))
     for t in i.targets; _u!(c, t); end
@@ -241,6 +249,7 @@ encode!(c::Vector{UInt8}, i::Call)::Vector{UInt8}  = (push!(c, Opcode.CALL); _u!
 encode!(c::Vector{UInt8}, i::CallIndirect)::Vector{UInt8} = (push!(c, Opcode.CALL_INDIRECT); _u!(c, i.type_idx); _u!(c, i.table_idx))
 encode!(c::Vector{UInt8}, i::CallRef)::Vector{UInt8}     = (push!(c, Opcode.CALL_REF); _u!(c, i.type_idx))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2203 BrOnNull.serialize)
 encode!(c::Vector{UInt8}, i::BrOnNull)::Vector{UInt8}    = (push!(c, Opcode.BR_ON_NULL);     _u!(c, i.depth))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::BrOnNonNull)::Vector{UInt8} = (push!(c, Opcode.BR_ON_NON_NULL); _u!(c, i.depth))
@@ -262,12 +271,15 @@ function encode!(c::Vector{UInt8}, i::TryTable)::Nothing
 end
 encode!(c::Vector{UInt8}, i::Throw)::Vector{UInt8}   = (push!(c, Opcode.THROW); _u!(c, i.tag))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1064 ThrowRef.serialize)
 encode!(c::Vector{UInt8}, ::ThrowRef)::Vector{UInt8} = push!(c, Opcode.THROW_REF)
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1080 Rethrow.serialize)
 encode!(c::Vector{UInt8}, i::Rethrow)::Vector{UInt8} = (push!(c, Opcode.RETHROW); _u!(c, i.depth))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::RefNullAbstract)::Vector{UInt8} = (push!(c, Opcode.REF_NULL); push!(c, i.heaptype_byte))
 encode!(c::Vector{UInt8}, i::RefNullConcrete)::Vector{UInt8} = (push!(c, Opcode.REF_NULL); _s!(c, i.heaptype))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2170 RefFunc.serialize)
 encode!(c::Vector{UInt8}, i::RefFunc)::Vector{UInt8}   = (push!(c, Opcode.REF_FUNC); _u!(c, i.idx))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, ::RefIsNull)::Vector{UInt8}    = push!(c, Opcode.REF_IS_NULL)
@@ -277,19 +289,20 @@ encode!(c::Vector{UInt8}, i::StructNewDefault)::Vector{UInt8} = (push!(c, Opcode
 encode!(c::Vector{UInt8}, i::StructGet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx); _u!(c, i.field))
 encode!(c::Vector{UInt8}, i::StructSet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_SET); _u!(c, i.idx); _u!(c, i.field))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2649 ArrayNew.serialize)
 encode!(c::Vector{UInt8}, i::ArrayNew)::Vector{UInt8}        = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW); _u!(c, i.idx))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::ArrayNewDefault)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DEFAULT); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArrayNewFixed)::Vector{UInt8}   = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_FIXED); _u!(c, i.idx); _u!(c, i.n))
 encode!(c::Vector{UInt8}, i::ArrayNewData)::Vector{UInt8}    = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_DATA); _u!(c, i.idx); _u!(c, i.seg))
 # end parity-region
-encode!(c::Vector{UInt8}, i::ArrayNewElem)::Vector{UInt8}    = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_NEW_ELEM); _u!(c, i.idx); _u!(c, i.seg))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::ArrayGet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::ArraySet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_SET); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, ::ArrayLen)::Vector{UInt8}  = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_LEN))
 encode!(c::Vector{UInt8}, i::ArrayCopy)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_COPY); _u!(c, i.dst); _u!(c, i.src))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2789 ArrayFill.serialize)
 encode!(c::Vector{UInt8}, i::ArrayFill)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ARRAY_FILL); _u!(c, i.idx))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::RefCastConcrete)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, i.nullable ? Opcode.REF_CAST_NULL : Opcode.REF_CAST); _s!(c, i.idx))
@@ -298,31 +311,36 @@ encode!(c::Vector{UInt8}, i::RefTest)::Vector{UInt8} = (push!(c, Opcode.GC_PREFI
 # end parity-region
 # br_on_cast / br_on_cast_fail: GC_PREFIX, op, flags byte, unsigned label, src heaptype bytes,
 # dst heaptype bytes (dart2wasm BrOnCast.serialize). Heaptype bytes are caller-supplied verbatim.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2936 BrOnCast.serialize)
 encode!(c::Vector{UInt8}, i::BrOnCast)::Vector{UInt8}     = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.BR_ON_CAST);      push!(c, i.flags); _u!(c, i.depth); append!(c, i.src_heap); append!(c, i.dst_heap))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2986 BrOnCastFail.serialize)
 encode!(c::Vector{UInt8}, i::BrOnCastFail)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.BR_ON_CAST_FAIL); push!(c, i.flags); _u!(c, i.depth); append!(c, i.src_heap); append!(c, i.dst_heap))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, ::AnyConvertExtern)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.ANY_CONVERT_EXTERN))
 encode!(c::Vector{UInt8}, ::ExternConvertAny)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.EXTERN_CONVERT_ANY))
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2815 I31New.serialize)
 encode!(c::Vector{UInt8}, ::RefI31)::Vector{UInt8}  = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.REF_I31))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2830 I31GetS.serialize)
 encode!(c::Vector{UInt8}, ::I31GetS)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.I31_GET_S))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2845 I31GetU.serialize)
 encode!(c::Vector{UInt8}, ::I31GetU)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.I31_GET_U))
-# table: get/set unprefixed; size/grow/fill FC-prefixed. All write an unsigned table index.
+# table: get/set unprefixed; size/fill FC-prefixed. All write an unsigned table index.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1518 TableGet.serialize)
 encode!(c::Vector{UInt8}, i::TableGet)::Vector{UInt8}  = (push!(c, Opcode.TABLE_GET); _u!(c, i.idx))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1493 TableSet.serialize)
 encode!(c::Vector{UInt8}, i::TableSet)::Vector{UInt8}  = (push!(c, Opcode.TABLE_SET); _u!(c, i.idx))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1569 TableSize.serialize)
 encode!(c::Vector{UInt8}, i::TableSize)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_SIZE)); _u!(c, i.idx))
-encode!(c::Vector{UInt8}, i::TableGrow)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_GROW)); _u!(c, i.idx))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1543 TableFill.serialize)
 encode!(c::Vector{UInt8}, i::TableFill)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.TABLE_FILL)); _u!(c, i.idx))
 # bulk memory: FC_PREFIX, unsigned sub-op, then immediates (dart2wasm writes the sub-op via
 # writeUnsigned — single-byte LEB == the raw byte for these values).
-encode!(c::Vector{UInt8}, i::MemoryInit)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_INIT)); _u!(c, i.seg); _u!(c, i.mem))
-encode!(c::Vector{UInt8}, i::DataDrop)::Vector{UInt8}   = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.DATA_DROP));   _u!(c, i.seg))
-encode!(c::Vector{UInt8}, i::MemoryCopy)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_COPY)); _u!(c, i.dst_mem); _u!(c, i.src_mem))
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2095 MemoryFill.serialize)
 encode!(c::Vector{UInt8}, i::MemoryFill)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(Opcode.MEMORY_FILL)); _u!(c, i.mem))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::TruncSat)::Vector{UInt8} = (push!(c, Opcode.FC_PREFIX); _u!(c, UInt32(i.sub_op)))
 # end parity-region
-encode!(c::Vector{UInt8}, i::RawBytes)::Vector{UInt8} = append!(c, i.bytes)
 
 # mnemonic(instr): symbolic WAT-ish text (dart2wasm `printTo`) — for builder_diagnose /
 # WT_BUILDER_TRACE disassembly. Clarity for tracking codegen bugs without a hex round-trip.
@@ -333,6 +351,7 @@ mnemonic(i::I64Const)::String = "i64.const $(i.value)"
 mnemonic(i::F32Const)::String = "f32.const $(i.value)"
 mnemonic(i::F64Const)::String = "f64.const $(i.value)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::NumOp)::String    = "num 0x$(string(i.op, base=16))"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(::Drop)::String   = "drop"
@@ -353,6 +372,7 @@ mnemonic(::End)::String    = "end"
 mnemonic(i::Br)::String    = "br $(i.depth)"
 mnemonic(i::BrIf)::String  = "br_if $(i.depth)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1182 BrTable.printTo)
 mnemonic(i::BrTable)::String = "br_table $(i.targets) $(i.default)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(::Return)::String = "return"
@@ -360,26 +380,24 @@ mnemonic(i::Call)::String  = "call $(i.idx)"
 mnemonic(i::CallIndirect)::String = "call_indirect (type $(i.type_idx)) (table $(i.table_idx))"
 mnemonic(i::CallRef)::String     = "call_ref \$$(i.type_idx)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2212 BrOnNull.printTo)
 mnemonic(i::BrOnNull)::String    = "br_on_null $(i.depth)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::BrOnNonNull)::String = "br_on_non_null $(i.depth)"
 # end parity-region
-_catch_mnemonic(k::TryCatch)::String =
-    k.kind == Opcode.CATCH         ? "catch $(k.tag) $(k.label)" :
-    k.kind == Opcode.CATCH_REF     ? "catch_ref $(k.tag) $(k.label)" :
-    k.kind == Opcode.CATCH_ALL     ? "catch_all $(k.label)" :
-    k.kind == Opcode.CATCH_ALL_REF ? "catch_all_ref $(k.label)" :
-                                     "catch?0x$(string(k.kind, base=16)) $(k.label)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
-mnemonic(i::TryTable)::String = "try_table $(i.blocktype) [" * join((_catch_mnemonic(k) for k in i.catches), ", ") * "]"
+mnemonic(i::TryTable)::String = "try_table"
 mnemonic(i::Throw)::String   = "throw $(i.tag)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1069 ThrowRef.name)
 mnemonic(::ThrowRef)::String = "throw_ref"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1089 Rethrow.printTo)
 mnemonic(i::Rethrow)::String = "rethrow $(i.depth)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::RefNullAbstract)::String = "ref.null 0x$(string(i.heaptype_byte, base=16))"
 mnemonic(i::RefNullConcrete)::String = "ref.null \$$(i.heaptype)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2179 RefFunc.printTo)
 mnemonic(i::RefFunc)::String   = "ref.func $(i.idx)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(::RefIsNull)::String    = "ref.is_null"
@@ -389,44 +407,50 @@ mnemonic(i::StructNewDefault)::String = "struct.new_default \$$(i.idx)"
 mnemonic(i::StructGet)::String = "struct.get \$$(i.idx) $(i.field)"
 mnemonic(i::StructSet)::String = "struct.set \$$(i.idx) $(i.field)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2659 ArrayNew.printTo)
 mnemonic(i::ArrayNew)::String        = "array.new \$$(i.idx)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::ArrayNewDefault)::String = "array.new_default \$$(i.idx)"
 mnemonic(i::ArrayNewFixed)::String   = "array.new_fixed \$$(i.idx) $(i.n)"
 mnemonic(i::ArrayNewData)::String    = "array.new_data \$$(i.idx) $(i.seg)"
 # end parity-region
-mnemonic(i::ArrayNewElem)::String    = "array.new_elem \$$(i.idx) $(i.seg)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::ArrayGet)::String = "array.get \$$(i.idx)"
 mnemonic(i::ArraySet)::String = "array.set \$$(i.idx)"
 mnemonic(::ArrayLen)::String  = "array.len"
 mnemonic(i::ArrayCopy)::String = "array.copy \$$(i.dst) \$$(i.src)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2799 ArrayFill.printTo)
 mnemonic(i::ArrayFill)::String = "array.fill \$$(i.idx)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::RefCastConcrete)::String = "ref.cast$(i.nullable ? " null" : "") \$$(i.idx)"
 mnemonic(i::RefCastAbstract)::String = "ref.cast$(i.nullable ? " null" : "") 0x$(string(i.heaptype_byte, base=16))"
 mnemonic(i::RefTest)::String = "ref.test$(i.nullable ? " null" : "") \$$(i.idx)"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2952 BrOnCast.printTo)
 mnemonic(i::BrOnCast)::String     = "br_on_cast $(i.depth) (flags 0x$(string(i.flags, base=16)))"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3002 BrOnCastFail.printTo)
 mnemonic(i::BrOnCastFail)::String = "br_on_cast_fail $(i.depth) (flags 0x$(string(i.flags, base=16)))"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(::AnyConvertExtern)::String = "any.convert_extern"
 mnemonic(::ExternConvertAny)::String = "extern.convert_any"
 # end parity-region
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2821 I31New.name)
 mnemonic(::RefI31)::String  = "ref.i31"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2836 I31GetS.name)
 mnemonic(::I31GetS)::String = "i31.get_s"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2851 I31GetU.name)
 mnemonic(::I31GetU)::String = "i31.get_u"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1527 TableGet.printTo)
 mnemonic(i::TableGet)::String  = "table.get $(i.idx)"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1502 TableSet.printTo)
 mnemonic(i::TableSet)::String  = "table.set $(i.idx)"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1579 TableSize.printTo)
 mnemonic(i::TableSize)::String = "table.size $(i.idx)"
-mnemonic(i::TableGrow)::String = "table.grow $(i.idx)"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1553 TableFill.printTo)
 mnemonic(i::TableFill)::String = "table.fill $(i.idx)"
-mnemonic(i::MemoryInit)::String = "memory.init $(i.seg) $(i.mem)"
-mnemonic(i::DataDrop)::String   = "data.drop $(i.seg)"
-mnemonic(i::MemoryCopy)::String = "memory.copy $(i.dst_mem) $(i.src_mem)"
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2105 MemoryFill.printTo)
 mnemonic(i::MemoryFill)::String = "memory.fill $(i.mem)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::TruncSat)::String = "trunc_sat 0x$(string(i.sub_op, base=16))"
 # end parity-region
-mnemonic(i::RawBytes)::String = "<raw $(length(i.bytes))B>"

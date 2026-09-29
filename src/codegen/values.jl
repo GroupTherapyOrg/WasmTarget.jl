@@ -963,8 +963,7 @@ const _VALUE_COMPILE_STACK = Vector{Any}()
 
 Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
 emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-guess via
-`infer_value_wasm_type`. The single replacement for the `emit_raw!(b, compile_value;
-pushes=WasmValType[static_wasm_type(v,ctx)])` anti-pattern (Loop C — the typed channel).
+`infer_value_wasm_type` (the typed channel).
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
 validator's stack type is now the truth instead of a re-derivation).
 parity(code_generator.dart:676 accept1): the emission whose result type is its byproduct.
@@ -1086,9 +1085,8 @@ end
 
 THE wrap chokepoint (dart `translateExpression`, code_generator.dart:665): emit `val`, take
 the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
-`convert_type!` funnel (dart `convertType`), and return `expected`. This is the M2 primitive
-that replaces the `emit_raw!(b, compile_value; pushes=[re-guess])` + hand-rolled
-coercion-ladder anti-pattern — the type is never re-derived after emission.
+`convert_type!` funnel (dart `convertType`), and return `expected`; the type is never
+re-derived after emission.
 
 `from_julia` (when the caller knows the value's Julia type) lets the boxing arm stamp the REAL
 classId. A `nothing` actual type means the emit produced no single result (dead/unreachable
@@ -1196,10 +1194,7 @@ _is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
 # constant kind as dart instantiates a Constant; an SSA value, argument or slot reads its local
 # as code_generator.dart:2127 visitVariableGet does.
 function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
-    # MIGRATED to InstrBuilder. The main accumulator is the typed builder `b`; the
-    # byte-INSPECTING branches (struct/Dict/Vector/Memory constants) keep building
-    # local UInt8[] buffers (they LEB-decode + scan recursive results) and splice them
-    # into `b` via emit_raw! / RawBytes. Byte-identical to the prior raw emission.
+    # The accumulator is the typed builder `b`.
     b = _ctx_builder(ctx, "compile_value")
     _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):

@@ -704,14 +704,6 @@ function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)
     validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type))
     _emit!(b, InstrIR.ArrayFill(UInt32(type_idx)))
 end
-# array.new_elem $type $seg : [offset:i32 length:i32] -> [(ref $type)] (sibling of array.new_data).
-function array_new_elem!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)::InstrBuilder
-    if b.v.reachable
-        validate_pop!(b.v, I32); validate_pop!(b.v, I32)
-        validate_push!(b.v, ConcreteRef(UInt32(type_idx), false))
-    end
-    _emit!(b, InstrIR.ArrayNewElem(UInt32(type_idx), UInt32(seg_idx)))
-end
 
 # br_on_cast / br_on_cast_fail: a cast that branches on success/failure (dart2wasm br_on_cast).
 # `src_heap`/`dst_heap` are the EXACT on-wire source/target heaptype bytes the caller already
@@ -754,11 +746,6 @@ function table_set!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
 end
 # table.size $t : [] -> [i32]
 table_size!(b::InstrBuilder, table_idx::Integer)::InstrBuilder = (validate_push!(b.v, I32); _emit!(b, InstrIR.TableSize(UInt32(table_idx))))
-# table.grow $t : [elemtype i32] -> [i32]
-function table_grow!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_pop_any!(b.v); validate_push!(b.v, I32); end
-    _emit!(b, InstrIR.TableGrow(UInt32(table_idx)))
-end
 # table.fill $t : [i32 elemtype i32] -> []
 function table_fill!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
     if b.v.reachable; validate_pop!(b.v, I32); validate_pop_any!(b.v); validate_pop!(b.v, I32); end
@@ -766,38 +753,12 @@ function table_fill!(b::InstrBuilder, table_idx::Integer)::InstrBuilder
 end
 
 # ── Bulk memory ───────────────────────────────────────────────────────────────────
-# memory.init $seg $mem : [dst:i32 src_off:i32 len:i32] -> []
-function memory_init!(b::InstrBuilder, seg_idx::Integer, mem_idx::Integer=0)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
-    _emit!(b, InstrIR.MemoryInit(UInt32(seg_idx), UInt32(mem_idx)))
-end
-# data.drop $seg : [] -> []
-data_drop!(b::InstrBuilder, seg_idx::Integer)::InstrBuilder = _emit!(b, InstrIR.DataDrop(UInt32(seg_idx)))
-# memory.copy $dst $src : [dst:i32 src:i32 len:i32] -> []
-function memory_copy!(b::InstrBuilder, dst_mem::Integer=0, src_mem::Integer=0)::InstrBuilder
-    if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
-    _emit!(b, InstrIR.MemoryCopy(UInt32(dst_mem), UInt32(src_mem)))
-end
 # memory.fill $mem : [dst:i32 val:i32 len:i32] -> []
 function memory_fill!(b::InstrBuilder, mem_idx::Integer=0)::InstrBuilder
     if b.v.reachable; validate_pop!(b.v, I32); validate_pop!(b.v, I32); validate_pop!(b.v, I32); end
     _emit!(b, InstrIR.MemoryFill(UInt32(mem_idx)))
 end
 
-# ════════════════════════════════════════════════════════════════════════════════
-# Transitional bridge: splice already-built raw bytes from an un-migrated callee as a
-# RawBytes instruction, advancing the stack model by an explicit (pops, pushes) effect.
-# Deleted once every emitter is migrated (Phase 6).
-# ════════════════════════════════════════════════════════════════════════════════
-function emit_raw!(b::InstrBuilder, raw::Vector{UInt8}; pops::Integer=0, pushes::Vector{<:Any}=WasmValType[])::InstrBuilder
-    for _ in 1:pops; validate_pop_any!(b.v); end
-    for p in pushes; validate_push!(b.v, p); end
-    # A zero-byte splice records NO instruction (the declared effects above still
-    # apply to the model) — `isempty(b.instrs)` keeps meaning "emits nothing",
-    # exactly like the byte-era `isempty(bytes)` tests it replaced.
-    isempty(raw) && return _check!(b)
-    _emit!(b, InstrIR.RawBytes(raw))
-end
 
 # Seed the model with stack values produced UPSTREAM (no instruction emitted). For
 # fragment emitters that consume a value the (not-yet-migrated) caller already left on
@@ -814,8 +775,7 @@ end
 """
     append_builder!(dst, src)
 
-Typed builder merge — the machine-tracked replacement for
-`emit_raw!(dst, builder_code(src); pops=…, pushes=…)`. `dst` pops exactly what
+Typed builder merge: `dst` pops exactly what
 `src` was seeded with (`src.seeded`, in reverse) and pushes `src`'s tracked final
 stack; the instruction stream transfers at the ir/ layer. No byte round-trip and
 NO human-declared effects — the fragment's real, validator-tracked stack shape

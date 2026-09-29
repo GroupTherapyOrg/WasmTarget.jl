@@ -11,8 +11,7 @@ nothing unless the base is a Vector with 1-byte elements (memmove counts
 bytes; element index == byte offset only for elsize 1).
 Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
 field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
-MIGRATED to InstrBuilder: emits typed struct.get/ref.cast directly onto the
-caller's builder `b`; compile_value splices bridge via emit_raw!. Byte-identical
+Emits typed struct.get/ref.cast directly onto the caller's builder `b`
 (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
 """
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)::InstrBuilder

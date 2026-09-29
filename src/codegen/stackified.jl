@@ -1194,9 +1194,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
 
         # Compile the block's statements (not the terminator, we handle it separately)
         # Skip any dead statements within the block.
-        # MIGRATED: block_bytes is now a sub-builder `bb`; straight-line emission uses
-        # typed methods, recursive sub-results (stmt_bytes/phi_value_bytes) bridge via
-        # emit_raw!, and the byte-INSPECTING DROP/box scans stay on those sub-results.
+        # The block's sub-builder `bb`: straight-line emission uses typed methods and
+        # recursive sub-results merge through append_builder!.
         bb = _ctx_builder(ctx, "generate_stackified_flow.block")
         _seed_builder_locals!(bb, ctx)
         # Values legitimately flow BETWEEN basic blocks on the wasm stack —

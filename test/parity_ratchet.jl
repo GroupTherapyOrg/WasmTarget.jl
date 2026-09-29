@@ -2085,8 +2085,8 @@ const LOCKS = [
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
         () -> count_sites(r"infer_value_wasm_type\(")),
-    "L13_no_byte_bridges" => ("THE byte-bridge class is EXTINCT — zero emit_raw! call sites exist; every emission is a typed method or a tracked merge (march4 COMPLETE; locked 2026-07-04)",
-        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "L13_no_byte_bridges" => ("the builder has no raw-bytes path: every emission is a typed method or a tracked merge (append_builder!). emit_raw! and its RawBytes instruction node are deleted (2026-09-29; their last caller went in march4, 2026-07-04), so no bytes enter a function body unvalidated",
+        () -> count_sites(r"emit_raw!|RawBytes")),
     "L12_god_fn_seams_only" => ("every emit_raw! splice is an ANNOTATED god-fn seam or front — the byte-bridge class is closed to new members; R2 falls only by killing seams (march3; locked 2026-07-04)",
         () -> count_sites(r"emit_raw!\(";
                           exclude_line=r"function emit_raw!|god-fn seam|THE front seam|`emit_raw!")),
