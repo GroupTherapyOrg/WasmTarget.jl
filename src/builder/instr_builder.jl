@@ -102,6 +102,8 @@ end
 # symbolic disassembly (dart2wasm printTo) — clarity for tracking codegen bugs.
 # parity(pkg/wasm_builder/lib/src/ir/instructions.dart:97 Instructions.printTo)
 builder_disasm(b::InstrBuilder)::Vector{String} = String[mnemonic(i) for i in b.instrs]
+# parity(quarantine: the emitted length a StackImbalanceError and the stackifier's trace report;
+# dart's _reportError (instructions.dart:452) reports its instruction trace.)
 _byte_len(b::InstrBuilder)::Int = length(builder_code(b))
 
 """
@@ -146,6 +148,7 @@ Full human-readable post-mortem of a builder's state — the symbolic instructio
 the operand-stack snapshot, the open control-flow labels (with their base heights/result
 types), reachability, the byte length, and any pending validator errors. Pins a
 codegen bug to an exact statement + stack shape with no wasm-tools round-trip.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:412 InstructionsBuilder._debugTrace)
 """
 function builder_diagnose(b::InstrBuilder)::String
     io = IOBuffer()
@@ -171,10 +174,13 @@ function builder_diagnose(b::InstrBuilder)::String
 end
 
 # Register a local's type so local.get/set/tee can be typed. idx is 0-based.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 function builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int
     push!(b.locals, typ)
     return length(b.locals) - 1
 end
+# parity(quarantine: the context-free Int128 builders (int128.jl) name their locals by index and
+# type them afterwards; dart's addLocal takes a local's type when it creates it.)
 function builder_set_local_type!(b::InstrBuilder, idx::Integer, typ::WasmValType)::WasmValType
     while length(b.locals) <= idx
         push!(b.locals, AnyRef)
@@ -197,6 +203,10 @@ f32_const!(b::InstrBuilder, x::Real)::InstrBuilder = (validate_push!(b.v, F32); 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:2091 InstructionsBuilder.f64_const)
 f64_const!(b::InstrBuilder, x::Real)::InstrBuilder = (validate_push!(b.v, F64); _emit!(b, InstrIR.F64Const(Float64(x))))
 # Generic numeric/comparison/conversion op (no immediates): reuse validate_instruction!.
+# parity(quarantine: one emitter for the no-immediate numeric, comparison and conversion
+# instructions, which dart emits through one method each (i32_add … f64_promote_f32, each
+# `_verifyTypes` of its operands and `_add` of its SingleByteInstruction); validate_instruction!
+# holds their operand types by opcode.)
 num!(b::InstrBuilder, op::UInt8)::InstrBuilder = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
 
 # Saturating truncation (FC-prefixed, sub-op 0x00–0x07): pop a float, push an int. The
@@ -219,6 +229,7 @@ select!(b::InstrBuilder)::InstrBuilder = (validate_instruction!(b.v, Opcode.SELE
 # ── Variable ────────────────────────────────────────────────────────────────────
 # fullstrict: the LIVE type for a local — the provider (fresh truth) outranks the
 # static snapshot; AnyRef only when neither knows.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 @inline _local_type(b::InstrBuilder, idx::Integer)::WasmValType = begin
     if b.locals_fn !== nothing
         local t = b.locals_fn(Int(idx))
@@ -276,6 +287,7 @@ nop!(b::InstrBuilder)::InstrBuilder = _emit!(b, InstrIR.Nop())
 # under-counted (the .block strict family). Derive the tracked results from the
 # positional blocktype when the kwarg is empty. (An Int blocktype = an s33 type-index
 # multi-value frame — callers pass `results` explicitly there.)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
 @inline _blocktype_results(blocktype, results)::Vector{WasmValType} =
     !isempty(results) ? WasmValType[r for r in results] :
     (blocktype === 0x40 || blocktype isa Int) ? WasmValType[] :
@@ -309,6 +321,7 @@ end_block!(b::InstrBuilder)::InstrBuilder = (validate_block_end!(b.v); _emit!(b,
 
 """
 Close the function label, rejecting any unclosed structured-control frames.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:276 InstructionsBuilder.forceBuild)
 """
 function finish_function!(b::InstrBuilder)::InstrBuilder
     if length(b.v.labels) != 1
@@ -366,6 +379,7 @@ return_!(b::InstrBuilder)::InstrBuilder = (b.v.reachable = false; _emit!(b, Inst
 
 # fullstrict: the module KNOWS every function's signature — derive it there; the
 # caller's claim is only a fallback for a genuinely unresolved index.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:947 InstructionsBuilder.call)
 @inline function _true_call_sig(b::InstrBuilder, func_idx::Integer, params, results)::Tuple{Any, Any}
     local m = b.v.mod
     m === nothing && return (params, results)
@@ -597,6 +611,7 @@ end
 # DERIVE the truth there instead of trusting the caller's declaration (dozens of sites
 # declared AnyRef over typed fields, silently poisoning the tracker downstream). The
 # declared param stays as the fallback when the module/type is unavailable.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
 @inline function _true_field_type(b::InstrBuilder, type_idx::Integer, field_idx::Integer, declared::WasmValType)::WasmValType
     m = b.v.mod
     m === nothing && return declared
@@ -641,6 +656,7 @@ function array_new_data!(b::InstrBuilder, type_idx::Integer, seg_idx::Integer)::
     _emit!(b, InstrIR.ArrayNewData(UInt32(type_idx), UInt32(seg_idx)))
 end
 # fullstrict: the module's array elem truth (packed i8/i16 read as i32)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1735 InstructionsBuilder.array_get)
 @inline function _true_elem_type(b::InstrBuilder, type_idx::Integer, declared::WasmValType)::WasmValType
     m = b.v.mod
     m === nothing && return declared
@@ -694,8 +710,9 @@ function array_copy!(b::InstrBuilder, dst_type_idx::Integer, src_type_idx::Integ
     validate_gc_instruction!(b.v, Opcode.ARRAY_COPY, (dst_type_idx, src_type_idx))
     _emit!(b, InstrIR.ArrayCopy(UInt32(dst_type_idx), UInt32(src_type_idx)))
 end
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1875 InstructionsBuilder.array_fill)
 function array_fill!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType)::InstrBuilder
-    validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, elem_type))
+    validate_gc_instruction!(b.v, Opcode.ARRAY_FILL, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayFill(UInt32(type_idx)))
 end
 
@@ -704,6 +721,8 @@ end
 # fragment emitters that consume a value the (not-yet-migrated) caller already left on
 # the stack, so the model starts from the true incoming stack rather than empty.
 # Seeds are RECORDED so append_builder! can replay the fragment's true stack effect.
+# parity(quarantine: WT emits a function through fragment builders merged by append_builder!, a
+# fragment starting from the stack its caller left; dart emits a function into one builder.)
 function seed_input!(b::InstrBuilder, types::Vector{<:Any})::InstrBuilder
     for t in types
         validate_push!(b.v, t)
@@ -720,6 +739,8 @@ Typed builder merge: `dst` pops exactly what
 stack; the instruction stream transfers at the ir/ layer. No byte round-trip and
 NO human-declared effects — the fragment's real, validator-tracked stack shape
 transfers, so a mis-declared splice is impossible at these seams.
+parity(quarantine: the merge of a fragment builder into its caller; dart emits a function into
+one builder, so it has none.)
 """
 function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     if length(src.v.labels) != 1

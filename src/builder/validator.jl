@@ -21,6 +21,7 @@ end
     ValidatorLabel
 
 Label stack entry for control flow validation, mirroring dart2wasm's Label class.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)
 Tracks block kind, stack height at entry, result types, and reachability.
 
 Key insight from dart2wasm:
@@ -37,6 +38,7 @@ struct ValidatorLabel
     has_else::Bool                      # For :if labels — has else branch been seen?
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)
 function ValidatorLabel(kind::Symbol, stack_height::Int,
                         input_types::Vector{WasmValType}, result_types::Vector{WasmValType},
                         reachable::Bool; handle=ControlLabel(kind, input_types, result_types))::ValidatorLabel
@@ -118,6 +120,8 @@ end
 
 Pop any type from the validation stack without type checking.
 Returns `nothing` on underflow.
+parity(quarantine: a pop whose operand its caller checks itself — a reference operand, a
+fragment seam; dart's _verifyTypes names every input's type.)
 """
 function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
     v.reachable || return nothing   # spec: polymorphic post-unreachable
@@ -141,6 +145,7 @@ stack_height(v::WasmStackValidator)::Int64 = length(v.stack)
     has_errors(v) -> Bool
 
 Whether any validation errors have been collected.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:452 InstructionsBuilder._reportError)
 """
 has_errors(v::WasmStackValidator)::Bool = !isempty(v.errors)
 
@@ -148,6 +153,8 @@ has_errors(v::WasmStackValidator)::Bool = !isempty(v.errors)
     reset_validator!(v)
 
 Clear the stack and errors for reuse (e.g., between functions).
+parity(quarantine: WT reuses one validator across the functions and fragments of a module;
+dart creates an InstructionsBuilder per function.)
 """
 function reset_validator!(v::WasmStackValidator)::Bool
     empty!(v.stack)
@@ -172,6 +179,9 @@ end
 # Opcode Sets for Instruction Validation
 # ============================================================================
 
+# parity-region(quarantine: the operand and result types of the no-immediate numeric,
+# comparison and conversion instructions by opcode, which dart states in each emitter's
+# _verifyTypes (i32_add … f64_promote_f32); num! emits them all.)
 # i32 unary ops: pop i32, push i32
 const I32_UNARY_OPS = Set{UInt8}([
     Opcode.I32_EQZ, Opcode.I32_CLZ, Opcode.I32_CTZ, Opcode.I32_POPCNT,
@@ -250,6 +260,8 @@ const F64_CMP_OPS = Set{UInt8}([
     Opcode.F64_LT, Opcode.F64_GT, Opcode.F64_LE, Opcode.F64_GE,
 ])
 
+# end parity-region
+
 # ============================================================================
 # Instruction Validation — numeric, parametric, and conversion ops
 # ============================================================================
@@ -260,6 +272,8 @@ const F64_CMP_OPS = Set{UInt8}([
 Validate a single instruction's stack effect. Pops expected operands and pushes
 results according to the Wasm spec. Mirrors dart2wasm's InstructionsBuilder
 assertion checks for numeric/parametric/conversion instructions.
+parity(quarantine: the per-opcode stack effects num! validates, which dart checks in each
+emitter's _verifyTypes.)
 
 For GC-prefixed instructions (0xFB), use validate_gc_instruction!.
 """
@@ -606,6 +620,7 @@ end
 
 Validate an if instruction: pop i32 condition, push label for the then-branch.
 Mirrors dart2wasm's `if_()` which calls `_verifyTypes([i32], [])` then `_pushLabel(If(...))`.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 """
 validate_if_start!(v::WasmStackValidator,
                    result_types::Vector{WasmValType}=WasmValType[])::ControlLabel =
@@ -690,6 +705,8 @@ byte AFTER the GC prefix (e.g., Opcode.STRUCT_NEW = 0x00). `type_info` provides
 type context needed for validation (type index, field types, element types).
 
 Mirrors dart2wasm's InstructionsBuilder assertion checks for GC instructions.
+parity(quarantine: the GC instructions' stack effects by opcode, which dart checks in each
+emitter's _verifyTypes (struct_new … array_copy).)
 """
 function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_info=nothing)::Union{WasmValType, Vector{WasmValType}}
 

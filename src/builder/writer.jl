@@ -115,42 +115,6 @@ function write_i32!(w::WasmWriter, value::Integer)::WasmWriter
     return w
 end
 
-function write_i64!(w::WasmWriter, value::Integer)::WasmWriter
-    append!(w.buffer, encode_leb128_signed(value))
-    return w
-end
-
-"""
-Write a 32-bit float (little endian).
-"""
-function write_f32!(w::WasmWriter, value::Float32)::WasmWriter
-    append!(w.buffer, reinterpret(UInt8, [value]))
-    return w
-end
-
-"""
-Write a 64-bit float (little endian).
-"""
-function write_f64!(w::WasmWriter, value::Float64)::WasmWriter
-    append!(w.buffer, reinterpret(UInt8, [value]))
-    return w
-end
-
-"""
-Write a vector with its length prefix (LEB128).
-"""
-function write_vec!(w::WasmWriter, items::Vector)::WasmWriter
-    write_u32!(w, length(items))
-    for item in items
-        write_item!(w, item)
-    end
-    return w
-end
-
-# Generic item writer - override for specific types
-write_item!(w::WasmWriter, b::UInt8)::WasmWriter = write_byte!(w, b)
-write_item!(w::WasmWriter, n::NumType)::WasmWriter = write_byte!(w, UInt8(n))
-
 """
 Write a name (UTF-8 string with length prefix).
 parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:103 Serializer.writeName)

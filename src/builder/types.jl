@@ -1,21 +1,14 @@
 # Wasm Types - Value types, Reference types, and composite types
 # Reference: https://webassembly.github.io/spec/core/binary/types.html
 
-export ValType, NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue, WasmGlobal
+export NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue, WasmGlobal
 
 # ============================================================================
 # Value Types (Section 5.3.1)
 # ============================================================================
 
 """
-    ValType
-
-Abstract type for all WebAssembly value types.
-"""
-abstract type ValType end
-
-"""
-    NumType <: ValType
+    NumType
 
 Numeric types in WebAssembly.
 """
@@ -27,7 +20,7 @@ Numeric types in WebAssembly.
 end
 
 """
-    RefType <: ValType
+    RefType
 
 Reference types in WebAssembly (including WasmGC extensions).
 """
@@ -78,6 +71,7 @@ const NonNullFuncRef = NonNullAbstractRef(UInt8(FuncRef))      # (ref func)
     WasmValType
 
 Union type for all Wasm value types (numeric, reference, packed, concrete refs).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:39 ValueType)
 """
 const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UInt8}
 
@@ -156,18 +150,6 @@ Union of all composite types in WasmGC.
 parity(pkg/wasm_builder/lib/src/ir/type.dart:708 DefType)
 """
 const CompositeType = Union{FuncType, StructType, ArrayType}
-
-# ============================================================================
-# Limits (for memories and tables)
-# ============================================================================
-
-struct Limits
-    min::UInt32
-    max::Union{Nothing, UInt32}
-end
-
-Limits(min::Integer)::Limits = Limits(UInt32(min), nothing)
-Limits(min::Integer, max::Integer)::Limits = Limits(UInt32(min), UInt32(max))
 
 # ============================================================================
 # JS Interop Types
@@ -279,6 +261,7 @@ end
 
 """
 Convert a Julia type to a Wasm value type (NumType or RefType).
+parity(pkg/dart2wasm/lib/translator.dart:1044 Translator.translateType)
 """
 function julia_to_wasm_type(::Type{T})::WasmValType where T
     if T === Int32 || T === UInt32
@@ -376,6 +359,8 @@ end
 
 """
 Resolve a Union type to a common Wasm type.
+parity(quarantine: a Julia Union of unrelated types has one wasm representation; dart's types are
+classes and their nullable forms, which translateType maps one by one.)
 
 Strategy:
 - Union{Nothing, T} -> T's reference form (StructRef for a numeric T: its nullable box)
@@ -413,6 +398,7 @@ end
 """
 Find a common Wasm type for a list of Julia types.
 For numeric types, returns the widest type.
+parity(quarantine: the members of a Julia Union, joined; see resolve_union_type.)
 """
 function find_common_wasm_type(types::Vector)::WasmValType
     # Check if all are numeric
@@ -493,9 +479,3 @@ function needs_anyref_boxing(T::Union)::Bool
     return true
 end
 
-"""
-Get the element type from a WasmGlobal type.
-"""
-function wasm_global_element_type(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
-    return T
-end
