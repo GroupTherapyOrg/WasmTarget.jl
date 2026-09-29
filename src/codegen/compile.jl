@@ -168,9 +168,7 @@ function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, ty
     _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
     b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
     ensure_exception_tag!(mod)
-    global_get!(b, ensure_exception_global!(mod), AnyRef)
-    ref_null!(b, ExternRef)
-    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    emit_throw_current!(b, mod)
     end_block!(b)
     return (builder_code(b), WasmValType[])
 end
@@ -278,7 +276,10 @@ function _compile_closed_world_plan(functions::Vector;
     else
         mod = WasmModule()
     end
-    source_map_url === nothing || (mod.source_map_url = source_map_url)
+    if source_map_url !== nothing
+        mod.source_map_url = source_map_url
+        ensure_provenance_imports!(mod)
+    end
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 

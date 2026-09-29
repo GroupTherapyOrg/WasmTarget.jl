@@ -11,6 +11,8 @@ const _SMT = WasmTarget
 
 _smt_down(x::Int64) = _smt_down(x + 1) + 1          # line 12: the recursive call
 _smt_entry(x::Int64) = x > 0 ? _smt_down(x) : 0
+_smt_boom(x::Int64) = x > 0 ? error("boom") : x      # line 14: the throw
+_smt_mid(x::Int64) = _smt_boom(x) + 1
 
 @testset "source maps: the builder records dart's mappings" begin
     m = _SMT.WasmModule()
@@ -83,4 +85,18 @@ end
     # a module compiled without a map carries no sourceMappingURL section
     plain = _SMT.compile(_smt_entry, (Int64,))
     @test !occursin("sourceMappingURL", String(copy(plain)))
+end
+
+@testset "source maps: an uncaught Julia exception names its throw site" begin
+    # the tag's stack slot carries the JS stack captured at the throw (emit_throw_current!),
+    # which the runner reads from the exported tag and names through the map
+    bytes, json = _SMT.compile_with_sourcemap(_smt_mid, (Int64,))
+    status, msg = WasmRunner.run_wasm_single(bytes, "_smt_mid", "1n"; source_map=json)
+    @test status === :trap && startswith(msg, "uncaught Julia exception")
+    @test occursin(r"_smt_boom @ .*source_maps\.jl:14", msg)
+    @test occursin("Base.error @ ", msg)
+    # the import and the tag export exist only in a module compiled with a map
+    plain = _SMT.compile(_smt_mid, (Int64,))
+    @test !occursin("stack_trace", String(copy(plain)))
+    @test occursin("stack_trace", String(copy(bytes))) && occursin("wasmtarget.exception", String(copy(bytes)))
 end

@@ -787,10 +787,11 @@ Add an export entry to the module.
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
-    0 <= kind <= 3 || _module_invalid(:add_export, "unknown export kind $kind")
+    0 <= kind <= 4 || _module_invalid(:add_export, "unknown export kind $kind")
     limit = kind == 0 ? _function_count(mod) :
             kind == 1 ? length(mod.tables) :
-            kind == 2 ? length(mod.memories) : length(mod.globals)
+            kind == 2 ? length(mod.memories) :
+            kind == 3 ? length(mod.globals) : length(mod.tags)
     0 <= idx < limit || _module_invalid(:add_export, "index $idx is out of bounds for kind $kind")
     any(e -> e.name == name, mod.exports) &&
         _module_invalid(:add_export, "duplicate export name $(repr(name))")

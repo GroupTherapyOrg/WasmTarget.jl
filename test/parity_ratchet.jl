@@ -2425,6 +2425,18 @@ const LOCKS = [
                 count(p -> occursin(p, all_src), forbidden) +
                 isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
+    "L145_a_throw_carries_its_stack" => ("every Julia throw and rethrow ends in the one emitter, emit_throw_current! (generate.jl), as dart's throws all capture StackTrace.current into the exception tag's stack slot (code_generator.dart:2955 visitThrow, js_helper.dart:857 JavaScriptStack.current): no other codegen site emits `throw`; in a module compiled with a source map the slot holds the JS stack at the throw (the imported wasmtarget.stack_trace, ensure_provenance_imports!, which also exports the tag), null otherwise; and the differential runner reads an escaped exception's stack from the tag's payload and names its frames through the map. Until 2026-09-29 twelve sites each pushed a null stack, and an uncaught exception printed `[object WebAssembly.Exception]` (test/source_maps.jl; dev/CHARTER.md C10)",
+        () -> begin
+            throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN], exclude_files=["generate.jl"])
+            gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
+            required = [(gen, "st === nothing ? ref_null!(b, ExternRef) : call!(b, st, WasmValType[], WasmValType[ExternRef])"),
+                        (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
+                        (read(joinpath(CODEGEN, "compile.jl"), String), "ensure_provenance_imports!(mod)"),
+                        (runner, "const st = e.getArg(tag, 1);"),
+                        (runner, "stack_trace: () => new Error()")]
+            throws + count(((text, needle),) -> !occursin(needle, text), required)
+        end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
     "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",

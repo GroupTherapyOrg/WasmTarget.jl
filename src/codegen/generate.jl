@@ -234,11 +234,62 @@ function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
-    # Payload: (anyref exn, externref stackTrace — null until traces wire).
+    # Payload: (anyref exn, externref stackTrace — the throw's JS stack in a module that
+    # records source maps, emit_throw_current!; null otherwise).
     if isempty(mod.tags)
         tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
         add_tag!(mod, add_type!(mod, tag_ft))
     end
+end
+
+"""
+    emit_throw_current!(b, mod) -> b
+
+Throw the current exception (the `\$current_exn` global) through the typed tag with its stack
+trace: in a module that records source maps, the JS stack at the throw — the imported
+`wasmtarget.stack_trace` answers `new Error()` (ensure_provenance_imports!) — else null. The
+one throw every raise and rethrow ends in, as dart's throws all capture
+`StackTrace.current` into the tag's stack slot.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+"""
+function emit_throw_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    ensure_exception_tag!(mod)
+    global_get!(b, ensure_exception_global!(mod), AnyRef)
+    local st = _stack_trace_func_idx(mod)
+    st === nothing ? ref_null!(b, ExternRef) : call!(b, st, WasmValType[], WasmValType[ExternRef])
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return b
+end
+
+"""
+    ensure_provenance_imports!(mod)
+
+What a module that records source maps adds when it is created, before any definition: the
+import `wasmtarget.stack_trace: () -> externref`, which the host answers with `new Error()`
+(the JS stack at the call: dart2wasm's JavaScriptStack.current), and the export of the
+exception tag as `wasmtarget.exception`, so a host that catches an escaped Julia exception
+can read the stack of its throw from the tag's payload.
+parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
+"""
+function ensure_provenance_imports!(mod::WasmModule)::Nothing
+    _stack_trace_func_idx(mod) === nothing &&
+        add_import!(mod, "wasmtarget", "stack_trace", WasmValType[], WasmValType[ExternRef])
+    ensure_exception_tag!(mod)
+    any(e -> e.name == "wasmtarget.exception", mod.exports) ||
+        add_export!(mod, "wasmtarget.exception", 4, 0)
+    return nothing
+end
+
+# the function index of the imported `wasmtarget.stack_trace`, or nothing
+# parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
+function _stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32}
+    local n = 0
+    for imp in mod.imports
+        imp.kind == 0x00 || continue
+        (imp.module_name == "wasmtarget" && imp.field_name == "stack_trace") && return UInt32(n)
+        n += 1
+    end
+    return nothing
 end
 
 """

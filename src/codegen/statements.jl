@@ -700,9 +700,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                         _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
             struct_new!(_sf, _tu_info.wasm_type_idx)
             global_set!(_sf, _tu_exn)
-            global_get!(_sf, _tu_exn, AnyRef)
-            ref_null!(_sf, ExternRef)
-            throw_!(_sf, 0; inputs=WasmValType[AnyRef, ExternRef])
+            emit_throw_current!(_sf, ctx.mod)
             end_block!(_sf)
             stmt_bytes = builder_code(_sf)
         else

@@ -122,7 +122,8 @@ end
 # parity(compile.dart:120 CFECrashError.toString)
 function _frame_text(f::Base.StackTraces.StackFrame)::String
     local file = String(f.file)
-    _in_wt_src(f) && (file = "src/" * relpath(file, _WT_SRC_DIR))
+    # a relative path with `/` on every platform (relpath answers `\\` on Windows)
+    _in_wt_src(f) && (file = "src/" * replace(relpath(file, _WT_SRC_DIR), '\\' => '/'))
     return string(f.func, " @ ", file, ":", f.line, f.inlined ? " [inlined]" : "")
 end
 

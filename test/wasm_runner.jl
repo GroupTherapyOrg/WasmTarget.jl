@@ -220,12 +220,23 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     $_ENC_JS
     $import_js
     Error.stackTraceLimit = 64;   // a trap's frames, beyond V8's default 10 (located_frames)
+    // a module compiled with a source map captures each throw's JS stack through this import
+    // (WasmTarget.ensure_provenance_imports!); modules without one ignore it
+    importObject.wasmtarget = Object.assign({ stack_trace: () => new Error() }, importObject.wasmtarget || {});
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
     let v;
     try { v = f($js_args); }
-    catch (e) { return [{ trap: String(e && e.message || e), stack: String(e && e.stack || '') }]; }
+    catch (e) {
+      const tag = instance.exports['wasmtarget.exception'];
+      if (e instanceof WebAssembly.Exception && tag && e.is(tag)) {
+        // an escaped Julia exception: its stack is the one captured at its throw
+        const st = e.getArg(tag, 1);
+        return [{ trap: 'uncaught Julia exception', stack: String(st && st.stack || '') }];
+      }
+      return [{ trap: String(e && e.message || e), stack: String(e && e.stack || '') }];
+    }
     // an export with no result answers `undefined`, which is Julia's `nothing`
     if (v === undefined) return [{ ok: null }];
     try { return [{ ok: JSON.parse(JSON.stringify(v, enc)) }]; }

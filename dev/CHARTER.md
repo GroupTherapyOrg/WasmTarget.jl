@@ -95,7 +95,9 @@ with the per-clause status. A clause is never closed by argument.
 - **C10 · Fast, precise feedback.** `bash dev/lanes.sh` gives one verdict in minutes; the
   full CI matrix runs on every march branch and is the landing gate (`dev/land.sh merge`);
   a failure names its site. Checks: `L144` (every instruction a statement emits maps to its
-  source, so a trap at run time names its statement as a rejection at compile time does).
+  source, so a trap at run time names its statement as a rejection at compile time does)
+  `L145` (every throw carries the stack it was raised on, so an escaped exception names its
+  throw site).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean).

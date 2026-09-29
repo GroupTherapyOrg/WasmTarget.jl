@@ -146,7 +146,7 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
     struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields
     global_set!(bld, exn_global)
-    global_get!(bld, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(bld, ExternRef); throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+    emit_throw_current!(bld, ctx.mod)   # typed (exn, trace) tag
     return bld
 end
 
@@ -167,9 +167,7 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                 fields[Int(info.field_offset) + 2].valtype; from_julia=Symbol)
     struct_new!(bld, info.wasm_type_idx)
     global_set!(bld, exn_global)
-    global_get!(bld, exn_global, AnyRef)
-    ref_null!(bld, ExternRef)
-    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    emit_throw_current!(bld, ctx.mod)
     return bld
 end
 
@@ -249,8 +247,7 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
     coerce_stack_top!(bld, AnyRef, ctx; from_julia=Int64)
     struct_new!(bld, error_info.wasm_type_idx)
     global_set!(bld, exn_global)
-    global_get!(bld, exn_global, AnyRef); ref_null!(bld, ExternRef)
-    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    emit_throw_current!(bld, ctx.mod)
     return bld
 end
 
@@ -2594,9 +2591,7 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
     end
     struct_new!(b, info.wasm_type_idx)
     global_set!(b, ensure_exception_global!(ctx.mod))
-    global_get!(b, ensure_exception_global!(ctx.mod), AnyRef)
-    ref_null!(b, ExternRef)
-    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    emit_throw_current!(b, ctx.mod)
     return b
 end
 
@@ -3485,14 +3480,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 global_set!(_thrb, exn_global)
             end
         end
-        global_get!(_thrb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(_thrb, ExternRef); throw_!(_thrb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+        emit_throw_current!(_thrb, ctx.mod)   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
     # throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func === Core.throw_methoderror
         fb = _ctx_builder(ctx, "compile_call.frag")
         ensure_exception_tag!(ctx.mod)
-            global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
+            emit_throw_current!(fb, ctx.mod)   # typed (exn, trace) tag
         ctx.last_stmt_was_stub = true
 
     # Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
@@ -4499,9 +4494,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
     global_set!(bld, exn_global)
-    global_get!(bld, exn_global, AnyRef)
-    ref_null!(bld, ExternRef)
-    throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
+    emit_throw_current!(bld, ctx.mod)
     return bld
 end
 
