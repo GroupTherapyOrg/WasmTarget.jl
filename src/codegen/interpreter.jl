@@ -312,11 +312,14 @@ _wt_uint_type(::Val{8})::Type{UInt64} = UInt64
 # Primitive numeric elements have no padding. Folding this target-independent
 # layout fact keeps ReinterpretArray construction out of Julia's host pointer/
 # datatype-layout machinery while preserving Base.array_subpadding semantics.
+# parity(quarantine: Julia's isbitstype/array_subpadding read the DataType's layout flags, host layout; for primitive bit types the answer is the same on every target.)
 @overlay WASM_METHOD_TABLE Base.isbitstype(
     ::Type{T}) where {T<:_WT_PRIMITIVE_BITS} = true
+# parity(quarantine: Julia's isbitstype/array_subpadding read the DataType's layout flags, host layout; for primitive bit types the answer is the same on every target.)
 @overlay WASM_METHOD_TABLE Base.array_subpadding(
     ::Type{S}, ::Type{T}) where {S<:_WT_PRIMITIVE_BITS,T<:_WT_PRIMITIVE_BITS} = true
 
+# parity(quarantine: Julia's ReinterpretArray element access probes the GC object header through pointer_from_objref; WasmGC has no header ABI, so the element is assembled from the parent's value bits.)
 @overlay WASM_METHOD_TABLE function Base.getindex(
         a::Base.ReinterpretArray{T,N,S,A,false}, i::Int
     ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
@@ -345,6 +348,7 @@ _wt_uint_type(::Val{8})::Type{UInt64} = UInt64
         return Core.bitcast(T, bits)
     end
 end
+# parity(quarantine: Julia's ReinterpretArray element access probes the GC object header through pointer_from_objref; WasmGC has no header ABI, so the element is assembled from the parent's value bits.)
 @overlay WASM_METHOD_TABLE function Base.setindex!(
         a::Base.ReinterpretArray{T,N,S,A,false}, value, i::Int
     ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
@@ -379,6 +383,7 @@ end
 
 # ─── show typeinfo overlay ────────────────────────────────────────────────
 
+# parity(quarantine: Julia's ReinterpretArray element access probes the GC object header through pointer_from_objref; WasmGC has no header ABI, so the element is assembled from the parent's value bits.)
 @overlay WASM_METHOD_TABLE function Base.getindex(
         a::Base.ReinterpretArray{T,N,S,A,false}, r::UnitRange{Int}
     ) where {T<:_WT_PRIMITIVE_BITS,N,S<:_WT_PRIMITIVE_BITS,A}
@@ -459,12 +464,12 @@ end
 #      hits the same func). For a plain IOBuffer — which is what the float/Complex
 #      formatting paths use — `get(io,:typeinfo,Any)` is `Any` and
 #      `nonmissingtype(nonnothingtype(Any)) === Any`, so returning `Any` is exact.
-#      (Only typeinfo-CONTEXT container display would differ; the Snapshot.jl
-#      oracle byte-compares and degrades those rather than shipping them wrong.)
-#      Inference const-folds the result, so callers' typeinfo branches collapse.
-# Remove when: runtime type-subtraction (nonnothingtype/nonmissingtype) compiles,
-#      or the dead-value-across-block-boundary stackifier defect is fixed.
-@overlay WASM_METHOD_TABLE Base.nonnothing_nonmissing_typeinfo(io::IO) = Any
+#      Only an IOBuffer: an IOContext may carry a :typeinfo whose answer differs, and
+#      it keeps Julia's body (compiled, or rejected loudly), never this `Any`.
+# parity(quarantine: Julia's nonnothing_nonmissing_typeinfo subtracts Nothing and Missing from
+# the context's :typeinfo at run time, typesplit, which WT does not lower; an IOBuffer has no
+# context, so its answer is Any.)
+@overlay WASM_METHOD_TABLE Base.nonnothing_nonmissing_typeinfo(io::Base.GenericIOBuffer) = Any
 
 # A primitive word reinterpreted as its byte tuple, and back: the word's little-endian
 # byte lanes. Base's generic `_reinterpret` first proves the two packed sizes equal by
@@ -732,9 +737,11 @@ end
         return (_wasm_memhash_seed(s, h2 % UInt32) + h2) % UInt
     end
 
+    # parity(quarantine: Julia 1.12's hash of a String calls C memhash_seed over the bytes' address, support/hashing.c; this is the same algorithm over code units.)
     @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
         return _wasm_hash_string(s, h)
     end
+    # parity(quarantine: Julia 1.12's hash of a String calls C memhash_seed over the bytes' address, support/hashing.c; this is the same algorithm over code units.)
     @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
         return _wasm_hash_string(s, h)
     end
@@ -844,9 +851,11 @@ else
         return _wasm_hash_bytes(s, UInt64(h), Base.HASH_SECRET) % UInt
     end
 
+    # parity(quarantine: Julia 1.13's rapidhash of a String loads the bytes through pointerref at their address; this is the same algorithm over code units.)
     @overlay WASM_METHOD_TABLE function Base.hash(s::String, h::UInt)
         return _wasm_hash_string(s, h)
     end
+    # parity(quarantine: Julia 1.13's rapidhash of a String loads the bytes through pointerref at their address; this is the same algorithm over code units.)
     @overlay WASM_METHOD_TABLE function Base.hash(s::SubString{String}, h::UInt)
         return _wasm_hash_string(s, h)
     end
@@ -1163,16 +1172,19 @@ end
     return :($(string(T)))
 end
 
+# parity(quarantine: Julia's show of a Type walks its TypeName and module bindings at run time, show_datatype, a reflection world WT does not compile; the text is Julia's own string(T), taken at compile time.)
 @overlay WASM_METHOD_TABLE Base.string(::Type{T}) where {T} = _wt_type_name_str(T)
 
 # Base.print(io, x::Type) reaches show through a deliberately unspecialized
 # argument and loses the concrete Type{T}. Preserve that static parameter at the
 # overlay boundary so generated type-name metadata never becomes runtime data.
+# parity(quarantine: Julia's show of a Type walks its TypeName and module bindings at run time, show_datatype, a reflection world WT does not compile; the text is Julia's own string(T), taken at compile time.)
 @overlay WASM_METHOD_TABLE function Base.print(io::IO, ::Type{T}) where {T}
     print(io, _wt_type_name_str(T))
     return nothing
 end
 
+# parity(quarantine: Julia's show of a Type walks its TypeName and module bindings at run time, show_datatype, a reflection world WT does not compile; the text is Julia's own string(T), taken at compile time.)
 @overlay WASM_METHOD_TABLE function Base.show(io::IO, ::Type{T}) where {T}
     print(io, _wt_type_name_str(T))
     return nothing

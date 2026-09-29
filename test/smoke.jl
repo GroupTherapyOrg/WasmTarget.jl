@@ -1202,9 +1202,13 @@ _g("memoryref_array_offset", Any[
 # Julia's own collection bodies, compiled instead of bespoke overlays (dev/CHARTER.md C3), at
 # the inputs where a re-implementation drifts: signed zeros, NaN, ties, negative integers, an
 # empty generator's element type.
+# a constant whose contents are values too: the classes of the function singletons inside
+# a Dict constant are numbered before its snapshot is built
+const _SM_FNDICT = Dict(1 => isodd, 2 => iseven)
 struct _SmPair; a::Float64; b::Float64; end
 struct _SmTrip; a::Float64; b::Float64; c::Float64; end   # a 24-byte stride
 _g("julia_collection_bodies", Any[
+    ("constant_dict_of_functions", (n::Int64) -> length(_SM_FNDICT) * 10 + (haskey(_SM_FNDICT, n) ? 1 : 0), Int64(2)),
     # Julia's copy of an isbits-struct vector is a memmove of its inline storage
     ("copy_isbits_struct_vector", (n::Int64) -> (v = [_SmPair(1.0, 2.0), _SmPair(3.0, n)]; w = copy(v); w[2].b * 10 + w[1].a + length(w)), Int64(4)),
     ("copy_isbits_struct_stride24", (n::Int64) -> (v = [_SmTrip(1.0, 2.0, 3.0), _SmTrip(4.0, 5.0, n), _SmTrip(7.0, 8.0, 9.0)]; w = copy(v); w[2].c * 100 + w[3].a * 10 + length(w)), Int64(6)),

@@ -1216,6 +1216,31 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         (has && v !== nothing) || return
         typeof(v) in _IR_META_TYPES && return
         reg!(v isa Type ? v : typeof(v))
+        v isa Type || contents!(v, IdSet{Any}())
+    end
+    # A constant's contents are values the module materializes too (Dates.ISDAYOFWEEK, a
+    # Dict of function singletons): the class of every value its object graph reaches —
+    # fields, tuple elements, assigned Array/Memory elements — is numbered, as dart numbers
+    # the classes of every constant it emits. Bounded: a graph past 4096 objects stops there.
+    function contents!(@nospecialize(v), seen::IdSet{Any})
+        (length(seen) >= 4096 || v in seen) && return
+        push!(seen, v)
+        T = typeof(v)
+        (v isa Type || v isa Module || v isa Symbol || v isa String || v isa Core.TypeName ||
+         T in _IR_META_TYPES) && return
+        if v isa Union{Array, GenericMemory}
+            for i in eachindex(v)
+                isassigned(v, i) || continue
+                local x = v[i]
+                x isa Type || (reg!(typeof(x)); contents!(x, seen))
+            end
+        elseif isstructtype(T) && !isprimitivetype(T)
+            for i in 1:fieldcount(T)
+                isdefined(v, i) || continue
+                local x = getfield(v, i)
+                x isa Type || (reg!(typeof(x)); contents!(x, seen))
+            end
+        end
     end
     for fd in function_data
         body = fd[8]

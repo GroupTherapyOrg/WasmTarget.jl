@@ -17,6 +17,7 @@ using Random: Random
 import SHA
 using Base.Experimental: @overlay
 
+# parity(quarantine: Julia's hash_seed writes 4-byte NTuple chunks through Base.write's reflection, Any-typed foldl and type-intersection guards, which WT does not lower; SHA-256 streams, so hashing the concatenated bytes gives the same digest.)
 @overlay WasmTarget.WASM_METHOD_TABLE function Random.hash_seed(seed::Integer)
     ctx = SHA.SHA2_256_CTX()
     neg = signbit(seed)
@@ -45,6 +46,7 @@ end
 # caller-provided context. Same type-stable byte-vector reroute; the native
 # tail returns `nothing`.
 @static if VERSION >= v"1.13-"
+    # parity(quarantine: Julia's hash_seed writes 4-byte NTuple chunks through Base.write's reflection, Any-typed foldl and type-intersection guards, which WT does not lower; SHA-256 streams, so hashing the concatenated bytes gives the same digest.)
     @overlay WasmTarget.WASM_METHOD_TABLE function Random.hash_seed(seed::Integer, ctx::SHA.SHA_CTX)
         neg = signbit(seed)
         if neg

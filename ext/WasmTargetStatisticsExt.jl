@@ -25,6 +25,7 @@ using Base.Experimental: @overlay
 # target decides, so the fuzz lane compares cor within its @simd allowance.) (1-arg `cor(x)` is left as-is: it has no ledger gap and its
 # value-independent `one(float(eltype))` result genuinely needs the type-level
 # path; failing to compile there is loud, not a wrong value.)
+# parity(quarantine: Julia's cor(x, y) keeps an x === y branch whose one(float(eltype)) is a run-time dispatch on type values WT does not lower; corm is the same computation.)
 @overlay WasmTarget.WASM_METHOD_TABLE Statistics.cor(x::AbstractVector, y::AbstractVector) =
     Statistics.corm(x, Statistics.mean(x), y, Statistics.mean(y))
 
@@ -32,6 +33,7 @@ using Base.Experimental: @overlay
 # `eachindex(x, y)` loop, but that multi-array iterator retains a lazy
 # AnnotatedString mismatch path. This dense specialization is the same corm
 # accumulation over the one validated index domain.
+# parity(quarantine: Julia's corm iterates eachindex(x, y), whose mismatch path reaches a lazy AnnotatedString WT does not compile; the lengths are checked first, so one index domain is the same loop.)
 @overlay WasmTarget.WASM_METHOD_TABLE function Statistics.corm(
         x::Vector{T}, mx::T, y::Vector{T}, my::T) where {T<:Union{Float32,Float64}}
     n = length(x)
@@ -55,6 +57,7 @@ end
 # Statistics only requires the requested quantile interval to be ordered and
 # explicitly permits mutation of `v`. Fully sorting through WT's pure-Julia sort
 # implementation is semantically exact and avoids Julia's host-header radix path.
+# parity(quarantine: Julia's _quantilesort! sorts through the radix path, which reads host object headers; a full sort is the ordering Statistics requires.)
 @overlay WasmTarget.WASM_METHOD_TABLE function Statistics._quantilesort!(
         v::AbstractVector, sorted::Bool, minp::Real, maxp::Real)
     isempty(v) && throw(ArgumentError("empty data vector"))
@@ -74,8 +77,10 @@ end
 # stdlib-statistics branch notes). Their LITERAL definitions compile
 # correctly, so reroute through them; semantically identical by definition.
 @static if VERSION >= v"1.13-"
+    # parity(quarantine: on 1.13 median(v)'s wrapper inlines into a control region the stackifier does not nest, dev/MARCH.md 13.10; median!(copy(v)) is its definition.)
     @overlay WasmTarget.WASM_METHOD_TABLE Statistics.median(v::AbstractVector) =
         Statistics.median!(copy(v))
+    # parity(quarantine: on 1.13 quantile(v, p)'s wrapper inlines into a control region the stackifier does not nest, dev/MARCH.md 13.10; quantile!(copy(v), p) is its definition.)
     @overlay WasmTarget.WASM_METHOD_TABLE Statistics.quantile(v::AbstractVector, p::Real) =
         Statistics.quantile!(copy(v), p)
 end
