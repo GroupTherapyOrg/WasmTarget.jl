@@ -157,43 +157,6 @@ parity(pkg/wasm_builder/lib/src/ir/type.dart:708 DefType)
 """
 const CompositeType = Union{FuncType, StructType, ArrayType}
 
-"""
-    HeapType
-
-Represents a heap type - either an abstract type or a concrete type index.
-"""
-struct HeapType
-    # If index >= 0, it's a concrete type index
-    # If index < 0, it's an abstract type encoded as negative
-    index::Int32
-end
-
-# Abstract heap types (encoded as negative values internally)
-const HEAP_FUNC = HeapType(-1)      # func
-const HEAP_EXTERN = HeapType(-2)    # extern
-const HEAP_ANY = HeapType(-3)       # any
-const HEAP_EQ = HeapType(-4)        # eq
-const HEAP_I31 = HeapType(-5)       # i31
-const HEAP_STRUCT = HeapType(-6)    # struct
-const HEAP_ARRAY = HeapType(-7)     # array
-const HEAP_NONE = HeapType(-8)      # none
-const HEAP_NOEXTERN = HeapType(-9)  # noextern
-const HEAP_NOFUNC = HeapType(-10)   # nofunc
-
-HeapType(idx::Integer)::HeapType = HeapType(Int32(idx))
-
-"""
-    RefTypeGC
-
-A reference type in WasmGC with nullability.
-"""
-struct RefTypeGC
-    nullable::Bool
-    heaptype::HeapType
-end
-
-RefTypeGC(ht::HeapType)::RefTypeGC = RefTypeGC(true, ht)  # Default to nullable
-
 # ============================================================================
 # Limits (for memories and tables)
 # ============================================================================

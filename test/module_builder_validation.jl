@@ -103,6 +103,21 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test sub == 1
     end
 
+    @testset "type definitions carry dart's subtyping prefix (DefType.serializeDefinition)" begin
+        m = MBV.WasmModule()
+        a = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false), MBV.FieldType(MBV.I64, true)], a))
+        MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        MBV.add_type!(m, MBV.ArrayType(MBV.FieldType(MBV.I32, true)))
+        bytes = MBV.to_bytes(m)
+        entries = UInt8[0x04,                                     # four singleton groups
+                        0x50, 0x00, 0x5F, 0x01, 0x7F, 0x00,       # a parent: `sub`, no supertypes
+                        0x4F, 0x01, 0x00, 0x5F, 0x02, 0x7F, 0x00, 0x7E, 0x01,  # a leaf: `sub final` a
+                        0x5F, 0x01, 0x7E, 0x00,                   # no relatives: no prefix (final)
+                        0x5E, 0x7F, 0x01]                         # an array: no prefix
+        @test any(i -> bytes[i:i + length(entries) - 1] == entries, 1:length(bytes) - length(entries) + 1)
+    end
+
     @testset "a branch carries its target label's types (dart _verifyBranchTypes)" begin
         m = MBV.WasmModule()
         s1 = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))

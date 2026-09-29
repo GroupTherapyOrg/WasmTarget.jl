@@ -246,9 +246,6 @@ module Opcode
     const ARRAY_NEW_DEFAULT = 0x07  # array.new_default $t : [len] -> [(ref $t)]
     const ARRAY_NEW_FIXED = 0x08  # array.new_fixed $t $n : [elem...] -> [(ref $t)]
     const ARRAY_NEW_DATA = 0x09   # array.new_data $t $d : [offset, len] -> [(ref $t)]
-# end parity-region
-    const ARRAY_NEW_ELEM = 0x0A   # array.new_elem $t $e
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const ARRAY_GET = 0x0B        # array.get $t : [(ref null $t) i32] -> [elem type]
     const ARRAY_GET_S = 0x0C      # array.get_s (packed signed)
     const ARRAY_GET_U = 0x0D      # array.get_u (packed unsigned)
@@ -282,6 +279,7 @@ module Opcode
     const EXTERN_CONVERT_ANY = 0x1B  # extern.convert_any
 
 # end parity-region
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:563 I32TruncSatF32S)
     # Saturating truncation (0xFC prefix, sub-ops 0x00–0x07): float → int, clamping
     # out-of-range / NaN to the int min/max/0 instead of trapping (the non-saturating
     # 0xA8–0xB1 family traps on overflow).
@@ -292,23 +290,12 @@ module Opcode
     const I64_TRUNC_SAT_F32_S = 0x04
     const I64_TRUNC_SAT_F32_U = 0x05
     const I64_TRUNC_SAT_F64_S = 0x06
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const I64_TRUNC_SAT_F64_U = 0x07
-
-    # Bulk memory operations (0xFC prefix)
+# end parity-region
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
+    # Bulk memory and table operations (0xFC prefix)
     const FC_PREFIX = 0xFC
-# end parity-region
-    const MEMORY_INIT = 0x08    # memory.init seg_idx mem_idx
-    const DATA_DROP = 0x09      # data.drop seg_idx
-    const MEMORY_COPY = 0x0A    # memory.copy dst_mem src_mem
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const MEMORY_FILL = 0x0B    # memory.fill mem_idx
-# end parity-region
-    const TABLE_INIT = 0x0C     # table.init seg_idx table_idx
-    const ELEM_DROP = 0x0D      # elem.drop seg_idx
-    const TABLE_COPY = 0x0E     # table.copy dst_table src_table
-    const TABLE_GROW = 0x0F     # table.grow table_idx
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
     const TABLE_SIZE = 0x10     # table.size table_idx
     const TABLE_FILL = 0x11     # table.fill table_idx
 # end parity-region
@@ -320,6 +307,7 @@ end
 
 """
 Represents a WebAssembly function definition.
+parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
     type_idx::UInt32
@@ -352,6 +340,7 @@ end
     WasmGlobalDef
 
 Internal representation of a WebAssembly global variable definition.
+parity(pkg/wasm_builder/lib/src/ir/global.dart:40 DefinedGlobal)
 """
 struct WasmGlobalDef
     valtype::WasmValType     # Type of the global
@@ -452,14 +441,21 @@ WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunctio
 # Module Building API
 # ============================================================================
 
-"Raised at a module-builder chokepoint when an addition would make the module invalid."
+"""
+Raised at a module-builder chokepoint when an addition would make the module invalid.
+parity(quarantine: dart's module builders check their invariants with `assert`, in debug
+builds only; WT checks every addition in every build and rejects it where it is made, as
+dev/CHARTER.md C7 requires.)
+"""
 struct ModuleValidationError <: Exception
     operation::Symbol
     detail::String
 end
+# parity(quarantine: the message of ModuleValidationError, above.)
 Base.showerror(io::IO, e::ModuleValidationError) =
     print(io, "invalid WebAssembly module at ", e.operation, ": ", e.detail)
 
+# parity(quarantine: the one raise of ModuleValidationError, above.)
 @noinline _module_invalid(op::Symbol, detail::AbstractString)::Union{} =
     throw(ModuleValidationError(op, String(detail)))
 
@@ -505,6 +501,10 @@ end
     add_type!(mod, composite_type) -> type_idx
 
 Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index.
+parity(quarantine: WT's validator identifies a type by its index, so an addition structurally
+identical to a type already defined returns that type's index, as wasm's iso-recursive
+canonicalization identifies the two at run time; dart's defineStruct and defineArray define a
+new type every time and deduplicate only function types, types.dart:406 _FunctionTypeKey.)
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
     _check_refs_defined(mod, ct, length(mod.types))
@@ -525,6 +525,7 @@ function types_equal(a::FuncType, b::FuncType)::Bool
     a.params == b.params && a.results == b.results
 end
 
+# parity(quarantine: the structural identity add_type! deduplicates by, above.)
 function types_equal(a::StructType, b::StructType)::Bool
     # step5: the SUPERTYPE is part of a struct type's identity — the class-DAG's
     # synthetic {classId} structs differ ONLY by their parent (dedup collapsed the
@@ -535,12 +536,15 @@ function types_equal(a::StructType, b::StructType)::Bool
     all(fields_equal(af, bf) for (af, bf) in zip(a.fields, b.fields))
 end
 
+# parity(quarantine: the structural identity add_type! deduplicates by, above.)
 function types_equal(a::ArrayType, b::ArrayType)::Bool
     fields_equal(a.elem, b.elem)
 end
 
+# parity(quarantine: the structural identity add_type! deduplicates by, above.)
 types_equal(a::CompositeType, b::CompositeType)::Bool = false  # Different types
 
+# parity(quarantine: the structural identity add_type! deduplicates by, above.)
 function fields_equal(a::FieldType, b::FieldType)::Bool
     a.valtype == b.valtype && a.mutable_ == b.mutable_
 end
@@ -588,6 +592,9 @@ end
 
 # every type index `ct` refers to is below `limit`: a type is added after what it refers to,
 # or with it in one group (add_type_group!)
+# parity(quarantine: WT numbers a type when it is added, since function bodies are bytes by the
+# time the module is written (dev/formal/RecGroup.tla), so each addition must refer only
+# backward or within its group; dart numbers every type at the end, types.dart:240.)
 function _check_refs_defined(mod::WasmModule, ct::CompositeType, limit::Integer)::Nothing
     for r in type_refs(ct)
         Int(r) < limit ||
@@ -787,6 +794,7 @@ end
 
 Add a global variable to the module and return its index.
 The init_value should be a constant of the appropriate type.
+parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
 """
 function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init_value)::UInt32
     # Generate initialization expression
@@ -820,6 +828,7 @@ end
     add_global_ref!(mod, type_idx, mutable, init_expr) -> global_idx
 
 Add a global variable with a WasmGC reference type to the module.
+parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
 The init_expr should be the bytecode for the initialization expression
 (e.g., struct.new instructions) WITHOUT the trailing END byte.
 
@@ -963,6 +972,10 @@ end
 
 Add a passive data segment (used with array.new_data or memory.init).
 Returns the 0-based index of the data segment.
+parity(quarantine: WT emits a string's bytes from more than one site (its interned constant
+global and a long string's lazy initializer), so a passive segment with the same content
+returns the existing one; dart's DataSegmentsBuilder.define, data_segments.dart:24, defines a
+new segment every time, its constants being interned once each.)
 """
 function add_passive_data_segment!(mod::WasmModule, data::Vector{UInt8})::UInt32
     # Passive segments are
@@ -1053,6 +1066,9 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
     if !isempty(mod.types)
         write_section!(w, SECTION_TYPE) do section
             local groups = recursion_groups(mod)
+            # the types some struct declares as its supertype (dart's hasAnySubtypes)
+            local subtyped = Set{UInt32}(ct.supertype_idx for ct in mod.types
+                                         if ct isa StructType && ct.supertype_idx !== nothing)
             write_u32!(section, length(groups))
             for g in groups
                 if length(g) > 1
@@ -1060,7 +1076,7 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                     write_u32!(section, length(g))
                 end
                 for ti in g
-                    write_composite_type!(section, mod.types[ti + 1])
+                    write_type_definition!(section, mod.types[ti + 1], UInt32(ti) in subtyped)
                 end
             end
         end
@@ -1376,9 +1392,30 @@ const SUB_FINAL_BYTE = 0x4F # sub final (final subtype, no further subtyping)
 const REC_BYTE = 0x4E       # rec (recursive type group)
 
 """
-Write a composite type to the type section.
-For function types, write directly (no sub wrapper needed for backward compat).
-For struct/array types, wrap in sub final.
+    write_type_definition!(w, ct, has_subtypes)
+
+A type-section entry: the subtyping prefix, then the composite type. A type with a supertype
+is `sub final` when nothing subtypes it and `sub` when something does; a type without one is
+`sub` (with no supertypes) only when something subtypes it, and has no prefix otherwise — a
+final type, as dart writes every class no other class extends.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:747 DefType.serializeDefinition)
+"""
+function write_type_definition!(w::WasmWriter, ct::CompositeType, has_subtypes::Bool)::Nothing
+    sup = ct isa StructType ? ct.supertype_idx : nothing
+    if sup !== nothing
+        write_byte!(w, has_subtypes ? SUB_BYTE : SUB_FINAL_BYTE)
+        write_u32!(w, 1)
+        write_u32!(w, sup)
+    elseif has_subtypes
+        write_byte!(w, SUB_BYTE)
+        write_u32!(w, 0)
+    end
+    write_composite_type!(w, ct)
+    return nothing
+end
+
+"""
+Write a function type's definition (after its subtyping prefix, write_type_definition!).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:1022 FunctionType.serializeDefinitionInner)
 """
 function write_composite_type!(w::WasmWriter, ft::FuncType)::Nothing
@@ -1395,17 +1432,8 @@ function write_composite_type!(w::WasmWriter, ft::FuncType)::Nothing
     end
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1167 StructType.serializeDefinitionInner)
 function write_composite_type!(w::WasmWriter, st::StructType)::Nothing
-    if st.supertype_idx !== nothing
-        # Non-final subtype with one supertype
-        write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final, allows further subtyping)
-        write_u32!(w, 1)                # 1 supertype
-        write_u32!(w, st.supertype_idx) # supertype index
-    else
-        # No supertype — use sub (non-final) to allow subtypes
-        write_byte!(w, SUB_BYTE)        # 0x50 = sub (non-final)
-        write_u32!(w, 0)                # 0 supertypes
-    end
     write_byte!(w, STRUCTTYPE_BYTE)
     write_u32!(w, length(st.fields))
     for field in st.fields
@@ -1413,10 +1441,8 @@ function write_composite_type!(w::WasmWriter, st::StructType)::Nothing
     end
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1255 ArrayType.serializeDefinitionInner)
 function write_composite_type!(w::WasmWriter, at::ArrayType)::WasmWriter
-    # WasmGC array types must be wrapped in "sub final" for the current spec
-    write_byte!(w, SUB_FINAL_BYTE)  # 0x4F = sub final
-    write_u32!(w, 0)                # 0 supertypes
     write_byte!(w, ARRAYTYPE_BYTE)
     write_field_type!(w, at.elem)
 end
@@ -1438,6 +1464,7 @@ function write_valtype!(w::WasmWriter, vt::NumType)::WasmWriter
     write_byte!(w, UInt8(vt))
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
 function write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter
     # FuncRef (0x70) and ExternRef (0x6F) are nullable shorthand forms
     # Abstract GC heap types (StructRef, ArrayRef, etc.) need nullable wrapper
@@ -1449,13 +1476,6 @@ function write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter
         # FuncRef, ExternRef are already nullable shorthand
         write_byte!(w, UInt8(vt))
     end
-end
-
-function write_valtype!(w::WasmWriter, vt::HeapType)::Union{}
-    # HeapType values used as locals/params should be nullable
-    # (ref null heaptype) = 0x63 followed by heaptype code
-    write_byte!(w, 0x63)  # ref null prefix
-    write_byte!(w, UInt8(vt))
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize)
