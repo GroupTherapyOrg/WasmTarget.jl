@@ -289,38 +289,63 @@ const TRACED_STATEMENT_TYPES = Dict{Type,WasmValType}(Int64 => I64, UInt64 => I6
 """
     ensure_trace_imports!(mod)
 
-The imports a traced compile's probes call, one per traced wasm type:
-`wasmtarget.trace_i32/i64/f32/f64(statement::i32, value)`. Added when the module is created,
-before any definition.
+The imports a traced compile's probes call: `wasmtarget.trace_enter(function::i32)` on entry
+to a traced function, and one per traced wasm type,
+`wasmtarget.trace_i32/i64/f32/f64(function::i32, statement::i32, value)`. Added when the
+module is created, before any definition.
 parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 """
 function ensure_trace_imports!(mod::WasmModule)::Nothing
+    _import_func_idx(mod, "wasmtarget", "trace_enter") === nothing &&
+        add_import!(mod, "wasmtarget", "trace_enter", WasmValType[I32], WasmValType[])
     for (name, T) in (("trace_i32", I32), ("trace_i64", I64), ("trace_f32", F32), ("trace_f64", F64))
         _import_func_idx(mod, "wasmtarget", name) === nothing &&
-            add_import!(mod, "wasmtarget", name, WasmValType[I32, T], WasmValType[])
+            add_import!(mod, "wasmtarget", name, WasmValType[I32, I32, T], WasmValType[])
     end
     return nothing
+end
+
+# a traced function's trace id, or nothing
+# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+_trace_id(ctx::AbstractCompilationContext)::Union{Nothing,Int} =
+    ctx.mod.trace === nothing ? nothing : get(ctx.mod.trace.ids, ctx.func_idx, nothing)
+
+"""
+    emit_trace_enter!(b, ctx) -> b
+
+At the start of a traced function's body, report entering it: `wasmtarget.trace_enter(id)`, so
+the host sees every function's probes in the order the calls ran.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function emit_trace_enter!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
+    local id = _trace_id(ctx)
+    id === nothing && return b
+    i32_const!(b, id)
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", "trace_enter")), WasmValType[I32], WasmValType[])
+    return b
 end
 
 """
     emit_statement_trace!(b, ctx, idx, local_idx, local_type) -> b
 
-In the traced function of a traced compile, report statement `idx`'s value (just stored in
-`local_idx`) to the host: `wasmtarget.trace_<type>(idx, value)`, for a statement of a traced
-type. Nothing otherwise.
+In a traced function of a traced compile, report statement `idx`'s value (just stored in
+`local_idx`) to the host: `wasmtarget.trace_<type>(id, idx, value)`, for a statement of a
+traced type. Nothing otherwise.
 parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 """
 function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int,
                                local_idx::Integer, local_type)::InstrBuilder
-    ctx.mod.trace_func_idx === ctx.func_idx || return b
+    local id = _trace_id(ctx)
+    id === nothing && return b
     local T = get(ctx.ssa_types, idx, Any)
     get(TRACED_STATEMENT_TYPES, T, nothing) === local_type || return b
     local name = local_type === I64 ? "trace_i64" : local_type === I32 ? "trace_i32" :
                  local_type === F32 ? "trace_f32" : "trace_f64"
+    i32_const!(b, id)
     i32_const!(b, idx)
     local_get!(b, local_idx)
-    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, local_type], WasmValType[])
-    idx in ctx.mod.trace_stmts || push!(ctx.mod.trace_stmts, idx)
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, I32, local_type], WasmValType[])
+    push!(ctx.mod.trace.probed[id], idx)
     return b
 end
 

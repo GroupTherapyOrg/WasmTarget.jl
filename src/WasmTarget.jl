@@ -137,25 +137,26 @@ function compile_with_sourcemap(f, arg_types::Tuple; sourcemap_url::String="modu
 end
 
 """
-    compile_with_statement_trace(f, arg_types; validate) -> (bytes, code, probed)
+    compile_with_statement_trace(f, arg_types; validate) -> (bytes, trace)
 
-`compile`, with each statement of `f`'s own body (its inlined code included) whose value has a
-traced type — Int64, UInt64, Int32, Bool, Float32, Float64 — reporting that value to the host
-after it is stored: `wasmtarget.trace_i32/i64/f32/f64(statement, value)`. The differential
-harness runs Julia's IR of `f` natively with the same probes; the first statement whose values
-differ is where a wrong value first appears (test/trace_localize.jl `first_divergence`). `code`
-is the typed CodeInfo of `f` as compiled, whose statement numbers the probes report, and
-`probed` the statements the module reports (a statement codegen stores nowhere is not).
+`compile`, with every function compiled from Julia IR traced: on entry it reports
+`wasmtarget.trace_enter(id)`, and each statement whose value has a traced type — Int64, UInt64,
+Int32, Bool, Float32, Float64 — reports that value after it is stored,
+`wasmtarget.trace_i32/i64/f32/f64(id, statement, value)`. `trace` (a StatementTrace) holds each
+function's id, typed CodeInfo, MethodInstance and probed statements. The differential harness
+runs the same IR natively with the same probes, every traced call routed to its callee's IR,
+and the first event where the two runs differ is where a wrong value first appears
+(test/trace_localize.jl `first_divergence`).
 parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 """
 function compile_with_statement_trace(f, arg_types::Tuple;
-                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},Core.CodeInfo,Vector{Int}}
+                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},StatementTrace}
     OPTIONS[] = options_from_env()
     local name = string(nameof(f))
     local mod = compile_module([(f, arg_types, name)]; trace_entry=name)
-    mod.trace_code isa Core.CodeInfo ||
-        throw(ArgumentError("$(name)$(arg_types) compiled to no traceable body"))
-    return first(_emit_module(mod; optimize=false, validate=validate)), mod.trace_code, sort(mod.trace_stmts)
+    local trace = something(mod.trace)
+    trace.entry > 0 || throw(ArgumentError("$(name)$(arg_types) compiled to no traceable body"))
+    return first(_emit_module(mod; optimize=false, validate=validate)), trace
 end
 
 """

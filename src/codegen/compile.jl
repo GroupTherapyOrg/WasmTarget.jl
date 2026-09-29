@@ -281,7 +281,10 @@ function _compile_closed_world_plan(functions::Vector;
         mod.source_map_url = source_map_url
         ensure_provenance_imports!(mod)
     end
-    trace_entry === nothing || ensure_trace_imports!(mod)
+    if trace_entry !== nothing
+        mod.trace = StatementTrace()
+        ensure_trace_imports!(mod)
+    end
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
@@ -565,9 +568,15 @@ function _compile_closed_world_plan(functions::Vector;
     _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
-        # a traced compile's entry: its index, and the typed IR its probes number
-        name == trace_entry && (mod.trace_func_idx = func_idx; mod.trace_code = function_data[i][4])
         local fd_mi = function_data[i][9]
+        # a traced compile traces every function compiled from Julia IR: its id numbers the
+        # typed IR its probes report, and the entry's is remembered
+        if mod.trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance
+            push!(mod.trace.codes, function_data[i][4]); push!(mod.trace.mis, fd_mi)
+            push!(mod.trace.probed, Set{Int}())
+            mod.trace.ids[func_idx] = length(mod.trace.codes)
+            name == trace_entry && (mod.trace.entry = length(mod.trace.codes))
+        end
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
                            mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,

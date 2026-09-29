@@ -6,6 +6,7 @@ parity(code_generator.dart:228 AstCodeGenerator.generate)
 function generate_structured(ctx::AbstractCompilationContext,
                              blocks::Vector{BasicBlock})::Tuple{Vector{UInt8},Vector{SourceMapping}}
     b = _ctx_builder(ctx, "generate_structured")
+    emit_trace_enter!(b, ctx)   # a traced compile: the host sees this function's entry
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
     # THE stackifier. Retired strategies this replaced: the nested-conditional

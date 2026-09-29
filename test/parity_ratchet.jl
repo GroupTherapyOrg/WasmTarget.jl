@@ -2454,7 +2454,7 @@ const LOCKS = [
                              "\"enrolled as \" * get(_ENROLLMENT_REASONS[], fd_mi,"]
             count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp)
         end),
-    "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) gives each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local) a local and reports its value after the store (emit_statement_trace!, through imports added before any definition), recording which statements it probed; test/trace_localize.jl runs the CodeInfo WT compiled natively as an OpaqueClosure with the same probes, compares both traces on the statements both report, and names the first divergent one — its text, inline chain, iteration and both values — or, when every traced statement agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
+    "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) traces every function compiled from Julia IR — each reports its entry (emit_trace_enter!) and, for each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local), its value after the store (emit_statement_trace!), through imports added before any definition, recording each function's probed statements; test/trace_localize.jl runs each traced function's CodeInfo natively as an OpaqueClosure with the same probes, every traced call routed to its callee's closure (the native run follows WT's IR all the way down), compares the two event streams on what both report, and names the first divergent event — its function, text, inline chain, iteration and both values — or, when every event agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration, in the entry and inside a separately compiled callee (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
         () -> begin
             gen = read(joinpath(CODEGEN, "generate.jl"), String)
             stm = read(joinpath(CODEGEN, "statements.jl"), String)
@@ -2464,11 +2464,13 @@ const LOCKS = [
             smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
             lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
             required = [(stm, "local_set!(b, local_idx)\n                emit_statement_trace!(b, ctx, idx, local_idx, local_type)"),
-                        (gen, "idx in ctx.mod.trace_stmts || push!(ctx.mod.trace_stmts, idx)"),
+                        (gen, "push!(ctx.mod.trace.probed[id], idx)"),
+                        (read(joinpath(CODEGEN, "flow.jl"), String), "emit_trace_enter!(b, ctx)"),
+                        (loc, "ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[3:end]...)"),
                         (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
-                        (comp, "trace_entry === nothing || ensure_trace_imports!(mod)"),
-                        (loc, "filter!(t -> t[1] in both, ntrace)"),
-                        (loc, "filter!(t -> t[1] in both, wtrace)"),
+                        (comp, "mod.trace = StatementTrace()\n        ensure_trace_imports!(mod)"),
+                        (loc, "filter!(keep, nevents)"),
+                        (loc, "filter!(keep, wevents)"),
                         (smoke, "replace(_smoke_locate(f, args), "),
                         (lane, "replace(_locate(fn, Tuple(o.input)), ")]
             count(((text, needle),) -> !occursin(needle, text), required)
