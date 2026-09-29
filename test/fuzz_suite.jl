@@ -56,7 +56,7 @@ end
 end
 
 # StaticArrays — the SVector surface (construction/getindex/destructure/arith/
-# broadcast), the NTuple-backed-struct carve-out + construct_type overlay.
+# broadcast), SArray laid out by its NTuple field + the construct_type overlay.
 @testset "Differential fuzz: StaticArrays" begin
     include(joinpath(@__DIR__, "fuzz", "staticarrays_diff.jl"))
     run_staticarrays_tests()

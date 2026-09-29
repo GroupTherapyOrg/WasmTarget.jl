@@ -78,10 +78,10 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
         source = pop!(pending)
         source in seen && continue
         push!(seen, source)
-        for (consumer_idx, rec) in enumerate(ctx.nir)
+        for consumer_idx in ssa_users(ctx, source)
             consumer_idx == source && continue
+            rec = ctx.nir[consumer_idx]
             consumer = rec.node
-            nir_refs_ssa(consumer, source) || continue
             # A slot assignment stores the pointer into a variable — an escape.
             rec.slot == 0 || return false
             if consumer isa NirPi || consumer isa NirPhi
@@ -586,7 +586,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # the wasm stack (the stackified model) — seed the fragment with the parent's
         # TRACKED stack so pops resolve; append_builder! settles the contract exactly.
         isempty(b.v.stack) || seed_input!(_sf, copy(b.v.stack))
-        _seed_builder_locals!(_sf, ctx)
         stmt_bytes = UInt8[]
         ctx.last_stmt_was_stub = false  # reset before dispatch
         if node isa NirCall
@@ -1275,11 +1274,7 @@ function _task_ssa_used_unsafely(ctx::AbstractCompilationContext, ssa_id::Int)::
         n isa NirCall && (n.callee === Core.getfield || n.callee === Core.setfield!) &&
         length(n.operands) >= 2 && n.operands[1] isa NirSSA && n.operands[1].id == ssa_id &&
         _nir_field_name(n.operands[2]) in (:rngState0, :rngState1, :rngState2, :rngState3)
-    for rec in ctx.nir
-        _is_safe_rng_access(rec.node) && continue
-        nir_refs_ssa(rec.node, ssa_id) && return true
-    end
-    return false
+    return any(j -> !_is_safe_rng_access(ctx.nir[j].node), ssa_users(ctx, ssa_id))
 end
 
 # ============================================================================

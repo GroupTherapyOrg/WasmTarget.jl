@@ -783,7 +783,16 @@ function nir_uses(node::NirNode, subject::NirNode)::Bool
     _same(x) = (subject isa NirSSA && x isa NirSSA && x.id == subject.id) ||
                (subject isa NirArgument && x isa NirArgument && x.n == subject.n)
     _same(node) && return true
-    _r(x) = x !== nothing && nir_uses(x, subject)
+    return _nir_any_operand(x -> nir_uses(x, subject), node)
+end
+
+"""Is `p` true of any operand `node` reads directly? The one table of which fields of each
+node kind are operands: `nir_uses` and `nir_ssa_users` both walk through it, so the use
+query and the use index cannot disagree about what a node reads.
+parity(quarantine: SSA use query — Kernel is a tree whose values are variables read by
+VariableGet (pkg/kernel/lib/src/ast/expressions.dart:203); Julia IR names values by SSA id.)"""
+function _nir_any_operand(p, node::NirNode)::Bool
+    _r(x) = x !== nothing && p(x)
     node isa NirPi && return _r(node.value)
     node isa NirPhi && return any(_r, node.values)
     node isa NirPhiC && return any(_r, node.values)
@@ -802,8 +811,34 @@ function nir_uses(node::NirNode, subject::NirNode)::Bool
     return false
 end
 
+# every SSA id `node` uses, transitively (the ids nir_uses answers true for), duplicates kept
 # parity(quarantine: SSA use query by id, the NirSSA case of nir_uses.)
-nir_refs_ssa(node::NirNode, id::Int)::Bool = nir_uses(node, NirSSA(id, Any))
+function _nir_ssa_refs!(ids::Vector{Int}, node::NirNode)::Vector{Int}
+    node isa NirSSA && push!(ids, node.id)
+    _nir_any_operand(x -> (_nir_ssa_refs!(ids, x); false), node)
+    return ids
+end
+
+"""
+    nir_ssa_users(nir) -> Dict{Int,Vector{Int}}
+
+For each SSA id, the indices of the statements that use it, ascending: `j in users[id]`
+exactly when `nir_uses(nir[j].node, NirSSA(id, Any))` (test/nir_use_index.jl). Built in one pass, so a question about every
+value's uses costs the body's size once rather than once per value.
+parity(quarantine: SSA use query by id, the NirSSA case of nir_uses.)
+"""
+function nir_ssa_users(nir::Vector{NirStmt})::Dict{Int,Vector{Int}}
+    users = Dict{Int,Vector{Int}}()
+    ids = Int[]
+    for (j, rec) in enumerate(nir)
+        empty!(ids)
+        for id in _nir_ssa_refs!(ids, rec.node)
+            u = get!(Vector{Int}, users, id)
+            (isempty(u) || u[end] != j) && push!(u, j)
+        end
+    end
+    return users
+end
 
 """The value operands an expression-kind node reads, in `Expr.args` order: the dynamic callee
 of a call/invoke first, the type operand of a `%new`, then the arguments. Empty for the IR

@@ -693,7 +693,7 @@ function _is_memoryref_store_result(ctx::AbstractCompilationContext, rec::NirStm
     T = get_ssa_type(ctx, rec.node.operands[3])
     (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) || return false
     idx = findfirst(r -> r === rec, ctx.nir)
-    return idx !== nothing && any(j -> j != idx && nir_refs_ssa(ctx.nir[j].node, idx), eachindex(ctx.nir))
+    return idx !== nothing && any(!=(idx), ssa_users(ctx, idx))
 end
 
 """

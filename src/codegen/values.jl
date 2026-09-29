@@ -1168,12 +1168,12 @@ end
 """
     _seed_builder_locals!(b, ctx)
 
-Teach a fresh value-builder the function's REAL local types (params via the same julia→wasm
-mapping the function header used, then ctx.locals), so `local_get!` pushes the TRUE type
-instead of the AnyRef unknown-local fallback. This makes the typed channel's returned type
-(`b.v.stack[end]`) truthful for the most common emission — `local.get` — and therefore safe
-to DRIVE `convert_type!` coercions from (dart: `local.type` is authoritative because dart's
-builder always knows its locals).
+Teach a fresh value-builder the function's REAL local types — the params via the same
+julia→wasm mapping the function header used, every other local through the live provider
+over ctx.locals — so `local_get!` pushes the TRUE type instead of the AnyRef unknown-local
+fallback. This makes the typed channel's returned type (`b.v.stack[end]`) truthful for the
+most common emission — `local.get` — and therefore safe to DRIVE `convert_type!` coercions
+from (dart: `local.type` is authoritative because dart's builder always knows its locals).
 parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
 """
 function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
@@ -1182,12 +1182,9 @@ function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)
         builder_set_local_type!(b, i - 1,
             boundary_wasm_type(ctx.arg_types[i], ctx.mod, ctx.type_registry))
     end
-    for (k, t) in enumerate(ctx.locals)
-        builder_set_local_type!(b, ctx.n_params + k - 1, t)
-    end
-    # fullstrict: the LIVE provider — locals allocated AFTER this builder's creation
-    # resolve to their true types (the stale-snapshot AnyRef guesses poisoned the
-    # tracker downstream of every mid-emission allocate_local!).
+    # The LIVE provider types every non-param local, including those allocated after this
+    # builder's creation (_local_type asks it before the seeded table, so ctx.locals is
+    # not copied into each fragment builder).
     b.locals_fn = function(idx::Int)
         idx < ctx.n_params && return nothing   # params: the static seed rules
         local off = idx - ctx.n_params + 1
@@ -1206,7 +1203,6 @@ _is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
 function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     # The accumulator is the typed builder `b`.
     b = _ctx_builder(ctx, "compile_value")
-    _seed_builder_locals!(b, ctx)
     # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
     _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
         emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :

@@ -11,9 +11,9 @@
 #
 # Three levers (verified bit-identical — see test/fuzz/simplediffeq_diff.jl):
 #
-# (1) CORE FOLD (src/codegen/interpreter.jl): re-enables concrete-eval for a
-#     curated whitelist of pure type-level fns (apply_type/sparams/eltype/
-#     _compute_eltype/isinplace-type-param/...). Folds the type computations native
+# (1) CORE FOLD (src/codegen/interpreter.jl): concrete evaluation of type-level
+#     calls (apply_type/sparams/eltype/_compute_eltype/the isinplace type parameter/…)
+#     by Julia's own effect-based eligibility. Folds the type computations native
 #     folds away but WT left as `dynamic` dispatch on Type values.
 #
 # (2) CONSTRUCTION OVERLAY: the outer `ODEProblem(f, u0, tspan)` runs `isinplace(f)`

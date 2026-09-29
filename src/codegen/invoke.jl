@@ -106,7 +106,6 @@ parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvoc
 """
 function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_invoke.frag")
-    _seed_builder_locals!(fb, ctx)
     args = node.operands
 
     # Early skip check — before compiling arguments.
@@ -851,7 +850,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 # Extract target type from Type{T}
                 local _ctor_target = mi.specTypes.parameters[1].parameters[1]::DataType
                 # Clear pre-compiled args — we re-emit in correct order with typeId
-                fb = _ctx_builder(ctx, "compile_invoke.frag"); _seed_builder_locals!(fb, ctx)
+                fb = _ctx_builder(ctx, "compile_invoke.frag")
                 # Register struct type if not already registered
                 if !haskey(ctx.type_registry.structs, _ctor_target)
                     register_struct_type!(ctx.mod, ctx.type_registry, _ctor_target)

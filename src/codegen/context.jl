@@ -81,6 +81,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # so the analysis passes below are themselves NIR consumers rather than its
     # prerequisites; the context reads Julia's IR through it and nothing else.
     nir::Vector{NirStmt}
+    # For each SSA id, the statements that use it, ascending (nir_ssa_users) — built with the
+    # context; `nir` is never rewritten after (the stackifier threads its own copy).
+    ssa_users::Dict{Int,Vector{Int}}
     # Julia inference's type for every IR slot, widened once at the boundary
     # (frontend/nir.jl's nir_slot_types) — what an Argument/SlotNumber operand is typed by.
     slot_types::Vector{Type}
@@ -140,6 +143,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
         Dict{Int, Int}(),       # exn_region_locals
         body.stmts,             # NIR boundary — built first, from the typed IR alone
+        nir_ssa_users(body.stmts),
         body.slot_types,
         body.debuginfo
     )
@@ -703,23 +707,17 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
 
     # First pass: allocate locals for SSAs used more than once or with intervening ops
     needs_local_set = Set{Int}()
-    first_goto_to = _first_goto_to(nir)
+    q = _LocalQueryIndex(ctx)
+    _jump_between(a, b) = _count_between(q.jumps, a, b) > 0
 
     # Find SSAs defined inside a loop but used outside
     # These need locals because stack values don't persist across Wasm block boundaries
     for (header, back_edge) in loop_bounds
-        for i in eachindex(nir)
-            # Check if SSA i is defined inside this loop
-            if i >= header && i <= back_edge
-                # Check if it's used after the loop (in return or other statements)
-                for (j, other) in enumerate(nir)
-                    if j > back_edge && nir_refs_ssa(other.node, i)
-                        # SSA i is defined inside loop but used outside - needs local
-                        push!(needs_local_set, i)
-                        break
-                    end
-                end
-            end
+        for i in max(header, 1):min(back_edge, length(nir))
+            # SSA i is defined inside this loop; its last use (in a return or any other
+            # statement) after the loop needs a local
+            u = ssa_users(ctx, i)
+            !isempty(u) && u[end] > back_edge && push!(needs_local_set, i)
         end
     end
 
@@ -743,7 +741,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
         if rec.node isa NirPi && rec.node.value isa NirSSA
             val_id = rec.node.value.id
             # Check if there's control flow between the definition and this PiNode
-            if any(_is_jump, (val_id + 1):(i - 1))
+            if _jump_between(val_id + 1, i - 1)
                 push!(needs_local_set, val_id)
             end
         end
@@ -764,17 +762,13 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
         # Without a local, compile_value assumes the value is on the stack,
         # but in branching code the stack value may be in a different block.
         if rec.node isa NirPi && !haskey(ctx.phi_locals, i)
-            # Check if there's any control flow between this PiNode and its uses
-            for j in (i+1):length(nir)
-                use_node = nir[j].node
-                if nir_refs_ssa(use_node, i) && !(use_node isa NirPhi)
-                    # Found a non-phi use. If there's control flow between PiNode and use, need a local.
-                    if any(_is_jump, (i+1):(j-1))
-                        push!(needs_local_set, i)
-                        break
-                    end
-                end
+            # Control flow between this PiNode and a later non-phi use needs a local; the
+            # last such use spans every earlier one
+            last_use = 0
+            for j in ssa_users(ctx, i)
+                j > i && !(nir[j].node isa NirPhi) && (last_use = j)
             end
+            last_use > 0 && _jump_between(i + 1, last_use - 1) && push!(needs_local_set, i)
         end
     end
 
@@ -783,16 +777,9 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
     # Any SSA defined before a GotoNode/GotoIfNot and used after it needs a local.
     for (i, rec) in enumerate(nir)
         if produces_stack_value(rec)
-            # Check all uses of this SSA
-            for j in (i+1):length(nir)
-                if nir_refs_ssa(nir[j].node, i)
-                    # Check if there's any control flow between definition and use
-                    if any(_is_jump, (i+1):(j-1))
-                        push!(needs_local_set, i)
-                        break
-                    end
-                end
-            end
+            # Control flow between the definition and a later use; the last use spans them all
+            u = ssa_users(ctx, i)
+            !isempty(u) && u[end] > i && _jump_between(i + 1, u[end] - 1) && push!(needs_local_set, i)
         end
     end
 
@@ -800,7 +787,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals
             ctx.ssa_locals[ssa_id] = ctx.phi_locals[ssa_id]
-        elseif use_count > 1 || needs_local(ctx, ssa_id, first_goto_to)
+        elseif use_count > 1 || needs_local(ctx, ssa_id, q)
             push!(needs_local_set, ssa_id)
         end
     end
@@ -1236,32 +1223,70 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
 end
 
 """
-    _first_goto_to(nir) -> Dict{Int,Int}
+    _LocalQueryIndex(ctx)
 
-For each statement that some `goto` targets, the index of the first such `goto` in statement
-order — the loop back-edge `needs_local` asks about for every SSA value, computed once per
-function instead of rescanning the body per value.
-parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR's gotos once for it.)
+The facts `allocate_ssa_locals!` and `needs_local` ask about every SSA value, computed once
+per function instead of rescanning the body per value: running counts of the jumps and of the stack-value producers (a range holds one when
+`_count_between` is positive), and the loops (header, first back-edge `goto`) whose body
+branches other than at its header.
+parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR once for it.)
 """
-function _first_goto_to(nir::Vector{NirStmt})::Dict{Int,Int}
-    first = Dict{Int,Int}()
+struct _LocalQueryIndex
+    jumps::Vector{Int}        # jumps[k + 1]: the goto/goto-if-not statements in 1:k
+    producers::Vector{Int}    # producers[k + 1]: the statements in 1:k that produce_stack_value
+    branching_loops::Vector{Tuple{Int,Int}}
+end
+
+# parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR once for it.)
+function _LocalQueryIndex(ctx::AbstractCompilationContext)::_LocalQueryIndex
+    nir = ctx.nir
+    n = length(nir)
+    jumps = zeros(Int, n + 1)
+    producers = zeros(Int, n + 1)
+    for (k, rec) in enumerate(nir)
+        jumps[k + 1] = jumps[k] + (rec.node isa NirGoto || rec.node isa NirGotoIfNot)
+        producers[k + 1] = producers[k] + produces_stack_value(rec)
+    end
+    # the first `goto` to each target: a loop header's back-edge
+    first_goto_to = Dict{Int,Int}()
     for (i, rec) in enumerate(nir)
         node = rec.node
-        node isa NirGoto && !haskey(first, node.target) && (first[node.target] = i)
+        node isa NirGoto && !haskey(first_goto_to, node.target) && (first_goto_to[node.target] = i)
     end
-    return first
+    branching_loops = Tuple{Int,Int}[]
+    for header in 1:length(ctx.loop_headers)
+        ctx.loop_headers[header] || continue
+        back_edge = get(first_goto_to, header, nothing)
+        back_edge === nothing && continue
+        # a conditional in the loop other than its exit test at the header
+        any(i -> nir[i].node isa NirGotoIfNot && i != header && i != header + 1, header:back_edge) &&
+            push!(branching_loops, (header, back_edge))
+    end
+    return _LocalQueryIndex(jumps, producers, branching_loops)
+end
+
+# the statements that use SSA `id`, ascending
+# parity(quarantine: SSA use query by id, the NirSSA case of nir_uses.)
+ssa_users(ctx::AbstractCompilationContext, id::Int)::Vector{Int} = get(ctx.ssa_users, id, Int[])
+
+# how many of statements a:b a running count counts (0 for an empty range)
+# parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR once for it.)
+function _count_between(counts::Vector{Int}, a::Int, b::Int)::Int
+    a = max(a, 1)
+    b = min(b, length(counts) - 1)
+    return a <= b ? counts[b + 1] - counts[a] : 0
 end
 
 """
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
 parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
-function needs_local(ctx::AbstractCompilationContext, ssa_id::Int,
-                     first_goto_to::Dict{Int,Int})::Bool
+function needs_local(ctx::AbstractCompilationContext, ssa_id::Int, q::_LocalQueryIndex)::Bool
     nir = ctx.nir
+    _first_use(id) = (for j in ssa_users(ctx, id); j != id && return j; end; nothing)
 
     # Find where this SSA is used
-    use_idx = findfirst(i -> i != ssa_id && nir_refs_ssa(nir[i].node, ssa_id), eachindex(nir))
+    use_idx = _first_use(ssa_id)
 
     if use_idx === nothing
         return false  # Never used
@@ -1281,8 +1306,7 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int,
            (use_node.callee === Core.memoryrefnew || use_node.callee === Core.memoryref) &&
            length(use_node.operands) == 1  # single-arg passthrough
             # Find where this passthrough result is used
-            next_use = findfirst(j -> j != actual_use_idx && nir_refs_ssa(nir[j].node, actual_use_idx),
-                                 eachindex(nir))
+            next_use = _first_use(actual_use_idx)
             if next_use !== nothing
                 actual_use_idx = next_use
                 continue
@@ -1293,41 +1317,14 @@ function needs_local(ctx::AbstractCompilationContext, ssa_id::Int,
 
     # If there are any statements between definition and use that produce values,
     # we need a local because those values will mess up the stack
-    for i in (ssa_id + 1):(actual_use_idx - 1)
-        if produces_stack_value(nir[i])
-            return true
-        end
-    end
+    _count_between(q.producers, ssa_id + 1, actual_use_idx - 1) > 0 && return true
 
     # Also need local if there's control flow between definition and use
-    for i in (ssa_id + 1):(actual_use_idx - 1)
-        if nir[i].node isa NirGotoIfNot || nir[i].node isa NirGoto
-            return true
-        end
-    end
+    _count_between(q.jumps, ssa_id + 1, actual_use_idx - 1) > 0 && return true
 
     # If SSA is defined inside a loop and there are conditionals in the loop,
     # we need a local to ensure stack balance across control flow
-    for header in 1:length(ctx.loop_headers)
-        ctx.loop_headers[header] || continue
-        # Find corresponding back-edge: the first `goto` to this header, found once per
-        # function (`_first_goto_to`)
-        back_edge = get(first_goto_to, header, nothing)
-        if back_edge !== nothing && ssa_id >= header && ssa_id <= back_edge
-            # SSA is defined inside this loop
-            # Check if there are any conditionals in the loop
-            for i in header:back_edge
-                if nir[i].node isa NirGotoIfNot
-                    # Loop has a conditional (not the exit condition if it's at the start)
-                    if i != header && i != header + 1
-                        return true
-                    end
-                end
-            end
-        end
-    end
-
-    return false
+    return any(((header, back_edge),) -> header <= ssa_id <= back_edge, q.branching_loops)
 end
 
 """

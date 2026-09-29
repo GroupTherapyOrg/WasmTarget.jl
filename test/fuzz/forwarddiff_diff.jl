@@ -5,8 +5,8 @@
 # impl; `gradient`/`jacobian` are overlaid in ext/WasmTargetForwardDiffExt.jl to
 # reuse the single-partial `Dual` seed (the path `derivative` already compiles),
 # one input direction at a time — bit-identical to native's Partials{N} vector
-# mode (forward-mode partials never cross slots). The whole value path is
-# unlocked by the Dual/Partials carve-out in is_struct_type (src/codegen/structs.jl).
+# mode (forward-mode partials never cross slots). Dual and Partials are laid out
+# by their fields, like every concrete struct (is_struct_type, L142).
 #
 # Verified dense-in / dense-out (the differentiated function lives INSIDE the
 # wrapper, since the bridge can't marshal a function argument) — derivative takes
@@ -59,7 +59,7 @@ _fd_g_sumsq(u::Vector{Float64}) = ForwardDiff.gradient(v -> sum(v.^2), u)       
 _fd_g_logistic(u::Vector{Float64}) = ForwardDiff.gradient(v -> log(1.0 + exp(v[1]*v[2] + v[3])), u)
 
 # ----- jacobian Jf: Rⁿ → Rᵐˣⁿ (f returns a VECTOR; literal `[…]` exercises the
-#       array-of-Dual path the carve-out fixes) ---------------------------------
+#       array-of-Dual path) ------------------------------------------------------
 _fd_j_bilin(u::Vector{Float64}) = ForwardDiff.jacobian(v -> [v[1]*v[2], v[1] + v[2]], u)
 _fd_j_nlsys(u::Vector{Float64}) = ForwardDiff.jacobian(v -> [v[1]^2 + v[2]^2 - 1.0, v[1] - v[2]], u)  # Newton system
 _fd_j_trig(u::Vector{Float64})  = ForwardDiff.jacobian(v -> [sin(v[1]), cos(v[2]), v[1]*v[2]], u)

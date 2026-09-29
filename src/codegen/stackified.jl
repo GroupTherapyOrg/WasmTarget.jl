@@ -494,8 +494,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # The main accumulator and every helper fragment are typed builders. Fragment
     # composition preserves tracked stack contracts; no byte splice or validation
     # exception exists in the flow path.
-    b = InstrBuilder(; func_name="generate_stackified_flow", mod=ctx.mod)
-    _seed_builder_locals!(b, ctx)
+    b = _ctx_builder(ctx, "generate_stackified_flow")
     for target_idx in ctx.entry_calls
         params, results = _true_call_sig(b, target_idx, WasmValType[], WasmValType[])
         isempty(params) && isempty(results) || throw(ArgumentError(
@@ -720,7 +719,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # own validation is structurally impossible now). `temp_map` substitutes
         # circular-phi temp locals at the plain local.get branches.
         pvb = _ctx_builder(ctx, "compile_phi_value")
-        _seed_builder_locals!(pvb, ctx)
         _cpv_ret() = begin
             if OPTIONS[].audit_value_stack && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
                 println(stderr, "PHI-VALUE-LIAR n=$(length(pvb.v.stack)) stack=$(pvb.v.stack) val=$(first(repr(val), 80)) phi=$phi_idx instrs=$(join(builder_disasm(pvb), "; ")) philoc=$(haskey(ctx.phi_locals, phi_idx) ? ctx.locals[ctx.phi_locals[phi_idx] - ctx.n_params + 1] : :none) errs=$(pvb.v.errors)")
@@ -801,7 +799,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                         # converter (source = local.get of the SSA local). The unbox arm is
                         # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
                         local _srcb = _ctx_builder(ctx, "phi_edge_src")
-                        _seed_builder_locals!(_srcb, ctx)
                         local_get!(_srcb, local_idx)
                         local _src_julia = _value_julia_type(val, ctx)
                         _src_julia isa Type || (_src_julia = Any)
@@ -830,7 +827,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
                     # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
                     local _srcb = _ctx_builder(ctx, "phi_edge_src")
-                    _seed_builder_locals!(_srcb, ctx)
                     local_get!(_srcb, local_idx)
                     local _src_julia = _value_julia_type(val, ctx)
                     _src_julia isa Type || (_src_julia = Any)
@@ -870,7 +866,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
                 if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
                     local _sb = _ctx_builder(ctx, "phi_edge_src")
-                    _seed_builder_locals!(_sb, ctx)
                     # the converter below is told the source is `ssa_wasm_type`; the emission states it
                     emit_value!(_sb, val, ctx, ssa_wasm_type)
                     local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
@@ -1199,7 +1194,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # The block's sub-builder `bb`: straight-line emission uses typed methods and
         # recursive sub-results merge through append_builder!.
         bb = _ctx_builder(ctx, "generate_stackified_flow.block")
-        _seed_builder_locals!(bb, ctx)
         # Values legitimately flow BETWEEN basic blocks on the wasm stack —
         # the block fragment declares the incoming stack (the merge settles exactly).
         isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))

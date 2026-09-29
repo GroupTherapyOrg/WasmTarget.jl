@@ -73,8 +73,7 @@ parity(quarantine: WT emits a function through fragment builders merged by appen
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
                       narrow_to::Union{Nothing, WasmValType}=nothing,
                       seed_types::Union{Nothing, Vector{WasmValType}}=nothing)::InstrBuilder
-    local b = InstrBuilder(; func_name=name, mod=ctx.mod)
-    _seed_builder_locals!(b, ctx)   # fullstrict: the live provider everywhere
+    local b = _ctx_builder(ctx, name)
     local h = length(fb.v.stack)
     # fullstrict: when the parent's tracking is short, the caller's DECLARED types
     # are the contract (the parent's shortfall surfaces at ITS merge, attributed there)
@@ -744,7 +743,7 @@ parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overfl
 function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                     op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _cadd_tt::Type)::Nothing
     if is_128bit
-        local _cadd128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_cadd128, ctx)
+        local _cadd128 = _ctx_builder(ctx, "compile_call.frag")
         emit_unsupported_stub!(ctx, _cadd128, :unsupported_method,
             "128-bit checked addition (Int128/UInt128)"; idx=idx)
         fbref[] = _cadd128
@@ -815,7 +814,7 @@ parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overfl
 function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                     op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _csub_tt::Type)::Nothing
     if is_128bit
-        local _csub128 = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(_csub128, ctx)
+        local _csub128 = _ctx_builder(ctx, "compile_call.frag")
         emit_unsupported_stub!(ctx, _csub128, :unsupported_method,
             "128-bit checked subtraction (Int128/UInt128)"; idx=idx)
         fbref[] = _csub128
@@ -2575,7 +2574,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # sees an empty fragment stack and reports a false underflow.
     isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
     _boxed_operand_unboxed = false   # FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
-    _seed_builder_locals!(fb, ctx)
     # The callee the NIR boundary resolved ONCE (frontend/nir.jl): a function object when
     # the IR named it statically — through a global, an SSA alias of one, a `Core.Const`,
     # or a singleton-typed argument — a `GlobalRef` when that global is unbound, else the
@@ -3199,7 +3197,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local arg1_ssa = args[1]
             if arg1_ssa isa NirSSA && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
                 # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+                fb = _ctx_builder(ctx, "compile_call.frag")
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
                     "numeric intrinsic on an Any-typed (boxed) operand — type instability"; idx=idx)
                 return append_builder!(b, fb)
@@ -3439,7 +3437,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
     # throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func === Core.throw_methoderror
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        fb = _ctx_builder(ctx, "compile_call.frag")
         ensure_exception_tag!(ctx.mod)
             global_get!(fb, ensure_exception_global!(ctx.mod), AnyRef); ref_null!(fb, ExternRef); throw_!(fb, 0; inputs=WasmValType[AnyRef, ExternRef])   # typed (exn, trace) tag
         ctx.last_stmt_was_stub = true
@@ -3453,7 +3451,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # P4-stdlib: fold against host-constant svecs (padding/typename.names)
         local _svl = _try_host_svec(args[1], ctx)
         if _svl isa Core.SimpleVector
-            fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)   # discard pre-pushed placeholder
+            fb = _ctx_builder(ctx, "compile_call.frag")   # discard pre-pushed placeholder
                 i64_const!(fb, Int64(length(_svl)))
         else
                 array_len!(fb)
@@ -3492,7 +3490,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     elseif func === Core._apply_iterate && length(args) >= 3
         # args layout: [Base.iterate, target_func, container1, ...]
         # Clear pre-pushed args (iterate ref, func ref, container ref are on stack)
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        fb = _ctx_builder(ctx, "compile_call.frag")
         target_func = args[2]  # The function to apply (e.g., Base.:+)
         container_arg = args[3]  # The container to iterate
 
@@ -3591,7 +3589,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
     # Core.svec — materialize the real $JlSVec array.
     elseif func === Core.svec
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        fb = _ctx_builder(ctx, "compile_call.frag")
         _emit_svec_values!(fb, args, ctx)
 
     # Core builtins re-exported through Base (isdefined, getfield, setfield!).
@@ -3599,7 +3597,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     elseif named &&
            any(name -> is_builtin_func(func, name), (:isdefined, :getfield, :setfield!))
         # Clear pre-pushed args
-        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+        fb = _ctx_builder(ctx, "compile_call.frag")
         # P4-stdlib (Statistics median): getfield on a compile-time CONSTANT
         # receiver (QuoteNode) — e.g. getfield(typename(UInt64), :flags) from
         # inlined isbits-style predicates in sort. Host-evaluate; emit the
@@ -3987,7 +3985,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         _dq_is || (_dq_all_ref = false)
                     end
                     if _dq_all_ref
-                        fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+                        fb = _ctx_builder(ctx, "compile_call.frag")
                         local _dqb = _ctx_builder(ctx, "compile_call")
                         for _dq_a in args
                             emit_value!(_dqb, _dq_a, ctx, AnyRef)  # every operand's local is anyref (checked above)
@@ -4021,7 +4019,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                    call_arg_types[1] <: Type && call_arg_types[1] isa DataType &&
                    length(call_arg_types[1].parameters) == 1 &&
                    call_arg_types[2] === call_arg_types[1].parameters[1]
-                    fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)  # clear pre-pushed args — identity re-emits the value itself
+                    fb = _ctx_builder(ctx, "compile_call.frag")  # clear pre-pushed args — identity re-emits the value itself
                     emit_value!(fb, args[2], ctx, static_wasm_type(args[2], ctx))
                     _dyneq_ok = true
                 end
@@ -4053,7 +4051,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # These are dead code branches in WasmGC context (we compile with concrete types).
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
-                fb = _ctx_builder(ctx, "compile_call.frag"); _seed_builder_locals!(fb, ctx)
+                fb = _ctx_builder(ctx, "compile_call.frag")
                 if get(ctx.ssa_types, idx, Any) === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
                     ctx.last_stmt_was_stub = true
