@@ -42,6 +42,7 @@ end
 
 # For an already-concrete SArray, construct_type is the identity — return it so WT
 # infers the result type (instead of Any) and the normal inner ctor takes over.
+# parity(quarantine: StaticArrays.construct_type derives the SArray type from its argument at run time, which WT does not lower; for an already-concrete SArray it is the identity.)
 @overlay WMT StaticArrays.construct_type(::Type{SArray{S, T, N, L}}, x) where {S <: Tuple, T, N, L} =
     SArray{S, T, N, L}
 

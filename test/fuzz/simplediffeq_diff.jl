@@ -35,7 +35,8 @@ function _sde_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
-        ok = r[1] === :ok ? (nat[1] && _SDE_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok = r[1] === :ok ? (nat[1] && _SDE_B.tree_matches(rdesc, nat[2], r[2];
+                                                          nonportable = get(_SDE_NONPORTABLE, fn, nothing))) : !nat[1]
         ok || return false
     end
     return true
@@ -86,6 +87,14 @@ for S in _SDE_SOLVERS
         sum(solve(ODEProblem(_sde_plorenz, SVector{3,Float64}(1.0, 1.0, 1.0), (0.0, 1.0),
                              (sig, 28.0, 2.6666666666666665)), $S(); dt = 0.01).u[end])
 end
+
+# The cases whose native value's last bits are not Julia's portable answer: SimpleEuler's
+# step is `@muladd`, and StaticArrays' muladd over an SVector is a per-element muladd_float,
+# which Julia leaves free to round once or twice (native rounded twice in this solve; the
+# module rounds once, as Base.fma_emulated). Every other case is compared bit-exact.
+const _SDE_NONPORTABLE = Dict{Function,String}(
+    getfield(@__MODULE__, Symbol("_sde_oscS_", :SimpleEuler)) => "muladd SimpleDiffEq SimpleEuler step!",
+)
 
 function run_simplediffeq_tests(; reps::Int = 30)
     rng = MersenneTwister(0x5DE0)

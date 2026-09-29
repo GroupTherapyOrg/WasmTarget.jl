@@ -134,6 +134,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   routine. 22 collection overlays gave way to Julia's bodies (two answered the wrong sign for
   maximum/minimum over signed zeros); isequal of floats is Julia's fpiseq. An :invoke calls
   the method it names (L139): unique(::Vector{Float64}) had compiled to infinite recursion.
+- A type-structure foreigncall folds, so SparseArrays compiles from its own source (its
+  extension is gone); BLAS/LAPACK overlay reasons are checked against Julia's methods (L140).
 
 ## Why the archive was consolidated
 

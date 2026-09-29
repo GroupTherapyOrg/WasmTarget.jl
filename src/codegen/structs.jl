@@ -41,7 +41,7 @@ function is_struct_type(T::Type)::Bool
     # dense Array/Vector types WT maps to wasm arrays). Without this, the 5-field
     # `:new` that builds a sparse RESULT (sparse*sparse / copy / transpose / …)
     # mismatches a 2-field registration → compile_new crash. Narrow + verified safe
-    # (field access, nnz, densify, matvec all stay correct — see WasmTargetSparseArraysExt).
+    # (field access, nnz, densify, matvec and SparseArrays' own builders compile from its source).
     if T isa DataType && T.name.name in (:SparseMatrixCSC, :SparseVector, :FixedSparseCSC)
         return isconcretetype(T) && isstructtype(T)
     end

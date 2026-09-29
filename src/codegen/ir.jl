@@ -140,6 +140,9 @@ function ir_reads_host_layout(ci::Core.CodeInstance)::Bool
     return _ir_reads_host_layout(ci, 0, memo === nothing ? IdDict{Any, Bool}() : memo)
 end
 
+# parity(quarantine: Julia's type-structure predicates, answered by Julia at compile time.)
+const _TYPE_STRUCTURE_FOREIGNCALLS = (:jl_has_free_typevars,)
+
 # parity(quarantine: the transitive walk behind ir_reads_host_layout, one memo per compilation.)
 function _ir_reads_host_layout(ci::Core.CodeInstance, depth::Int, memo::IdDict{Any, Bool})::Bool
     depth > 6 && return true
@@ -162,7 +165,11 @@ function _ir_reads_host_layout(ci::Core.CodeInstance, depth::Int, memo::IdDict{A
                     found = true; break
                 end
             elseif node isa NirForeignCall
-                found = true; break
+                # a type-structure predicate answers the same in every process and on every
+                # architecture (Core.has_free_typevars, which the frontend's
+                # _typeof_captured_variable asks of a captured type); any other foreigncall
+                # may read the host
+                node.c_symbol in _TYPE_STRUCTURE_FOREIGNCALLS || (found = true; break)
             elseif node isa NirInvoke
                 if node.ci !== nothing
                     _ir_reads_host_layout(node.ci, depth + 1, memo) && (found = true; break)

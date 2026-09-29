@@ -855,6 +855,9 @@ _g("memoryref_erased", Any[
 @noinline _sm_cap_float(x::Float64) = (c = x; () -> (c = c + 0.5; c))
 @noinline _sm_cap_undef() = (local r; () -> (r = Int64[]; push!(r, 1); r))
 _g("captured_variables", Any[
+    # a closure capturing a type: the frontend's Core._typeof_captured_variable asks
+    # jl_has_free_typevars of the constant type
+    ("captured_type", (n::Int64) -> (T = Int64; g = x -> T(x) + one(T); g(n)), Int64(4)),
     ("int_counter", (x::Int64) -> (f = _sm_cap_int(x); f(); f()), Int64(3)),
     ("float_counter", (x::Float64) -> (f = _sm_cap_float(x); f(); f()), 0.25),
     ("undefined_then_written", (n::Int64) -> (f = _sm_cap_undef(); length(f()) + n), Int64(3)),

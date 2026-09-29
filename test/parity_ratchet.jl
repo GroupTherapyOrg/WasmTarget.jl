@@ -573,8 +573,9 @@ function overlays_without_reason()::Vector{String}
     for path in paths
         L = _lines(path)
         for (i, l) in enumerate(L)
-            # any macro prefix (`@noinline @overlay …`) is still an overlay
-            occursin(r"^\s*(?:@\w+\s+)*@overlay\s+[A-Za-z_.]*WASM_METHOD_TABLE", l) || continue
+            # any macro prefix (`@noinline @overlay …`) and any spelling of the table (the
+            # WMT alias) is still an overlay
+            occursin(r"^\s*(?:@\w+\s+)*@overlay\s+\S+\s", l) || continue
             ok = occursin("parity(", l)
             j = i - 1
             while !ok && j >= 1 && startswith(strip(L[j]), "#")
@@ -813,7 +814,7 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`: those went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
+    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`, and through any alias of the table, `@overlay WMT`: both went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
         () -> length(overlays_without_reason())),
     "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
         () -> smoke_runtime_xfails()),
@@ -2427,7 +2428,7 @@ const LOCKS = [
             count(p -> !occursin(p, trim * inv * types), required) +
                 count(p -> occursin(p, trim), ["seen_sigs", "(f, arg_types) in seen_sigs"])
         end),
-    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===` — and the result transports carry -0.0 (JSON writes it as 0). The one tolerance (a relative 1e-9) applies only where tree_matches is told why the native value's last bits are not Julia's portable answer, and only two per-case allowlists say so: linalg_diff.jl's _LA_C_LIBRARY (each a BLAS or LAPACK routine) and stats_diff.jl's _ST_NONPORTABLE (each an @simd reduction, whose order Julia leaves to the target). Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which passed a last-bit error in Julia's own math and a -0.0 read as 0.0 (dev/CHARTER.md C3)",
+    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===` — and the result transports carry -0.0 (JSON writes it as 0). The one tolerance (a relative 1e-9) applies only where tree_matches is told why the native value's last bits are not Julia's portable answer, and only four per-case allowlists say so: linalg_diff.jl's _LA_C_LIBRARY (each a BLAS or LAPACK routine), stats_diff.jl's _ST_NONPORTABLE and staticarrays_diff.jl's _SA_NONPORTABLE (each an @simd reduction, whose order and contraction Julia leaves to the target), and simplediffeq_diff.jl's _SDE_NONPORTABLE (each a muladd, which Julia leaves free to round once or twice). Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which passed a last-bit error in Julia's own math and a -0.0 read as 0.0 (dev/CHARTER.md C3)",
         () -> begin
             bridge = read(joinpath(SRC, "bridge.jl"), String)
             utils = read(joinpath(ROOT, "test", "utils.jl"), String)
@@ -2442,7 +2443,9 @@ const LOCKS = [
                         "if (Object.is(value, -0)) return \"__-0__\";", "out.push('__-0__')",
                         "result == \"__-0__\" && return -0.0"])
             for (file, dict, rx) in (("linalg_diff.jl", "_LA_C_LIBRARY", r"^(BLAS|LAPACK) [a-z]"),
-                                     ("stats_diff.jl", "_ST_NONPORTABLE", r"^@simd [A-Za-z]"))
+                                     ("stats_diff.jl", "_ST_NONPORTABLE", r"^@simd [A-Za-z]"),
+                                     ("staticarrays_diff.jl", "_SA_NONPORTABLE", r"^@simd [A-Za-z]"),
+                                     ("simplediffeq_diff.jl", "_SDE_NONPORTABLE", r"^muladd [A-Za-z]"))
                 src = read(joinpath(ROOT, "test", "fuzz", file), String)
                 m = match(Regex("(?s)const $(dict) = Dict\\{Function,String\\}\\((.*?)\\n?\\)\\n"), src)
                 m === nothing && (n += 1; continue)

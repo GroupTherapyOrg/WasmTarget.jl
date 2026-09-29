@@ -1,12 +1,11 @@
 # ============================================================================
 # Differential fuzz of the SparseArrays stdlib — FOUNDATION (step 1).
 # ============================================================================
-# SparseArrays construction (`sparse(::Matrix)`) is unlocked by two overlays in
-# ext/WasmTargetSparseArraysExt.jl (sparse_check_Ti + a hand-rolled dense→CSC).
-# Once a CSC exists, the READ/REDUCE/MATVEC paths compile from the real
-# SparseArrays implementations. This file differentially verifies that
-# foundation (wasm vs native, same oracle as core): construction round-trips,
-# nnz, reductions, sparse·vector, sparse·dense.
+# SparseArrays compiles from its own source (no overlays): construction, the
+# builders (hcat/vcat/blockdiag/permute/spdiagm/±), reads, reductions and
+# products. This file differentially verifies it (wasm vs native, the same
+# bit-exact oracle as core): construction round-trips, nnz, reductions,
+# sparse·vector, sparse·dense.
 #
 # Tested dense-in / dense-out (sparse used INTERNALLY) so the matrix bridge can
 # marshal inputs/outputs — mirrors how linalg_diff verifies factorization objects.

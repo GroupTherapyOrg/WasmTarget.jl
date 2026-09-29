@@ -26,7 +26,8 @@ function _sa_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
-        ok = r[1] === :ok ? (nat[1] && _SA_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok = r[1] === :ok ? (nat[1] && _SA_B.tree_matches(rdesc, nat[2], r[2];
+                                                         nonportable = get(_SA_NONPORTABLE, fn, nothing))) : !nat[1]
         ok || return false
     end
     return true
@@ -71,6 +72,12 @@ _sa_a_add(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); b = SVector{3,Float6
 _sa_a_sub(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); b = SVector{3,Float64}(0.5, 0.5, 0.5); c = a - b; c[1] + c[2] + c[3])
 _sa_a_scale(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); c = 2.5 * a; c[1] + c[2] + c[3])
 _sa_a_dot(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); dot(a, a))
+
+# The cases whose native value's last bits are not Julia's portable answer: StaticArrays'
+# _vecdot accumulates under `@simd`, which lets native contract `ret + a*b` into a fused
+# multiply-add and reorder as its target decides (it differs from the module in 48 of 2000
+# random inputs by one ulp). Every other case is compared bit-exact.
+const _SA_NONPORTABLE = Dict{Function,String}(_sa_a_dot => "@simd StaticArrays._vecdot")
 _sa_a_bcast(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); c = a .* a .+ 1.0; c[1] + c[2] + c[3])
 _sa_a_combo(x::Float64) = (a = SVector{3,Float64}(x, 2x, 3x); b = SVector{3,Float64}(x, -x, x); sum(2.0 .* a .- b))
 

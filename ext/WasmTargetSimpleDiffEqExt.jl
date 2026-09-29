@@ -68,16 +68,19 @@ end
 end
 
 # (2) outer ODEProblem ctor → concrete construction (scalar or vector state).
+# parity(quarantine: SciMLBase's ODEProblem(f, ...) asks isinplace(f) through kwarg method-arity reflection, which WT does not lower; the ODEFunction is built concretely.)
 @overlay WMT SB.ODEProblem(f::F, u0, tspan::Tuple{Float64, Float64}) where {F} =
     SB.ODEProblem{false}(_wt_odefunc(f), u0, tspan)
 
 # (2b) parameterized form `ODEProblem(f, u0, tspan, p)` — the idiomatic way to feed
 # coefficients to a top-level rhs `f(u, p, t)` (no closure capture, which WT can't
 # lower as an ODEFunction field). p flows through to the concrete ODEProblem{false}.
+# parity(quarantine: SciMLBase's ODEProblem(f, ...) asks isinplace(f) through kwarg method-arity reflection, which WT does not lower; the ODEFunction is built concretely.)
 @overlay WMT SB.ODEProblem(f::F, u0, tspan::Tuple{Float64, Float64}, p) where {F} =
     SB.ODEProblem{false}(_wt_odefunc(f), u0, tspan, p)
 
 # (3) generic solve → __solve (bypass the kwarg-Pairs machinery).
+# parity(quarantine: SciMLBase's solve routes through DiffEqBase's kwargs NamedTuple machinery, which WT does not fold; this calls __solve directly.)
 @overlay WMT SB.solve(prob::SB.ODEProblem, alg::_WT_SOLVERS; dt, kw...) =
     SciMLBase.__solve(prob, alg; dt = dt)
 
