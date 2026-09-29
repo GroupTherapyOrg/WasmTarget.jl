@@ -237,9 +237,7 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
-    if ctx.scratch_locals === nothing
-        error("String operations require scratch locals but none were allocated")
-    end
+    ctx.scratch_locals === nothing && allocate_string_scratch!(ctx)
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
     b = InstrBuilder(; func_name="compile_string_equal")

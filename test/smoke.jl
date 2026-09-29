@@ -1261,6 +1261,9 @@ _g("julia_string_bodies", Any[
     ("sort_signed_zero", (n::Int64) -> (v = sort([0.0, -0.0, Float64(n), -1.0]); (signbit(v[2]) ? 1 : 0) + (signbit(v[3]) ? 10 : 0)), Int64(2)),
     ("sortperm_rev", (n::Int64) -> (p = sortperm([3, 1, n, 2]; rev=true); p[1] * 10 + p[end]), Int64(4)),
     ("partialsort_k", (n::Int64) -> partialsort([5, 3, n, 1, 4], 2), Int64(2)),
+    # two String literals compared in a function no String type names (the scratch locals
+    # are allocated at the comparison)
+    ("string_literal_eq", (n::Int64) -> (repeat("hello", 1) == "hello" ? 1 : 0) + n, Int64(2)),
 ])
 # Types whose fields reach back to themselves register with their strongly connected component
 # (finish_pending!, dev/formal/RecGroup.tla): a two-type cycle through a type parameter, a

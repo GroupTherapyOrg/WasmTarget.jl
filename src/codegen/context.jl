@@ -260,6 +260,45 @@ function analyze_signal_captures!(ctx::AbstractCompilationContext)::Nothing
 end
 
 """
+    allocate_string_scratch!(ctx) -> Nothing
+
+The five scratch locals a String comparison uses (a result ref, two source refs, two i32
+counters), stored in ctx.scratch_locals: allocated up front when the function's types name a
+String or Symbol, or at the first comparison that needs them (two String literals compared in
+a function no String type names).
+parity(quarantine: WT compares two Strings byte by byte in scratch locals; dart's String ==
+is a method call, string_patch.dart.)
+"""
+function allocate_string_scratch!(ctx::AbstractCompilationContext)::Nothing
+    # Add 5 scratch locals for string operations:
+    # - 1 ref for result array
+    # - 2 refs for source strings
+    # - 2 i32s for lengths/indices
+    # Use get_string_array_type! to ensure type is registered
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    str_ref_type = ConcreteRef(str_type_idx, true)
+
+    # Calculate indices BEFORE adding locals (indices are n_params + current local count)
+    scratch_base = ctx.n_params + length(ctx.locals)
+    result_local = scratch_base      # ref for result
+    str1_local = scratch_base + 1    # ref for str1
+    str2_local = scratch_base + 2    # ref for str2
+    len1_local = scratch_base + 3    # i32 for len1
+    i_local = scratch_base + 4       # i32 for len2/index
+
+    # Store the indices in context
+    ctx.scratch_locals = (result_local, str1_local, str2_local, len1_local, i_local)
+
+    # Now add the locals
+    push!(ctx.locals, str_ref_type)  # result/scratch ref 1
+    push!(ctx.locals, str_ref_type)  # scratch ref 2
+    push!(ctx.locals, str_ref_type)  # scratch ref 3
+    push!(ctx.locals, I32)           # scratch i32 1 (len1)
+    push!(ctx.locals, I32)           # scratch i32 2 (len2/i)
+    return nothing
+end
+
+"""
 Allocate scratch locals for complex operations like string concatenation.
 These are extra locals beyond what SSA analysis requires.
 Stores the indices in ctx.scratch_locals for later use.
@@ -286,33 +325,7 @@ function allocate_scratch_locals!(ctx::AbstractCompilationContext)::Nothing
         end
     end
 
-    if needs_string_scratch
-        # Add 5 scratch locals for string operations:
-        # - 1 ref for result array
-        # - 2 refs for source strings
-        # - 2 i32s for lengths/indices
-        # Use get_string_array_type! to ensure type is registered
-        str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-        str_ref_type = ConcreteRef(str_type_idx, true)
-
-        # Calculate indices BEFORE adding locals (indices are n_params + current local count)
-        scratch_base = ctx.n_params + length(ctx.locals)
-        result_local = scratch_base      # ref for result
-        str1_local = scratch_base + 1    # ref for str1
-        str2_local = scratch_base + 2    # ref for str2
-        len1_local = scratch_base + 3    # i32 for len1
-        i_local = scratch_base + 4       # i32 for len2/index
-
-        # Store the indices in context
-        ctx.scratch_locals = (result_local, str1_local, str2_local, len1_local, i_local)
-
-        # Now add the locals
-        push!(ctx.locals, str_ref_type)  # result/scratch ref 1
-        push!(ctx.locals, str_ref_type)  # scratch ref 2
-        push!(ctx.locals, str_ref_type)  # scratch ref 3
-        push!(ctx.locals, I32)           # scratch i32 1 (len1)
-        push!(ctx.locals, I32)           # scratch i32 2 (len2/i)
-    end
+    needs_string_scratch && allocate_string_scratch!(ctx)
     return nothing
 end
 
