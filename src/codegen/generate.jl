@@ -308,7 +308,7 @@ end
 # a traced function's trace id, or nothing
 # parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 _trace_id(ctx::AbstractCompilationContext)::Union{Nothing,Int} =
-    ctx.mod.trace === nothing ? nothing : get(ctx.mod.trace.ids, ctx.func_idx, nothing)
+    ctx.translator.trace === nothing ? nothing : get(ctx.translator.trace.ids, ctx.func_idx, nothing)
 
 """
     emit_trace_enter!(b, ctx) -> b
@@ -345,7 +345,7 @@ function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext,
     i32_const!(b, idx)
     local_get!(b, local_idx)
     call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, I32, local_type], WasmValType[])
-    push!(ctx.mod.trace.probed[id], idx)
+    push!(ctx.translator.trace.probed[id], idx)
     return b
 end
 

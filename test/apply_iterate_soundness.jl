@@ -77,9 +77,9 @@ _wt_va_splat_no_vararg(v::Vector{Int64})::Int64 = _wt_va_two_arity(_wt_va_mk_val
 
     # the callee IS in the plan, with the packed {Object, data, size} parameter —
     # ONE physical parameter, not a flattened tail
-    plan, _ = WasmTarget.trim_compile_plan(
+    plan = WasmTarget.trim_compile_plan(
         Any[(_wt_va_splat_value, (Vector{Int64},), "f")])
-    @test any(e -> e[1] === _wt_va_sum && e[2] == (Tuple{Vararg{Int64}},), plan)
+    @test any(e -> e[1] === _wt_va_sum && e[2] == (Tuple{Vararg{Int64}},), plan.functions)
 
     # correct or loud: no single static target ⇒ reject, never a guessed arity
     err = try

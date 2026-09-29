@@ -109,7 +109,7 @@ end
 end
 
 # In-place variants. Native `gradient!`/`jacobian!`/`hessian!` route through the
-# preallocated `Config` + chunk machinery (the cyclic-`Method` wall), so overlay
+# preallocated `Config` + chunk machinery (which embeds a `Method` object as a constant), so overlay
 # them to the alloc forms above (which DO compile) and copy into the caller's
 # buffer. Same values, just a `copyto!`.
 # derivative! — derivative of a VECTOR-valued f: R → Rᵐ into a preallocated

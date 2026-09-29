@@ -23,6 +23,7 @@ mutable struct CompilationContext <: AbstractCompilationContext
     phi_locals::IntKeyMap{Int}   # PhiNode SSA -> local index
     loop_headers::Vector{Bool}   # Line numbers that are loop headers (bitmap)
     mod::WasmModule              # The module being built
+    translator::Translator       # the compilation's shared state (dart: CodeGenerator.translator)
     type_registry::TypeRegistry  # Struct type mappings
     func_registry::Union{FunctionRegistry, Nothing}  # Function mappings for cross-calls
     func_idx::UInt32             # Index of the function being compiled (for recursion)
@@ -96,6 +97,7 @@ end
 
 # parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
 function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
+                           translator::Translator,
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
                            global_args::Set{Int}=Set{Int}(),
@@ -119,6 +121,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         IntKeyMap{Int}(n_stmts),
         fill(false, n_stmts),
         mod,
+        translator,
         type_registry,
         func_registry,
         func_idx,

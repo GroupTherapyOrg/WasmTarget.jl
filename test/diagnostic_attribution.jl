@@ -123,7 +123,8 @@ end
     # Julia never converts float→int implicitly; a codegen type-chain defect that asks the
     # funnel for one must reject at the statement, never leave the value unconverted.
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
-    ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+    ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
+                                        translator=WasmTarget.Translator(nothing))
     ctx.current_stmt_idx = 1
     b = WasmTarget._ctx_builder(ctx, "funnel_negative")
     WasmTarget.f64_const!(b, 1.5)
@@ -141,7 +142,8 @@ end
 @testset "diagnostics: the funnel rejects a cross-hierarchy ref pair and lands non-null abstract sinks (Coercion.tla)" begin
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
-        ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry())
+        ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
+                                        translator=WasmTarget.Translator(nothing))
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "funnel_negative")
     end
@@ -221,9 +223,7 @@ end
     @test length(err2.frames) == 2 && occursin("the batch failed", sprint(showerror, err2))
     # real discovery records why: the dynamic `==` enrolls its candidates with its statement's line
     entry = WasmTarget.entry_method_instance(DiagCollect.dyn_eq, (Int64,))
-    cis = WasmTarget.collect_closed_world(Any[entry])
-    reasons = IdDict{Any,String}()
-    WasmTarget._dynamic_dispatch_candidate_mis(cis, Set{Any}(), Any[entry]; reasons)
+    world = WasmTarget.collect_closed_world(Any[entry])
     @test any(r -> occursin("dispatch candidate for runtime class", r) &&
-                   occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(reasons))
+                   occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(world.enrolled_as))
 end

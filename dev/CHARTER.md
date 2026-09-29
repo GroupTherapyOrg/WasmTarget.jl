@@ -43,7 +43,8 @@ with the per-clause status. A clause is never closed by argument.
   `L45` `L47` `L61` `L67` `L68` `L69` `L80` `L91` `L97` `L98` `L100` `L102` `L103` `L104`
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
-  an index) `R20` `R21` `R29a` `R29b` `R37`.
+  an index) `R20` `R21` `R29a` `R29b` `R37`. Planned: the 2026-09-29 audit's second paths
+  (dev/AUDIT.md B3, P3, E3, E4, E5).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
@@ -51,7 +52,9 @@ with the per-clause status. A clause is never closed by argument.
   force is a defect even when every test passes. Checks: `L2` `L20` `L21` `L23` `L28` `L30`
   `L31` `L32` `L43` `L44` `L46` `L50` `L55` `L77` `L83` `L84` `L86` `L88` `L95` `L110`
   `L132` (anchors resolve: each cited line exists at the pinned commit and names the cited
-  symbol; CI fetches the pinned sources and a missing checkout fails, never skips) `R32`.
+  symbol; CI fetches the pinned sources and a missing checkout fails, never skips) `L149`
+  (the builder holds no Julia compiler object) `R32` `R40` (no process-global compile
+  state: one compilation's state lives on its Translator).
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported,
   never approximated; Julia's own bodies compile instead of bespoke re-implementations.
@@ -61,7 +64,8 @@ with the per-clause status. A clause is never closed by argument.
   oracle is bit-exact; a tolerance only where the native value comes from a named BLAS or
   LAPACK routine) `L140` (an overlay's BLAS/LAPACK reason is verified against Julia's own
   method) `L141` (a constant is interned by `===`, never by `isequal`) `R38` (each
-  `@overlay` states why Julia's body cannot compile, or goes).
+  `@overlay` states why Julia's body cannot compile, or goes). Planned: the SimpleDiffEq
+  tolerance, answered by a native reference that rounds each muladd once (dev/AUDIT.md H3).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
@@ -76,15 +80,19 @@ with the per-clause status. A clause is never closed by argument.
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `R34` `R39` (no smoke xfail compiles and then answers wrong,
-  traps, or returns what the harness cannot read).
+  traps, or returns what the harness cannot read). Planned: dev/MARCH.md 13.1, 13.14, 13.15,
+  and the audit's silent values and unlocated failures (dev/AUDIT.md E1, E7, E8, H1, M7, E9).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99`.
+  Planned: a block's type from its label, typed pops, validated initializers (dev/AUDIT.md
+  B2, B4, B5).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant.
   Checks: `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic
-  component to its model or states why it has none).
+  component to its model or states why it has none). Planned: the closed-world
+  model prunes and models the hidden edges' two computations (dev/AUDIT.md P4).
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.**
   No dead definition, fossil comment, retired name, campaign narration, or second
   computation of a fact the first already produced; the plan holds only open work and the
@@ -97,10 +105,13 @@ with the per-clause status. A clause is never closed by argument.
   a failure names its site. Checks: `L144` (every instruction a statement emits maps to its
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
-  throw site).
+  throw site). Planned: dev/MARCH.md 13.15
+  (an exception's type, every function named); one module shape whose throws carry their
+  stack (dev/AUDIT.md H1, H2); a check that `bash dev/lanes.sh` gives its verdict in minutes.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
-  instructions file, stays current and lean).
+  instructions file, stays current and lean) `L148` (every change is audited against this
+  charter within 5 commits, `dev/AUDIT.md`).
 
 ## Rules that keep the goal from drifting
 

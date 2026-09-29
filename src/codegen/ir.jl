@@ -18,7 +18,7 @@ const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
 
 Get Julia's typed IR (SSA form) for a function with given argument types.
 Returns the CodeInfo object from code_typed.
-P5-trim: when a trim collection is active (compile_module discovery=:trim),
+While a closed world is being compiled (compile_module),
 every (f, arg_types) the pipeline asks about is served the collection's
 PAIRED CodeInfo — one consistent world, overlays applied, no re-inference.
 A query the collection cannot answer is an error, never a second inference: a

@@ -1,0 +1,121 @@
+# The anti-drift audit log
+
+The locks check what they measure; drift hides in what none of them counts. So the work
+pauses at every session start and at most every 5 commits for a full audit against
+`dev/CHARTER.md` (AGENTS.md, "The anti-drift audit"), and records it here. L148 fails when
+the last entry is more than 5 commits behind HEAD or an entry leaves out an area.
+
+The method:
+
+1. Re-read `dev/CHARTER.md`, `AGENTS.md` and `dev/MARCH.md` in full.
+2. Audit every change since the last entry, `git diff <audited through>..HEAD`, in four
+   areas, each by a read-only auditor (no edits, no Julia runs):
+   - **builder**: `src/builder/`: wasm_builder's structure, and a builder that knows
+     nothing of Julia;
+   - **collection and planning**: `trimcollect.jl`, `compile.jl`, the frontend: the closed
+     world as Julia's compiler builds it;
+   - **emission and diagnostics**: the rest of `src/codegen/`: dart's lowering, correct or
+     loud;
+   - **enforcement and prose**: `test/`, `dev/`, the docs: locks that guarantee behavior,
+     charter edits that only strengthen, prose that is true.
+3. Check each changed definition against every clause: its dart anchor by what the dart
+   code does at the pinned commit (not only by the symbol's name); a quarantine's Julia
+   necessity is real; no layering leak; no process-global state; no second path; correct
+   or loud; a new lock negative-tested.
+4. Fix the findings before new work. Record the entry: the range, one `Area:` paragraph per
+   area with its findings, and a `Resolution:` for each finding (the commit that fixed it,
+   or the MARCH item and ratchet that now carry it).
+
+## 2026-09-29 — audited through 7acc21c9 (4fc785d2~1..7acc21c9: batches 51–59)
+
+The first audit, done because none had been: 45 findings, two of them silent wrong values.
+The fix batches run in the order below, before any new work.
+
+Area: builder — (B1) `StatementTrace` and `WasmModule.trace` put Julia's CodeInfo and
+MethodInstance in the builder; dart's ModuleBuilder holds wasm parts only. (B2) a block's type
+has two sources (a positional block type and `inputs`/`results`): `try_table!(b, cs, I32)` is
+tracked void and encoded with a result; dart's `_beginBlock` derives the encoding from the
+label. (B3) branch typing is checked four times (`validate_br!`, `validate_br_if!`,
+`validate_branch_types!`, `try_table!`); dart has one `_verifyBranchTypes`. (B4)
+`validate_pop_any!`'s quarantine is false: `global_set!`, `ref_is_null!`, `ref_as_non_null!`,
+the `call_ref` callee, `local_set!` of an unknown index and five validator arms pop untyped.
+(B5) anchors naming other code: `_local_type` invents AnyRef; `_true_field_type`,
+`_true_elem_type`, `_true_call_sig` fall back to the claimed type; `write_valtype!(::RefType)`
+never writes the one-byte shorthand; `add_global_ref!` takes raw initializer bytes
+(closures.jl writes them by hand, unvalidated); `julia_to_wasm_type` is a translator in the
+builder; `builder_diagnose` is dead; `reset_validator!`'s quarantine is false. (B6) 15 opcode
+constants without a use, unreachable CATCH_REF/CATCH_ALL_REF branches, `add_export!`'s
+docstring, campaign narration. (B7) the sourceMappingURL section writes its own framing;
+`source_map_url` is set after construction (an `existing_module` records a partial map);
+sources are paths, not URIs; `append_builder!` carries a fragment's last mapping. (adjacent)
+`diagnostics.jl:313` turns an unknown line 0 into line 1.
+
+Area: collection and planning — (P2) `_ENROLLMENT_REASONS`, a new process-global Ref, and an
+invented fallback reason for every base-collected function (entries were never recorded);
+the same trim quarantine on `_DYNAMIC_ROOT_MIS`, `_ENROLLED_CALLABLE_TYPES`,
+`_TRIM_DISPATCH_CANDIDATES`, `_TRIM_INVOKE_ONLY`, which explains the collector, not why its
+state is process-global. (P3) the invoke_in_world edge is worked out in three places with
+different operand types; a non-unique target becomes neither an edge nor a dynamic site; no
+exact-type check. (P4) MCClosedWorld never enables Prune; HiddenEdges cannot express the
+collector and pruner disagreeing; the fma roots are not modeled. (P5) the catch-alls re-infer
+on an interrupt or out-of-memory; internal ArgumentErrors pass unlocated. (P6)
+`throw_located_collection_failure` cites CFECrashError for WT's own re-inference;
+`add_codegen_export!` cites ExportsBuilder.export but renames silently. (P7) a source-mapped
+build is a second module shape, and the extra entry points drifted (no diagnostics_sink).
+(S6) the plan compile normalizes 2-tuples it never receives; `optimize_ir=false` errors for
+every planned function. (side) a third loop-bounds definition (context.jl:1243);
+`count_ssa_uses!`, a second operand table missing Upsilon and PhiC; statements.jl:902 scans
+the whole body.
+
+Area: emission and diagnostics — (E1) SILENT WRONG VALUE: `_emit_getfield_runtime_name!`
+reads a field by Julia's field order from a projected layout: `getfield(::DataType, :hash)`
+reads `dfs_high`, `:instance` reads `abstract`; TypeName too; Module always throws. (E7)
+`_lower_invoke_in_world!` re-infers the return type, and for a callee returning `Nothing` can
+box an earlier statement's value (`isempty(b.v.stack)` on a seeded fragment). (E8) the vararg
+dynamic-getfield arm emits a Symbol operand as I64 (the trap batch 53 removed from the tuple
+arm). (H1 = P1 = E2) a rethrow records a fresh stack, not the caught one (dart `visitRethrow`
+rethrows `stackTraceLocal`; Julia keeps the backtrace); a throw records its stack only in a
+source-mapped build (dart: `errorThrowWithCurrentStackTrace` always). (E3) L142 incomplete:
+`Union{Nothing,Matrix}` reaches `register_vector_type!` with no rank check. (E4) which types
+have a dedicated layout is decided twice. (E5) L143's one rule is three (calls.jl:293,
+statements.jl:1804, :1861). (E6) `_is_direct_struct_constructor` cites a dart mechanism that
+never substitutes `struct.new`. (E9) unmapped prologue and trailing unreachables; a statement
+with no location borrows the previous one's; `map_to_statement!` runs outside the located try.
+(E10) the titlecase overlay's reason may be stale. (E11) a false docstring.
+
+Area: enforcement and prose — (H2) smoke and the differential files run only the
+source-mapped shape; the plain build is never run. (H3) L138's tolerance covers all 40
+SimpleDiffEq cases, and `_sde_step_calls_muladd` passes on any method of the file. (M4) C6
+and C10 read CLOSED while MARCH 13.1, 13.14, 13.15 are open; C10's "one verdict in minutes"
+has no check. (M5) six commits added citations to the charter without recorded direction
+(each only strengthens; L125 requires a citation for every new check). (M6) locks that pin
+text: L101 counts deleted names while `SymbolicTryCatch(CATCH_ALL)` still validates; L143
+forbids one spelling; L145 exempts all of generate.jl; L65 was loosened (misses `;` and line
+start); L12 is vacuous and names the retired R2; L144, L147 pin comment text. (M7 = P8)
+tracing forces locals and the locator never checks that the traced build still answers
+wrong; an unroutable closure calling a routable callee reports a spurious parting. (L8)
+MARCH 13.15 holds finished work and results; HISTORY has no entries for e226aab7..7acc21c9.
+(L9, L10) README: `discovery=:legacy`, Statistics "bit-exact", removed mechanisms, absent
+overlays, "tolerance-aware"; the retracted "cyclic Method" reason in two files; the
+`ensure_exception_tag!` docstring; formal/README maps one function to two models. (L11) the
+statement lane's draw digest is printed, not asserted. (self) no ratchet counted
+process-global state (MARCH 13.7); a requested validation without wasm-tools warned and
+skipped; `discovery` took one legal value.
+
+Resolution: batch 60 (this commit) — B1: the trace is codegen state on a per-compilation
+Translator (dart translator.dart:96), passed in by the caller; L149 locks the builder free of
+Julia compiler objects, and moved `julia_to_wasm_type` and its union helpers to codegen (B5
+in part). P2: collection returns a ClosedWorld and planning a ClosedWorldPlan, values that
+replace five process-global Refs; every planned function carries its recorded reason (entries,
+each :invoke callee by its call site), and a missing one is a collector defect raised at
+planning. R40 counts the process-global state left (8), with an exact allowlist. A requested
+validation without wasm-tools throws. `discovery` is gone. P5: interrupts and out-of-memory
+pass through both catch-alls. L9, L10: README and the stale reasons corrected. M4, M5:
+proposed to Dale, who answered "don't wait on me" (2026-09-29): C1, C3, C6, C7, C8 and C10
+now name their open findings as `Planned:` and read OPEN until those land; a citation L125
+requires for a new check is added with the check. Next, in order: batch 61 E1, E7, E8 (the silent
+values and the trap, each with a planted differential case); 62 H1, H2, P7, E9 (one module
+shape: the exception tag carries (exception, stack), rethrow keeps the caught stack, a source
+map is output only); 63 B2, B3, B4 (the block type from its label, one branch check, typed
+pops); 64 H3 (the native reference computes muladd as fma: bit-exact); 65 M7, L11; then P3
+with P4 (the model first), E3–E6, B5–B7, P6, S6, M6, L8, E10, E11 and the side notes.

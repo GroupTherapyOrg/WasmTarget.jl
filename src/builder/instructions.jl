@@ -306,26 +306,6 @@ end
 # ============================================================================
 
 """
-    StatementTrace
-
-A traced compile's record (compile_with_statement_trace, for locating a wrong value at its
-first divergent statement): each function traced — every one compiled from Julia IR — by its
-trace id (1-based, as its probes report it), with the typed CodeInfo and MethodInstance it was
-compiled from and the statements its probes report as emitted; `entry` is the entry's id.
-parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
-"""
-mutable struct StatementTrace
-    ids::Dict{UInt32,Int}                  # function index → trace id
-    codes::Vector{Core.CodeInfo}           # by trace id
-    mis::Vector{Core.MethodInstance}       # by trace id
-    probed::Vector{Set{Int}}               # by trace id
-    entry::Int                             # the entry's trace id (0 until numbered)
-end
-# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
-StatementTrace()::StatementTrace =
-    StatementTrace(Dict{UInt32,Int}(), Core.CodeInfo[], Core.MethodInstance[], Set{Int}[], 0)
-
-"""
 Represents a WebAssembly function definition: its type, locals, body bytes, and the body's
 source mappings (byte offsets into `body`; empty for a compiler-generated function that no
 statement emitted).
@@ -461,13 +441,10 @@ mutable struct WasmModule
     # the URL a `sourceMappingURL` section names; set, every builder of this module records
     # its source mappings (dart ModuleBuilder.sourceMapUrl, module.dart:28)
     source_map_url::Union{Nothing, String}
-    # a traced compile's record (compile_with_statement_trace): the functions whose statements
-    # report their values to the host; nothing otherwise
-    trace::Union{Nothing, StatementTrace}
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing)
 
 # ============================================================================
 # Module Building API

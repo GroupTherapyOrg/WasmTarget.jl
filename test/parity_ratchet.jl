@@ -295,6 +295,10 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:DispatchTableRegistry, :selector_positions),
     (:DispatchTableRegistry, :selector_cascades),
     (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
+    (:ClosedWorld, :codeinfos),         # Core.Compiler.compile!'s output as it hands it: CodeInstance, CodeInfo alternating in a Vector{Any}
+    (:ClosedWorldPlan, :functions),     # (callable, argument types, name, MethodInstance) — the callable is open, as FunctionInfo.func_ref
+    (:ClosedWorldPlan, :ir_cache),      # keyed by MethodInstance and by (callable, argument types), both of which get_typed_ir serves
+    (:ClosedWorldPlan, :dispatch_candidates),  # (callable, argument types) keys — the same open callable
 ])
 
 """
@@ -544,6 +548,38 @@ function untyped_value_emissions(root::String=CODEGEN)::Vector{Tuple{String,Int,
     return out
 end
 
+
+# ── R40: process-global compile state (dev/MARCH.md 13.7) ──
+# module-level mutable state in src/: a Ref, RefValue or TaskLocalRef, or a container
+# constructed empty and filled at run time. Each allowed one is named here exactly, with why it
+# is not one compilation's state; an entry that no longer names a definition counts too.
+const R40_ALLOWED_PROCESS_STATE = Dict{String,String}(
+    "codegen/builtins.jl BUILTIN_LOWERINGS" =>
+        "the lowering registry: filled at load by each @builtin_lowering, read-only after (dart's intrinsic tables, intrinsics.dart, are static)",
+    "codegen/compile.jl STANDALONE_INTRINSIC_BODIES" =>
+        "filled once from Base's rethrow methods on first use: the same table for every compilation",
+    "bridge.jl _DESC_CACHE" => "the host bridge's memo of descriptor(T), a pure function of T",
+    "bridge.jl _FN_CACHE" => "the host bridge's memo of each type's generated accessor functions",
+    "bridge.jl _ARG_CACHE" => "the host bridge's memo of each argument type's converter")
+
+function process_global_state_sites()::Vector{String}
+    local rx = r"^const (\w+)(?:::[^=]+)? = (?:(?:Base\.)?(?:Ref|RefValue|TaskLocalRef)\b|(?:Vector|Dict|IdDict|Set|WeakKeyDict)\{.*\}\(\)\s*$)"
+    local found = String[]
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        local path = joinpath(dir, f)
+        local rel = replace(relpath(path, SRC), '\\' => '/')
+        for l in eachline(path)
+            local m = match(rx, l)
+            m === nothing || push!(found, rel * " " * m.captures[1])
+        end
+    end
+    local bad = String[s for s in found if !haskey(R40_ALLOWED_PROCESS_STATE, s)]
+    for k in keys(R40_ALLOWED_PROCESS_STATE)
+        k in found || push!(bad, "stale allowlist entry: " * k)
+    end
+    return sort!(bad)
+end
 
 """
 The smoke xfails that compile and then fail when they run: the entries of test/smoke.jl's
@@ -819,6 +855,8 @@ const METRICS = [
         () -> length(overlays_without_reason())),
     "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
         () -> smoke_runtime_xfails()),
+    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Terminal state 0 (dev/CHARTER.md C2)",
+        () -> length(process_global_state_sites())),
     "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
         () -> length(components_without_model())),
     "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
@@ -1122,7 +1160,7 @@ const LOCKS = [
                         "matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
                         "collect_new_pairs!", "original_mi in protected ||",
-                        "append!(prune_roots, _DYNAMIC_ROOT_MIS[])",
+                        "append!(prune_roots, dynamic_roots)",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
@@ -1332,7 +1370,7 @@ const LOCKS = [
                         "capture_read_types(nir, nir, capture_record",
                         "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
                         "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
-                        "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
+                        "root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
                         "info.is_candidate && info.arg_types == arg_types",
                         "infos = FunctionInfo[i for i in infos if !i.is_candidate && !i.invoke_only]",
@@ -1935,8 +1973,8 @@ const LOCKS = [
     "L26_dispatch_roots_only" => ("dynamic selector candidates are only discovery roots; their transitive helper dependencies remain ordinary cross-call-visible functions",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["_DYNAMIC_ROOT_MIS", "union!(_DYNAMIC_ROOT_MIS[], extra)",
-                        "mi in _DYNAMIC_ROOT_MIS[]"]
+            required = ["dynamic_roots::Set{Core.MethodInstance}", "union!(dynamic_roots, extra)",
+                        "mi in world.dynamic_roots"]
             forbidden = ["pair_no > base_pairs", "_TRIM_BASE_PAIRS"]
             count(p -> !occursin(p, trim_src), required) + count(p -> occursin(p, trim_src), forbidden)
         end),
@@ -1960,8 +1998,8 @@ const LOCKS = [
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
-            required = ["_ENROLLED_CALLABLE_TYPES", "isdefined(T, :instance)",
-                        "typeof(f) in _ENROLLED_CALLABLE_TYPES[]", "takes_context ? 1 : 0",
+            required = ["callable_types::Set{DataType}", "isdefined(T, :instance)",
+                        "typeof(f) in plan.callable_types", "takes_context ? 1 : 0",
                         "get_nothing_global!(ctx.mod, ctx.type_registry)"]
             forbidden = ["static_tearoff_struct", "tearoff_base_idx", "tearoff_callsite"]
             all_src = trim_src * compile_src * closure_src
@@ -2451,7 +2489,7 @@ const LOCKS = [
             # a failure outside any statement (planning the module, declaring a signature) is
             # located too: at the module's entries, or at the function and why it is there
             required_comp = ["String[\"while planning the module (no statement was being compiled)\"],",
-                             "\"enrolled as \" * get(_ENROLLMENT_REASONS[], fd_mi,"]
+                             "\"enrolled as \" * plan.enrolled_as[fd_mi]]"]
             count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp)
         end),
     "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) traces every function compiled from Julia IR — each reports its entry (emit_trace_enter!) and, for each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local), its value after the store (emit_statement_trace!), through imports added before any definition, recording each function's probed statements; test/trace_localize.jl runs each traced function's CodeInfo natively as an OpaqueClosure with the same probes, every traced call routed to its callee's closure (the native run follows WT's IR all the way down), compares the two event streams on what both report, and names the first divergent event — its function, text, inline chain, iteration and both values — or, when every event agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration, in the entry and inside a separately compiled callee (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
@@ -2464,16 +2502,42 @@ const LOCKS = [
             smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
             lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
             required = [(stm, "local_set!(b, local_idx)\n                emit_statement_trace!(b, ctx, idx, local_idx, local_type)"),
-                        (gen, "push!(ctx.mod.trace.probed[id], idx)"),
+                        (gen, "push!(ctx.translator.trace.probed[id], idx)"),
                         (read(joinpath(CODEGEN, "flow.jl"), String), "emit_trace_enter!(b, ctx)"),
                         (loc, "ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[3:end]...)"),
                         (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
-                        (comp, "mod.trace = StatementTrace()\n        ensure_trace_imports!(mod)"),
+                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(trace)"),
                         (loc, "filter!(keep, nevents)"),
                         (loc, "filter!(keep, wevents)"),
                         (smoke, "replace(_smoke_locate(f, args), "),
                         (lane, "replace(_locate(fn, Tuple(o.input)), ")]
             count(((text, needle),) -> !occursin(needle, text), required)
+        end),
+    "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context: dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl) (dev/CHARTER.md C2)",
+        () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b";
+                          roots=[joinpath(SRC, "builder")])),
+    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
+        () -> begin
+            local audit = joinpath(ROOT, "dev", "AUDIT.md")
+            isfile(audit) || return 1
+            local txt = read(audit, String)
+            local entries = split(txt, r"\n(?=## )")[2:end]
+            isempty(entries) && return 1
+            local v = 0
+            for e in entries
+                for area in ("Area: builder", "Area: collection and planning",
+                             "Area: emission and diagnostics", "Area: enforcement and prose")
+                    occursin(area, e) || (v += 1)
+                end
+                occursin("Resolution:", e) || (v += 1)
+            end
+            local m = match(r"audited through ([0-9a-f]{8,40})", entries[end])
+            m === nothing && return v + 1
+            local sha = m.captures[1]
+            success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v + 1
+            # the commits since the audited one (a pull request's merge checkout adds only itself)
+            local behind = parse(Int, readchomp(`git -C $ROOT rev-list --count --ancestry-path $sha..HEAD`))
+            return v + (behind > 5 ? 1 : 0)
         end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),

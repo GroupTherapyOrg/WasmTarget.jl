@@ -176,7 +176,7 @@ end
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                       superseded::Set{Any}, protected::Set{Any}=Set{Any}();
-                                      reasons::IdDict{Any,String}=IdDict{Any,String}())::Vector{Any}
+                                      reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}())::Vector{Any}
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
@@ -370,7 +370,7 @@ its front end's whole-program type flow analysis.)
 """
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[];
-                                         reasons::IdDict{Any,String}=IdDict{Any,String}())::Vector{Any}
+                                         reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}())::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -701,20 +701,19 @@ function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any
                for T in types]
 end
 
-# Dynamic-dispatch selector roots, distinct from the ordinary dependencies that
-# their candidate compilation discovers transitively.
-# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
-const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
-# why each MethodInstance of the current collection entered the closed world (collect_closed_world's
-# enrollment reasons), for a failure after collection — declaring a function's signature — to name
-# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
-const _ENROLLMENT_REASONS = Ref(IdDict{Any,String}())
-
-# The conversion-arm allowlist — callable types whose bodies the candidate
-# fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
-# lifecycle as TRIM_IR_CACHE; reset at each collect).
-# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
-const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
+"""
+The closed world one collection built (collect_closed_world): the collected (CodeInstance,
+CodeInfo) pairs; the dynamic-dispatch selector roots, distinct from the ordinary dependencies
+their compilation reaches; the callable types whose bodies the candidate fixpoint enrolled;
+and why each MethodInstance entered it, for a later failure — declaring its signature — to name.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+"""
+struct ClosedWorld
+    codeinfos::Vector{Any}                # alternating CodeInstance, CodeInfo
+    dynamic_roots::Set{Core.MethodInstance}          # enrolled as selector candidates
+    callable_types::Set{DataType}                    # callable types whose bodies the candidate fixpoint enrolled
+    enrolled_as::IdDict{Core.MethodInstance,String}  # why each entered the closed world
+end
 
 """Keep only code reachable from roots over the invoke edges as they stand, never the body of
 a declared import (an external leaf). With `unreachable=true` it prunes even when there is
@@ -790,8 +789,7 @@ const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compil
 # below always collects exactly the methods reachable from the roots, never stops
 # early, and never silently drops a reachable method whose specialization fails.
 """
-    collect_closed_world(entries::Vector{Any}; verify::Bool=false)
-        -> Vector{Any}   # alternating CodeInstance, CodeInfo pairs
+    collect_closed_world(entries::Vector{Any}; verify::Bool=false) -> ClosedWorld
 
 Collect the closed transitive callgraph for the given entry
 `MethodInstance`s under the WASM overlay interpreter. With `verify=true`,
@@ -810,9 +808,9 @@ parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; 
 its front end's whole-program type flow analysis.)
 """
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
-                              external_leaves::Set{Any}=Set{Any}())::Vector{Any}
-    _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
-    _DYNAMIC_ROOT_MIS[] = Set{Any}()
+                              external_leaves::Set{Any}=Set{Any}())::ClosedWorld
+    local callable_types = Set{DataType}()
+    local dynamic_roots = Set{Core.MethodInstance}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -846,9 +844,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     superseded_invokes = Set{Any}()
     pruned_superseded = 0
     seen_disp = Set{Any}()
-    # why each MethodInstance entered the closed world, for a collection failure to name
-    enrolled_by = IdDict{Any,String}()
-    _ENROLLMENT_REASONS[] = enrolled_by
+    # why each MethodInstance entered the closed world, for a collection failure to name (the
+    # plan adds each body's :invoke callees, trim_compile_plan)
+    enrolled_by = IdDict{Core.MethodInstance,String}(e => "a compilation entry" for e in entries)
 
     # Explicit invokes and dynamic-dispatch candidates form ONE reachability
     # problem. Either class can add IR containing edges of the other class, so
@@ -895,7 +893,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # the canonical MI as a selector root too: identity-only reachability
             # pruning must not discard the overlay body merely because its native
             # precursor has the same signature but a different Method object.
-            root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
+            root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)
             roots === nothing || push!(roots, resolved_mi)
             push!(fresh_wq, resolved_mi)
             push!(batch, (resolved_mi, get(enrolled_by, root_mi, why)))
@@ -905,7 +903,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
             CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
         catch err
-            err isa WasmInternalError && rethrow()
+            # an interrupt or exhausted memory is the process's, not a root's: never re-inferred
+            (err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
             throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)
         end
         for k in 1:2:length(fresh_ci)
@@ -934,7 +933,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # Preserve them—and their newly specialized invoke subgraphs—when
             # pruning what no site invokes any more.
             prune_roots = Any[entries...]
-            append!(prune_roots, _DYNAMIC_ROOT_MIS[])
+            append!(prune_roots, dynamic_roots)
             append!(prune_roots, intrinsic_body_roots)
             codeinfos = _prune_external_leaf_subgraphs(
                 codeinfos, prune_roots, external_leaves; unreachable=true)
@@ -952,12 +951,12 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
 
         extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by)
         extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
-        union!(_DYNAMIC_ROOT_MIS[], extra)
+        union!(dynamic_roots, extra)
         for mi in extra
             local st = mi.specTypes
             if st isa DataType && st <: Tuple && length(st.parameters) >= 1
                 local ft = st.parameters[1]
-                ft isa DataType && ft <: Function && push!(_ENROLLED_CALLABLE_TYPES[], ft)
+                ft isa DataType && ft <: Function && push!(callable_types, ft)
             end
         end
         changed |= collect_new_pairs!(extra)
@@ -986,7 +985,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end
-    return codeinfos
+    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by)
 end
 
 """
@@ -1004,13 +1003,29 @@ end
 
 
 """
-    trim_compile_plan(entries_named) -> (functions, ir_cache)
+The compile inputs one closed world yields (trim_compile_plan): every function to compile as
+(f, arg_types, name, MethodInstance) — entries keep their given names, the rest get deduped
+names; the (f, arg_types) and MethodInstance → (CodeInfo, rettype) cache get_typed_ir serves,
+so every function compiles from the collection's consistent-world IR; the (f, arg_types) keys
+discovered solely as dynamic-dispatch candidates; the MethodInstances reached only through an
+`invoke` of a method dispatch would not select for their argument types; the callable types
+the candidate fixpoint enrolled; and why each MethodInstance was enrolled.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+"""
+struct ClosedWorldPlan
+    functions::Vector{Any}
+    ir_cache::IdDict{Any,Tuple{Core.CodeInfo,Any}}
+    dispatch_candidates::Set{Any}
+    invoke_only::Set{Core.MethodInstance}
+    callable_types::Set{DataType}
+    enrolled_as::IdDict{Core.MethodInstance,String}
+end
 
-Run `collect_closed_world` over the named entry points and derive the
-compile_module inputs: the full (func, arg_types, name) list (entries keep
-their given names; discovered functions get deduped names) and the
-(f, arg_types) → (CodeInfo, rettype) cache that get_typed_ir serves —
-every function compiles from the collection's consistent-world IR.
+"""
+    trim_compile_plan(entries_named) -> ClosedWorldPlan
+
+Run `collect_closed_world` over the named entry points and derive the compile inputs
+(ClosedWorldPlan).
 
 Skipped (with a debug note): non-singleton callables (stateful closures —
 their call sites inline or carry the closure value; no module-level
@@ -1018,7 +1033,7 @@ function entry to register) and Core/internal entries without a usable
 function object.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
-function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::Tuple{Vector{Any}, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
+function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::ClosedWorldPlan
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     entry_values = Dict{Any,Any}()     # explicit capturing-closure instances
@@ -1033,7 +1048,8 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         f, arg_types = entry[1], entry[2]
         push!(external_mis, entry_method_instance(f, arg_types))
     end
-    codeinfos = collect_closed_world(entry_mis; external_leaves=external_mis)
+    local world = collect_closed_world(entry_mis; external_leaves=external_mis)
+    codeinfos = world.codeinfos
 
     functions = Any[]
     ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
@@ -1049,12 +1065,16 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     # `_growend!`/`_growbeg!` closures) is a direct call of a known method: its body is
     # compiled like the invoker's, keyed by the closure type (dart: a closure's target is
     # compiled when the closure is created). Dynamic calls of Base closures stay out.
+    # Each :invoke callee Julia's inference collected is enrolled by its first call site.
     invoked_closures = Set{DataType}()
+    local enrolled_as = world.enrolled_as
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j + 1] isa Core.CodeInfo) || continue
-        for s in build_nir(codeinfos[j + 1])
+        for (k, s) in enumerate(build_nir(codeinfos[j + 1]))
             local n = s.node
             (n isa NirInvoke && n.mi isa Core.MethodInstance) || continue
+            haskey(enrolled_as, n.mi) ||
+                (enrolled_as[n.mi] = _enrollment_text("the call", codeinfos[j], codeinfos[j + 1], k, n))
             local st = n.mi.specTypes
             (st isa DataType && length(st.parameters) >= 1) || continue
             local ft = st.parameters[1]
@@ -1100,7 +1120,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             # its target. USERLAND ONLY: converting Base-internal closure pairs
             # (previously skipped) changed unrelated compiles — randsubseq's
             # internals regressed in the suite context (the march-16 gate catch).
-            (ftyp in _ENROLLED_CALLABLE_TYPES[] || ftyp in invoked_closures ||
+            (ftyp in world.callable_types || ftyp in invoked_closures ||
              ftyp <: _RuntimeComposition) && (f = ftyp)
         end
         if f === nothing
@@ -1176,14 +1196,14 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         ir_cache[mi] = (src, ci.rettype)
         # Only discovery ROOTS are selector candidates. Dependencies compiled
         # transitively with a root remain ordinary cross-call-visible functions.
-        if mi in _DYNAMIC_ROOT_MIS[] && !haskey(entry_keys, mi)
+        if mi in world.dynamic_roots && !haskey(entry_keys, mi)
             push!(dispatch_candidates, (f, arg_types))
         end
     end
     # (f, arg_types) names the function Julia's dispatch selects for those types: where two
     # collected methods share them, the other one is reached only by its `invoke`
     # (FunctionInfo.invoke_only) and never by a call that names (f, arg_types).
-    invoke_only = Set{Any}()
+    invoke_only = Set{Core.MethodInstance}()
     local mt = CC.method_table(get_wasm_interpreter())
     for (key, mis) in mis_by_sig
         local winner = if length(mis) == 1
@@ -1198,20 +1218,16 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             m === winner || push!(invoke_only, m)
         end
     end
-    _TRIM_DISPATCH_CANDIDATES[] = dispatch_candidates
-    _TRIM_INVOKE_ONLY[] = invoke_only
-    return functions, ir_cache
+    # every planned function says why it is in the closed world; one that cannot is a
+    # collector defect, raised here rather than guessed at when a later failure names it
+    for fn in functions
+        haskey(enrolled_as, fn[4]) || throw(WasmInternalError(fn[3], 0, "",
+            String["planning the closed world: $(fn[3]) was collected with no recorded reason"],
+            ErrorException("no enrollment reason for $(fn[4])"), StackFrame[]))
+    end
+    return ClosedWorldPlan(functions, ir_cache, dispatch_candidates, invoke_only,
+                           world.callable_types, enrolled_as)
 end
-
-# MethodInstances reached only through an `invoke` of a method dispatch does not select for
-# their argument types (reset at each plan).
-# parity(quarantine: Julia's `invoke` calls a method dispatch would not select; a dart call
-# names its member's Reference, functions.dart:25 FunctionCollector._functions.)
-const _TRIM_INVOKE_ONLY = Ref{Set{Any}}(Set{Any}())
-
-# (f, arg_types) keys discovered solely as dynamic-dispatch candidates.
-# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
-const _TRIM_DISPATCH_CANDIDATES = Ref{Set{Any}}(Set{Any}())
 
 # ============================================================================
 # The closed-world type collector — reads the NIR bodies the planner built

@@ -241,7 +241,7 @@ function, number the closed world's classes, then emit every body. It never disc
 silently adds a function.
 parity(pkg/dart2wasm/lib/translator.dart:524 Translator.translate)
 """
-function _compile_closed_world_plan(functions::Vector;
+function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
@@ -250,10 +250,11 @@ function _compile_closed_world_plan(functions::Vector;
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         source_map_url::Union{Nothing,String}=nothing,
-                        trace_entry::Union{Nothing,String}=nothing
+                        trace::Union{Nothing,StatementTrace}=nothing
                         )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
+    functions = plan.functions
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
@@ -281,10 +282,8 @@ function _compile_closed_world_plan(functions::Vector;
         mod.source_map_url = source_map_url
         ensure_provenance_imports!(mod)
     end
-    if trace_entry !== nothing
-        mod.trace = StatementTrace()
-        ensure_trace_imports!(mod)
-    end
+    trace === nothing || ensure_trace_imports!(mod)
+    local translator = Translator(trace)
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
@@ -565,22 +564,22 @@ function _compile_closed_world_plan(functions::Vector;
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
-    _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
+    _disp_cands = plan.dispatch_candidates
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
         local fd_mi = function_data[i][9]
         # a traced compile traces every function compiled from Julia IR: its id numbers the
         # typed IR its probes report, and the entry's is remembered
-        if mod.trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance
-            push!(mod.trace.codes, function_data[i][4]); push!(mod.trace.mis, fd_mi)
-            push!(mod.trace.probed, Set{Int}())
-            mod.trace.ids[func_idx] = length(mod.trace.codes)
-            name == trace_entry && (mod.trace.entry = length(mod.trace.codes))
+        if trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance
+            push!(trace.codes, function_data[i][4]); push!(trace.mis, fd_mi)
+            push!(trace.probed, Set{Int}())
+            trace.ids[func_idx] = length(trace.codes)
+            name == trace.entry_name && (trace.entry = length(trace.codes))
         end
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
                            mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
-                           invoke_only = fd_mi in _TRIM_INVOKE_ONLY[])
+                           invoke_only = fd_mi in plan.invoke_only)
         # fullstrict: the PLACEHOLDER carries the true signature from birth
         local _pp, _rr = try
             function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
@@ -589,8 +588,7 @@ function _compile_closed_world_plan(functions::Vector;
             (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
             throw(WasmInternalError(name, 0, "",
                 String["declaring the wasm signature of $(name)($(join(("::" * string(T) for T in arg_types), ", "))) -> $(return_type)",
-                       "enrolled as " * get(_ENROLLMENT_REASONS[], fd_mi,
-                           "a callee Julia's inference reached from an enrolled method (an :invoke edge)")],
+                       "enrolled as " * plan.enrolled_as[fd_mi]],
                 err, _raised_frames(catch_backtrace(), :_compile_closed_world_plan)))
         end
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
@@ -605,7 +603,7 @@ function _compile_closed_world_plan(functions::Vector;
     for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
         if f isa DataType && is_closure_type(f)
             push!(_cvp, (i, f, true))
-        elseif f isa Function && typeof(f) in _ENROLLED_CALLABLE_TYPES[]
+        elseif f isa Function && typeof(f) in plan.callable_types
             push!(_cvp, (i, typeof(f), false))
         end
     end
@@ -700,7 +698,7 @@ function _compile_closed_world_plan(functions::Vector;
             local _bound_invokes = bindings === nothing ? Dict{Int,UInt32}() :
                 merge(bindings.invoke_imports, _root_invokes)
             ctx = CompilationContext(fn_nir, arg_types, return_type, mod, type_registry;
-                                    func_registry=func_registry, func_idx=func_idx, func_ref=f,
+                                    translator=translator, func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args,
                                     is_compiled_closure=is_closure &&
                                         !(bindings !== nothing && bindings.elide_closure_context),
@@ -787,8 +785,8 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     end
     try
         return with_layout_read_memo() do
-            plan, ir_cache = trim_compile_plan(normalized; external_entries)
-            TRIM_IR_CACHE[] = ir_cache
+            plan = trim_compile_plan(normalized; external_entries)
+            TRIM_IR_CACHE[] = plan.ir_cache
             try
                 return _compile_closed_world_plan(plan; kwargs...)
             finally
@@ -799,10 +797,10 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
         # a failure outside any statement — collecting the closed world, registering its
         # types, building its dispatch tables, declaring its functions — located at the
         # module's entries and the compiler frames it was raised through. The caller-facing
-        # errors (a rejection, an already-located bug, an invalid module, a misused API)
-        # pass through as they are.
-        (err isa WasmCompileError || err isa WasmInternalError ||
-         err isa ModuleValidationError || err isa ArgumentError) && rethrow()
+        # errors (a rejection, an already-located bug, an invalid module, a misused API) and
+        # the process's own (an interrupt, exhausted memory) pass through as they are.
+        (err isa WasmCompileError || err isa WasmInternalError || err isa ModuleValidationError ||
+         err isa ArgumentError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
         throw(WasmInternalError(_module_entries_label(normalized), 0, "",
                                 String["while planning the module (no statement was being compiled)"],
                                 err, _raised_frames(catch_backtrace(), :_compile_module_trim)))
@@ -842,14 +840,11 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        discovery::Symbol=:trim,
                         source_map_url::Union{Nothing,String}=nothing,
-                        trace_entry::Union{Nothing,String}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
-    discovery === :trim || throw(ArgumentError(
-        "only the closed-world compilation path is supported (discovery=:trim)"))
+                        trace::Union{Nothing,StatementTrace}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url, trace_entry)
+        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url, trace)
 end
 
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in

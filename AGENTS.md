@@ -59,6 +59,16 @@ its cases added to smoke first; every new lock is negative-tested (break it, wat
 restore) before it counts; `WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.
 Run `julia +1.13` for anything touching inference or control flow.
 
+## The anti-drift audit — `dev/AUDIT.md`
+
+The locks check only what they measure. At every session start and at most every 5 commits
+(L148), pause: re-read `dev/CHARTER.md`, this file and `dev/MARCH.md` in full, then audit every
+change since the last entry in four areas (builder; collection and planning; emission and
+diagnostics; enforcement and prose) against every clause: dart anchors checked by what the
+dart code does, quarantines a real Julia necessity, no layering leak, no process-global
+state, no second path, correct or loud, locks that guarantee behavior, prose that is true.
+Fix the findings before new work, and record the entry.
+
 ## Spec-first for algorithms
 
 An algorithmic component carries a TLA+ model in `dev/formal/` with a Broken variant TLC must

@@ -3,6 +3,263 @@
 
 export compile_function, compile_module, FunctionRegistry
 
+"""
+    StatementTrace(entry_name)
+
+A traced compile's record (compile_with_statement_trace, for locating a wrong value at its
+first divergent statement): each function traced — every one compiled from Julia IR — by its
+trace id (1-based, as its probes report it), with the typed CodeInfo and MethodInstance it was
+compiled from and the statements its probes report as emitted; `entry` is the id of the
+function named `entry_name`.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+mutable struct StatementTrace
+    entry_name::String                     # the traced entry's function name
+    ids::Dict{UInt32,Int}                  # function index → trace id
+    codes::Vector{Core.CodeInfo}           # by trace id
+    mis::Vector{Core.MethodInstance}       # by trace id
+    probed::Vector{Set{Int}}               # by trace id
+    entry::Int                             # the entry's trace id (0 until numbered)
+end
+# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+StatementTrace(entry_name::String)::StatementTrace =
+    StatementTrace(entry_name, Dict{UInt32,Int}(), Core.CodeInfo[], Core.MethodInstance[], Set{Int}[], 0)
+
+"""
+One compilation's state, shared by the code generator of every function it compiles (dart: the
+Translator each CodeGenerator holds).
+parity(pkg/dart2wasm/lib/translator.dart:96 Translator)
+"""
+struct Translator
+    # a traced compile's record; nothing otherwise
+    # parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+    trace::Union{Nothing,StatementTrace}
+end
+
+# ============================================================================
+# Julia types to wasm value types (the translator side of dart's translateType)
+# ============================================================================
+
+"""
+Convert a Julia type to a Wasm value type (NumType or RefType).
+parity(pkg/dart2wasm/lib/translator.dart:1044 Translator.translateType)
+"""
+function julia_to_wasm_type(::Type{T})::WasmValType where T
+    if T === Int32 || T === UInt32
+        return I32
+    elseif T === Int64 || T === UInt64 || T === Int
+        return I64
+    elseif T === Float32
+        return F32
+    elseif T === Float64
+        return F64
+    elseif T === Bool
+        # Bool is represented as i32 (0 or 1)
+        return I32
+    elseif T === Char
+        # Char is represented as i32 (Unicode codepoint)
+        return I32
+    elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16
+        # Smaller integers also use i32
+        return I32
+    elseif T === Int128 || T === UInt128
+        # 128-bit integers are represented as WasmGC structs with two i64 fields
+        return StructRef
+    elseif T === Nothing
+        # Nothing has no Wasm representation - handled specially
+        # Return I32 as a placeholder (functions returning Nothing don't actually return)
+        return I32
+    elseif T === Any
+        # Any can hold any value - map to anyref for internal polymorphism
+        # anyref supports ref.cast/ref.test/br_on_cast (externref does not)
+        # Convert to externref only at JS boundary via extern.convert_any
+        return AnyRef
+    elseif T === JSValue
+        # JS values are held as externref
+        return ExternRef
+    elseif T === String || T === Symbol || T <: AbstractString
+        # parity(class_info.dart:18 FieldIndex): strings are CLASSED — {classId, data} <: $JlBase. The abstract
+        # (module-less) rep is StructRef; concrete mappers give the $JlString ref.
+        return StructRef
+    elseif T <: Tuple
+        # Tuples map to WasmGC structs
+        return StructRef
+    elseif !(T isa Union) && T <: Core.GenericMemory
+        # a Memory is a raw WasmGC array
+        return ArrayRef
+    elseif !(T isa Union) && T <: AbstractArray
+        # An Array is its Vector or Matrix wrapper struct, and any other concrete array its own
+        # struct; an abstract array type holds any of them or a raw Memory array, so it is the
+        # join (get_concrete_wasm_type answers the same). Unions go to resolve_union_type.
+        return (T isa DataType && isconcretetype(T)) ? StructRef : AnyRef
+    elseif T <: WasmGlobal
+        # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
+        return StructRef
+    elseif T isa Union
+        # Handle Union types by finding a common Wasm type
+        return resolve_union_type(T)
+    elseif isconcretetype(T) && isstructtype(T)
+        # User-defined structs map to WasmGC structs
+        return StructRef
+    elseif T isa UnionAll && isstructtype(T)
+        # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
+        # Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
+        return AnyRef
+    elseif isprimitivetype(T)
+        # Custom primitive types (e.g., JuliaSyntax.Kind, Core.IntrinsicFunction) - map by size.
+        # IMPORTANT: Check BEFORE T <: Function since Core.IntrinsicFunction IS a primitive type
+        # (sizeof=8, stored as an integer ID) AND is a subtype of Function.
+        # Without this ordering, IntrinsicFunction → ExternRef (wrong) instead of I64.
+        sz = sizeof(T)
+        if sz <= 4
+            return I32
+        elseif sz <= 8
+            return I64
+        else
+            error("Primitive type too large for Wasm: $T ($sz bytes)")
+        end
+    elseif T <: Function
+        # Abstract Function types (non-closure) map to externref
+        return ExternRef
+    elseif T <: Type && !(T isa UnionAll) && !isstructtype(T)
+        # Type{X} singleton values are now represented as DataType struct refs (global.get)
+        # instead of i32.const 0. Use StructRef as the generic fallback since we don't have
+        # access to the module/registry here to get the concrete DataType type index.
+        # NOTE: Struct types like Union, DataType are handled above (isconcretetype && isstructtype)
+        # NOTE: !isstructtype(T) ensures we only match singleton Type{X} (e.g., Type{Int64})
+        return StructRef
+    elseif isabstracttype(T)
+        # Abstract types (e.g., Compiler.CallInfo, Type (UnionAll)) can hold any concrete subtype
+        # Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
+        # NOTE: Type (without parameter) is UnionAll and isabstracttype, maps here
+        return AnyRef
+    else
+        error("Unsupported Julia type for Wasm: $T")
+    end
+end
+
+"""
+Resolve a Union type to a common Wasm type.
+parity(quarantine: a Julia Union of unrelated types has one wasm representation; dart's types are
+classes and their nullable forms, which translateType maps one by one.)
+
+Strategy:
+- Union{Nothing, T} -> T's reference form (StructRef for a numeric T: its nullable box)
+- Union{T1, T2, ...} where all are numeric -> AnyRef (boxed)
+"""
+function resolve_union_type(T::Union)::WasmValType
+    # Get the union types
+    types = Base.uniontypes(T)
+
+    # Filter out Nothing
+    non_nothing = filter(t -> t !== Nothing, types)
+
+    if isempty(non_nothing)
+        # Union of just Nothing - shouldn't happen but handle it
+        return I32
+    elseif length(non_nothing) == 1
+        # Union{Nothing, T} -> T's reference form: a numeric T is held in its nullable box
+        # struct (translator.dart:1141; the concrete box is get_concrete_wasm_type's answer).
+        local inner = julia_to_wasm_type(non_nothing[1])
+        (inner === I32 || inner === I64 || inner === F32 || inner === F64) && return StructRef
+        return inner
+    else
+        # Multi-variant: box mixed-CATEGORY numeric (int/float — Union{Int64,Float64}) behind
+        # AnyRef. Collapsing to the widest primitive is LOSSY (Int 1 / Float 1.0 become the same
+        # f64, tag gone). The SAME needs_anyref_boxing decision the codegen resolver uses
+        # (_resolve_multivariant_union) — so the builder + codegen layers AGREE on one boxing rule.
+        # Same-category numeric (all-int / all-float) → widest primitive (find_common_wasm_type).
+        # NOTE: Union{Int128,Int64,BigInt} → I64 (Int128/BigInt store i64.const 0 defaults; the
+        # caller discriminates via isa()).
+        needs_anyref_boxing(T) && return AnyRef
+        return find_common_wasm_type(non_nothing)
+    end
+end
+
+"""
+Find a common Wasm type for a list of Julia types.
+For numeric types, returns the widest type.
+parity(quarantine: the members of a Julia Union, joined; see resolve_union_type.)
+"""
+function find_common_wasm_type(types::Vector)::WasmValType
+    # Check if all are numeric
+    if all(t -> t <: Number, types)
+        # Prefer i64 over i32, f64 over f32
+        has_i64 = any(t -> t === Int64 || t === UInt64 || t === Int, types)
+        has_f64 = any(t -> t === Float64, types)
+        has_f32 = any(t -> t === Float32, types)
+        has_float = has_f64 || has_f32
+        has_int = any(t -> t === Int32 || t === UInt32 || t === Int64 || t === UInt64 ||
+                         t === Int || t === Bool || t === Int8 || t === UInt8 ||
+                         t === Int16 || t === UInt16, types)
+
+        if has_float
+            return has_f64 ? F64 : F32
+        elseif has_i64
+            return I64
+        else
+            return I32
+        end
+    end
+
+    # Check if all are string/symbol types (WasmGC arrays)
+    if all(t -> t === String || t === Symbol || t <: AbstractString, types)
+        return ArrayRef
+    end
+
+    # Check if all are RAW-array-represented types. P4-stdlib (Statistics
+    # median): Vector/Matrix are concretely (ref $struct{arr,size}) — only
+    # String/Symbol and Memory/MemoryRef compile to bare wasm arrays. The old
+    # blanket `t <: AbstractArray → ArrayRef` typed Union{Nothing,
+    # Vector{Float64}, Vector{UInt64}} signatures as arrayref while every
+    # return site pushes a struct ref: the callee's value died to a ref.null
+    # default and the caller failed validation (structref vs arrayref).
+    _is_array_rep = t -> t === String || t === Symbol ||
+        (t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
+                            t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef))
+    if all(_is_array_rep, types)
+        return ArrayRef
+    end
+
+    # Check if all are reference types (structs, tuples, struct-represented
+    # arrays). Exclude raw-array reps (String/Symbol/Memory).
+    is_wasm_struct = t -> !_is_array_rep(t) &&
+        (((isconcretetype(t) && isstructtype(t)) || t <: Tuple) || t <: AbstractArray)
+    if all(is_wasm_struct, types)
+        return StructRef
+    end
+
+    # Heterogeneous union (mix of primitives, strings, structs, etc.)
+    # Use anyref as the universal boxed value type (supports ref.cast/ref.test)
+    return AnyRef
+end
+
+"""
+    needs_anyref_boxing(T::Union)::Bool
+
+Check if a Union type needs anyref boxing for runtime dispatch.
+Returns true when the union has members with incompatible Wasm types (e.g., Int32+Float64),
+meaning widening loses type identity and isa() checks can't work.
+Used to override parameter types to anyref in function signatures.
+parity(quarantine: a Julia Union of two or more numeric members has no single wasm value type; dart has no union types (every dart dynamic value is already a boxed object), so whether a Union boxes is Julia's question)
+"""
+function needs_anyref_boxing(T::Union)::Bool
+    types = Base.uniontypes(T)
+    non_nothing = filter(t -> t !== Nothing, types)
+    length(non_nothing) < 2 && return false
+    # Box iff EVERY member boxes as a NUMERIC value (i32/i64/f32/f64) — covers Number
+    # subtypes AND Char/other numeric-rep primitives, excluding struct/string/ref members
+    # (those use their own ConcreteRef/tagged rep).
+    wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
+    all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
+    # ANY multi-member numeric union must box (dart2wasm boxes every dynamic value): members
+    # with DIFFERENT wasm reps (e.g. Int64 i64 vs Bool i32, or int vs float) can't collapse to
+    # one faithful primitive — the het-tuple/phi if-else would read different-width fields under
+    # a single block result type → INVALID wasm; members SHARING a rep (Bool/Int8/Int32 all i32)
+    # lose their type tag on collapse → isa/typeof mis-fire. Either way: box, keep the classId.
+    return true
+end
+
 # ============================================================================
 # Struct Type Registry
 # ============================================================================

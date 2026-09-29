@@ -153,8 +153,8 @@ function compile_with_statement_trace(f, arg_types::Tuple;
                                       validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},StatementTrace}
     OPTIONS[] = options_from_env()
     local name = string(nameof(f))
-    local mod = compile_module([(f, arg_types, name)]; trace_entry=name)
-    local trace = something(mod.trace)
+    local trace = StatementTrace(name)
+    local mod = compile_module([(f, arg_types, name)]; trace)
     trace.entry > 0 || throw(ArgumentError("$(name)$(arg_types) compiled to no traceable body"))
     return first(_emit_module(mod; optimize=false, validate=validate)), trace
 end
@@ -227,7 +227,6 @@ parity(compile.dart:216 compile)
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
-                       discovery::Symbol=:trim,
                        existing_module::Union{WasmModule,Nothing}=nothing,
                        import_stubs::Vector=Any[],
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
@@ -239,7 +238,7 @@ function compile_multi(functions::Vector; optimize=false,
     result = try
         compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types,
-                       discovery=discovery, existing_module=existing_module,
+                       existing_module=existing_module,
                        import_stubs=import_stubs, root_bindings=root_bindings,
                        link_roots=link_roots)
     finally
@@ -262,11 +261,9 @@ parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with sou
 """
 function compile_multi_with_sourcemap(functions::Vector; sourcemap_url::String="module.wasm.map",
                                       optimize=false, optimize_ir::Bool=true,
-                                      validate::Bool=_wt_default_validate(),
-                                      discovery::Symbol=:trim)::Tuple{Vector{UInt8},String}
+                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
     OPTIONS[] = options_from_env()
-    mod = compile_module(functions; optimize_ir=optimize_ir, discovery=discovery,
-                         source_map_url=sourcemap_url)
+    mod = compile_module(functions; optimize_ir=optimize_ir, source_map_url=sourcemap_url)
     return _emit_module(mod; optimize=optimize, validate=validate)
 end
 
@@ -457,16 +454,6 @@ end
 # Independent validation cross-check — opt-in; the typed builder is the gate
 # ============================================================================
 
-# parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
-const _WARNED_NO_WASM_TOOLS = Ref(false)
-# parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
-function _warn_no_wasm_tools_once()
-    if !_WARNED_NO_WASM_TOOLS[]
-        @warn "wasm-tools not found — skipping the wasm validation gate (install: `cargo install wasm-tools`)"
-        _WARNED_NO_WASM_TOOLS[] = true
-    end
-end
-
 """
 Disassemble ±12 instructions around the first `(at offset 0x…)` in a validator
 message, "" when the message names no offset or the printer prints nothing (a module
@@ -498,17 +485,15 @@ end
     validate_wasm_bytes(bytes; label="module") -> Vector{UInt8}
 
 Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError`](@ref)
-if the validator rejects the module. If `wasm-tools` is not installed, this is a no-op
-(with a one-time warning) so the package stays usable without the tool. Returns `bytes`
-unchanged so it can be used inline.
+if the validator rejects the module, and an `ErrorException` if `wasm-tools` is not installed:
+a validation that was asked for and cannot run is never skipped. Returns `bytes` unchanged so
+it can be used inline.
 parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 """
 function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module")
     wasm_tools = Sys.which("wasm-tools")
-    if wasm_tools === nothing
-        _warn_no_wasm_tools_once()
-        return bytes
-    end
+    wasm_tools === nothing && error("validation was requested (validate=true or WT_VALIDATE=1) " *
+        "and wasm-tools is not installed: install it (`cargo install wasm-tools`) or do not request validation")
     mktempdir() do dir
         p = joinpath(dir, "validate.wasm")
         write(p, bytes)

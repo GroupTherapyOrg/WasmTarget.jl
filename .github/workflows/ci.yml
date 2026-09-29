@@ -82,6 +82,8 @@ jobs:
           - { os: windows-latest, slice: fuzz, shard: '', fuzz: '1' }
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # L148 checks the audit log against the commit history
 
       - uses: julia-actions/setup-julia@v2
         with:

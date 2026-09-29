@@ -187,11 +187,11 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
     end
 
     @testset "signed-width unsigned overlays stay inside the closed world" begin
-        plan, cache = MBV.trim_compile_plan(
+        plan = MBV.trim_compile_plan(
             Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")])
         @test !any(e -> e[1] === unsigned && e[2] == (Int128,) &&
                        any(stmt -> stmt isa Expr && stmt.head === :foreigncall,
-                           cache[(e[1], e[2])][1].code), plan)
+                           plan.ir_cache[(e[1], e[2])][1].code), plan.functions)
         bytes = MBV.compile_multi(Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")];
                                   validate=false)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]

@@ -36,12 +36,12 @@
              remains responsible for validity by construction."
         ),
         api_entry(
-            "compile_multi(functions::Vector; optimize=false, discovery=:trim, ...)",
+            "compile_multi(functions::Vector; optimize=false, ...)",
             "Compile multiple `(f, arg_types[, name])` entries into one module. Functions in the same call share the WasmGC \
              type space and can call each other directly — this is the entry point for vector-bridge patterns and any \
-             multi-function island. Callee discovery defaults to `:trim` — the upstream closed-world collection \
-             (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`) walks every reachable invoke in \
-             one consistent inference world. This is the only supported discovery and module-codegen path."
+             multi-function island. Callees are discovered by the upstream closed-world collection \
+             (`Compiler.typeinf_ext_toplevel`, the same machinery behind `juliac --trim`), which walks every reachable \
+             invoke in one consistent inference world: the only discovery and module-codegen path."
         ),
         api_entry(
             "compile_with_base(functions::Vector; ...)",
