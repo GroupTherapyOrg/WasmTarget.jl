@@ -149,7 +149,9 @@ end
 # Behaviour is identical for sequential use. These wrappers keep the original
 # `d[k]` / `r[]` call sites unchanged.
 struct TaskLocalDict{K,V}; key::Symbol; end
-_tld(d::TaskLocalDict{K,V}) where {K,V} = get!(() -> Dict{K,V}(), task_local_storage(), d.key)::Dict{K,V}
+function _tld(d::TaskLocalDict{K,V})::Dict{K,V} where {K,V}
+    return get!(() -> Dict{K,V}(), task_local_storage(), d.key)::Dict{K,V}
+end
 Base.haskey(d::TaskLocalDict, k) = haskey(_tld(d), k)
 Base.getindex(d::TaskLocalDict, k) = getindex(_tld(d), k)
 Base.setindex!(d::TaskLocalDict, v, k) = setindex!(_tld(d), v, k)

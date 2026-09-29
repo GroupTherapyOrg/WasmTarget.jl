@@ -68,7 +68,7 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", mod=nothing)
+                      func_name::String="", mod=nothing)::InstrBuilder
     locals = WasmValType[p for p in param_types]
     # `mod` (the WasmModule) lets the validator's `wasm_subtype` resolve ConcreteRef
     # supertype chains. Threaded from codegen sites that have `ctx.mod` in scope (the
@@ -283,21 +283,21 @@ nop!(b::InstrBuilder)::InstrBuilder = _emit!(b, InstrIR.Nop())
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
 function block!(b::InstrBuilder, blocktype=0x40;
-                inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+                inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
     label = validate_block_start!(b.v, :block, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Block(blocktype)); return label
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:741 InstructionsBuilder.loop)
 function loop!(b::InstrBuilder, blocktype=0x40;
-               inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+               inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
     label = validate_block_start!(b.v, :loop, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Loop(blocktype)); return label
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 function if_!(b::InstrBuilder, blocktype=0x40;
-              inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])
+              inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
     label = validate_if_start!(b.v, WasmValType[t for t in inputs],
                                _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.If(blocktype)); return label
@@ -489,7 +489,7 @@ catch_all_ref_clause(label::ControlLabel)::SymbolicTryCatch =
 # catch handlers branch OUT of the try_table to their target labels (validated at br time),
 # so here we only start the block label — matching how block!/loop! work.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:907 InstructionsBuilder.try_table)
-function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::Vector{<:Any}=WasmValType[])
+function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::Vector{<:Any}=WasmValType[])::ControlLabel
     for c in catches
         c isa SymbolicTryCatch || throw(ArgumentError(
             "try_table catches must retain symbolic ControlLabel targets"))

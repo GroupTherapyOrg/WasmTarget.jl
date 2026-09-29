@@ -198,9 +198,9 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
 
 # encode!(code, instr): append this instruction's exact on-wire bytes (dart2wasm `serialize`).
 # parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
-@inline _u!(code, n) = append!(code, encode_leb128_unsigned(n))
+@inline _u!(code::Vector{UInt8}, n::Integer)::Vector{UInt8} = append!(code, encode_leb128_unsigned(n))
 # parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
-@inline _s!(code, n) = append!(code, encode_leb128_signed(n))
+@inline _s!(code::Vector{UInt8}, n::Integer)::Vector{UInt8} = append!(code, encode_leb128_signed(n))
 
 # parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)

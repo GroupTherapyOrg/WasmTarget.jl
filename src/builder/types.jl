@@ -278,17 +278,25 @@ end
 
 # Constructor with zero initial value
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-WasmGlobal{T, IDX}() where {T, IDX} = WasmGlobal{T, IDX}(zero(T))
+function WasmGlobal{T, IDX}()::WasmGlobal{T, IDX} where {T, IDX}
+    return WasmGlobal{T, IDX}(zero(T))
+end
 
 # Get the global index from the type
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-global_index(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = IDX
+function global_index(::Type{WasmGlobal{T, IDX}})::Int where {T, IDX}
+    return IDX
+end
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-global_index(g::WasmGlobal{T, IDX}) where {T, IDX} = IDX
+function global_index(g::WasmGlobal{T, IDX})::Int where {T, IDX}
+    return IDX
+end
 
 # Get the element type
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-global_eltype(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = T
+function global_eltype(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
+    return T
+end
 
 # Accessor methods - work in Julia (for testing) and compile to Wasm global ops
 # parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
@@ -524,6 +532,6 @@ end
 """
 Get the element type from a WasmGlobal type.
 """
-function wasm_global_element_type(::Type{WasmGlobal{T, IDX}}) where {T, IDX}
+function wasm_global_element_type(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
     return T
 end

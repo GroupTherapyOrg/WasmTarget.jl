@@ -54,7 +54,7 @@ name Symbol. The NIR boundary already resolved a bound global to its object; a c
 IR embedded literally is unwrapped here. An unbound global (left a `GlobalRef` by the
 boundary) and a runtime value (an SSA use, an argument) are explicit non-matches.
 parity(intrinsics.dart:414 StaticIntrinsic.fromProcedure)"""
-_resolve_builtin_callee(func) = nir_const(func)
+_resolve_builtin_callee(func)::Any = nir_const(func)
 
 """THE funnel: resolve `func`'s callee identity once and, if it names a
 registered Core/Base builtin, run its lowering. Returns the handled

@@ -93,7 +93,7 @@ end
 # parity(quarantine: types the operands of a value written into a Julia `Core.Box`, whose
 # `contents::Any` erases the variable's type — box reads as the join candidate, arguments through
 # the MethodInstance's specTypes)
-function _f3_operand_type(a, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})
+function _f3_operand_type(a, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})::Union{Type, Core.TypeofVararg}
     _f3_is_box_read(a, nir) && return T
     if a isa NirSSA
         return _f3_ssa_type(sst, a.id)
@@ -112,7 +112,7 @@ end
 # parity(quarantine: the inferred type of one value written into a Julia `Core.Box`, recomputed
 # through the one inference path because `contents::Any` erased it; dart reads the variable's
 # inferred type, translator.dart:2100 translateTypeOfLocalVariable)
-function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospecialize(T))
+function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospecialize(T))::Union{Type, Core.TypeofVararg}
     if rhs isa NirSSA && 1 <= rhs.id <= length(nir)
         local node = nir[rhs.id].node
         if node isa NirCall
@@ -648,8 +648,9 @@ parity(quarantine: Julia's `Core.Box` is one untyped struct for every captured v
 records, per closure type, the restored contents type so its captured cell becomes a typed Box
 struct, where dart defines the context field with the variable's type, closures.dart:1576)
 """
-function populate_box_field_types!(mod, registry, nir::Vector{NirStmt}, ssa_types)
-    registry.box_contents_types === nothing && return registry.box_contents_types
+function populate_box_field_types!(mod::WasmModule, registry::TypeRegistry, nir::Vector{NirStmt},
+                                   ssa_types)::Nothing
+    registry.box_contents_types === nothing && return nothing
     for box_id in find_box_news(nir)
         bt = box_contents_type(nir, ssa_types, box_id)
         bt === nothing && continue                       # dynamic contents → anyref fallback
@@ -658,5 +659,5 @@ function populate_box_field_types!(mod, registry, nir::Vector{NirStmt}, ssa_type
             registry.box_contents_types[clo_T] = contents_wasm
         end
     end
-    return registry.box_contents_types
+    return nothing
 end

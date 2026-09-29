@@ -165,6 +165,26 @@ end
 _has_return_annotation(sig) = sig isa Expr && sig.head === :(::) && length(sig.args) == 2
 
 """
+The definitions whose `::Any` return is a named heterogeneous seam (dev/CHARTER.md C4: no
+`Any` outside named seams), by function name, each with why its value is open by
+construction. Any other `::Any` return counts in R30 as untyped.
+"""
+const R30_ANY_SEAMS = Dict{Symbol,String}(
+    :_resolve_nircall_callee => "a call's callee resolved to its object: a function, a type or any callable value",
+    :_nir_callee_object => "a callee operand's object: a function, a type or any callable value",
+    :resolve_call_callee => "a :call's callee resolved to its object, or the operand of a dynamic callee",
+    :_resolve_builtin_callee => "the object a builtin call names, compared by identity against the registry",
+    :_invoke_callee_object => "the function object a MethodInstance specializes",
+    :_invoke_named_callee => "the callee object an :invoke names",
+    :_invoke_singleton_instance => "the one instance of a singleton type, any value",
+    :nir_const => "a literal operand's value, any Julia value",
+    :_nir_const_operand => "a constant operand's value, any Julia value",
+    :_nir_field_name => "a getfield operand's literal, whatever the IR wrote there",
+    :with_layout_read_memo => "returns its argument function's value (a higher-order passthrough)",
+    :_runtime_composition_apply => "a runtime composition returns whatever its last function returns",
+)
+
+"""
 Count `function f(...)`/`f(...) = ...` definitions under `roots` with no `::T`
 return-type annotation. Walks Meta.parseall's AST rather than lines, so a
 signature split across lines or wrapped in `where`/a macrocall (`@inline`) is
@@ -214,7 +234,10 @@ function _count_untyped_returns_in(ex, in_fn::Bool)::Int
             return body === nothing ? 0 : _count_untyped_returns_in(body, true)
         end
         below = body === nothing ? 0 : _count_untyped_returns_in(body, true)
-        return (_has_return_annotation(_strip_where(sig)) ? 0 : 1) + below
+        local core = _strip_where(sig)
+        typed = _has_return_annotation(core) &&
+                (core.args[2] !== :Any || (name isa Symbol && haskey(R30_ANY_SEAMS, name)))
+        return (typed ? 0 : 1) + below
     end
     return sum(a -> _count_untyped_returns_in(a, in_fn), ex.args; init=0)
 end
@@ -871,7 +894,7 @@ const METRICS = [
     # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
     # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
     # regard" made machine-checked for API types, not just codegen structure.
-    "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
+    "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation, or with `::Any` outside R30_ANY_SEAMS's named seams (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
         () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
     "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
         () -> count_any_typed_fields()),

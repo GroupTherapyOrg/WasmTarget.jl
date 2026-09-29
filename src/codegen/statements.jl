@@ -212,7 +212,7 @@ end
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
                             through_value_ptr::Bool = true,
-                            _seen::Set{Int} = Set{Int}())
+                            _seen::Set{Int} = Set{Int}())::Union{Nothing, NirNode}
     # Walk through recognized storage-relative operations looking only for the
     # backing object's identity. Offsets remain runtime values and are compiled
     # by the consumer; no raw host address is ever synthesized.
@@ -2363,7 +2363,7 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
 Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
 """
-function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)
+function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The C symbol was decoded ONCE at the boundary (NirForeignCall.c_symbol) and
     # `node.operands` holds only the runtime operands — the ABI preamble
     # (name, return_type, arg_types, nreq, calling_conv) is not reachable from a lowering.

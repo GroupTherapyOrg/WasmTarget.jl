@@ -97,7 +97,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
-                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())
+                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())::CompilationContext
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     n_stmts = length(body.stmts)
@@ -264,7 +264,7 @@ Allocate scratch locals for complex operations like string concatenation.
 These are extra locals beyond what SSA analysis requires.
 Stores the indices in ctx.scratch_locals for later use.
 """
-function allocate_scratch_locals!(ctx::AbstractCompilationContext)
+function allocate_scratch_locals!(ctx::AbstractCompilationContext)::Nothing
     # Check if any SSA type is String or Symbol - if so, we need scratch locals
     # Symbol uses same array<i32> representation as String and needs element-wise comparison
     needs_string_scratch = false
@@ -313,6 +313,7 @@ function allocate_scratch_locals!(ctx::AbstractCompilationContext)
         push!(ctx.locals, I32)           # scratch i32 1 (len1)
         push!(ctx.locals, I32)           # scratch i32 2 (len2/i)
     end
+    return nothing
 end
 
 """
@@ -351,7 +352,7 @@ end
 Convert a numeric value on the stack to f64 (no-op when already f64) — builder-native
 (THE implementation). Used for DOM bindings where numerics pass as f64 for JS.
 """
-function emit_convert_to_f64!(b, valtype::WasmValType)
+function emit_convert_to_f64!(b::InstrBuilder, valtype::WasmValType)::InstrBuilder
     if valtype == I32
         num!(b, 0xB7)  # f64.convert_i32_s
     elseif valtype == I64
@@ -1616,7 +1617,7 @@ function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall
     return rt
 end
 
-function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)
+function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg}
     if val isa NirArgument
         # Source IR semantics are authoritative. The physical signature can be
         # flattened (notably a vararg tuple), so indexing ctx.arg_types first
@@ -1727,7 +1728,7 @@ Resolve the DECLARED wasm slot type of `val`'s source (SSA/phi local or paramete
 feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/anyref)
 or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
 """
-function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)
+function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, WasmValType}
     if val isa NirSSA
         local_idx = get(ctx.ssa_locals, val.id, nothing)
         if local_idx === nothing
@@ -1764,7 +1765,8 @@ function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Inte
 end
 
 """builder-native core: with the source ref on `b`'s stack, narrow per the arm table."""
-function _emit_ref_cast_arm!(b, local_wasm_type, target_type_idx::Integer)
+function _emit_ref_cast_arm!(b::InstrBuilder, local_wasm_type::Union{Nothing, WasmValType},
+                            target_type_idx::Integer)::InstrBuilder
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
         # Value on stack is structref/anyref, but struct_get/array_get needs (ref null $target_type_idx)
         ref_cast!(b, Int64(target_type_idx), true)

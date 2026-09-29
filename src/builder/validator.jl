@@ -39,7 +39,7 @@ end
 
 function ValidatorLabel(kind::Symbol, stack_height::Int,
                         input_types::Vector{WasmValType}, result_types::Vector{WasmValType},
-                        reachable::Bool; handle=ControlLabel(kind, input_types, result_types))
+                        reachable::Bool; handle=ControlLabel(kind, input_types, result_types))::ValidatorLabel
     ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false)
 end
 
@@ -67,7 +67,7 @@ mutable struct WasmStackValidator
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
-WasmStackValidator(; func_name="", mod=nothing) =
+WasmStackValidator(; func_name="", mod=nothing)::WasmStackValidator =
     WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "")
 
 """

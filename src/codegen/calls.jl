@@ -69,7 +69,7 @@ A fragment that consumes the parent's top `n` stack values DECLARES them
 """
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
                       narrow_to::Union{Nothing, WasmValType}=nothing,
-                      seed_types::Union{Nothing, Vector{WasmValType}}=nothing)
+                      seed_types::Union{Nothing, Vector{WasmValType}}=nothing)::InstrBuilder
     local b = InstrBuilder(; func_name=name, mod=ctx.mod)
     _seed_builder_locals!(b, ctx)   # fullstrict: the live provider everywhere
     local h = length(fb.v.stack)
@@ -239,7 +239,7 @@ end
 # is only set for signed div. Stack: [a, b] → [a, b] (operands re-pushed; values
 # must already be narrow-normalised).
 function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool;
-                          check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))
+                          check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))::InstrBuilder
     lt     = is32 ? I32 : I64
     wconst!(blr, v) = is32 ? i32_const!(blr, v) : i64_const!(blr, v)
     weqz   = is32 ? Opcode.I32_EQZ : Opcode.I64_EQZ
@@ -306,7 +306,7 @@ end
 # sign-extend from julia_width before ashr; lshr also honours the julia_width
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
-                              julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)
+                              julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)::InstrBuilder
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
     wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
     width  = is32 ? 32 : 64
@@ -1248,7 +1248,7 @@ function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilat
     return nothing
 end
 
-function _trace_typename_symbol_owner(value::NirNode, ctx::AbstractCompilationContext)
+function _trace_typename_symbol_owner(value::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     def = _ssa_def(value, ctx)
     parts = _getfield_parts(def)
     if def isa NirPi
@@ -2473,7 +2473,7 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
 end
 
 function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
-                                ctx::AbstractCompilationContext; func::Symbol=:typeassert)
+                                ctx::AbstractCompilationContext; func::Symbol=:typeassert)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]

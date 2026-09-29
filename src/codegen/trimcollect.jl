@@ -31,7 +31,7 @@
         (T isa DataType && T <: Type && length(T.parameters) == 1 &&
          !(T.parameters[1] isa TypeVar)))
 
-@inline function _canonical_type_object_arg(@nospecialize(T), @nospecialize(formal))
+@inline function _canonical_type_object_arg(@nospecialize(T), @nospecialize(formal))::Union{Type, Core.TypeofVararg}
     if T isa DataType && T <: Type && length(T.parameters) == 1 &&
        !(T.parameters[1] isa TypeVar)
         # `Core.Typeof(value)` intentionally preserves Type{value} singleton
@@ -598,7 +598,7 @@ invoke in a kept body names a kept body or an import, and every kept body is rea
 parity(quarantine: dart's calls name a fixed member; Julia's explicit invokes may name an
 abstract MethodInstance the closed-world subset specializes per site.)"""
 function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
-                                        external_leaves::Set{Any}; unreachable::Bool=false)
+                                        external_leaves::Set{Any}; unreachable::Bool=false)::Vector{Any}
     isempty(external_leaves) && !unreachable && return codeinfos
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
@@ -657,7 +657,7 @@ const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compil
 # below always collects exactly the methods reachable from the roots, never stops
 # early, and never silently drops a reachable method whose specialization fails.
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
-                              external_leaves::Set{Any}=Set{Any}())
+                              external_leaves::Set{Any}=Set{Any}())::Vector{Any}
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
     _DYNAMIC_ROOT_MIS[] = Set{Any}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
@@ -834,7 +834,7 @@ their call sites inline or carry the closure value; no module-level
 function entry to register) and Core/internal entries without a usable
 function object.
 """
-function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])
+function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::Tuple{Vector{Any}, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     entry_values = Dict{Any,Any}()     # explicit capturing-closure instances

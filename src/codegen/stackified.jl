@@ -12,7 +12,7 @@ The value's static Julia type for boxing (SSA inferred / Bool literal / argument
 `nothing` when unknown. Used to pick the box's real classId and the i31 fast-path decision.
 parity(code_generator.dart:135 getStaticType): a value's static type, read from its node.
 """
-function _value_julia_type(val::NirNode, ctx::AbstractCompilationContext)
+function _value_julia_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Type}
     if val isa NirSSA
         return get(ctx.ssa_types, val.id, nothing)
     elseif val isa NirArgument
@@ -76,7 +76,7 @@ end
 
 """parity(code_generator.dart:38 CodeGenerator.generate): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
-function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)
+function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)::InstrBuilder
     append_builder!(b, generate_stackified_flow(ctx, args...; kwargs...))   # typed merge
     return b
 end

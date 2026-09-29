@@ -27,7 +27,7 @@ struct _RuntimeComposition{V<:AbstractVector} <: Function
     fs::V
 end
 
-@noinline function _runtime_composition_apply(fs::AbstractVector, i::Int, x)
+@noinline function _runtime_composition_apply(fs::AbstractVector, i::Int, x)::Any
     i == 0 && return x
     return _runtime_composition_apply(fs, i - 1, fs[i](x))
 end
@@ -1219,41 +1219,6 @@ end
     return best
 end
 
-# ─── reduce/foldl Overlays ───────────────────────────────────────────────
-# Why: `reduce(op, v)` / `foldl(op, v)` over a Vector lower through native
-#      mapreduce/mapfoldl. The CFG keeps a `mapreduce_impl` block (large-vector
-#      branch) that emits invalid wasm, so the whole module fails to validate
-#      even for small vectors — every reduce/foldl trapped (in lax mode it
-#      returned garbage, e.g. `reduce(min, [5,3,8,1])` yielded the MAX). A plain
-#      left-fold is exact for the generated associative ops (+, *, min, max) and
-#      matches Base's observable result. (Float `+` differs only by pairwise-vs-
-#      sequential rounding, within the differential harness's tolerance.)
-#
-#      `op::F` forces per-op specialization so the empty-collection identity
-#      folds to a compile-time constant — otherwise `op` infers as abstract
-#      `Function` and the empty branch becomes a `dynamic invoke ...::Union{}`
-#      (Base.reduce_empty) that fails to compile. The `op === (+/*)` branches
-#      give Base's empty identity (0 / 1); min/max (and any other op) throw on
-#      empty, exactly as Base does.
-# Remove when: native mapreduce/mapfoldl codegen is implemented.
-@inline function _wasm_reduce_loop(op::F, v::Vector{T}) where {F,T}
-    n = length(v)
-    if n == 0
-        op === (+) && return zero(T)
-        op === (*) && return one(T)
-        throw(ArgumentError("reducing over an empty collection is not allowed; consider supplying `init` to the reduce function"))
-    end
-    acc = v[1]
-    i = 2
-    while i <= n
-        acc = op(acc, v[i])
-        i += 1
-    end
-    return acc
-end
-@overlay WASM_METHOD_TABLE Base.reduce(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
-@overlay WASM_METHOD_TABLE Base.foldl(op::F, v::Vector{T}) where {F,T} = _wasm_reduce_loop(op, v)
-
 # ─── argmax/argmin Overlays ──────────────────────────────────────────────
 # Why: Base implementations use complex dispatch through _findmax/_findmin
 #      with Pairs iterators and kwarg patterns that produce codegen errors.
@@ -1628,7 +1593,7 @@ else
     # rapidhash hash_bytes(ptr, n, seed, secret) -> UInt (1.13+ Base), ported
     # over codeunit reads; the widening multiply avoids Int128/widemul (see
     # comment above).
-    @inline function _wasm_rh_umul128(a::UInt64, b::UInt64)
+    @inline function _wasm_rh_umul128(a::UInt64, b::UInt64)::Tuple{UInt64,UInt64}
         a_lo = a & 0x00000000ffffffff
         a_hi = a >> 32
         b_lo = b & 0x00000000ffffffff
@@ -1956,7 +1921,7 @@ const _WT_OPERATORS = sort!(unique(UInt64[_wt_pack_name(s, ncodeunits(s)) for s 
     if ccall(:jl_is_operator, Cint, (Cstring,), s) != 0 &&
        !any(c -> isvalid(c) && ccall(:jl_op_suffix_char, Cint, (UInt32,), UInt32(c)) != 0, s)]))
 # parity(quarantine: julia-parser.scm `no-suffix?` over `operators`, read through jl_is_operator)
-const _WT_NO_SUFFIX_OPERATORS = let unpack(v) = String(UInt8[(v >> (8 * i)) % UInt8 for i in 0:7
+const _WT_NO_SUFFIX_OPERATORS = let unpack(v::UInt64)::String = String(UInt8[(v >> (8 * i)) % UInt8 for i in 0:7
                                                            if (v >> (8 * i)) % UInt8 != 0x00])
     UInt64[v for v in _WT_OPERATORS if ccall(:jl_is_operator, Cint, (Cstring,), unpack(v) * "′") == 0]
 end
@@ -2080,7 +2045,9 @@ end
 #      time; overlay string/show of a Type to use it. Covers string(), repr(),
 #      interpolation, and embedded `print(io, T)` (all funnel through show).
 # Remove when: WT can navigate DataType.name.name to a string at runtime.
-@generated _wt_type_name_str(::Type{T}) where {T} = :($(string(T)))
+@generated function _wt_type_name_str(::Type{T})::String where {T}
+    return :($(string(T)))
+end
 
 @overlay WASM_METHOD_TABLE Base.string(::Type{T}) where {T} = _wt_type_name_str(T)
 
@@ -2187,7 +2154,7 @@ struct WasmInterpreter <: CC.AbstractInterpreter
     cache_token::Any
 end
 
-function WasmInterpreter(; world::UInt=Base.get_world_counter())
+function WasmInterpreter(; world::UInt=Base.get_world_counter())::WasmInterpreter
     mt = CC.OverlayMethodTable(world, WASM_METHOD_TABLE)
     inf_params = CC.InferenceParams(;
         aggressive_constant_propagation=true,
@@ -2200,7 +2167,7 @@ function WasmInterpreter(; world::UInt=Base.get_world_counter())
                     IdDict{Core.CodeInstance, Core.CodeInfo}(), :wasm_target)
 end
 
-function WasmInterpreter(cache_token; world::UInt=Base.get_world_counter())
+function WasmInterpreter(cache_token; world::UInt=Base.get_world_counter())::WasmInterpreter
     base = WasmInterpreter(; world)
     WasmInterpreter(base.world, base.method_table, base.inf_cache,
                     base.inf_params, base.opt_params, base.codegen, cache_token)

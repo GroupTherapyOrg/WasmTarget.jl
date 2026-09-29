@@ -27,11 +27,11 @@ function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.Me
     return _is_arg(alloc.operands[end], fixed_count + 2)
 end
 
-_invoke_arg_static_type(arg, ctx::AbstractCompilationContext) =
+_invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
     nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : infer_value_type(arg, ctx)
 
 """Return the unique singleton represented by `T`, or `nothing` when none exists."""
-_invoke_singleton_instance(@nospecialize(T)) =
+_invoke_singleton_instance(@nospecialize(T))::Any =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
 """The function object a MethodInstance specializes — its signature's first parameter's
@@ -95,7 +95,7 @@ emits the invoke INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that replace it re-init; exits merge typed).
 """
-function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)
+function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_invoke.frag")
     _seed_builder_locals!(fb, ctx)
     args = node.operands

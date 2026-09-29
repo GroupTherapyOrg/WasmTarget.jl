@@ -451,7 +451,7 @@ end
 kept as the corresponding NirNode operand (dynamic callee — e.g. a closure argument).
 parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode operand; a Kernel
 invocation carries its target member.)"""
-function resolve_call_callee(x, types)
+function resolve_call_callee(x, types)::Any
     if x isa GlobalRef
         return isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : x
     elseif x isa QuoteNode
@@ -498,7 +498,7 @@ end
 
 # parity(quarantine: Julia's `%new` names its type by a literal, GlobalRef or QuoteNode operand;
 # Kernel's ConstructorInvocation carries its target.)
-function _resolve_type_operand(x)
+function _resolve_type_operand(x)::Type
     x isa Type && return x
     if x isa GlobalRef
         isdefined(x.mod, x.name) || return Any

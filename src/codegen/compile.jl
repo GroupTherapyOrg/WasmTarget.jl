@@ -25,7 +25,7 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       invoke_arguments=Dict{Int,Vector{Int}}(),
                       bound_leaves=Tuple{Any,Tuple}[],
                       entry_calls=UInt32[],
-                      elide_closure_context::Bool=false, void_return::Bool=false)
+                      elide_closure_context::Bool=false, void_return::Bool=false)::RootBindings
     RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
                  Dict{Symbol,Any}(captured_constants),
                  Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
@@ -253,7 +253,7 @@ function _compile_closed_world_plan(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false
-                        )
+                        )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
@@ -732,7 +732,7 @@ end
 # The sole module pipeline: collect one closed world, install its paired typed-IR
 # cache for the duration of codegen, then compile that immutable plan. Public
 # entry points may normalize inputs, but none may bypass this collector.
-function _compile_module_trim(functions::Vector; kwargs...)
+function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     normalized = Any[]
     for entry in functions
         if length(entry) == 2
@@ -767,7 +767,7 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        discovery::Symbol=:trim)
+                        discovery::Symbol=:trim)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     discovery === :trim || throw(ArgumentError(
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
