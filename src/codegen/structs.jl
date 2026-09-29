@@ -422,9 +422,7 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
             str_type_idx = get_string_struct_type!(mod, registry)
             wasm_vt = ConcreteRef(str_type_idx, true)
         elseif ft === Any
-            # Any type - map to externref (Julia 1.12 closures have Any fields)
-            # Use AnyRef when JlType hierarchy is active
-            wasm_vt = registry.jl_type_idx !== nothing ? AnyRef : ExternRef
+            wasm_vt = AnyRef
         elseif ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
                ft === Int8 || ft === UInt8 || ft === Int16 || ft === UInt16
             # Standard 32-bit or smaller types
@@ -952,108 +950,6 @@ function get_int128_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::UIn
     else
         info = register_int128_type!(mod, registry, T)
         return info.wasm_type_idx
-    end
-end
-
-"""
-    patch_any_fields_for_jltype_hierarchy!(mod, registry)
-
-After `create_jl_type_hierarchy!` sets `registry.jl_type_idx`, re-patch struct types
-that were registered before the hierarchy existed. Fixes two issues:
-
-1. `Any`-typed fields mapped to `ExternRef` → should be `AnyRef`
-2. Struct-typed fields pointing to stale type indices → should use current registry index
-   (e.g., TypeVar field was registered as ConcreteRef(7) but JlType hierarchy re-registered
-   TypeVar at index 25 as \$JlTypeVar)
-"""
-function patch_any_fields_for_jltype_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Nothing
-    registry.jl_type_idx === nothing && return
-
-    # Patch SimpleVector StructInfo to use $JlSVec array type from hierarchy.
-    # SimpleVector may have been registered before the hierarchy existed; converge
-    # every consumer on the one heterogeneous $JlSVec type.
-    if registry.jl_svec_idx !== nothing && haskey(registry.structs, Core.SimpleVector)
-        old_info = registry.structs[Core.SimpleVector]
-        if old_info.wasm_type_idx != registry.jl_svec_idx
-            registry.structs[Core.SimpleVector] = StructInfo(
-                Core.SimpleVector, registry.jl_svec_idx,
-                old_info.field_names, old_info.field_types, old_info.field_offset
-            )
-        end
-    end
-
-    for (T, info) in registered_structs(registry)
-        type_idx = info.wasm_type_idx
-        type_idx + 1 > length(mod.types) && continue
-        ct = mod.types[type_idx + 1]
-
-        if ct isa StructType
-            # Build set of types re-registered by JlType hierarchy (TypeVar, DataType, etc.)
-            # Only these need ConcreteRef patching; other struct fields are correct as-is.
-            jl_hierarchy_types = Set{Type}()
-            for jl_t in (Core.TypeVar,)
-                if haskey(registry.structs, jl_t)
-                    push!(jl_hierarchy_types, jl_t)
-                end
-            end
-
-            needs_patch = false
-            for (i, ft) in enumerate(info.field_types)
-                wasm_fi = i - 1 + info.field_offset  # 0-based wasm field index
-                wasm_fi + 1 > length(ct.fields) && continue
-                existing_vt = ct.fields[wasm_fi + 1].valtype
-
-                if ft === Any && existing_vt === ExternRef
-                    # Issue 1: Any-typed field still ExternRef
-                    needs_patch = true
-                    break
-                elseif existing_vt isa ConcreteRef && ft in jl_hierarchy_types
-                    # Issue 2: JlType hierarchy re-registered this type at a new index
-                    current_idx = registry.structs[ft].wasm_type_idx
-                    if existing_vt.type_idx != current_idx
-                        needs_patch = true
-                        break
-                    end
-                end
-            end
-
-            if needs_patch
-                new_fields = FieldType[]
-                for (wi, field) in enumerate(ct.fields)
-                    julia_idx = wi - Int(info.field_offset)  # 1-based Julia field index
-                    if julia_idx >= 1 && julia_idx <= length(info.field_types)
-                        ft = info.field_types[julia_idx]
-                        if ft === Any && field.valtype === ExternRef
-                            push!(new_fields, FieldType(AnyRef, field.mutable_))
-                        elseif field.valtype isa ConcreteRef && ft in jl_hierarchy_types
-                            current_idx = registry.structs[ft].wasm_type_idx
-                            if field.valtype.type_idx != current_idx
-                                # Type was re-registered at a different index (JlType hierarchy).
-                                # If new index > this struct's index, can't forward-reference it.
-                                # Use AnyRef instead (the value is a subtype of anyref).
-                                if current_idx > type_idx
-                                    push!(new_fields, FieldType(AnyRef, field.mutable_))
-                                else
-                                    push!(new_fields, FieldType(ConcreteRef(current_idx, field.valtype.nullable), field.mutable_))
-                                end
-                            else
-                                push!(new_fields, field)
-                            end
-                        else
-                            push!(new_fields, field)
-                        end
-                    else
-                        push!(new_fields, field)
-                    end
-                end
-                mod.types[type_idx + 1] = StructType(new_fields, ct.supertype_idx)
-            end
-        elseif ct isa ArrayType
-            # SimpleVector and other Any-element arrays: patch ExternRef → AnyRef
-            if T === Core.SimpleVector && ct.elem.valtype === ExternRef
-                mod.types[type_idx + 1] = ArrayType(FieldType(AnyRef, ct.elem.mutable_))
-            end
-        end
     end
 end
 

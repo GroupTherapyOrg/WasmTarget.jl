@@ -331,13 +331,7 @@ end
 
 function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
-    # normalize AnyRef → ExternRef to avoid type hierarchy mismatches
-    # Exception — keep AnyRef when $JlType hierarchy is active
-    local actual_type = wasm_type
-    if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-        actual_type = ExternRef
-    end
-    push!(ctx.locals, actual_type)
+    push!(ctx.locals, wasm_type)
     return local_idx
 end
 
@@ -632,13 +626,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
                 n_stmts = length(nir)
                 @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            # normalize AnyRef → ExternRef for phi locals
-            # Exception — keep AnyRef when $JlType hierarchy is active
-            local phi_actual = phi_wasm_type
-            if phi_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                phi_actual = ExternRef
-            end
-            push!(ctx.locals, phi_actual)
+            push!(ctx.locals, phi_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -651,12 +639,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
             phic_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             phic_wasm_type = get_concrete_wasm_type(phic_julia_type, ctx.mod, ctx.type_registry; for_local=true)
             local_idx = ctx.n_params + length(ctx.locals)
-            # normalize AnyRef → ExternRef unless JlType hierarchy active
-            local phic_actual = phic_wasm_type
-            if phic_wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                phic_actual = ExternRef
-            end
-            push!(ctx.locals, phic_actual)
+            push!(ctx.locals, phic_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -1105,8 +1088,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                         if field_sym isa Symbol && hasfield(obj_type, field_sym)
                             jft = fieldtype(obj_type, field_sym)
                             if jft === Any
-                                # ExternRef unless JlType hierarchy active
-                                wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
+                                wasm_type = AnyRef
                             end
                         end
                     end
@@ -1123,8 +1105,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                             elt = ref_type.parameters[2]
                         end
                         if elt === Any
-                            # ExternRef unless JlType hierarchy active
-                            wasm_type = ctx.type_registry.jl_type_idx !== nothing ? AnyRef : ExternRef
+                            wasm_type = AnyRef
                         end
                     end
                 end
@@ -1190,13 +1171,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 n_stmts = length(nir)
                 @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            # normalize AnyRef → ExternRef for SSA locals
-            # Exception — keep AnyRef when $JlType hierarchy is active
-            local ssa_actual = wasm_type
-            if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                ssa_actual = ExternRef
-            end
-            push!(ctx.locals, ssa_actual)
+            push!(ctx.locals, wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
@@ -1226,10 +1201,6 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
             # Determine type from the SSA type of this statement
             ssa_type = get(ctx.ssa_types, i, Any)
             wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
-            # Normalize AnyRef → ExternRef unless JlType hierarchy active
-            if wasm_type === AnyRef && ctx.type_registry.jl_type_idx === nothing
-                wasm_type = ExternRef
-            end
             local_idx = ctx.n_params + length(ctx.locals)
             push!(ctx.locals, wasm_type)
             ctx.slot_locals[slot_id] = local_idx

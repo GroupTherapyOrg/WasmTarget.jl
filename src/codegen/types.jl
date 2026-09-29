@@ -456,17 +456,12 @@ end
 """
     get_datatype_type_idx(registry::TypeRegistry) → UInt32
 
-Get the WasmGC type index for DataType globals.
-Returns \$JlDataType when hierarchy is available, else Julia's DataType struct type.
+The WasmGC type index of a DataType value: \$JlDataType.
 """
 function get_datatype_type_idx(registry::TypeRegistry)::UInt32
-    if registry.jl_datatype_idx !== nothing
-        return registry.jl_datatype_idx
-    elseif haskey(registry.structs, DataType)
-        return registry.structs[DataType].wasm_type_idx
-    else
-        error("No DataType type index available")
-    end
+    registry.jl_datatype_idx === nothing &&
+        error("\$JlDataType is created with the \$JlType hierarchy, before any type registers (compile_module)")
+    return registry.jl_datatype_idx
 end
 
 # ============================================================================
@@ -2469,7 +2464,6 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
         needs_anyref_boxing(T) && return AnyRef
         # same-category numeric union → widest primitive (dart: unboxed int/double).
         result = julia_to_wasm_type(T)
-        for_local && result === AnyRef && registry.jl_type_idx === nothing && return ExternRef
         return result
     end
     # union of type values → their kinds' struct, $JlType when the kinds differ (dart: a
@@ -2580,7 +2574,6 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
     # multi-variant unions that map to AnyRef (via julia_to_wasm_type), not single DataType refs.
     if T <: Type && !(T isa UnionAll) && !(T isa Union) && !isstructtype(T)
         # a `Type{X}` value is X's one type object, whose struct is X's kind
-        registry.jl_type_idx === nothing && return ConcreteRef(get_datatype_type_idx(registry), true)
         return ConcreteRef(type_value_struct_idx(registry, T), true)
     end
     if T === String || T === Symbol
@@ -2787,14 +2780,6 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
     else
         # Standard (non-struct/array) conversion.
         result = julia_to_wasm_type(T)
-        # Never return AnyRef for locals — use ExternRef instead. Exception — when the
-        # $JlType hierarchy is active, keep AnyRef for Any-typed locals: $JlType struct
-        # fields return (ref null $JlType), a subtype of anyref but NOT externref, so
-        # locals must align with function params. Signature/field positions (for_local=
-        # false) return the raw AnyRef unconditionally, as before this function existed.
-        if for_local && result === AnyRef && registry.jl_type_idx === nothing
-            return ExternRef
-        end
         return result
     end
 end

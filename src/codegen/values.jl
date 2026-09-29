@@ -134,8 +134,6 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         elseif lit isa Type
             # a type object compiles to global.get of its constant, an instance of its kind
             # (typeof(Int64) is DataType). Checked BEFORE isstructtype: typeof(Type) is a struct.
-            ctx.type_registry.jl_type_idx === nothing &&
-                return ConcreteRef(get_datatype_type_idx(ctx.type_registry), false)
             return ConcreteRef(type_object_struct_idx(ctx.type_registry, lit), false)
         elseif lit isa Core.TypeName
             # TypeName constants compile to global.get ($JlTypeName struct ref)

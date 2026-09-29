@@ -282,8 +282,13 @@ function _compile_closed_world_plan(functions::Vector;
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
-    # Create base struct type FIRST — all other structs will be subtypes
+    # Create base struct type FIRST — all other structs will be subtypes — then the $JlType
+    # hierarchy, before any other type registers: every `Any` field, local and signature is
+    # anyref, and a type-valued field names its kind's struct.
+    # parity(class_info.dart:666 ClassInfoCollector.collect): Top, then `_Type`, before the
+    # classes that refer to them.
     get_base_struct_type!(mod, type_registry)
+    create_jl_type_hierarchy!(mod, type_registry)
 
     # Pre-register import stubs at their import indices in func_registry.
     # This enables compiled functions to call imports via cross-function call resolution.
@@ -464,12 +469,6 @@ function _compile_closed_world_plan(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # Create $JlType hierarchy types FIRST (the closed-world
-    # collector below registers structs whose DataType-typed fields must resolve to
-    # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
-    # which the Any-only patch pass below can't fix)
-    create_jl_type_hierarchy!(mod, type_registry)
-
     # Census F2 CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
     # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
     # function's typed IR and COLLECT every reachable concrete struct / union member
@@ -485,11 +484,6 @@ function _compile_closed_world_plan(functions::Vector;
 
     # Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
-
-    # Patch struct types registered before JlType hierarchy existed.
-    # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
-    # Now that the hierarchy exists, patch them to AnyRef.
-    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
 
     # Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)

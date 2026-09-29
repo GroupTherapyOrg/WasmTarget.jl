@@ -2398,6 +2398,14 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L137_any_is_anyref" => ("one representation of `Any`: the \$JlType hierarchy is created right after Top, before any type registers (compile_module; dart's ClassInfoCollector.collect creates Top and `_Type` first), so every `Any` field, local and signature is anyref — no code branches on the hierarchy's absence and no pass rewrites a finished type. Until 2026-09-28 the exception and signature types registered before the hierarchy took externref `Any` fields and a second, stale DataType struct, which patch_any_fields_for_jltype_hierarchy! rewrote afterwards (dev/CHARTER.md C1)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            count_sites(r"jl_type_idx\s*(===|!==)\s*nothing"; exclude_line=r"# Already created") +
+                count_sites(r"\bmod\.types\[[^\]]*\]\s*=[^=]") +
+                count_sites(r"patch_any_fields_for_jltype_hierarchy!") +
+                (occursin("get_base_struct_type!(mod, type_registry)\n    create_jl_type_hierarchy!(mod, type_registry)", compile_src) ? 0 : 1)
+        end),
     "L136_constant_type_is_its_emission" => ("a constant's static type (static_wasm_type, dart's TypeOfConstantVisitor) is the type its emission pushes: the one visitor, emit_value!(b, val, ctx), checks it for every literal and bound GlobalRef it emits, as dart asserts it of every constant (constants.dart:811), and every reference constant is non-null (constants.dart:821). A long String constant pushed (ref null \$JlString) under a non-null static type until 2026-09-28 (dev/CHARTER.md C4)",
         () -> begin
             src = read(joinpath(CODEGEN, "values.jl"), String)

@@ -132,6 +132,9 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   so a two-type cycle keeps both field types (placeholder-and-patch erased one to structref).
 - The self-hosting leftovers went: a second serializer, a minimal registry, a test that
   loaded a deleted directory.
+- The `$JlType` hierarchy is created right after Top, so `Any` is anyref everywhere (L137):
+  the externref fallbacks, a stale second DataType struct and the pass that rewrote finished
+  types are gone.
 
 ## Why the archive was consolidated
 
