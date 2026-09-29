@@ -675,6 +675,17 @@ insertion order.)
 ordered_pairs(dict::AbstractDict, keyfn)::Vector{<:Pair} = ordered_by(collect(dict), p -> keyfn(p.first))
 
 """
+    ordered_pairs(dict, keyfn, pred) -> Vector{Pair}
+
+The pairs of `dict` whose key satisfies `pred`, in `keyfn` order: the order keys print types,
+so restricting first costs the kept pairs' printing rather than the whole registry's (the
+bare-array classes of a closed world with thousands of classes were printed at every call).
+parity(quarantine: the program-derived order key for identity-hashed keys, see ordered_pairs.)
+"""
+ordered_pairs(dict::AbstractDict, keyfn, pred)::Vector{<:Pair} =
+    ordered_by(filter(p -> pred(p.first), collect(dict)), p -> keyfn(p.first))
+
+"""
     ordered_by(items, keyfn) -> Vector
 
 `items` stably sorted by `keyfn`, each key computed once. A sort's `by` re-derives the
@@ -760,7 +771,7 @@ range window (class_info.dart:831 getConcreteClassIdRange).
 parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): the concrete ids below T.
 """
 function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
-    ids = Int32[id for (C, id) in ordered_pairs(registry.type_ids, type_order_key) if C isa Type && C <: T]
+    ids = Int32[id for (_, id) in ordered_pairs(registry.type_ids, type_order_key, C -> C isa Type && C <: T)]
     return sort!(ids)
 end
 

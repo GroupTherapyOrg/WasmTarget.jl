@@ -37,35 +37,6 @@ end
     return _runtime_composition_apply(c.fs, length(c.fs), x)
 end
 
-# ─── hvcat Overlay (Tuple-element matrices) ─────────────────────────────────
-# A 2-D matrix literal of TUPLE elements — e.g. WasmMakie's RGBA image data
-# `[(r,g,b,a) (r,g,b,a); …]` — lowers to `Base.hvcat((nc,nc,…), tup, tup, …)`,
-# which routes through `Base._typed_hvncat_dims` (1000+ stmts). WT stubs that to
-# `unreachable` (and whitelisting it sends discovery into a recursive-type
-# StackOverflow), so the matrix traps at runtime (gap a9bf645b1003, WASMMAKIE
-# W-005). The known-working path is `Matrix{T}(undef, m, n)` + element stores;
-# this overlay reconstructs the rectangular matrix that way. Scoped to
-# `values::T... where T<:Tuple` so numeric hvcat (already working) is untouched.
-# Ragged row specs (which native rejects) throw here too → parity, never a wrong
-# shape. Remove when codegen handles `_typed_hvncat` without the StackOverflow.
-@overlay WASM_METHOD_TABLE function Base.hvcat(rows::Tuple{Vararg{Int}}, values::T...) where {T<:Tuple}
-    nc = rows[1]
-    for r in rows
-        r == nc || throw(ArgumentError("hvcat: row lengths must be uniform"))
-    end
-    n = length(values)
-    nr = n ÷ nc
-    m = Matrix{T}(undef, nr, nc)
-    k = 1
-    for i in 1:nr
-        for j in 1:nc
-            m[i, j] = values[k]
-            k += 1
-        end
-    end
-    return m
-end
-
 
 # ─── String Concatenation Overlays ────────────────────────────────────────
 # Why: Base.*(::String, ::String) calls string() which uses print_to_string/IOBuffer
@@ -77,6 +48,11 @@ end
     return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
 end
 
+# Julia's print_to_string builds an IOBuffer (which takes pointer_from_objref, jl_value_ptr)
+# and prints each part through show — a vector's through show_vector, which asks
+# Base.invoke_in_world (arrayshow.jl:553). WT lowers neither, so each part is its string.
+# parity(quarantine: Julia's print_to_string writes an IOBuffer through pointer_from_objref,
+# and shows a vector through Base.invoke_in_world; WT lowers neither.)
 @noinline @overlay WASM_METHOD_TABLE function Base.print_to_string(xs...)
     # Tuple recursion preserves each fixed call site's concrete heterogeneous
     # field types. Iterating `xs` widens the element to Any and enrolls the
@@ -84,82 +60,20 @@ end
     return _wasm_print_to_string_tuple(xs)
 end
 
-@noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String)
-    al = ncodeunits(a)
-    bl = ncodeunits(b)
-    bytes = UInt8[]
-    i = 1
-    while i <= al
-        push!(bytes, codeunit(a, i))
-        i += 1
-    end
-    i = 1
-    while i <= bl
-        push!(bytes, codeunit(b, i))
-        i += 1
-    end
-    return String(bytes)
+# Julia's titlecase writes through an IOBuffer, which takes pointer_from_objref
+# (jl_value_ptr, pointer.jl:302); WT rejects a pointer into an object. This is titlecase's
+# rule over the String's characters (_wasm_titlecase_impl).
+# parity(quarantine: Julia's titlecase writes through an IOBuffer that takes
+# pointer_from_objref, jl_value_ptr; a WT object has no address.)
+@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
+    return _wasm_titlecase_impl(s, strict)
 end
 
-@noinline @overlay WASM_METHOD_TABLE function Base.:*(a::String, b::String, c::String)
-    return (a * b) * c
-end
-
-# ─── string(::Complex) Overlay ─────────────────────────────────────────────
-# Why: string(z::Complex) routes through show(io::IOBuffer, ::Complex), i.e. the
-#      general Base IOBuffer string-building machinery (ensureroom growth +
-#      jl_string_ptr/jl_string_to_genericmemory memmove + take!) that WT does not
-#      implement — empty IOBuffer() yields a null .data array → trap. (gap
-#      cfd419793b0d, Snapshot.jl fractal labels like "0.9 + 0.4im".)
-# How:  byte-assemble the result directly, reusing string(::Real) for the parts
-#      (which WT supports via the Ryu/StringVector overlays). The wrapper logic
-#      mirrors Base.show(io, ::Complex) EXACTLY (sign on imag, " + "/" - ", the
-#      "*" separator for non-finite/non-Integer imag, "im" suffix) so the
-#      differential oracle agrees. Non-compact form (what string() produces).
-# Remove when: codegen handles Base IOBuffer string construction.
-@noinline @overlay WASM_METHOD_TABLE function Base.string(z::Complex)
-    r = real(z)
-    i = imag(z)
-    rs = string(r)
-    neg = signbit(i) && !isnan(i)
-    ia = neg ? -i : i
-    is = string(ia)
-    # Base appends "*" unless imag is a non-Bool Integer or a finite AbstractFloat.
-    star = !((isa(i, Integer) && !isa(i, Bool)) || (isa(i, AbstractFloat) && isfinite(i)))
-    bytes = UInt8[]
-    k = 1
-    nr = ncodeunits(rs)
-    while k <= nr
-        push!(bytes, codeunit(rs, k))
-        k += 1
-    end
-    push!(bytes, UInt8(' '))
-    push!(bytes, neg ? UInt8('-') : UInt8('+'))
-    push!(bytes, UInt8(' '))
-    k = 1
-    ni = ncodeunits(is)
-    while k <= ni
-        push!(bytes, codeunit(is, k))
-        k += 1
-    end
-    if star
-        push!(bytes, UInt8('*'))
-    end
-    push!(bytes, UInt8('i'))
-    push!(bytes, UInt8('m'))
-    return String(bytes)
-end
-
-# Why: `string(::Vector{Int64})` (and `_plain_body(v)=string(v)` in PI island
-#      cells, e.g. convolution_1d `treatment_in = [a1_s, …]`) goes through Base's
-#      array-show → IOBuffer machinery, which WT can't codegen → trap "unreachable".
-# How: byte-assemble the one-line array repr `[e1, e2, …]`, reusing string(::Int64)
-#      (line ~1643) for each element — bit-exact with `show(io, ::Vector{Int64})`.
-#      Scoped to the DEFAULT eltype (Int64): a `Vector{Int64}` shows WITHOUT the
-#      `Int64[…]` type prefix that non-default eltypes (Int32, Bool) get, so a bare
-#      element `string` is correct here and would be WRONG for those. The empty
-#      vector is the one exception — Base shows `Int64[]` — handled explicitly.
-# Remove when: codegen handles Base IOBuffer / array-show string construction (#39).
+# Julia's string of a vector runs show_vector, which asks Base.invoke_in_world for
+# _typeinfo_implicit (arrayshow.jl:553); WT does not lower invoke_in_world (R33). These write
+# Julia's text for the three element types a program prints: "[1, 2]", "[1.5, 2.0]",
+# ["a", "b"] with its quotes.
+# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Int64})
     n = length(v)
     bytes = UInt8[]
@@ -191,11 +105,6 @@ end
     return String(bytes)
 end
 
-# Why: same array-show trap for `string(::Vector{Float64})` (PI numeric island cells
-#      that display a vector of measurements/features, e.g. EEG band powers).
-# How: byte-assemble `[e1, e2, …]` reusing string(::Float64) (Ryu) per element —
-#      bit-exact with show(io, ::Vector{Float64}). Float64 is the default float
-#      eltype → no `Float64[…]` prefix for non-empty; empty shows `Float64[]`.
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Float64})
     n = length(v)
     bytes = UInt8[]
@@ -226,15 +135,6 @@ end
     return String(bytes)
 end
 
-# Why: `string(::Vector{String})` (PI dither island shows its colour palette via
-#      `_plain_body(colorscheme)`) hits the same array-show trap.
-# How: byte-assemble `["e1", "e2", …]`, quoting each element as show(io, ::String)
-#      does — escape `"`, `\`, `$`. SOUND-OR-TRAP: show keeps non-ASCII printable
-#      bytes verbatim but escapes non-printable ones via `\uXXXX`, which needs
-#      Unicode printability tables WT lacks. Rather than risk silently-wrong bytes,
-#      this is bit-exact for printable-ASCII elements (0x20–0x7e, the dither hex
-#      colours) and TRAPS loudly on any control/≥0x80 byte. Empty ⇒ `String[]`.
-# Remove when: codegen handles Base IOBuffer / Unicode-aware escape_string (#39).
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{String})
     n = length(v)
     bytes = UInt8[]
@@ -275,19 +175,71 @@ end
     return String(bytes)
 end
 
-# Julia's titlecase writes through an IOBuffer, which takes pointer_from_objref
-# (jl_value_ptr, pointer.jl:302); WT rejects a pointer into an object. This is titlecase's
-# rule over the String's characters (_wasm_titlecase_impl).
-# parity(quarantine: Julia's titlecase writes through an IOBuffer that takes
-# pointer_from_objref, jl_value_ptr; a WT object has no address.)
-@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
-    return _wasm_titlecase_impl(s, strict)
-end
-
 # Julia's repr of a vector runs show_vector, which asks Base.invoke_in_world for
 # _typeinfo_implicit (arrayshow.jl:553); WT does not lower invoke_in_world (R33).
 # parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
 @overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
+
+# Julia's hvcat of tuple elements shapes the matrix through _typed_hvncat_shape
+# (abstractarray.jl:52), which WT does not compile. This builds the same rectangular matrix
+# with Matrix{T}(undef, m, n) and element stores.
+# parity(quarantine: Julia's hvcat shapes the result through _typed_hvncat_shape, which WT does
+# not compile.)
+@overlay WASM_METHOD_TABLE function Base.hvcat(rows::Tuple{Vararg{Int}}, values::T...) where {T<:Tuple}
+    nc = rows[1]
+    for r in rows
+        r == nc || throw(ArgumentError("hvcat: row lengths must be uniform"))
+    end
+    n = length(values)
+    nr = n ÷ nc
+    m = Matrix{T}(undef, nr, nc)
+    k = 1
+    for i in 1:nr
+        for j in 1:nc
+            m[i, j] = values[k]
+            k += 1
+        end
+    end
+    return m
+end
+
+# Julia's string(::Complex) is print_to_string(z), which WT's print_to_string overlay answers
+# with string(z) — itself (dev/MARCH.md 13.10); the call recursed until the stack ran out. This
+# writes Julia's text, re ± im "im".
+# parity(quarantine: WT's print_to_string overlay answers print_to_string(x) with string(x),
+# which is print_to_string(x) for a value with no string method of its own.)
+@noinline @overlay WASM_METHOD_TABLE function Base.string(z::Complex)
+    r = real(z)
+    i = imag(z)
+    rs = string(r)
+    neg = signbit(i) && !isnan(i)
+    ia = neg ? -i : i
+    is = string(ia)
+    # Base appends "*" unless imag is a non-Bool Integer or a finite AbstractFloat.
+    star = !((isa(i, Integer) && !isa(i, Bool)) || (isa(i, AbstractFloat) && isfinite(i)))
+    bytes = UInt8[]
+    k = 1
+    nr = ncodeunits(rs)
+    while k <= nr
+        push!(bytes, codeunit(rs, k))
+        k += 1
+    end
+    push!(bytes, UInt8(' '))
+    push!(bytes, neg ? UInt8('-') : UInt8('+'))
+    push!(bytes, UInt8(' '))
+    k = 1
+    ni = ncodeunits(is)
+    while k <= ni
+        push!(bytes, codeunit(is, k))
+        k += 1
+    end
+    if star
+        push!(bytes, UInt8('*'))
+    end
+    push!(bytes, UInt8('i'))
+    push!(bytes, UInt8('m'))
+    return String(bytes)
+end
 
 # Julia's string(nothing) is print_to_string(nothing), which WT's print_to_string overlay
 # answers with string(first(xs)) — itself — so the call has no end (dev/MARCH.md 13.10). This
@@ -337,109 +289,6 @@ end
     return String(bytes)
 end
 
-
-# ─── Ryu scalar writeshortest Overlay (string(::Float64/Float32)) ─────────
-# Why: the digit-generation kernel writeshortest(buf, pos, x, ...) compiles
-#      fine, but the scalar wrapper that string(x::AbstractFloat) calls steals
-#      its buffer via String(resize!(buf, ...)) → atomic_pointerset, which
-#      codegen stubs → every string(::Float64) trapped (gap 5741ab865252
-#      family: string(0.0) in Set/Dict/length). Same kernel, but materialize
-#      the result through the String(bytes) path every other overlay uses.
-# Remove when: codegen handles the unsafe_takestring / atomic_pointerset
-#      buffer-steal idiom.
-@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeshortest(x::T) where {T <: Union{Float32, Float64}}
-    # Explicit 1-arg method (no default-arg expansion: @overlay does not put the
-    # generated wrapper arities in the overlay table, so a defaulted definition
-    # never shadowed Base's 1-arg call from string()).
-    cap = Base.Ryu.neededdigits(T)
-    buf = UInt8[]
-    i = 0
-    while i < cap
-        push!(buf, 0x00)
-        i += 1
-    end
-    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
-                                 UInt8('e'), false, UInt8('.'), false, false)
-    out = UInt8[]
-    i = 1
-    while i < pos
-        push!(out, buf[i])
-        i += 1
-    end
-    return String(out)
-end
-
-# ─── string(::Float64/Float32) Overlay ─────────────────────────────────────
-# Why: Base.string(x::IEEEFloat) (Ryu.jl:122) does NOT route through the
-#      scalar writeshortest wrapper — the StringVector + buffer-steal
-#      (String(resize!(buf, ...)) → atomic_pointerset) lives INLINE in its own
-#      body, which codegen stubs → unreachable trap (gap 5741ab865252 family).
-#      Same Ryu kernel, result materialized through the String(bytes) path
-#      the other overlays use.
-@noinline @overlay WASM_METHOD_TABLE function Base.string(x::T) where {T <: Union{Float32, Float64}}
-    cap = Base.Ryu.neededdigits(T)
-    buf = UInt8[]
-    i = 0
-    while i < cap
-        push!(buf, 0x00)
-        i += 1
-    end
-    pos = Base.Ryu.writeshortest(buf, 1, x, false, false, true, -1,
-                                 UInt8('e'), false, UInt8('.'), false, false)
-    out = UInt8[]
-    i = 1
-    while i < pos
-        push!(out, buf[i])
-        i += 1
-    end
-    return String(out)
-end
-
-# ─── Ryu scalar writefixed/writeexp Overlays (WASMMAKIE W-004) ────────────
-# Why: same buffer-steal idiom as writeshortest — the scalar wrappers build a
-#      StringVector and materialize via String(resize!(buf, ...)) →
-#      atomic_pointerset, which codegen stubs → unreachable trap. The digit
-#      kernels writefixed(buf, pos, x, precision, ...) compile fine. Same
-#      treatment: push!-built buffer + String(bytes) materialization.
-#      (Consumers: tick-label formatting — Makie tick_format / Showoff.)
-# Remove when: codegen handles the unsafe_takestring buffer-steal idiom.
-@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writefixed(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
-    cap = precision + Base.Ryu.neededdigits(T)
-    buf = UInt8[]
-    i = 0
-    while i < cap
-        push!(buf, 0x00)
-        i += 1
-    end
-    pos = Base.Ryu.writefixed(buf, 1, x, precision, false, false, false,
-                              UInt8('.'), false)
-    out = UInt8[]
-    i = 1
-    while i < pos
-        push!(out, buf[i])
-        i += 1
-    end
-    return String(out)
-end
-
-@noinline @overlay WASM_METHOD_TABLE function Base.Ryu.writeexp(x::T, precision::Integer) where {T <: Union{Float32, Float64}}
-    cap = precision + Base.Ryu.neededdigits(T)
-    buf = UInt8[]
-    i = 0
-    while i < cap
-        push!(buf, 0x00)
-        i += 1
-    end
-    pos = Base.Ryu.writeexp(buf, 1, x, precision, false, false, false,
-                            UInt8('e'), UInt8('.'), false)
-    out = UInt8[]
-    i = 1
-    while i < pos
-        push!(out, buf[i])
-        i += 1
-    end
-    return String(out)
-end
 
 # The padding-free primitive element types of the reinterpret overlays below, by width.
 const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
@@ -716,22 +565,6 @@ end
     Core.Intrinsics.atomic_pointerset(Ptr{Ptr{Cvoid}}(pointer(A)), C_NULL, :monotonic)
     return A
 end
-
-# ─── table_unpack Overlay ─────────────────────────────────────────────────
-# Why: Base.Math.table_unpack indexes into J_TABLE::NTuple{256,UInt64} with a
-#      runtime index. NTuple dynamic indexing generates massive IR (mapfoldl/
-#      reduce_empty/fieldtype on all 256 fields). Vector indexing is O(1) in WASM.
-# Remove when: codegen handles NTuple dynamic indexing efficiently
-const _WASM_J_TABLE_VEC = UInt64[Base.Math.J_TABLE[i] for i in 1:256]
-
-@overlay WASM_METHOD_TABLE function Base.Math.table_unpack(ind::Int32)
-    i = Int64(ind & Int32(0xff)) + Int64(1)
-    entry = _WASM_J_TABLE_VEC[i]
-    jU = Core.bitcast(Float64, Base.Math.JU_CONST | (entry & Base.Math.JU_MASK))
-    jL = Core.bitcast(Float64, Base.Math.JL_CONST | (entry >> UInt64(0x08)))
-    return (jU, jL)
-end
-
 
 # ─── String hash Overlay — bit-exact with native Julia ─────────────────────
 # Why: Base's hash(::String,::UInt)/hash(::SubString{String},::UInt) reach

@@ -2243,7 +2243,7 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
     reg = ctx.type_registry
     kinds = UInt32[]   # the bare-array representations (Memory, SimpleVector) under check_type
     outside = UInt32[]
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key, C -> C isa DataType && C <: GenericMemory)
         (C isa DataType && C <: GenericMemory) || continue
         arr = get(reg.arrays, eltype(C), nothing)   # no array type: no such value exists
         arr === nothing && continue

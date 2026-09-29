@@ -1265,6 +1265,24 @@ _g("julia_string_bodies", Any[
     # are allocated at the comparison)
     ("string_literal_eq", (n::Int64) -> (repeat("hello", 1) == "hello" ? 1 : 0) + n, Int64(2)),
 ])
+# Julia's own printing bodies (dev/CHARTER.md C3). A string compares by a positional digest of
+# its code units, so every byte and its place counts.
+_sm_digest(s::AbstractString)::Int64 = (d = Int64(0); for (i, c) in enumerate(codeunits(s)); d += Int64(c) * i; end; d * 1000 + ncodeunits(s))
+_g("julia_print_bodies", Any[
+    ("concat2", (n::Int64) -> _sm_digest("ab" * string(n)), Int64(7)),
+    ("concat3", (n::Int64) -> _sm_digest("ab" * "c" * string(n)), Int64(7)),
+    ("interp_mixed", (n::Int64) -> _sm_digest("x=$(n) y=$(n * 0.5) z=$(n > 0)"), Int64(3)),
+    ("string_float", (n::Int64) -> _sm_digest(string(0.1 + 0.2 * n)) + _sm_digest(string(-0.0)) + _sm_digest(string(1.0e-7 * n)), Int64(1)),
+    ("string_float32", (n::Int64) -> _sm_digest(string(Float32(0.1) * n)), Int64(3)),
+    ("string_complex", (n::Int64) -> _sm_digest(string(1.0 + n * 1.0im)), Int64(2)),
+    ("string_vec_int", (n::Int64) -> _sm_digest(string([1, n, -3])), Int64(5)),
+    ("string_vec_float", (n::Int64) -> _sm_digest(string([1.5, n * 0.25])), Int64(3)),
+    ("string_vec_string", (n::Int64) -> _sm_digest(string(["a", string(n)])), Int64(4)),
+    ("ryu_writefixed", (n::Int64) -> _sm_digest(Base.Ryu.writefixed(1.23456 * n, 2)), Int64(3)),
+    ("ryu_writeexp", (n::Int64) -> _sm_digest(Base.Ryu.writeexp(1.23456e10 * n, 3)), Int64(3)),
+    ("ryu_writeshortest", (n::Int64) -> _sm_digest(Base.Ryu.writeshortest(0.3 * n)), Int64(3)),
+    ("hvcat_tuples", (n::Int64) -> (m = [(1, 2) (3, n); (5, 6) (7, 8)]; m[1, 2][2] * 100 + m[2, 1][1] * 10 + size(m, 2)), Int64(4)),
+])
 # Types whose fields reach back to themselves register with their strongly connected component
 # (finish_pending!, dev/formal/RecGroup.tla): a two-type cycle through a type parameter, a
 # three-type cycle, a cycle through a tuple and through an abstract field — each field keeps its
