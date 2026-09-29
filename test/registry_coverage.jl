@@ -87,15 +87,9 @@ end
 # UNREACHED/UNREACHABLE (a deletion candidate) or the smoke xfail case that reaches it.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "Core.apply_type") => "fires for a runtime Union{T, Nothing} and rejects: jl_type_union's normalization is not ported — smoke xfail apply_type_union (measured 2026-09-27)",
-    (:BUILTIN_LOWERINGS, "Base.check_world_bounded") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, which compile_invoke! routes to this entry by function identity; no :call form measured, and show_type_name's programs fail first on 1.12 — smoke xfail show_type)",
     (:BUILTIN_LOWERINGS, "Base.getproperty") => "fires on an Any receiver, then the compile rejects in the getproperty(::UInt64, ::Symbol) dispatch candidate — smoke xfail builtin_crashes/getproperty_any (measured 2026-09-22)",
     (:BUILTIN_LOWERINGS, "Core.invoke_in_world") => "fires, then rejects the re-dispatched callee as an unresolved dynamic call — smoke xfail builtin_crashes/invoke_in_world (measured 2026-09-22)",
-    (:BUILTIN_LOWERINGS, "Core.isdefinedglobal") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function, which fails to compile first; isdefinedglobal(Main, runtime Symbol) rejects as an unresolved dynamic call without this entry firing)",
-    (:BUILTIN_LOWERINGS, "Base.isvisible") => "UNREACHED (measured 2026-09-22: Julia emits it as an :invoke, which compile_invoke! routes to this entry by function identity; its caller show_function fails to compile first — raw ArgumentError from structs.jl:177 is_self_referential_type)",
     (:BUILTIN_LOWERINGS, "Base.setproperty!") => "fires on an Any receiver, then the compile rejects — smoke xfail builtin_crashes/setproperty_any (measured 2026-09-22)",
-    (:BUILTIN_LOWERINGS, "Base.sizeof") => "no fast-lane program reaches a :call of Base.sizeof with a String, Symbol or Memory operand (Julia invokes its own methods for those); a dynamic sizeof over an Any element declines this lowering and fails in Julia's own body at getfield(Any, :layout) — smoke xfail builtin_crashes/sizeof_any (measured 2026-09-29)",
-    (:FOREIGN_LOWERINGS, "jl_is_binding_deprecated") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function/isvisible, which fail to compile first)",
-    (:FOREIGN_LOWERINGS, "jl_is_const") => "UNREACHED (measured 2026-09-22: its TypeName shape comes only from show_function; isconst(Base, runtime Symbol) reaches it, it declines, and the call rejects 'no lowering')",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "fires for unsafe_wrap(Array, pointer(v), n) and declines (pointer not traced) — smoke xfail pointer_foreigncalls/unsafe_wrap_pointer (measured 2026-09-22)",
     (:FOREIGN_LOWERINGS, "jl_value_ptr") => "every measured spelling (pointer_from_objref of a Ref, graphemes, isgraphemebreak!) rejects 'escapes storage-relative WasmGC operations' — smoke xfail pointer_foreigncalls/ref_pointer_load (measured 2026-09-22)",
 )

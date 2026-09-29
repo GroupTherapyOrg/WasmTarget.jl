@@ -1428,6 +1428,21 @@ const _SM_CONST_VEC = [1, 2]
 # size, plus a selector byte per element for an isbits union. The lowering once cast every
 # AbstractVector or Any operand to the String byte array: a Memory{Int64} trapped at the cast
 # where Julia answers 24.
+# Julia's reflection over a runtime type's TypeName — check_world_bounded, isvisible,
+# isdefinedglobal, isdeprecated, isconst — answered from the closed world's TypeName metadata. The
+# two types live in different modules, so the module stays the TypeName's own field (a type pair
+# from one module folds it to a constant, and the lowerings decline); the second argument is the
+# spelling show_function uses (name, or singletonname).
+_sm_rt_type(x::Int64) = x > 0 ? Int64 : Float64
+_sm_rt_type2(x::Int64) = x > 0 ? Int64 : Base.RefValue{Int64}
+_g("closed_world_reflection", Any[
+    ("check_world_bounded_runtime", (x::Int64) -> (r = Base.check_world_bounded(_sm_rt_type(x).name); r === nothing ? -1 : Int64(first(r) >= 0)), Int64(1)),
+    ("isvisible_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(Base.isvisible(tn.name, tn.module, Main))), Int64(1)),
+    ("isvisible_runtime_not", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(Base.isvisible(tn.name, tn.module, Main))), Int64(-1)),
+    ("isdefinedglobal_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(isdefinedglobal(tn.module, tn.singletonname))), Int64(-1)),
+    ("isdeprecated_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(Base.isdeprecated(tn.module, tn.name))), Int64(1)),
+    ("isconst_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(isconst(tn.module, tn.singletonname))), Int64(-1)),
+])
 _g("sizeof_values", Any[
     ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),
     ("sizeof_memory_float32", (n::Int64) -> sizeof(Memory{Float32}(undef, n)), Int64(3)),

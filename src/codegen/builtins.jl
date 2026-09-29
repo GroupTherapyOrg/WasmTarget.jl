@@ -2970,11 +2970,9 @@ _register_builtin!(Base.check_world_bounded, _lower_check_world_bounded!)
 _register_builtin!(_closed_world_type_bounds, _lower_check_world_bounded!)
 
 _register_builtin!(Core.getglobal, _lower_getglobal!)
-# `Core.sizeof` (the builtin `code_typed` actually resolves calls to) and
-# `Base.sizeof` (the generic function) are DIFFERENT objects — `is_func`
-# matched either by bare name, so both keys route to the same lowering.
+# `Core.sizeof` is the builtin (jl_f_sizeof). `Base.sizeof` is a generic function whose
+# methods compile from their own Julia bodies (which call the builtin), so it has no entry.
 _register_builtin!(Core.sizeof, _lower_sizeof!)
-_register_builtin!(Base.sizeof, _lower_sizeof!)
 _register_builtin!(Base.ncodeunits, _lower_ncodeunits!)
 _register_builtin!(Base.length, _lower_length!)
 _register_builtin!(Core.nfields, _lower_nfields!)
