@@ -249,7 +249,8 @@ function _compile_closed_world_plan(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        source_map_url::Union{Nothing,String}=nothing
+                        source_map_url::Union{Nothing,String}=nothing,
+                        trace_entry::Union{Nothing,String}=nothing
                         )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
@@ -280,6 +281,7 @@ function _compile_closed_world_plan(functions::Vector;
         mod.source_map_url = source_map_url
         ensure_provenance_imports!(mod)
     end
+    trace_entry === nothing || ensure_trace_imports!(mod)
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
@@ -563,6 +565,8 @@ function _compile_closed_world_plan(functions::Vector;
     _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
+        # a traced compile's entry: its index, and the typed IR its probes number
+        name == trace_entry && (mod.trace_func_idx = func_idx; mod.trace_code = function_data[i][4])
         local fd_mi = function_data[i][9]
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
@@ -830,12 +834,13 @@ function compile_module(functions::Vector;
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         discovery::Symbol=:trim,
-                        source_map_url::Union{Nothing,String}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
+                        source_map_url::Union{Nothing,String}=nothing,
+                        trace_entry::Union{Nothing,String}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     discovery === :trim || throw(ArgumentError(
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url)
+        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url, trace_entry)
 end
 
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in

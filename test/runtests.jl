@@ -145,6 +145,7 @@ include("utils.jl")
 # a rejection names its statement and inline chain (dev/MARCH.md exit criterion 5)
 _wt_shard0() && include("diagnostic_attribution.jl")
 _wt_shard0() && include("source_maps.jl")
+_wt_shard0() && include("wrong_value_locator.jl")
 _wt_shard0() && include("fold_rule.jl")
 # formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
 _wt_shard0() && include("dispatch_method_error.jl")

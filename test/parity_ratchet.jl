@@ -2454,6 +2454,25 @@ const LOCKS = [
                              "\"enrolled as \" * get(_ENROLLMENT_REASONS[], fd_mi,"]
             count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp)
         end),
+    "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) gives each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local) a local and reports its value after the store (emit_statement_trace!, through imports added before any definition), recording which statements it probed; test/trace_localize.jl runs the CodeInfo WT compiled natively as an OpaqueClosure with the same probes, compares both traces on the statements both report, and names the first divergent one — its text, inline chain, iteration and both values — or, when every traced statement agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
+        () -> begin
+            gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            loc = read(joinpath(ROOT, "test", "trace_localize.jl"), String)
+            smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
+            required = [(stm, "local_set!(b, local_idx)\n                emit_statement_trace!(b, ctx, idx, local_idx, local_type)"),
+                        (gen, "idx in ctx.mod.trace_stmts || push!(ctx.mod.trace_stmts, idx)"),
+                        (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
+                        (comp, "trace_entry === nothing || ensure_trace_imports!(mod)"),
+                        (loc, "filter!(t -> t[1] in both, ntrace)"),
+                        (loc, "filter!(t -> t[1] in both, wtrace)"),
+                        (smoke, "replace(_smoke_locate(f, args), "),
+                        (lane, "replace(_locate(fn, Tuple(o.input)), ")]
+            count(((text, needle),) -> !occursin(needle, text), required)
+        end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
     "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",

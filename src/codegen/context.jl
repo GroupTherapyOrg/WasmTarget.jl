@@ -787,6 +787,15 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
         end
     end
 
+    # a traced compile's traced function keeps each statement of a traced type in a local,
+    # which the probe after its store reads (emit_statement_trace!)
+    if ctx.mod.trace_func_idx === ctx.func_idx
+        for (i, rec) in enumerate(nir)
+            rec.slot == 0 && produces_stack_value(rec) && !(rec.node isa NirPhi) &&
+                haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)
+        end
+    end
+
     for (ssa_id, use_count) in ssa_uses
         if haskey(ctx.phi_locals, ssa_id)
             # Phi nodes already have locals

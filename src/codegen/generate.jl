@@ -280,17 +280,65 @@ function ensure_provenance_imports!(mod::WasmModule)::Nothing
     return nothing
 end
 
-# the function index of the imported `wasmtarget.stack_trace`, or nothing
-# parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
-function _stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32}
+# The Julia types whose statements a traced compile reports, and the wasm local each lives in:
+# exactly Julia's bits, so a traced value compares bit for bit with the native one.
+# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+const TRACED_STATEMENT_TYPES = Dict{Type,WasmValType}(Int64 => I64, UInt64 => I64, Int32 => I32,
+                                                      Bool => I32, Float32 => F32, Float64 => F64)
+
+"""
+    ensure_trace_imports!(mod)
+
+The imports a traced compile's probes call, one per traced wasm type:
+`wasmtarget.trace_i32/i64/f32/f64(statement::i32, value)`. Added when the module is created,
+before any definition.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function ensure_trace_imports!(mod::WasmModule)::Nothing
+    for (name, T) in (("trace_i32", I32), ("trace_i64", I64), ("trace_f32", F32), ("trace_f64", F64))
+        _import_func_idx(mod, "wasmtarget", name) === nothing &&
+            add_import!(mod, "wasmtarget", name, WasmValType[I32, T], WasmValType[])
+    end
+    return nothing
+end
+
+"""
+    emit_statement_trace!(b, ctx, idx, local_idx, local_type) -> b
+
+In the traced function of a traced compile, report statement `idx`'s value (just stored in
+`local_idx`) to the host: `wasmtarget.trace_<type>(idx, value)`, for a statement of a traced
+type. Nothing otherwise.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int,
+                               local_idx::Integer, local_type)::InstrBuilder
+    ctx.mod.trace_func_idx === ctx.func_idx || return b
+    local T = get(ctx.ssa_types, idx, Any)
+    get(TRACED_STATEMENT_TYPES, T, nothing) === local_type || return b
+    local name = local_type === I64 ? "trace_i64" : local_type === I32 ? "trace_i32" :
+                 local_type === F32 ? "trace_f32" : "trace_f64"
+    i32_const!(b, idx)
+    local_get!(b, local_idx)
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, local_type], WasmValType[])
+    idx in ctx.mod.trace_stmts || push!(ctx.mod.trace_stmts, idx)
+    return b
+end
+
+# the function index of an imported function, or nothing
+# parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
+function _import_func_idx(mod::WasmModule, module_name::String, field_name::String)::Union{Nothing,UInt32}
     local n = 0
     for imp in mod.imports
         imp.kind == 0x00 || continue
-        (imp.module_name == "wasmtarget" && imp.field_name == "stack_trace") && return UInt32(n)
+        (imp.module_name == module_name && imp.field_name == field_name) && return UInt32(n)
         n += 1
     end
     return nothing
 end
+
+# the function index of the imported `wasmtarget.stack_trace`, or nothing
+# parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
+_stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32} = _import_func_idx(mod, "wasmtarget", "stack_trace")
 
 """
 Ensure module has the \$current_exn global for exception value stashing.

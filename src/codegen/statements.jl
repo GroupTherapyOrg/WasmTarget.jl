@@ -782,6 +782,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                     local_tee!(b, ctx.slot_locals[_slot_assign_id])
                 end
                 local_set!(b, local_idx)
+                emit_statement_trace!(b, ctx, idx, local_idx, local_type)
             end
         end
     end
@@ -790,14 +791,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     # the value is still on the stack — store it to the slot local directly. Typed.
     if _slot_assign_id > 0 && haskey(ctx.slot_locals, _slot_assign_id) && !haskey(ctx.ssa_locals, idx)
         local_set!(b, ctx.slot_locals[_slot_assign_id])   # direct
-    end
-
-    # TRACE: Find double-DROP in compiled output for func 8 (node count — no byte scan)
-    if ctx.func_idx == 8
-        local n_drops = count(i -> i isa InstrIR.Drop, b.instrs)
-        if n_drops >= 2
-            @debug "STMT $idx has $n_drops DROPs: $(first(nir_text(rec), 80))"
-        end
     end
 
     return b

@@ -441,10 +441,15 @@ mutable struct WasmModule
     # the URL a `sourceMappingURL` section names; set, every builder of this module records
     # its source mappings (dart ModuleBuilder.sourceMapUrl, module.dart:28)
     source_map_url::Union{Nothing, String}
+    # the function whose statements report their values to the host (a traced compile, for
+    # locating a wrong value at its first divergent statement); nothing otherwise
+    trace_func_idx::Union{Nothing, UInt32}
+    trace_code::Union{Nothing, Core.CodeInfo}   # that function's typed CodeInfo, as compiled
+    trace_stmts::Vector{Int}                    # the statements its probes report, as emitted
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, nothing, nothing, Int[])
 
 # ============================================================================
 # Module Building API

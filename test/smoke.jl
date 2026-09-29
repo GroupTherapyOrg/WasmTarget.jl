@@ -15,6 +15,7 @@ using WasmTarget
 using Random, SHA   # seeded streams, as the full suite loads them
 using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
 include(joinpath(@__DIR__, "utils.jl"))
+include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first divergent statement
 
 const FILTER = lowercase.(ARGS)
 _want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER)
@@ -1555,6 +1556,16 @@ _g("overlays", Any[
 
 # ============================================================================
 
+# A WRONG answer located at its first divergent statement (TraceLocalize.first_divergence);
+# the locator's own failure is reported in its place, never hidden.
+function _smoke_locate(f, args)::String
+    try
+        return TraceLocalize.first_divergence(f, args...; js_args=join(map(format_js_arg, args), ", ")).summary
+    catch e
+        return "(the wrong value could not be located: $(first(sprint(showerror, e), 200)))"
+    end
+end
+
 # An error's located lines — the headline (for a codegen bug, the compiler source line it was
 # raised at), the statement, its innermost inline frame, and the cause — so a failing case
 # names where to look without rerunning it; the full trace prints when the case runs alone.
@@ -1580,7 +1591,9 @@ function main()
                 if r.pass
                     npass += 1
                 else
-                    nfail += 1; push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)")
+                    nfail += 1
+                    push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)\n    " *
+                                    replace(_smoke_locate(f, args), "\n" => "\n    "))
                 end
             catch e
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")

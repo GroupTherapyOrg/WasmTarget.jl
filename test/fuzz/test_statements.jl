@@ -13,6 +13,19 @@
 using Test, Supposition, Random
 
 include(joinpath(@__DIR__, "run.jl"))
+# a wrong outcome is located at its first divergent statement (test/trace_localize.jl)
+const WasmRunner = FuzzHarness.WasmRunner
+include(joinpath(@__DIR__, "..", "trace_localize.jl"))
+_js_arg(x::Int64)::String = "$(x)n"
+_js_arg(x::Float64)::String = isnan(x) ? "NaN" : isinf(x) ? (x > 0 ? "Infinity" : "-Infinity") : repr(x)
+function _locate(fn, input::Tuple)::String
+    try
+        return Base.invokelatest(TraceLocalize.first_divergence, fn, input...;
+                                 js_args=join(map(_js_arg, input), ", ")).summary
+    catch e
+        return "(the wrong value could not be located: $(first(sprint(showerror, e), 200)))"
+    end
+end
 
 const N = 40
 const SEED = 0x5747_0001   # the fixed draw; a new seed is a new program set, reviewed as such
@@ -59,7 +72,8 @@ const SEED = 0x5747_0001   # the fixed draw; a new seed is a new program set, re
                 length(findings) < 5 && push!(findings, "[compile_error] $(first(string(body), 100))")
             elseif o.category ∉ (:ok, :skip)
                 push!(wrong, "[$(o.category)] program $k, input $(o.input): native $(o.native), " *
-                             "wasm $(o.wasm)\n$(o.src)")
+                             "wasm $(o.wasm)\n$(o.src)\n  " *
+                             replace(_locate(fn, Tuple(o.input)), "\n" => "\n  "))
             end
         end
         println("$T0: ", sort(collect(cats)), "  genfail=$genfail natfail=$natfail  draw=",
