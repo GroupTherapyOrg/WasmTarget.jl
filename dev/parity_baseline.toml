@@ -41,6 +41,7 @@ L134_the_wasm_runtime_is_required = 0
 L135_callee_by_exact_signature = 0
 L136_constant_type_is_its_emission = 0
 L137_any_is_anyref = 0
+L138_oracle_is_bit_exact = 0
 L13_no_byte_bridges = 0
 L14_no_posthoc_module_repair = 0
 L15_no_fabricated_ssa_store = 0

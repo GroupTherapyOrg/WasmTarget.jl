@@ -2398,6 +2398,23 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===`. The one tolerance (a relative 1e-9) applies only where tree_matches is given the C routine the native value came from, and only linalg_diff's _LA_C_LIBRARY names one, each a BLAS or LAPACK routine. Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which would pass a last-bit error in Julia's own math (dev/CHARTER.md C3)",
+        () -> begin
+            bridge = read(joinpath(SRC, "bridge.jl"), String)
+            utils = read(joinpath(ROOT, "test", "utils.jl"), String)
+            prop = read(joinpath(ROOT, "test", "fuzz", "property.jl"), String)
+            la = read(joinpath(ROOT, "test", "fuzz", "linalg_diff.jl"), String)
+            n = count_sites(r"isapprox\(|≈|\brtol\b|\batol\b"; roots=[joinpath(ROOT, "test")],
+                            exclude_files=["parity_ratchet.jl"])
+            n += count_sites(r"isapprox\(|\brtol\b|\batol\b"; roots=[SRC],
+                             exclude_line=r"return isapprox\(Float64\(a\), Float64\(b\); rtol = 1e-9, atol = 1e-12\)")
+            n += count(p -> !occursin(p, bridge * utils * prop),
+                       ["c_library === nothing && return false", "a === b && return true",
+                        "pass=isequal(expected, actual)", "return isequal(a, b)"])
+            m = match(r"(?s)const _LA_C_LIBRARY = Dict\{Function,String\}\((.*?)\n\)", la)
+            m === nothing && return n + 1
+            n + count(v -> !occursin(r"^(BLAS|LAPACK) [a-z]", v), [x.captures[1] for x in eachmatch(r"=> \"([^\"]*)\"", m.captures[1])])
+        end),
     "L137_any_is_anyref" => ("one representation of `Any`: the \$JlType hierarchy is created right after Top, before any type registers (compile_module; dart's ClassInfoCollector.collect creates Top and `_Type` first), so every `Any` field, local and signature is anyref — no code branches on the hierarchy's absence and no pass rewrites a finished type. Until 2026-09-28 the exception and signature types registered before the hierarchy took externref `Any` fields and a second, stale DataType struct, which patch_any_fields_for_jltype_hierarchy! rewrote afterwards (dev/CHARTER.md C1)",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)

@@ -55,8 +55,9 @@ with the per-clause status. A clause is never closed by argument.
   never approximated; Julia's own bodies compile instead of bespoke re-implementations.
   Checks: `L42` `L52` `L53` `L54` `L56` `L57` `L59` `L62` `L70` `L81` `L82` `L92` `L123`
   `L133` (each bespoke body in `STANDALONE_INTRINSIC_BODIES` is on an exact allowlist with the
-  reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `R38` (each `@overlay`
-  states why Julia's body cannot compile, or goes).
+  reason Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `L138` (the differential
+  oracle is bit-exact; a tolerance only where the native value comes from a named BLAS or
+  LAPACK routine) `R38` (each `@overlay` states why Julia's body cannot compile, or goes).
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.

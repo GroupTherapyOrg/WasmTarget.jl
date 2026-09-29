@@ -2341,18 +2341,18 @@ begin
             wasm_bytes = WasmTarget.compile(test_float_add, (Float64, Float64))
             @test length(wasm_bytes) > 0
 
-            @test run_wasm(wasm_bytes, "test_float_add", 1.5, 2.5) ≈ 4.0
-            @test run_wasm(wasm_bytes, "test_float_add", -1.0, 1.0) ≈ 0.0
-            @test run_wasm(wasm_bytes, "test_float_add", 100.5, 200.5) ≈ 301.0
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", 1.5, 2.5), 4.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", -1.0, 1.0), 0.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", 100.5, 200.5), 301.0)
         end
 
         @testset "Float multiplication" begin
             wasm_bytes = WasmTarget.compile(test_float_mul, (Float64, Float64))
             @test length(wasm_bytes) > 0
 
-            @test run_wasm(wasm_bytes, "test_float_mul", 2.0, 3.0) ≈ 6.0
-            @test run_wasm(wasm_bytes, "test_float_mul", -2.0, 4.0) ≈ -8.0
-            @test run_wasm(wasm_bytes, "test_float_mul", 0.5, 0.5) ≈ 0.25
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", 2.0, 3.0), 6.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", -2.0, 4.0), -8.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", 0.5, 0.5), 0.25)
         end
 
         @testset "Integer branching" begin
@@ -3140,9 +3140,9 @@ begin
             bytes = compile(test_sqrt_fast, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_sqrt_fast", Float64[4.0]) ≈ 2.0
-            @test run_wasm(bytes, "test_sqrt_fast", Float64[9.0]) ≈ 3.0
-            @test run_wasm(bytes, "test_sqrt_fast", Float64[2.0]) ≈ sqrt(2.0)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[4.0]), 2.0)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[9.0]), 3.0)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[2.0]), sqrt(2.0))
         end
 
         @testset "abs" begin
@@ -3153,9 +3153,9 @@ begin
             bytes = compile(test_abs, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_abs", Float64[-5.0]) ≈ 5.0
-            @test run_wasm(bytes, "test_abs", Float64[3.0]) ≈ 3.0
-            @test run_wasm(bytes, "test_abs", Float64[-0.0]) ≈ 0.0
+            @test isequal(run_wasm(bytes, "test_abs", Float64[-5.0]), 5.0)
+            @test isequal(run_wasm(bytes, "test_abs", Float64[3.0]), 3.0)
+            @test isequal(run_wasm(bytes, "test_abs", Float64[-0.0]), 0.0)
         end
 
         @testset "floor" begin
@@ -3166,9 +3166,9 @@ begin
             bytes = compile(test_floor, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_floor", Float64[3.7]) ≈ 3.0
-            @test run_wasm(bytes, "test_floor", Float64[-2.3]) ≈ -3.0
-            @test run_wasm(bytes, "test_floor", Float64[5.0]) ≈ 5.0
+            @test isequal(run_wasm(bytes, "test_floor", Float64[3.7]), 3.0)
+            @test isequal(run_wasm(bytes, "test_floor", Float64[-2.3]), -3.0)
+            @test isequal(run_wasm(bytes, "test_floor", Float64[5.0]), 5.0)
         end
 
         @testset "ceil" begin
@@ -3179,9 +3179,9 @@ begin
             bytes = compile(test_ceil, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_ceil", Float64[3.2]) ≈ 4.0
-            @test run_wasm(bytes, "test_ceil", Float64[-2.7]) ≈ -2.0
-            @test run_wasm(bytes, "test_ceil", Float64[5.0]) ≈ 5.0
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[3.2]), 4.0)
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[-2.7]), -2.0)
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[5.0]), 5.0)
         end
 
         @testset "round" begin
@@ -3192,9 +3192,9 @@ begin
             bytes = compile(test_round, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_round", Float64[3.2]) ≈ 3.0
-            @test run_wasm(bytes, "test_round", Float64[3.7]) ≈ 4.0
-            @test run_wasm(bytes, "test_round", Float64[-2.5]) ≈ -2.0  # Round to even
+            @test isequal(run_wasm(bytes, "test_round", Float64[3.2]), 3.0)
+            @test isequal(run_wasm(bytes, "test_round", Float64[3.7]), 4.0)
+            @test isequal(run_wasm(bytes, "test_round", Float64[-2.5]), -2.0)  # Round to even
         end
 
         @testset "trunc" begin
@@ -3205,9 +3205,9 @@ begin
             bytes = compile(test_trunc, (Float64,))
             @test length(bytes) > 0
             @test validate_wasm(bytes)
-            @test run_wasm(bytes, "test_trunc", Float64[3.7]) ≈ 3.0
-            @test run_wasm(bytes, "test_trunc", Float64[-3.7]) ≈ -3.0
-            @test run_wasm(bytes, "test_trunc", Float64[5.0]) ≈ 5.0
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[3.7]), 3.0)
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[-3.7]), -3.0)
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[5.0]), 5.0)
         end
 
         @testset "Float32 variants" begin
@@ -6258,7 +6258,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t59_isinf_exp, 1000.0).pass    # exp(1000) = Inf
 
             _t59_exp_neginf(x::Float64)::Float64 = exp(-x * x)
-            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) ≈ 0
+            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) underflows to 0
 
             _t59_isinf_log(x::Float64)::Int32 = Int32(isinf(log(x)))
             @test compare_julia_wasm(_t59_isinf_log, 0.0).pass       # log(0) = -Inf (doesn't throw in Julia for 0.0)
@@ -6334,21 +6334,16 @@ console.log(JSON.stringify({
         end
 
         @testset "Hyperbolic sinh/cosh/tanh (WASMTARGET-FUZZ)" begin
-            # Base sinh/cosh/tanh were value-stubs (no codegen) — hypot(Inf, sinh(x))
-            # failed to validate. Overlays: cosh exact; sinh Taylor (|x|<0.35) else
-            # exp-based with an overflow-safe eᵃ/2 for |x|>20; tanh = sinh/cosh (±1 for |x|>20).
-            # These use a *different* algorithm than Base (exp-based), so compare within
-            # the differential tolerance (rtol=1e-9) rather than bit-exact `==`.
+            # Julia's own sinh/cosh/tanh bodies, compared bit-exact (their approximating
+            # overlays are gone).
             _t60_sinh(x::Float64)::Float64 = sinh(x)
             _t60_cosh(x::Float64)::Float64 = cosh(x)
             _t60_tanh(x::Float64)::Float64 = tanh(x)
-            _hyp_close(f, x) = (r = compare_julia_wasm(f, x);
-                isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
             for x in (0.0, 0.34, 0.35, 0.5, 1.0, -1.0, 2.0, -2.0, 5.0, 20.0, 21.0,
                       30.0, 710.0, 1e-8, 1e-300)
-                @test _hyp_close(_t60_sinh, x)
-                @test _hyp_close(_t60_cosh, x)
-                @test _hyp_close(_t60_tanh, x)
+                @test compare_julia_wasm(_t60_sinh, x).pass
+                @test compare_julia_wasm(_t60_cosh, x).pass
+                @test compare_julia_wasm(_t60_tanh, x).pass
             end
             # saturation / specials via Bool wrappers (bit-exact ⇒ plain `.pass`)
             _t60_sinh_pinf(x::Float64)::Bool = isinf(sinh(x)) && sinh(x) > 0.0
@@ -6359,9 +6354,9 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_cosh_inf, -Inf).pass
             @test compare_julia_wasm(_t60_tanh_one, Inf).pass
             @test compare_julia_wasm(_t60_tanh_nan, NaN).pass
-            # Float32 redirect
+            # Julia's Float32 sinh
             _t60_sinh32(x::Float32)::Float32 = sinh(x)
-            @test _hyp_close(_t60_sinh32, 1.0f0)
+            @test compare_julia_wasm(_t60_sinh32, 1.0f0).pass
         end
 
         @testset "Numeric-struct field struct.new/struct.get (WASMTARGET-FUZZ)" begin

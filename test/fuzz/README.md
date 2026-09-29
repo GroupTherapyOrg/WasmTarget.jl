@@ -13,7 +13,7 @@ replays first on every run, and become tracked, auto-closing gap files.
 | `harness.jl`    | compile once, run all sample inputs in ONE Node process |
 | `bridge.jl`, `bridge_args.jl` | bit-exact value transport across the Node bridge |
 | `catalogue.jl`, `generators.jl`, `statements.jl`, `structpool.jl` | type-directed program generation |
-| `property.jl`, `oracle_policy.jl` | differential oracle + classification (`wrong_value` = soundness alarm); the frozen float tolerances |
+| `property.jl` | differential oracle (bit-exact) + classification (`wrong_value` = soundness alarm) |
 | `ledger.jl`     | gap tracker — each failure → `failures/<id>.md`, auto-closes when fixed |
 | `run.jl`        | entrypoint: `@check` loop + `DirectoryDB` corpus + ledger |
 | `*_diff.jl`     | per-library differential sweeps, run by `test/fuzz_suite.jl` |

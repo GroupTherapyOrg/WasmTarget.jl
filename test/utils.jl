@@ -176,8 +176,8 @@ macro test_compile(func_call)
         # 4. Run in Node
         actual = run_wasm(wasm_bytes, string(nameof(f)), args...)
 
-        # 5. Verify
-        @test actual == expected
+        # 5. Verify (bit-exact: 0.0 and -0.0 differ, NaN is NaN)
+        @test isequal(actual, expected)
     end
 end
 
@@ -289,9 +289,9 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
                               string(nameof(w)), imports, args...)
     end
 
-    # 4. Compare
+    # 4. Compare, bit-exact: 0.0 and -0.0 differ, NaN is NaN
 
-    return (pass=(expected == actual), expected=expected, actual=actual, wasm_size=length(bytes))
+    return (pass=isequal(expected, actual), expected=expected, actual=actual, wasm_size=length(bytes))
 end
 
 """
@@ -481,7 +481,7 @@ function compare_julia_wasm_manual(f, args::Tuple, expected)
 
     # 3. Compare against pre-computed expected value
 
-    return (pass=(expected == actual), expected=expected, actual=actual)
+    return (pass=isequal(expected, actual), expected=expected, actual=actual)
 end
 
 """
@@ -866,9 +866,9 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
                 actual
             end
             pass = actual_nums isa Vector && length(actual_nums) == length(expected_nums) &&
-                   all(i -> _approx_equal(actual_nums[i], expected_nums[i]), 1:length(expected_nums))
+                   all(i -> isequal(actual_nums[i], expected_nums[i]), 1:length(expected_nums))
         else
-            pass = (expected == actual)
+            pass = isequal(expected, actual)
         end
 
         return (pass=pass, expected=expected, actual=actual, wasm_size=length(bytes))
@@ -954,7 +954,7 @@ host-linking pattern (`parity(functions.dart:90 wasm:import/export;
 translator.dart:213 ffiMemory)`). `expected` is a precomputed oracle — NEVER
 derived by calling `func_name`'s Julia function natively, since its import
 stub calls are `Base.inferencebarrier`/`Base.donotdelete` no-ops off the wasm
-boundary — compared element-wise (via `_approx_equal`) against the
+boundary — compared element-wise (bit-exact, `isequal`) against the
 `Vector{Float64}` wasm result of calling `func_name(args...)` in the
 compiled `main_bytes` module, with the `sidecar_bytes` module instantiated
 first and wired in as `importObject[sidecar_module_name]`.
@@ -978,7 +978,7 @@ function compare_sidecar_wasm_vec(main_bytes::Vector{UInt8}, sidecar_bytes::Vect
     actual_raw = unmarshal_result(r["ok"])
     actual = actual_raw isa Vector ? [_parse_f64(x) for x in actual_raw] : actual_raw
     pass = actual isa Vector && length(actual) == length(expected) &&
-           all(i -> _approx_equal(actual[i], expected[i]), 1:length(expected))
+           all(i -> isequal(actual[i], expected[i]), 1:length(expected))
     return (pass=pass, expected=expected, actual=actual, wasm_size=length(main_bytes))
 end
 
@@ -1123,19 +1123,6 @@ function _parse_f64(x)
     return Float64(x)
 end
 
-"""
-Approximate equality for float comparisons.
-"""
-function _approx_equal(a, b)
-    if a isa AbstractFloat || b isa AbstractFloat
-        fa, fb = Float64(a), Float64(b)
-        if isnan(fa) && isnan(fb)
-            return true
-        end
-        return isapprox(fa, fb; atol=1e-10, rtol=1e-10)
-    end
-    return a == b
-end
 
 # ============================================================================
 # Debug Utilities

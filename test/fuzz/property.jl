@@ -35,9 +35,6 @@ using ..FuzzHarness: compile_and_run, compile_and_run_vec
 using ..FuzzBridge: bridge_run, descriptor, tree_matches, tree_decode, bridge_supported
 using ..FuzzBridgeArgs: bridge_run_args, args_supported, ismutable_shape
 using ..FuzzGen: make_function, sample_inputs, make_function_natural, vector_inputs
-# Float-match tolerances live in the frozen oracle policy (oracle_policy.jl): widening
-# them to bury a divergence is never a fix.
-using ..FuzzOraclePolicy: ORACLE_RTOL, ORACLE_ATOL
 
 struct Outcome
     category::Symbol            # :ok :wrong_value :runtime_trap :divergent_throw :compile_error :skip
@@ -48,20 +45,14 @@ struct Outcome
     detail::Any                 # raw extra (exception, body, …)
 end
 
+# Bit-exact, as the bridge's `_float_match` without a C library: a float matches when its bits
+# are Julia's (0.0 and -0.0 differ) or both are NaN; vectors elementwise.
 function vals_match(a, b)
-    # Elementwise (NaN-aware) for vectors — `[NaN] == [NaN]` is false, so a plain
-    # `==` would flag identity-on-NaN as a divergence (false positive).
     if a isa AbstractVector && b isa AbstractVector
         length(a) == length(b) || return false
         return all(vals_match(x, y) for (x, y) in zip(a, b))
-    elseif a isa AbstractFloat || b isa AbstractFloat
-        fa = float(a); fb = float(b)
-        (isnan(fa) && isnan(fb)) && return true
-        (isinf(fa) && isinf(fb) && sign(fa) == sign(fb)) && return true
-        fa == fb && return true
-        return isapprox(fa, fb; rtol = ORACLE_RTOL, atol = ORACLE_ATOL)
     end
-    return a == b
+    return isequal(a, b)
 end
 
 function classify(nv, wv, cmp = vals_match)
