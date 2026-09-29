@@ -204,24 +204,28 @@ const enc = (key,value) => {
 """
 
 """
-    run_wasm_single(bytes, fname, js_args; import_js) -> (:ok,val) | (:trap,msg) | (:error,msg)
+    run_wasm_single(bytes, fname, js_args; import_js, source_map) -> (:ok,val) | (:trap,msg) | (:error,msg)
 
 Instantiate `bytes`, call `fname(js_args)` once, and return the JSON-decoded
 result. `js_args` is a JS argument string (e.g. `BigInt("5"), 3`). `import_js`
-is a JS statement defining `const importObject = {…}`.
+is a JS statement defining `const importObject = {…}`. With the module's
+`source_map` (WasmTarget.compile_with_sourcemap), a trap's message names the Julia
+statement of each wasm frame it unwound through (`located_frames`).
 """
 function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::AbstractString;
-        import_js::AbstractString = "const importObject = {};")
+        import_js::AbstractString = "const importObject = {};",
+        source_map::Union{Nothing,AbstractString} = nothing)
     pool = get_pool()
     src = """
     $_ENC_JS
     $import_js
+    Error.stackTraceLimit = 64;   // a trap's frames, beyond V8's default 10 (located_frames)
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
     let v;
     try { v = f($js_args); }
-    catch (e) { return [{ trap: String(e && e.message || e) }]; }
+    catch (e) { return [{ trap: String(e && e.message || e), stack: String(e && e.stack || '') }]; }
     // an export with no result answers `undefined`, which is Julia's `nothing`
     if (v === undefined) return [{ ok: null }];
     try { return [{ ok: JSON.parse(JSON.stringify(v, enc)) }]; }
@@ -230,8 +234,81 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     status, results = run_driver(pool, enc_wasm(bytes), src; ninputs = 1)
     status === :error && return (:error, results)
     r = results[1]
-    haskey(r, "trap") && return (:trap, String(r["trap"]))
+    if haskey(r, "trap")
+        local msg = String(r["trap"])
+        if source_map !== nothing && haskey(r, "stack")
+            local frames = located_frames(String(r["stack"]), source_map)
+            isempty(frames) || (msg *= "\n" * join(("  at " * f for f in frames), "\n"))
+        end
+        return (:trap, msg)
+    end
     return (:ok, r["ok"])
+end
+
+# ---- A trap's frames, located through the module's source map ---------------------------
+# V8 prints a wasm frame as `wasm://wasm/<id>:wasm-function[<i>]:0x<byte offset in the module>`;
+# the source map (Source Map v3, one generated line whose columns are module byte offsets)
+# names the statement whose instructions cover that offset.
+
+# the Source Map v3 segments of `mappings`: [offset, source, line, column(, name)] absolute
+function _source_map_segments(mappings::AbstractString)::Vector{Vector{Int}}
+    local digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local acc = zeros(Int, 5)
+    local out = Vector{Int}[]
+    for seg in split(mappings, ',')
+        isempty(seg) && continue
+        local fields = Int[]
+        local value, shift = 0, 0
+        for c in seg
+            local d = findfirst(==(c), digits) - 1
+            value |= (d & 31) << shift
+            if d & 32 != 0
+                shift += 5
+            else
+                push!(fields, (value & 1) == 1 ? -(value >> 1) : (value >> 1))
+                value, shift = 0, 0
+            end
+        end
+        for (i, f) in enumerate(fields)
+            acc[i] += f
+        end
+        push!(out, length(fields) == 1 ? Int[acc[1]] : acc[1:length(fields)])
+    end
+    return out
+end
+
+"""
+    located_frames(stack, source_map) -> Vector{String}
+
+Each wasm frame of a JS `stack`, innermost first, as the Julia statement its offset maps to —
+the statement's inline chain — or `wasm-function[i] +0x… (compiler-generated)` for unmapped
+code; a frame repeated in a row (recursion) prints once with its count.
+"""
+function located_frames(stack::AbstractString, source_map::AbstractString)::Vector{String}
+    local sm = JSON.parse(source_map)
+    local segs = _source_map_segments(sm["mappings"])
+    local names = sm["names"]
+    local sources = sm["sources"]
+    local out = String[]
+    local counts = Int[]
+    for m in eachmatch(r"at (?:(\S+) \()?wasm://wasm/[0-9a-f]+:wasm-function\[(\d+)\]:0x([0-9a-f]+)", stack)
+        local offset = parse(Int, m.captures[3]; base=16)
+        local k = findlast(s -> s[1] <= offset, segs)
+        local text = if k === nothing || length(segs[k]) < 4
+            local fn = m.captures[1] === nothing ? "wasm-function[$(m.captures[2])]" : "`$(m.captures[1])`"
+            "$fn at 0x$(m.captures[3]): no statement (the function's entry, or code the compiler generated)"
+        elseif length(segs[k]) >= 5
+            names[segs[k][5] + 1]
+        else
+            "$(sources[segs[k][2] + 1]):$(segs[k][3] + 1)"
+        end
+        if !isempty(out) && out[end] == text
+            counts[end] += 1
+        else
+            push!(out, text); push!(counts, 1)
+        end
+    end
+    return String[c == 1 ? t : "$t (× $c)" for (t, c) in zip(out, counts)]
 end
 
 """

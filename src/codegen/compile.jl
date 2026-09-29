@@ -116,10 +116,12 @@ end
 Compile a Julia function to a WebAssembly module.
 parity(pkg/dart2wasm/lib/compile.dart:216 compile)
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true,
+                          source_map_url::Union{Nothing,String}=nothing)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir,
+                          source_map_url=source_map_url)
 end
 
 # ============================================================================
@@ -248,7 +250,8 @@ function _compile_closed_world_plan(functions::Vector;
                         link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false
+                        register_ir_types::Bool=false,
+                        source_map_url::Union{Nothing,String}=nothing
                         )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
@@ -275,6 +278,7 @@ function _compile_closed_world_plan(functions::Vector;
     else
         mod = WasmModule()
     end
+    source_map_url === nothing || (mod.source_map_url = source_map_url)
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
@@ -647,6 +651,8 @@ function _compile_closed_world_plan(functions::Vector;
             dispatch_dt = find_dispatch_call(fn_nir.stmts, dispatch_registry)
         end
 
+        # a dispatcher or standalone body is compiler-generated: no statement emitted it
+        local body_mappings = SourceMapping[]
         if standalone_body !== nothing
             body, locals = standalone_body
         elseif dispatch_dt !== nothing
@@ -690,7 +696,7 @@ function _compile_closed_world_plan(functions::Vector;
             # diagnostic ledgers. The context already carries the root function
             # and source location; converting failures to ErrorException here
             # erased the machine-readable contract used by framework callers.
-            body = generate_body(ctx)
+            body, body_mappings = generate_body(ctx)
             locals = ctx.locals
         end
 
@@ -699,7 +705,8 @@ function _compile_closed_world_plan(functions::Vector;
                                                              mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
-        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body)
+        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body,
+                                            body_mappings)
         actual_idx = func_idx
 
         # Export the function with a unique name
@@ -794,12 +801,13 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        discovery::Symbol=:trim)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
+                        discovery::Symbol=:trim,
+                        source_map_url::Union{Nothing,String}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     discovery === :trim || throw(ArgumentError(
         "only the closed-world compilation path is supported (discovery=:trim)"))
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, link_roots, optimize_ir, register_ir_types)
+        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url)
 end
 
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in

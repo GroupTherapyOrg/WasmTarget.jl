@@ -27,9 +27,10 @@ Execute a WebAssembly function in Node.js and return the result.
 The result of the function call, parsed from JSON.
 Returns `nothing` if Node.js is not available.
 """
-function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...)
+function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...;
+                  source_map::Union{Nothing,String}=nothing)
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
-    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args)
+    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args; source_map=source_map)
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -120,10 +121,12 @@ run_wasm_with_imports(bytes, "main", imports, Int32(42))
 ```
 """
 function run_wasm_with_imports(wasm_bytes::Vector{UInt8}, func_name::String,
-                               imports::Dict, args...)
+                               imports::Dict, args...;
+                               source_map::Union{Nothing,String}=nothing)
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
     status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args;
-                                             import_js = build_imports_js(imports))
+                                             import_js = build_imports_js(imports),
+                                             source_map = source_map)
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -271,23 +274,24 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 1. Run natively in Julia to get expected result
     expected = f(args...)
 
-    # 2. Compile to Wasm (with optional binaryen optimization)
+    # 2. Compile to Wasm (with optional binaryen optimization), with its source map: a trap
+    #    names the Julia statement of every wasm frame it unwound through
     arg_types = Tuple(map(typeof, args))
-    bytes = WasmTarget.compile(f, arg_types; optimize=optimize)
+    bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)
 
     # 3. Run in Node.js to get actual result (no host imports)
     func_name = string(nameof(f))
     imports = Dict{String,Any}()
     actual = try
-        run_wasm_with_imports(bytes, func_name, imports, args...)
+        run_wasm_with_imports(bytes, func_name, imports, args...; source_map=source_map)
     catch e
         # a result the host cannot read (an Any result, a GC reference) is read inside the
         # module, through a typeassert to the native result's type
         (e isa ErrorException && occursin("unserializable result", e.msg)) || rethrow()
         w = typed_result_wrapper(f, typeof(expected))
         w === nothing && rethrow()
-        run_wasm_with_imports(WasmTarget.compile(w, arg_types; optimize=optimize),
-                              string(nameof(w)), imports, args...)
+        wbytes, wmap = WasmTarget.compile_with_sourcemap(w, arg_types; optimize=optimize)
+        run_wasm_with_imports(wbytes, string(nameof(w)), imports, args...; source_map=wmap)
     end
 
     # 4. Compare, bit-exact: 0.0 and -0.0 differ, NaN is NaN

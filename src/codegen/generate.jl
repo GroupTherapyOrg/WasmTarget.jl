@@ -40,7 +40,7 @@ Uses a block-based translation for control flow.
 
 parity(code_generator.dart:38 CodeGenerator.generate)
 """
-function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
+function generate_body(ctx::AbstractCompilationContext)::Tuple{Vector{UInt8},Vector{SourceMapping}}
     # Analyze control flow to find basic block structure
     blocks = analyze_blocks(ctx.nir)
 

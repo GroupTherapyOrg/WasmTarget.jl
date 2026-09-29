@@ -61,7 +61,7 @@ anchor in `src/` has a row.)
 | Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
 | Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
 | Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
-| LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `vlq_encode` (sourcemap.jl) | — encodings; wasm-tools parses every module |
+| LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl) | — encodings; wasm-tools parses every module |
 
 ## Rules
 

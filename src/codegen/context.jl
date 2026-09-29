@@ -84,6 +84,8 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # For each SSA id, the statements that use it, ascending (nir_ssa_users) — built with the
     # context; `nir` is never rewritten after (the stackifier threads its own copy).
     ssa_users::Dict{Int,Vector{Int}}
+    # each statement's source-map provenance, computed once (map_to_statement!)
+    stmt_sources::Dict{Int,Union{Nothing,SourceInfo}}
     # Julia inference's type for every IR slot, widened once at the boundary
     # (frontend/nir.jl's nir_slot_types) — what an Argument/SlotNumber operand is typed by.
     slot_types::Vector{Type}
@@ -144,6 +146,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         Dict{Int, Int}(),       # exn_region_locals
         body.stmts,             # NIR boundary — built first, from the typed IR alone
         nir_ssa_users(body.stmts),
+        Dict{Int,Union{Nothing,SourceInfo}}(),
         body.slot_types,
         body.debuginfo
     )

@@ -256,16 +256,7 @@ parity(quarantine: Julia source positions live in the CodeInfo's compressed Core
 """
 function stmt_frames(di, idx::Int)::Vector{String}
     frames = String[]
-    di isa Core.DebugInfo || return frames
-    i = idx
-    while i >= 1
-        t = Base.IRShow.getdebugidx(di, i)
-        Int(t[1]) > 0 && break
-        i -= 1
-    end
-    i >= 1 || return frames
-    nodes = Base.IRShow.buildLineInfoNode(di, di.def, i)   # outermost first
-    for n in Iterators.reverse(nodes)
+    for n in Iterators.reverse(_stmt_line_nodes(di, idx))
         m = n.method
         name = m isa Core.MethodInstance ? sprint(show, m) :
                m isa Method ? string(m.name) : string(m)
@@ -273,6 +264,47 @@ function stmt_frames(di, idx::Int)::Vector{String}
         push!(frames, string(name, " @ ", n.file, ":", n.line))
     end
     return frames
+end
+
+# The line-info nodes of statement `idx`, outermost first — the one decoding of a function's
+# DebugInfo that stmt_frames and stmt_source_info share; a statement with no location of its
+# own takes the nearest earlier statement's.
+# parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
+function _stmt_line_nodes(di, idx::Int)::Vector{Any}
+    di isa Core.DebugInfo || return Any[]
+    i = idx
+    while i >= 1
+        t = Base.IRShow.getdebugidx(di, i)
+        Int(t[1]) > 0 && break
+        i -= 1
+    end
+    i >= 1 || return Any[]
+    return Any[Base.IRShow.buildLineInfoNode(di, di.def, i)...]
+end
+
+"""
+    stmt_source_info(ctx, idx) -> Union{SourceInfo,Nothing}
+
+The source a statement's instructions map to: its innermost frame's file and line (0-based,
+the source map's convention; Julia records no column), named by its inline chain innermost
+first — the provenance a compile-time rejection prints, carried into the module so a trap is
+located the same way. `nothing` for a statement with no location.
+parity(pkg/dart2wasm/lib/code_generator.dart:190 CodeGenerator.setSourceMapFileOffset)
+"""
+function stmt_source_info(ctx, idx::Int)::Union{SourceInfo,Nothing}
+    local nodes = _stmt_line_nodes(_ctx_debuginfo(ctx), idx)
+    isempty(nodes) && return nothing
+    local inner = nodes[end]
+    # each frame by its method's name, as a Julia stacktrace heads a frame: a MethodInstance's
+    # full signature prints its type parameters whole, megabytes for a solver's inlined body
+    local chain = String[]
+    for n in Iterators.reverse(nodes)
+        local m = n.method
+        local name = m isa Core.MethodInstance ? (m.def isa Method ? string(m.def.module, ".", m.def.name) : string(m.def)) :
+                     m isa Method ? string(m.module, ".", m.name) : string(m)
+        push!(chain, string(name, " @ ", n.file, ":", n.line))
+    end
+    return SourceInfo(string(inner.file), max(Int(inner.line) - 1, 0), 0, join(chain, " ← "))
 end
 
 """

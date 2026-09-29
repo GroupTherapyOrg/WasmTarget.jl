@@ -1014,6 +1014,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                 # Check type compatibility before emitting local.set
                                 local_idx = ctx.phi_locals[i]
                                 phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                map_to_statement!(b, ctx, i)   # this edge's store maps to its phi
                                 # parity(code_generator.dart:2149 visitVariableSet) wrap+store: typed compile_phi_value → THE
                                 # convert_type! funnel → local.set. Replaces the arm-chain +
                                 # END-byte sniffing + LEB re-decode + temp byte-rewrite
@@ -1031,6 +1032,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     phi_count += 1
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
+                                    # a recomputed value statement ends unmapped: the
+                                    # coercion and store are the phi's again
+                                    map_to_statement!(b, ctx, i)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
                                         local _edge_julia = _value_julia_type(val, ctx)
                                         coerce_stack_top!(b, phi_local_type, ctx;
@@ -1053,6 +1057,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 break  # Phi nodes are consecutive at the start
             end
         end
+        # the remaining edge code is the jump's again
+        map_to_statement!(b, ctx, terminator_idx)
         for (off_local, off_tmp) in offset_stores
             local_get!(b, off_tmp)
             local_set!(b, off_local)
@@ -1227,6 +1233,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
             end
 
             if stmt isa NirReturn
+                map_to_statement!(bb, ctx, i)
                 if stmt.value !== nothing
                     # THE single return-coercion path (dead pre-emit type locals deleted).
                     bb = emit_return_coerced!(bb, stmt.value, ctx)
@@ -1237,6 +1244,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # one). dart: unimplemented/throw paths end in unreachable.
                     unreachable!(bb)   # structural trap (dart-legit dead path)
                 end
+                stop_source_mapping!(bb)
 
             elseif stmt isa NirGotoIfNot
                 # GotoIfNot: handled by control flow structure
@@ -1333,9 +1341,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
         append_builder!(b, bb)   # typed merge — the block's real tracked effect
 
-        # Handle the terminator
+        # Handle the terminator: its code (the branch, the return's coercion, the phi stores on
+        # its edges) maps to the terminator statement, each phi store to its phi
         term = block.terminator
         terminator_idx = block.end_idx
+        map_to_statement!(b, ctx, terminator_idx)
 
         # Check if this terminator is a boundscheck always-jump
         if terminator_idx in boundscheck_jumps && term isa NirGotoIfNot
@@ -1575,6 +1585,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 set_phi_locals_for_edge!(b, next_block_idx, terminator_idx)
             end
         end
+        stop_source_mapping!(b)
 
         # Slice B: this block ends with an EnterNode (post-split guarantee) →
         # open the region: landing block (the catch's br target ends at the handler)

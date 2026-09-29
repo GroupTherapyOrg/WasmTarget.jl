@@ -306,14 +306,20 @@ end
 # ============================================================================
 
 """
-Represents a WebAssembly function definition.
+Represents a WebAssembly function definition: its type, locals, body bytes, and the body's
+source mappings (byte offsets into `body`; empty for a compiler-generated function that no
+statement emitted).
 parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
     type_idx::UInt32
     locals::Vector{WasmValType}
     body::Vector{UInt8}
+    mappings::Vector{SourceMapping}
 end
+# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a body with no source mappings.
+WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8})::WasmFunction =
+    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, SourceMapping[])
 
 """
 Represents an export entry.
@@ -432,10 +438,13 @@ mutable struct WasmModule
     data_segments::Vector{WasmDataSegment}  # Data segments for memory init
     tags::Vector{WasmTag}         # Exception tags for exception handling
     start_function::Union{Nothing, UInt32}  # Optional start function index
+    # the URL a `sourceMappingURL` section names; set, every builder of this module records
+    # its source mappings (dart ModuleBuilder.sourceMapUrl, module.dart:28)
+    source_map_url::Union{Nothing, String}
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing)
 
 # ============================================================================
 # Module Building API
@@ -1055,8 +1064,35 @@ const SECTION_TAG = 0x0D      # Exception tags (section 13); parity(pkg/wasm_bui
 Serialize a WasmModule to binary format.
 parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
 """
-function to_bytes(mod::WasmModule)::Vector{UInt8}
+to_bytes(mod::WasmModule)::Vector{UInt8} = first(to_bytes_mapped(mod))
+
+"""
+    to_bytes_with_source_map(mod) -> (bytes, source_map_json)
+
+Serialize `mod` — which records source maps (`mod.source_map_url`) — with its
+`sourceMappingURL` section, and the Source Map v3 JSON of its functions' mappings at their
+module byte offsets.
+parity(pkg/wasm_builder/lib/source_map.dart:94 SourceMapSerializer.serializeAsJson)
+"""
+function to_bytes_with_source_map(mod::WasmModule)::Tuple{Vector{UInt8},String}
+    mod.source_map_url === nothing &&
+        throw(ArgumentError("the module records no source maps (it has no source_map_url)"))
+    local bytes, mappings = to_bytes_mapped(mod)
+    return bytes, source_map_json(mappings)
+end
+
+"""
+    to_bytes_mapped(mod) -> (bytes, mappings)
+
+Serialize `mod`, and each function's source mappings at their module byte offsets: a body's
+offsets move by where the body lands in the code section's contents, then by where those
+contents land in the module (dart: function.dart:123 and sections.dart:33 copyMappings). A
+module with a `source_map_url` gets the `sourceMappingURL` section after the name section.
+parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
+"""
+function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapping}}
     w = WasmWriter()
+    local module_mappings = SourceMapping[]
 
     # Magic number and version
     write_bytes!(w, WASM_MAGIC...)
@@ -1234,6 +1270,8 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
 
     # Code section
     if !isempty(mod.functions)
+        local code_mappings = SourceMapping[]   # offsets into the code section's contents
+        local code_length = 0
         write_section!(w, SECTION_CODE) do section
             write_u32!(section, length(mod.functions))
             for func in mod.functions
@@ -1254,12 +1292,23 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
                 end
 
                 # Body instructions
+                local body_start = length(body_writer.buffer)
                 append!(body_writer.buffer, func.body)
 
                 # Write body size then body
                 write_u32!(section, length(body_writer.buffer))
+                local entry_start = length(section.buffer)
+                for m in func.mappings
+                    push!(code_mappings, shift_by(m, entry_start + body_start))
+                end
                 append!(section.buffer, body_writer.buffer)
             end
+            code_length = length(section.buffer)
+        end
+        # the contents end the module so far: they start `code_length` bytes before its end
+        local contents_start = length(w.buffer) - code_length
+        for m in code_mappings
+            push!(module_mappings, shift_by(m, contents_start))
         end
     end
 
@@ -1330,7 +1379,24 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
         append!(w.buffer, custom_section.buffer)
     end
 
-    return bytes(w)
+    mod.source_map_url === nothing || write_source_mapping_url_section!(w, mod.source_map_url)
+    return bytes(w), module_mappings
+end
+
+"""
+    write_source_mapping_url_section!(w, url)
+
+The `sourceMappingURL` custom section: its name, then the URL of the module's source map.
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
+"""
+function write_source_mapping_url_section!(w::WasmWriter, url::String)::WasmWriter
+    local contents = WasmWriter()
+    write_name!(contents, "sourceMappingURL")
+    write_name!(contents, url)
+    write_byte!(w, 0x00)
+    write_u32!(w, length(contents.buffer))
+    append!(w.buffer, contents.buffer)
+    return w
 end
 
 """

@@ -63,6 +63,10 @@ mutable struct InstrBuilder
     # creation (the tracker then guessed AnyRef and every downstream op mismatched).
     locals_fn::Union{Nothing, Function}
     seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
+    # (instruction index → source) as emitted, in order (start_source_mapping!), when the
+    # module records source maps; a fragment's mappings move into the builder it is appended
+    # to, shifted (append_builder!). `nothing` otherwise (dart: null, instructions.dart:239).
+    source_mappings::Union{Nothing,Vector{SourceMapping}}
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
@@ -80,14 +84,41 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     push!(v.labels, ValidatorLabel(:expression, 0, WasmValType[],
                                    WasmValType[r for r in result_types], true))
     trace = OPTIONS[].builder_trace ? String[] : nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[])
+    records = mod isa WasmModule && mod.source_map_url !== nothing
+    InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[],
+                 records ? SourceMapping[] : nothing)
 end
+
+# does `b` record source mappings? (its module has a source map URL)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:254 InstructionsBuilder.recordSourceMaps)
+records_source_maps(b::InstrBuilder)::Bool = b.source_mappings !== nothing
 
 # serialize/ layer: turn the recorded instruction stream into bytes.
 # parity(pkg/wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize)
-function builder_code(b::InstrBuilder)::Vector{UInt8}
+builder_code(b::InstrBuilder)::Vector{UInt8} = first(builder_code_mapped(b))
+
+"""
+    builder_code_mapped(b) -> (code, mappings)
+
+Serialize `b`'s instructions, and its source mappings with them: each mapping's instruction
+index becomes the byte offset of that instruction in `code`, and the end of the code is
+unmapped.
+parity(pkg/wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize)
+"""
+function builder_code_mapped(b::InstrBuilder)::Tuple{Vector{UInt8},Vector{SourceMapping}}
     code = UInt8[]
+    local mapped = SourceMapping[]
+    local ms = something(b.source_mappings, SourceMapping[])
+    local k = 1
     for i in eachindex(b.instrs)
+        # the mapping that covers instruction i (0-based index i - 1)
+        while k < length(ms) && ms[k + 1].offset <= i - 1
+            k += 1
+        end
+        if k <= length(ms) && ms[k].offset <= i - 1
+            push!(mapped, SourceMapping(length(code), ms[k].info))
+            k += 1
+        end
         if !isassigned(b.instrs, i)
             around = [isassigned(b.instrs, j) ? string(nameof(typeof(b.instrs[j]))) : "#undef"
                       for j in max(1, i-3):min(length(b.instrs), i+3)]
@@ -97,7 +128,47 @@ function builder_code(b::InstrBuilder)::Vector{UInt8}
         end
         encode!(code, b.instrs[i])
     end
-    code
+    records_source_maps(b) && push!(mapped, SourceMapping(length(code), nothing))
+    return code, mapped
+end
+
+"""
+    start_source_mapping!(b, info) -> b
+
+Map the instructions emitted from here on to `info`, until the next start or stop.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:603 InstructionsBuilder.startSourceMapping)
+"""
+start_source_mapping!(b::InstrBuilder, info::SourceInfo)::InstrBuilder =
+    records_source_maps(b) ? _add_source_mapping!(b, SourceMapping(length(b.instrs), info)) : b
+
+"""
+    stop_source_mapping!(b) -> b
+
+Leave the instructions emitted from here on unmapped.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:615 InstructionsBuilder.stopSourceMapping)
+"""
+stop_source_mapping!(b::InstrBuilder)::InstrBuilder =
+    records_source_maps(b) ? _add_source_mapping!(b, SourceMapping(length(b.instrs), nothing)) : b
+
+"""
+    _add_source_mapping!(b, m) -> b
+
+Record `m`: a mapping at the same instruction as the last replaces it (the last one covered
+no instruction), and one naming the same source as the last adds nothing.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:619 InstructionsBuilder._addSourceMapping)
+"""
+function _add_source_mapping!(b::InstrBuilder, m::SourceMapping)::InstrBuilder
+    local ms = b.source_mappings
+    if !isempty(ms)
+        local last = ms[end]
+        if last.offset == m.offset
+            ms[end] = m
+            return b
+        end
+        last.info == m.info && return b
+    end
+    push!(ms, m)
+    return b
 end
 # symbolic disassembly (dart2wasm printTo) — clarity for tracking codegen bugs.
 # parity(pkg/wasm_builder/lib/src/ir/instructions.dart:97 Instructions.printTo)
@@ -805,6 +876,15 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     # 1.13.0-rc1 (clean source verified immediately before; holes end exactly at the
     # append boundary; GC-timing dependent; not reproducible in isolation). Element-wise
     # push! writes each slot at transfer time and is immune. Semantically identical.
+    # the fragment's source mappings, shifted to where its instructions land (dart has one
+    # builder per function; WT merges fragments, as dart's serializer merges a body's
+    # mappings into the module's, function.dart:123 copyMappings)
+    if records_source_maps(dst) && records_source_maps(src)
+        local shift = length(dst.instrs)
+        for m in src.source_mappings
+            _add_source_mapping!(dst, shift_by(m, shift))
+        end
+    end
     sizehint!(dst.instrs, length(dst.instrs) + length(src.instrs))
     for ins in src.instrs
         push!(dst.instrs, ins)

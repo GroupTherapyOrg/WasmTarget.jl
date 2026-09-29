@@ -392,6 +392,21 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
 end
 
 """
+    map_to_statement!(b, ctx, idx) -> b
+
+Map the instructions `b` emits from here on to statement `idx`'s source (stmt_source_info),
+or leave them unmapped when the statement has none. Every emission on a statement's behalf —
+the statement itself (compile_statement!), a block's terminator, the phi stores on an edge —
+maps through here.
+parity(pkg/dart2wasm/lib/code_generator.dart:190 CodeGenerator.setSourceMapFileOffset)
+"""
+function map_to_statement!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int)::InstrBuilder
+    records_source_maps(b) || return b
+    local info = get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)
+    return info === nothing ? stop_source_mapping!(b) : start_source_mapping!(b, info)
+end
+
+"""
 Compile a single IR statement — dart's ONE code generator, ONE builder (Phase C): THE visitor emits directly into the caller's builder; the byte era's
 front seam and accumulator are gone.
 The one per-statement entry: every failure raised below it is located here — a
@@ -402,11 +417,17 @@ parity(pkg/dart2wasm/lib/code_generator.dart:714 CodeGenerator.translateStatemen
 """
 function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
+    # the statement's instructions map to its source; the code the stackifier emits between
+    # statements (branches, phi stores) is left unmapped, as dart restores the enclosing
+    # node's offset after a subtree
+    map_to_statement!(b, ctx, idx)
     try
         return _compile_statement_located!(b, idx, ctx)
     catch err
         (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
         throw(located_internal_error(ctx, idx, err, catch_backtrace()))
+    finally
+        stop_source_mapping!(b)
     end
 end
 

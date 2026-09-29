@@ -10,6 +10,7 @@ include("codegen/options.jl")
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
+include("builder/source_map.jl")
 include("builder/instructions.jl")
 include("builder/validator.jl")
 include("builder/instr_ir.jl")
@@ -52,7 +53,6 @@ include("codegen/calls.jl")
 include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
-include("codegen/sourcemap.jl")
 
 include("bridge.jl")
 
@@ -115,16 +115,47 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end
+    return first(_emit_module(mod; optimize=optimize, validate=validate))
+end
 
-    # Serialize to bytes
-    bytes = to_bytes(mod)
+"""
+    compile_with_sourcemap(f, arg_types; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
+
+`compile`, with the module's source map: every statement's instructions map to the Julia
+source they were compiled from (its innermost frame's file and line, named by its inline
+chain), and the module's `sourceMappingURL` section names `sourcemap_url`. An engine reports
+a trap as a module byte offset; the map resolves it to the statement that trapped.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with source maps on.
+"""
+function compile_with_sourcemap(f, arg_types::Tuple; sourcemap_url::String="module.wasm.map",
+                                optimize=false, optimize_ir::Bool=true,
+                                validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
+    OPTIONS[] = options_from_env()
+    mod = compile_function(f, arg_types, string(nameof(f)); optimize_ir=optimize_ir,
+                           source_map_url=sourcemap_url)
+    return _emit_module(mod; optimize=optimize, validate=validate)
+end
+
+"""
+    _emit_module(mod; optimize, validate) -> (bytes, source_map_json)
+
+The one serialization of a compiled module, shared by every compile entry: its bytes —
+validated, or optimized by wasm-opt — and, for a module that records source maps
+(`mod.source_map_url`), its source map (threaded through wasm-opt as dart threads it,
+io_util.dart:133). `nothing` for the map otherwise.
+parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
+"""
+function _emit_module(mod::WasmModule; optimize, validate::Bool)::Tuple{Vector{UInt8},Union{Nothing,String}}
+    local source_map_url = mod.source_map_url
+    local bytes, json = source_map_url === nothing ? (to_bytes(mod), nothing) :
+                                                     to_bytes_with_source_map(mod)
     if optimize === false
         # Soundness gate: validate the emitted module (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(bytes; label="compiled module")
-        return bytes
+        return bytes, json
     end
     level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level, validate=validate)
+    return _run_wasm_opt(bytes, json, source_map_url; level=level, validate=validate)
 end
 
 # Convenience method for single argument type
@@ -193,24 +224,27 @@ function compile_multi(functions::Vector; optimize=false,
     end
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
-        bytes = to_bytes(mod)
-        if optimize !== false
-            level = optimize === true ? :size : optimize
-            bytes = WasmTarget.optimize(bytes; level=level, validate=validate)
-        else
-            validate && validate_wasm_bytes(bytes; label="compiled module")
-        end
+        bytes = first(_emit_module(mod; optimize=optimize, validate=validate))
         return (bytes, type_registry, func_registry, dispatch_registry)
     else
-        mod = result
-        bytes = to_bytes(mod)
-        if optimize === false
-            validate && validate_wasm_bytes(bytes; label="compiled module")
-            return bytes
-        end
-        level = optimize === true ? :size : optimize
-        return WasmTarget.optimize(bytes; level=level, validate=validate)
+        return first(_emit_module(result; optimize=optimize, validate=validate))
     end
+end
+
+"""
+    compile_multi_with_sourcemap(functions; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
+
+`compile_multi`, with the module's source map (see `compile_with_sourcemap`).
+parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with source maps on.
+"""
+function compile_multi_with_sourcemap(functions::Vector; sourcemap_url::String="module.wasm.map",
+                                      optimize=false, optimize_ir::Bool=true,
+                                      validate::Bool=_wt_default_validate(),
+                                      discovery::Symbol=:trim)::Tuple{Vector{UInt8},String}
+    OPTIONS[] = options_from_env()
+    mod = compile_module(functions; optimize_ir=optimize_ir, discovery=discovery,
+                         source_map_url=sourcemap_url)
+    return _emit_module(mod; optimize=optimize, validate=validate)
 end
 
 # ============================================================================
@@ -333,6 +367,20 @@ Optimized `Vector{UInt8}`.
 parity(compile.dart:711 _runOptPhase)
 """
 function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
+    return first(_run_wasm_opt(bytes, nothing, nothing; level=level, validate=validate))
+end
+
+"""
+    _run_wasm_opt(bytes, source_map_json, source_map_url; level, validate) -> (bytes, source_map_json)
+
+Run wasm-opt at `level`. With a source map it reads the input map and writes the output's
+(`-ism`/`-osm`/`-osu`, as dart runs it), so the optimized module's map names the same source
+for its rewritten code.
+parity(pkg/dart2wasm/lib/io_util.dart:133 CompilerPhaseInputOutputManager.runWasmOpt)
+"""
+function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,String},
+                       source_map_url::Union{Nothing,String}; level::Symbol,
+                       validate::Bool)::Tuple{Vector{UInt8},Union{Nothing,String}}
     # Build flags based on level
     flags = copy(WASM_OPT_GC_FLAGS)
     if level === :size
@@ -354,6 +402,11 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         input_path = joinpath(dir, "input.wasm")
         output_path = joinpath(dir, "output.wasm")
         write(input_path, bytes)
+        if source_map_json !== nothing
+            write(joinpath(dir, "input.wasm.map"), source_map_json)
+            append!(flags, ["-ism", joinpath(dir, "input.wasm.map"),
+                            "-osm", joinpath(dir, "output.wasm.map"), "-osu", source_map_url])
+        end
 
         # Binaryen_jll supplies a platform-correct executable plus its required
         # library environment. Optimization therefore has no ambient PATH or
@@ -372,7 +425,8 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         # Soundness gate: validate optimized output (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(opt_bytes; label="optimized module")
 
-        return opt_bytes
+        return opt_bytes, source_map_json === nothing ? nothing :
+                          read(joinpath(dir, "output.wasm.map"), String)
     end
 end
 

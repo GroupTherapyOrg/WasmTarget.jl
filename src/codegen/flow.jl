@@ -3,7 +3,8 @@ Generate code using Wasm's structured control flow.
 For simple if-then-else patterns, we use the `if` instruction.
 parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
-function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock})::Vector{UInt8}
+function generate_structured(ctx::AbstractCompilationContext,
+                             blocks::Vector{BasicBlock})::Tuple{Vector{UInt8},Vector{SourceMapping}}
     b = _ctx_builder(ctx, "generate_structured")
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
@@ -19,7 +20,8 @@ function generate_structured(ctx::AbstractCompilationContext, blocks::Vector{Bas
     # stackifier bug and must fail here, never serialize into malformed Wasm.
     finish_function!(b)
 
-    return builder_code(b)
+    # the body's bytes, and each statement's instructions mapped to its source (compile_statement!)
+    return builder_code_mapped(b)
 end
 
 

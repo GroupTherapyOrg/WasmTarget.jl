@@ -919,7 +919,7 @@ const METRICS = [
 const LOCKS = [
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
         () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
-                          roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
+                          roots=[CODEGEN])),
     "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
         () -> begin
             codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
@@ -1345,7 +1345,7 @@ const LOCKS = [
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             test_src = read(joinpath(ROOT, "test", "diagnostics_sink.jl"), String)
             forbidden = ["code generation failed for", "sprint(showerror, err)"]
-            required = ["body = generate_body(ctx)",
+            required = ["body, body_mappings = generate_body(ctx)",
                         "err isa WasmTarget.WasmCompileError", "err.diag in err.all",
                         "DIAGNOSTICS_SINK[] === nothing"]
             count(p -> occursin(p, compile_src), forbidden) +
@@ -2400,6 +2400,30 @@ const LOCKS = [
                                !occursin(r"^\s*info\.return_type <: expected_return", l),
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
+        end),
+    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) and unmaps after it; the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
+        () -> begin
+            src(f) = read(joinpath(CODEGEN, f), String)
+            bsrc(f) = read(joinpath(SRC, "builder", f), String)
+            tsrc(f) = read(joinpath(ROOT, "test", f), String)
+            required = [
+                (src("statements.jl"), "    map_to_statement!(b, ctx, idx)\n    try"),
+                (src("statements.jl"), "    finally\n        stop_source_mapping!(b)"),
+                (src("stackified.jl"), "        map_to_statement!(b, ctx, terminator_idx)\n"),
+                (src("stackified.jl"), "map_to_statement!(b, ctx, i)   # this edge's store maps to its phi"),
+                (src("stackified.jl"), "                map_to_statement!(bb, ctx, i)\n"),
+                (bsrc("instr_builder.jl"), "_add_source_mapping!(dst, shift_by(m, shift))"),
+                (bsrc("instructions.jl"), "push!(code_mappings, shift_by(m, entry_start + body_start))"),
+                (bsrc("instructions.jl"), "push!(module_mappings, shift_by(m, contents_start))"),
+                (src("compile.jl"), "body, body_mappings = generate_body(ctx)"),
+                (tsrc("utils.jl"), "bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)"),
+                (tsrc("wasm_runner.jl"), "located_frames(String(r[\"stack\"]), source_map)"),
+            ]
+            forbidden = ["collect_source_info", "update_function_offsets!"]
+            all_src = join((read(joinpath(dir, f), String) for (dir, _, fs) in walkdir(SRC) for f in fs if endswith(f, ".jl")))
+            count(((text, needle),) -> !occursin(needle, text), required) +
+                count(p -> occursin(p, all_src), forbidden) +
+                isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
