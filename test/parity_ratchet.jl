@@ -707,7 +707,8 @@ function components_without_model()::Vector{String}
     for (p, t) in text
         cur = nothing
         for l in split(t, '\n')
-            mm = match(r"^(?:    )?function ([A-Za-z_!0-9.]+)\(", l)
+            # a definition under macros counts too: `@inline function`, `@noinline @overlay T function`
+            mm = match(r"^(?:    )?(?:@[\w.]+\s+(?:[A-Z][\w.]*\s+)?)*function ([A-Za-z_!0-9.]+)\(", l)
             mm === nothing || (cur = mm.captures[1])
             if cur !== nothing && occursin(r"\bwhile (changed|verifying|true\b|!isempty)", l) && !(cur in listed)
                 push!(bad, "fixpoint with no row: $cur ($(basename(p)))"); cur = nothing
@@ -2395,6 +2396,8 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
+        () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
     "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
         () -> begin
             structs = read(joinpath(CODEGEN, "structs.jl"), String)

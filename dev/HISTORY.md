@@ -148,13 +148,11 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - SimpleDiffEq's oracle allows muladd's rounding in every case, checked against each solver's
   step; on Julia 1.13.1 the Vector-state RK4/Tsit5 solves compile and run bit-exact.
 - A type definition carries dart's subtyping prefix: a type nothing extends is final.
+- titlecase is Julia's rule over utf8proc's grapheme breaks, ported and checked against the C
+  library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
 
 ## Why the archive was consolidated
 
-The original files were valuable while their campaigns were active, but later searches
-could surface stale `NEXT`, `LIVE`, `RESUME HERE`, and “remaining work” sections as if
-they described the current tree. Consolidating the outcome here makes that impossible:
-
-- completed architecture is locked in code (`test/parity_ratchet.jl`);
-- current boundaries require a present reproducer or source census;
-- exact historical prose is archaeological evidence in Git, not a zombie backlog.
+Searches of the old campaign files surfaced stale `NEXT` and `RESUME HERE` sections as if they
+were current. Here finished architecture is locked in `test/parity_ratchet.jl`, an open boundary
+needs a present reproducer or census, and exact historical prose lives in Git.

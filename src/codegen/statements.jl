@@ -209,8 +209,10 @@ function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
         num!(b, Opcode.I64_SUB)
     end
     narrow_length_to_i32!(b)
-    i32_const!(b, Int64(shift))
-    num!(b, Opcode.I32_SHR_U)
+    if shift != 0
+        i32_const!(b, Int64(shift))
+        num!(b, Opcode.I32_SHR_U)
+    end
     return b
 end
 
@@ -1495,10 +1497,7 @@ function _emit_cstring_extent!(b::InstrBuilder, ptr_arg::NirNode, source::NirNod
     local len_local = allocate_local!(ctx, I32)
     emit_value!(b, source, ctx, ConcreteRef(UInt32(arr_idx), true))
     local_set!(b, arr_local)
-    emit_value!(b, ptr_arg, ctx, I64)
-    coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8})
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_SUB)
+    _emit_storage_element_offset!(b, ptr_arg, source, ctx, 0)
     local_tee!(b, off_local)
     local_set!(b, end_local)
     local done = block!(b)
@@ -1637,14 +1636,13 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
                     array_new_default!(b, str_arr_type)
                     local_tee!(b, dest_local)
 
-                    # array.copy: dest, dest_offset=0, src, src_offset=0, count=n
+                    # array.copy: dest, dest_offset=0, src, src_offset, count=n
                     i32_const!(b, 0)  # dest offset
-                    # The pointer representation carries its byte offset while the
-                    # traced owner carries the GC array identity. For UInt8/Int8,
-                    # byte offset and array index are identical.
+                    # The pointer carries its byte offset (1-based for a String or Symbol,
+                    # _fc_jl_string_ptr!) and the traced owner the GC array: the source
+                    # index is the one storage rule's (_emit_storage_element_offset!).
                     _emit_backing_array!(b, data_owner, ctx, str_arr_type)
-                    emit_value!(b, ptr_arg, ctx, I64)
-                    coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8})
+                    _emit_storage_element_offset!(b, ptr_arg, data_owner, ctx, 0)
                     local_get!(b, len_local)  # count
                     array_copy!(b, str_arr_type, str_arr_type)  # dest type, src type
 
@@ -1896,8 +1894,7 @@ function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
                   () -> emit_value!(b, offset, ctx, I32)
     elseif root_type isa DataType && root_type.name.name in (:Memory, :GenericMemory)
         source! = () -> _emit_backing_array!(b, root, ctx, arr_idx)
-        offset! = () -> (emit_value!(b, ptr_arg, ctx, I64);
-                         coerce_stack_top!(b, I32, ctx; from_julia=Ptr{UInt8}))
+        offset! = () -> _emit_storage_element_offset!(b, ptr_arg, root, ctx, 0)
     else
         emit_unsupported_stub!(ctx, b, :unsupported_method,
             "jl_symbol_n pointer cannot be traced to a String or Memory"; idx=idx, detail=node)

@@ -949,11 +949,8 @@ _g("immutable_objectid", Any[
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
 _xf("pointer_foreigncalls", Any[
     # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
-    # storage-relative WasmGC operations" (also the first reject in isgraphemebreak!,
-    # whose Ref{Int32} state argument goes through it; its utf8proc foreigncall has no
-    # lowering and would reject next)
+    # storage-relative WasmGC operations"
     ("ref_pointer_load", (x::Int64) -> (r = Ref(x); GC.@preserve r unsafe_load(Base.unsafe_convert(Ptr{Int64}, r))), Int64(5)),
-    ("grapheme_break_stateful", (x::Int64) -> Base.Unicode.isgraphemebreak!(Ref{Int32}(0), 'a', Char(x)) ? 1 : 0, Int64(98)),
     # jl_ptr_to_array_1d: the lowering cannot trace pointer(v) and declines ("no lowering")
     ("unsafe_wrap_pointer", (n::Int64) -> (v = collect(1:n); GC.@preserve v (w = unsafe_wrap(Array, pointer(v), n); w[2])), Int64(3)),
 ])
@@ -1250,7 +1247,35 @@ _g("julia_collection_bodies", Any[
 ])
 # Julia's own string and ordering bodies (dev/CHARTER.md C3), at the inputs a re-implementation
 # drifts on: multibyte characters, empty pieces, limits, kwargs, stability, signed zeros.
+# the bytes of a String, packed with its length: any byte out of place changes the value
+_sm_pack(u::String)::Int64 = (x = Int64(0); for c in codeunits(u); x = x * 256 + Int64(c); end; x * 16 + ncodeunits(u))
+function _sm_sub_bytes(n::Int64)::Int64
+    s = SubString("hello world", n, n + 4)
+    bytes = UInt8[]
+    for i in 1:ncodeunits(s)
+        push!(bytes, codeunit(s, i))
+    end
+    t = String(bytes)
+    return Int64(sum(codeunits(t))) * 100 + ncodeunits(t)
+end
 _g("julia_string_bodies", Any[
+    # a SubString's code units, read in a loop into a fresh String, and Julia's own
+    # uppercase/lowercase of a SubString (once noted as reading zeros)
+    ("substring_codeunit_loop", _sm_sub_bytes, Int64(2)),
+    # String(::SubString{String}) copies from the parent's pointer (unsafe_string(pointer(parent,
+    # offset + 1), n)); a String pointer's value is 1 + its byte offset, which the copy once read
+    # as the offset itself, answering "de" for "cd"
+    ("substring_to_string", (n::Int64) -> _sm_pack(string(SubString("cde", 1, n))), Int64(2)),
+    ("substring_string_interpolated", (n::Int64) -> _sm_pack(string(SubString("cdef", 2, n + 1), 7)), Int64(2)),
+    # titlecase is Julia's rule (words split at non-letters, Unicode casing) over utf8proc's
+    # grapheme breaks; an ASCII stand-in answered "Hello-world" and "élan"
+    ("titlecase_dash", (n::Int64) -> Int64(codepoint(titlecase("hello-world" * string(n))[7])), Int64(2)),
+    ("titlecase_accent", (n::Int64) -> Int64(codepoint(first(titlecase("élan vital" * string(n))))), Int64(2)),
+    ("titlecase_combining", (n::Int64) -> (t = titlecase("e\u0301cole ÉLAN" * string(n)); Int64(codepoint(t[1])) * 1000 + Int64(codepoint(t[end-1]))), Int64(2)),
+    ("grapheme_count", (n::Int64) -> length(Base.Unicode.graphemes("e\u0301a🇺🇸x" * string(n))), Int64(2)),
+    ("grapheme_break_stateful", (x::Int64) -> Base.Unicode.isgraphemebreak!(Ref{Int32}(0), 'a', Char(x)) ? 1 : 0, Int64(98)),
+    ("uppercase_substring", (n::Int64) -> (u = uppercase(SubString("hello world", n, n + 4)); Int64(sum(codeunits(u))) * 100 + ncodeunits(u)), Int64(2)),
+    ("lowercase_substring", (n::Int64) -> (u = lowercase(SubString("HELLO WORLD", n, n + 4)); Int64(sum(codeunits(u))) * 100 + ncodeunits(u)), Int64(2)),
     ("reverse_unicode", (n::Int64) -> ncodeunits(reverse("aé" * string(n) * "∀")) * 10 + Int64(codepoint(first(reverse("xé")))), Int64(3)),
     ("titlecase_words", (n::Int64) -> Int64(codepoint(titlecase("hello wörld " * string(n))[7])), Int64(2)),
     ("replace_pair", (n::Int64) -> ncodeunits(replace("abcabc" * string(n), "b" => "xyz")), Int64(4)),

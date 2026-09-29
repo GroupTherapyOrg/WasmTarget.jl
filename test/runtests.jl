@@ -137,6 +137,7 @@ _wt_shard0() && include("diagnostics_sink.jl")
 _wt_shard0() && include("m8_selector_table.jl")
 _wt_shard0() && include("m11_intrinsics_table.jl")
 _wt_shard0() && include("module_builder_validation.jl")
+_wt_shard0() && include("grapheme_break.jl")
 _wt_shard0() && include("host_boundary_types.jl")
 
 include("utils.jl")

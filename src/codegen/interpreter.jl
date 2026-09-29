@@ -22,16 +22,23 @@ using Base.Experimental: @overlay
 
 Base.Experimental.@MethodTable(WASM_METHOD_TABLE)
 
-"""Flat source-level type for runtime-length function composition."""
+"""
+Flat source-level type for runtime-length function composition.
+parity(quarantine: Julia's inference models `∘` splatted over a run-time vector as an unbounded
+nest of ComposedFunction types; WT's abstract_apply answers it with this one flat callable over
+the vector.)
+"""
 struct _RuntimeComposition{V<:AbstractVector} <: Function
     fs::V
 end
 
+# parity(quarantine: the call of _RuntimeComposition, above.)
 @noinline function _runtime_composition_apply(fs::AbstractVector, i::Int, x)::Any
     i == 0 && return x
     return _runtime_composition_apply(fs, i - 1, fs[i](x))
 end
 
+# parity(quarantine: the call of _RuntimeComposition, above.)
 @noinline function (c::_RuntimeComposition)(x)
     isempty(c.fs) && throw(MethodError(∘, ()))
     return _runtime_composition_apply(c.fs, length(c.fs), x)
@@ -43,7 +50,9 @@ end
 #      with deep dispatch chains and foreigncalls. Pure Julia byte-copy works in WASM.
 # Remove when: codegen handles IOBuffer-based string construction
 
+# parity(quarantine: the part-by-part walk of the print_to_string overlay below.)
 @inline _wasm_print_to_string_tuple(::Tuple{})::String = ""
+# parity(quarantine: the part-by-part walk of the print_to_string overlay below.)
 @inline function _wasm_print_to_string_tuple(xs::Tuple)::Union{Missing, Base.AnnotatedString{String}, Regex, String}
     return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
 end
@@ -60,13 +69,145 @@ end
     return _wasm_print_to_string_tuple(xs)
 end
 
-# Julia's titlecase writes through an IOBuffer, which takes pointer_from_objref
-# (jl_value_ptr, pointer.jl:302); WT rejects a pointer into an object. This is titlecase's
-# rule over the String's characters (_wasm_titlecase_impl).
+# ─── Grapheme breaks ────────────────────────────────────────────────────────
+# Julia's isgraphemebreak! (strings/unicode.jl:801) hands its state to libutf8proc's
+# utf8proc_grapheme_break_stateful through the Ref's address (pointer_from_objref), which a WT
+# object does not have. The overlay below is utf8proc's own rule — utf8proc.c
+# grapheme_break_simple and grapheme_break_extended, identical in utf8proc 2.10.0 (Julia 1.12)
+# and 2.11.3 (Julia 1.13) — over utf8proc's own classes, read through its public API when WT is
+# precompiled. test/grapheme_break.jl checks both against the C library.
+
+# parity-region(quarantine: utf8proc's grapheme boundary classes (utf8proc.h
+# utf8proc_boundclass_t, utf8proc_indic_conjunct_break_t), for the port of its grapheme rule.)
+const _GB_START, _GB_OTHER, _GB_CR, _GB_LF, _GB_CONTROL, _GB_EXTEND = Int32.((0, 1, 2, 3, 4, 5))
+const _GB_L, _GB_V, _GB_T, _GB_LV, _GB_LVT = Int32.((6, 7, 8, 9, 10))
+const _GB_RI, _GB_SPACINGMARK, _GB_PREPEND, _GB_ZWJ = Int32.((11, 12, 13, 14))
+const _GB_EXTPICT, _GB_E_ZWG = Int32.((19, 20))
+const _ICB_NONE, _ICB_LINKER, _ICB_CONSONANT, _ICB_EXTEND = Int32.((0, 1, 2, 3))
+# end parity-region
+
+# The class utf8proc gives a codepoint, boundclass + (indic_conjunct_break << 8), read through
+# its public API: from a zero state after a consonant (U+0915, boundclass Other), the stateful
+# break stores exactly the second codepoint's boundclass and indic_conjunct_break.
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+function _wt_grapheme_class(c::UInt32)::Int32
+    st = Ref{Int32}(0)
+    ccall(:utf8proc_grapheme_break_stateful, Bool, (UInt32, UInt32, Ref{Int32}), 0x00000915, c, st)
+    return st[]
+end
+
+# The codepoints where the class changes and the class from each on, over 0 … 0x10FFFF and the
+# default past it (0x110000 on).
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+function _wt_grapheme_class_ranges()::Tuple{Vector{UInt32}, Vector{Int32}}
+    _wt_grapheme_class(0x00000915) == _GB_OTHER + (_ICB_CONSONANT << 8) ||
+        error("utf8proc does not class U+0915 as a consonant with boundclass Other")
+    starts = UInt32[0]
+    classes = Int32[_wt_grapheme_class(0x00000000)]
+    for c in 0x00000001:0x00110000
+        k = _wt_grapheme_class(c)
+        k == classes[end] || (push!(starts, c); push!(classes, k))
+    end
+    return starts, classes
+end
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+const _WT_GRAPHEME_RANGES = _wt_grapheme_class_ranges()
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+const _WT_GRAPHEME_STARTS = _WT_GRAPHEME_RANGES[1]
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+const _WT_GRAPHEME_CLASSES = _WT_GRAPHEME_RANGES[2]
+
+# parity(quarantine: utf8proc's classes, for the port of its grapheme rule.)
+_wt_grapheme_class_of(cp::UInt32)::Int32 =
+    @inbounds _WT_GRAPHEME_CLASSES[searchsortedlast(_WT_GRAPHEME_STARTS, cp)]
+
+# Whether a grapheme break may fall between boundclasses lbc and tbc (utf8proc.c
+# grapheme_break_simple, rule by rule).
+# parity(quarantine: libutf8proc's grapheme_break_simple, ported; Julia calls it through a ccall.)
+function _wt_grapheme_break_simple(lbc::Int32, tbc::Int32)::Bool
+    lbc == _GB_START && return true                                          # GB1
+    (lbc == _GB_CR && tbc == _GB_LF) && return false                         # GB3
+    (_GB_CR <= lbc <= _GB_CONTROL) && return true                            # GB4
+    (_GB_CR <= tbc <= _GB_CONTROL) && return true                            # GB5
+    (lbc == _GB_L && (tbc == _GB_L || tbc == _GB_V || tbc == _GB_LV || tbc == _GB_LVT)) &&
+        return false                                                         # GB6
+    ((lbc == _GB_LV || lbc == _GB_V) && (tbc == _GB_V || tbc == _GB_T)) && return false   # GB7
+    ((lbc == _GB_LVT || lbc == _GB_T) && tbc == _GB_T) && return false       # GB8
+    (tbc == _GB_EXTEND || tbc == _GB_ZWJ || tbc == _GB_SPACINGMARK || lbc == _GB_PREPEND) &&
+        return false                                                         # GB9, GB9a, GB9b
+    (lbc == _GB_E_ZWG && tbc == _GB_EXTPICT) && return false                 # GB11
+    (lbc == _GB_RI && tbc == _GB_RI) && return false                         # GB12/13
+    return true                                                              # GB999
+end
+
+# The stateful break between classes (lk, tk) (boundclass + indic_conjunct_break << 8) from
+# `state`, and the state after it (utf8proc.c grapheme_break_extended, statement by statement).
+# parity(quarantine: libutf8proc's grapheme_break_extended, ported; Julia calls it through a ccall.)
+function _wt_grapheme_break_extended(lk::Int32, tk::Int32, state::Int32)::Tuple{Bool, Int32}
+    lbc, licb = lk & Int32(0xff), lk >> 8
+    tbc, ticb = tk & Int32(0xff), tk >> 8
+    if state == 0
+        state_bc = lbc
+        state_icb = licb == _ICB_CONSONANT ? licb : _ICB_NONE
+    else
+        state_bc = state & Int32(0xff)
+        state_icb = state >> 8
+    end
+    brk = _wt_grapheme_break_simple(state_bc, tbc) &&
+          !(state_icb == _ICB_LINKER && ticb == _ICB_CONSONANT)             # GB9c
+    if ticb == _ICB_CONSONANT || state_icb == _ICB_CONSONANT || state_icb == _ICB_EXTEND
+        state_icb = ticb
+    elseif state_icb == _ICB_LINKER
+        state_icb = ticb == _ICB_EXTEND ? _ICB_LINKER : ticb
+    end
+    if state_bc == tbc && tbc == _GB_RI
+        state_bc = _GB_OTHER
+    elseif state_bc == _GB_EXTPICT
+        state_bc = tbc == _GB_EXTEND ? _GB_EXTPICT : tbc == _GB_ZWJ ? _GB_E_ZWG : tbc
+    else
+        state_bc = tbc
+    end
+    return brk, state_bc + (state_icb << 8)
+end
+
+# parity(quarantine: Julia's isgraphemebreak! passes its state to utf8proc through the Ref's
+# address, pointer_from_objref; a WT object has no address. The body is Julia's, with the ccall
+# answered by utf8proc's rule over utf8proc's classes.)
+@overlay WASM_METHOD_TABLE function Base.Unicode.isgraphemebreak!(state::Ref{Int32}, c1::AbstractChar,
+                                                                  c2::AbstractChar)
+    if Base.ismalformed(c1) || Base.ismalformed(c2)
+        state[] = 0
+        return true
+    end
+    brk, st = _wt_grapheme_break_extended(_wt_grapheme_class_of(UInt32(c1)),
+                                          _wt_grapheme_class_of(UInt32(c2)), state[])
+    state[] = st
+    return brk
+end
+
+# Julia's titlecase (strings/unicode.jl:685) prints each character into an IOBuffer, which
+# takes pointer_from_objref (jl_value_ptr, pointer.jl:302); WT rejects a pointer into an
+# object. This is Julia's loop, word separators and casing over the same characters, collected
+# instead of printed. (An ASCII-only stand-in answered "Hello-world" and "élan" where Julia
+# answers "Hello-World" and "Élan".)
 # parity(quarantine: Julia's titlecase writes through an IOBuffer that takes
 # pointer_from_objref, jl_value_ptr; a WT object has no address.)
-@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
-    return _wasm_titlecase_impl(s, strict)
+@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep::Function = !isletter, strict::Bool = true)
+    startword = true
+    state = Ref{Int32}(0)
+    c0 = eltype(s)(0x00000000)
+    out = Char[]
+    for c in s
+        if Base.Unicode.isgraphemebreak!(state, c0, c) && wordsep(c)
+            push!(out, c)
+            startword = true
+        else
+            push!(out, startword ? titlecase(c) : strict ? lowercase(c) : c)
+            startword = false
+        end
+        c0 = c
+    end
+    return String(out)
 end
 
 # Julia's string of a vector runs show_vector, which asks Base.invoke_in_world for
@@ -257,42 +398,9 @@ end
 # All overlays use only: ncodeunits, codeunit, String(UInt8[...]) construction.
 # This is pure Julia that WasmTarget's codegen can handle.
 
-# NOTE: `uppercase`/`lowercase`(::SubString) is NOT overlaid. The natural overlay
-# (byte-loop reading codeunit(s,i) from the SubString into a fresh String) compiles
-# but is SILENTLY WRONG: `codeunit(::SubString)` reads return 0 inside this
-# nested-build context (length comes out right, bytes come out zero) — the same
-# SubString/String(bytes) codegen class the strip overlays contort around. A loud
-# compile error (gap 05bc422e7ffb) is better than silently-wrong content; the real
-# fix needs that underlying codegen bug. Triaged for Part 2 with the strip gaps.
-
-@noinline function _wasm_titlecase_impl(s::String, strict::Bool)::String
-    n = ncodeunits(s)
-    n == 0 && return s
-    bytes = UInt8[]
-    prev_space = true
-    i = 1
-    while i <= n
-        b = codeunit(s, i)
-        c = b
-        is_ws = b == UInt8(' ')
-        if is_ws
-            prev_space = true
-        else
-            if prev_space && b >= UInt8('a') && b <= UInt8('z')
-                c = b - UInt8(32)
-            elseif strict && !prev_space && b >= UInt8('A') && b <= UInt8('Z')
-                c = b + UInt8(32)
-            end
-            prev_space = false
-        end
-        push!(bytes, c)
-        i += 1
-    end
-    return String(bytes)
-end
-
-
 # The padding-free primitive element types of the reinterpret overlays below, by width.
+# parity-region(quarantine: the element types of the ReinterpretArray overlays below, whose
+# Julia bodies read GC object headers through pointer_from_objref.)
 const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}
 const _WT_BITS64 = Union{Int64, UInt64, Float64}
 const _WT_BITS16 = Union{Int16, UInt16}
@@ -308,6 +416,7 @@ _wt_uint_type(::Val{1})::Type{UInt8} = UInt8
 _wt_uint_type(::Val{2})::Type{UInt16} = UInt16
 _wt_uint_type(::Val{4})::Type{UInt32} = UInt32
 _wt_uint_type(::Val{8})::Type{UInt64} = UInt64
+# end parity-region
 
 # Primitive numeric elements have no padding. Folding this target-independent
 # layout fact keeps ReinterpretArray construction out of Julia's host pointer/
@@ -401,6 +510,8 @@ end
 # semantic boundary for WT inference so codegen can read the immutable result
 # captured in its TypeName metadata. This is analogous to dart2wasm retaining a
 # recognized runtime operation instead of inlining VM implementation details.
+# parity(quarantine: Julia's check_world_bounded walks the TypeName's binding partitions at run
+# time; the closed module has one world, answered from compile-time metadata.)
 @noinline function _closed_world_type_bounds(tn::Core.TypeName)::Union{Nothing, UnitRange{Int64}}
     binding = ccall(:jl_get_module_binding, Ref{Core.Binding},
                     (Any, Any, Cint), tn.module, tn.name, true)
@@ -426,6 +537,8 @@ end
     return _closed_world_type_bounds(tn)
 end
 
+# parity(quarantine: Julia's isvisible walks binding partitions at run time; the closed module
+# has one world, answered from compile-time metadata (the overlay below).)
 @noinline function _closed_world_isvisible(sym::Symbol, parent::Module, from::Module)::Bool
     Base.isdeprecated(parent, sym) && return false
     Base.isdefinedglobal(from, sym) || return false
@@ -625,6 +738,7 @@ end
 #      (only relevant if some future Base version routes a THIRD caller
 #      through memhash/hash_bytes for strings).
 
+# parity(quarantine: the rotation of MurmurHash3, for the memhash_seed port below.)
 @inline function _wasm_rotl64(x::UInt64, r::Int)::UInt64
     return (x << r) | (x >> (64 - r))
 end
@@ -1168,6 +1282,8 @@ end
 #      time; overlay string/show of a Type to use it. Covers string(), repr(),
 #      interpolation, and embedded `print(io, T)` (all funnel through show).
 # Remove when: WT can navigate DataType.name.name to a string at runtime.
+# parity(quarantine: Julia's show of a Type walks its TypeName and module bindings at run time;
+# the name of a statically known type is baked in for the string/show(::Type) overlays below.)
 @generated function _wt_type_name_str(::Type{T})::String where {T}
     return :($(string(T)))
 end
@@ -1189,28 +1305,6 @@ end
     print(io, _wt_type_name_str(T))
     return nothing
 end
-
-# Concrete 2-arg specializations: the Vararg method's invoke widens elements
-# to the Union (heterogeneous-union tuple reads still miscompile — the
-# hetero-Dict class), so give inference concrete signatures to prefer for the
-# common mixed pairs ("m" * substring, str * char, ...).
-@inline function _wasm_append_str!(out::Vector{UInt8}, s::Union{String, SubString{String}})::Vector{UInt8}
-    for i in 1:ncodeunits(s)
-        push!(out, codeunit(s, i))
-    end
-    return out
-end
-@inline function _wasm_append_char!(out::Vector{UInt8}, c::Char)::Vector{UInt8}
-    u = reinterpret(UInt32, c)
-    nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
-    i = 1
-    while i <= nb
-        push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
-        i += 1
-    end
-    return out
-end
-
 
 # On 1.13 Julia inlines in(::UInt8/Int8, dense byte vector)'s findfirst into a C memchr over
 # the vector's memory (pointer.jl:77), a raw pointer WT does not lower; on 1.12 Julia's own
@@ -1236,6 +1330,9 @@ end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
+# parity-region(quarantine: WT runs Julia's own inference, under its overlay method table and its
+# own cache partition, as an AbstractInterpreter; dart2wasm reads the types its front end
+# computed.)
 struct WasmInterpreter <: CC.AbstractInterpreter
     world::UInt
     method_table::CC.OverlayMethodTable
@@ -1282,6 +1379,7 @@ CC.get_inference_cache(interp::WasmInterpreter) = interp.inf_cache
 CC.cache_owner(interp::WasmInterpreter) = interp.cache_token
 CC.method_table(interp::WasmInterpreter) = interp.method_table
 CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
+# end parity-region
 
 # Julia's native inference models `(∘)(runtime_vector...)` as an unbounded
 # recursive union of nested ComposedFunction types, then specializes downstream
@@ -1289,6 +1387,8 @@ CC.codegen_cache(interp::WasmInterpreter) = interp.codegen
 # context, analogous to dart2wasm's closure context + vtable. Teach inference the
 # target representation before optimization so downstream IR is generated from
 # that truth; all unrelated builtins delegate unchanged to Julia's implementation.
+# parity(quarantine: the one representation WT gives `∘` over a run-time vector,
+# _RuntimeComposition; Julia's inference answers an unbounded nest of ComposedFunction types.)
 function CC.abstract_apply(interp::WasmInterpreter, argtypes::Vector{Any},
                            si::CC.StmtInfo,
                            sv::Union{CC.IRInterpretationState,CC.InferenceState},
@@ -1368,6 +1468,9 @@ end
 # these. This is checked on the value itself, after evaluation: eligibility runs
 # before the call, and a result typed `Any` (getproperty on a DataType) or an
 # address already bit-cast to an integer would pass any type-level test.
+# parity-region(quarantine: WT's concrete-evaluation policy: Julia's own effect-based
+# eligibility, restricted to type-level calls whose values mean the same in every process and on
+# every architecture; dart's constants are evaluated by its front end.)
 function _wt_has_pointer_field(@nospecialize(T))::Bool
     T isa DataType || return true
     T <: Ptr && return true
@@ -1475,11 +1578,13 @@ function CC.concrete_eval_call(interp::WasmInterpreter,
     rt isa CC.Const && !_wt_program_value(rt.val) && return nothing
     return r
 end
+# end parity-region
 
 """
     get_wasm_interpreter() -> WasmInterpreter
 
 Create a WasmInterpreter with overlay method table for the current world age.
 Must be called after all user functions are defined (so they're visible to inference).
+parity(quarantine: the WasmInterpreter WT runs Julia's inference with, above.)
 """
 get_wasm_interpreter()::WasmInterpreter = WasmInterpreter(; world=Base.get_world_counter())
