@@ -21,7 +21,8 @@ using Base.Experimental: @overlay
 # actual computation and value-level throughout. `corm(x, mean(x), y, mean(y))` is
 # BIT-EXACT equal to native `cor(x, y)` for every input — including `x === y`,
 # where `clampcor` yields exactly 1.0 — so this is semantically identical, not an
-# approximation. (1-arg `cor(x)` is left as-is: it has no ledger gap and its
+# approximation. (corm accumulates under `@simd`: native vectorizes the sum in an order its
+# target decides, so the fuzz lane compares cor within its @simd allowance.) (1-arg `cor(x)` is left as-is: it has no ledger gap and its
 # value-independent `one(float(eltype))` result genuinely needs the type-level
 # path; failing to compile there is loud, not a wrong value.)
 @overlay WasmTarget.WASM_METHOD_TABLE Statistics.cor(x::AbstractVector, y::AbstractVector) =
@@ -79,17 +80,23 @@ end
         Statistics.quantile!(copy(v), p)
 end
 
-# mean!(r, A) reduces A into r via sum!+rescale; the dim-reduction machinery
-# emits invalid wasm. For the dest-vector / matrix form it is row-means
-# (r[i] = mean(A[i, :])) — written out explicitly. Bit-identical to native.
+# Statistics.mean!(R, A) is `sum!(R, A; init=true)`, then `R .= R .* (max(1, length(R)) //
+# length(A))`. WT does not compile sum!'s dim-reduction machinery (it emitted invalid wasm);
+# for the row form (R a Vector, A a Matrix) that sum is each row's sequential sum from 0.0,
+# written out here, followed by Julia's own rescale. The rescale is Julia's, not `/ n`: the
+# division answered differently in 754 of 2000 random inputs.
+# parity(quarantine: Julia's sum! over a matrix dimension — Base's mapreducedim! machinery,
+# which WT does not compile; the row sums follow its column-major order.)
 @overlay WasmTarget.WASM_METHOD_TABLE function Statistics.mean!(r::Vector{Float64}, A::Matrix{Float64})
     m = size(A, 1); n = size(A, 2)
     @inbounds for i in 1:m
         s = 0.0
         for j in 1:n; s += A[i, j]; end
-        r[i] = s / n
+        r[i] = s
     end
-    r
+    x = max(1, length(r)) // length(A)
+    r .= r .* x
+    return r
 end
 
 end # module

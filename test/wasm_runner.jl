@@ -198,7 +198,7 @@ end
 const _ENC_JS = """
 const enc = (key,value) => {
   if (typeof value === 'bigint') return { __bigint__: value.toString() };
-  if (typeof value === 'number') { if (value===Infinity) return "__Inf__"; if (value===-Infinity) return "__-Inf__"; if (Number.isNaN(value)) return "__NaN__"; }
+  if (typeof value === 'number') { if (value===Infinity) return "__Inf__"; if (value===-Infinity) return "__-Inf__"; if (Number.isNaN(value)) return "__NaN__"; if (Object.is(value, -0)) return "__-0__"; }
   return value;
 };
 """

@@ -85,6 +85,7 @@ function unmarshal_result(result)
         result == "__Inf__" && return Inf
         result == "__-Inf__" && return -Inf
         result == "__NaN__" && return NaN
+        result == "__-0__" && return -0.0   # JSON writes -0 as 0; the sign is part of the value
         # WBUILD-3000: BigInt values are serialized as strings to preserve Int64 precision
         # (JavaScript Number loses precision for values > 2^53)
         return try
@@ -761,6 +762,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
         push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
         push!(lines, "      else if (v === Infinity) out.push('Inf');")
         push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+        push!(lines, "      else if (Object.is(v, -0)) out.push('__-0__');")
         push!(lines, "      else out.push(v);")
         push!(lines, "    }")
         push!(lines, "    return [{ ok: out }];")
@@ -772,6 +774,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
         if (value === Infinity) return "__Inf__";
         if (value === -Infinity) return "__-Inf__";
         if (Number.isNaN(value)) return "__NaN__";
+        if (Object.is(value, -0)) return "__-0__";
       }
       return value;
     };""")
@@ -936,6 +939,7 @@ function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_m
     push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
     push!(lines, "      else if (v === Infinity) out.push('Inf');")
     push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+    push!(lines, "      else if (Object.is(v, -0)) out.push('__-0__');")
     push!(lines, "      else out.push(v);")
     push!(lines, "    }")
     push!(lines, "    return [{ ok: out }];")

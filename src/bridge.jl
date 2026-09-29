@@ -18,8 +18,8 @@
 #   drives those exports and returns a tagged tree whose every leaf is an
 #   EXACT integer (stringified BigInt). `tree_matches(desc, native, tree)`
 #   compares against the native value; all numeric policy (bit-exact floats,
-#   NaN classes equal, a tolerance only for a named C-library routine) lives in
-#   `_float_match`.
+#   NaN classes equal, a tolerance only where a named C routine or @simd reduction
+#   makes the native bits nonportable) lives in `_float_match`.
 #
 # ARG side (values INTO wasm):
 #   `arg_descriptor(T)` → (desc, accessors): constructor exports (positional
@@ -441,20 +441,21 @@ ismutable_shape(T::Type) = T <: Array || (isstructtype(T) && ismutabletype(T))
 # ═════════════════════════════════════════════════════════════════════════════
 
 """
-    _float_match(a, b, c_library) -> Bool
+    _float_match(a, b, nonportable) -> Bool
 
 A float leaf matches when its bits are Julia's (`===`: 0.0 and -0.0 differ) or both are NaN
-(wasm leaves a NaN's payload to the engine). Only where the native value comes from a C
-library while the module runs Julia's generic algorithm — `c_library` names the routine, e.g.
-"LAPACK dgetrf" — does a relative difference up to 1e-9 match: two algorithms, neither of
-them an approximation of the other's answer.
+(wasm leaves a NaN's payload to the engine). Only where the native value's last bits are not
+Julia's portable answer does a relative difference up to 1e-9 match — `nonportable` names
+why: the C routine it came from while the module runs Julia's generic algorithm ("LAPACK
+dgetrf"), or an `@simd` reduction whose order Julia leaves to the target's vector width
+("@simd Statistics.corm").
 parity(quarantine: the differential oracle compares Julia's native result with the module's;
 dart2wasm has no counterpart)
 """
-function _float_match(a::AbstractFloat, b::AbstractFloat, c_library::Union{Nothing,String})::Bool
+function _float_match(a::AbstractFloat, b::AbstractFloat, nonportable::Union{Nothing,String})::Bool
     (isnan(a) && isnan(b)) && return true
     a === b && return true
-    c_library === nothing && return false
+    nonportable === nothing && return false
     (isinf(a) || isinf(b)) && return a == b
     return isapprox(Float64(a), Float64(b); rtol = 1e-9, atol = 1e-12)
 end
@@ -471,22 +472,22 @@ function _dec_int(w::Int, signed::Bool, s::AbstractString)
 end
 
 """
-    tree_matches(d, native, tree; c_library=nothing) -> Bool
+    tree_matches(d, native, tree; nonportable=nothing) -> Bool
 
 Whether a walked wasm tree is the native value: integers, chars and strings exactly, floats
-by `_float_match` (bit-exact unless `c_library` names the C routine the native value came
-from).
+by `_float_match` (bit-exact unless `nonportable` names why the native value's last bits are
+not Julia's portable answer).
 parity(quarantine: the differential oracle compares Julia's native result with the module's;
 dart2wasm has no counterpart)
 """
-function tree_matches(d, native, tree; c_library::Union{Nothing,String}=nothing)::Bool
+function tree_matches(d, native, tree; nonportable::Union{Nothing,String}=nothing)::Bool
     tree isa AbstractDict || return false
     haskey(tree, "err") && return false
     k = d["k"]
     if k == "int"
         return native == _dec_int(d["w"], d["s"], tree["x"])
     elseif k == "bits"
-        return _float_match(native, _dec_bits(Val(d["w"]), tree["x"]), c_library)
+        return _float_match(native, _dec_bits(Val(d["w"]), tree["x"]), nonportable)
     elseif k == "char"
         return codepoint(native::Char) == UInt32(parse(Int64, tree["x"]))
     elseif k == "str"
@@ -495,18 +496,18 @@ function tree_matches(d, native, tree; c_library::Union{Nothing,String}=nothing)
         fs = d["fs"]
         tf = tree["f"]
         length(tf) == length(fs) || return false
-        return all(tree_matches(fs[i]["d"], getfield(native, i), tf[i]; c_library) for i in eachindex(fs))
+        return all(tree_matches(fs[i]["d"], getfield(native, i), tf[i]; nonportable) for i in eachindex(fs))
     elseif k == "vec"
         ta = tree["a"]
         length(native) == length(ta) || return false
-        return all(tree_matches(d["el"], native[i], ta[i]; c_library) for i in eachindex(ta))
+        return all(tree_matches(d["el"], native[i], ta[i]; nonportable) for i in eachindex(ta))
     elseif k == "mat"
         (size(native, 1) == tree["r"] && size(native, 2) == tree["c"]) || return false
         ta = tree["a"]
         length(ta) == length(native) || return false
         p = 1
         for i in 1:tree["r"], j in 1:tree["c"]   # row-major
-            tree_matches(d["el"], native[i, j], ta[p]; c_library) || return false
+            tree_matches(d["el"], native[i, j], ta[p]; nonportable) || return false
             p += 1
         end
         return true

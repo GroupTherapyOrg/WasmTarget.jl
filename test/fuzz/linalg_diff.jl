@@ -62,7 +62,7 @@ function _la_diff(fn, argTs::Tuple, inputs::Vector, rettype)
         a = inputs[i]
         nat = try (true, fn(a...)) catch; (false, nothing) end
         ok = r[1] === :ok ? (nat[1] && _LA_B.tree_matches(rdesc, nat[2], r[2];
-                                                          c_library = get(_LA_C_LIBRARY, fn, nothing))) : !nat[1]
+                                                          nonportable = get(_LA_C_LIBRARY, fn, nothing))) : !nat[1]
         if !ok
             @error("LinearAlgebra differential mismatch",
                 function_name=string(nameof(fn)), argument_types=argTs,

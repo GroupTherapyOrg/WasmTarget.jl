@@ -84,6 +84,7 @@ function _unmarshal(v)
         v == "__Inf__" && return Inf
         v == "__-Inf__" && return -Inf
         v == "__NaN__" && return NaN
+        v == "__-0__" && return -0.0
         return v
     elseif v isa AbstractVector
         return [_unmarshal(x) for x in v]
@@ -122,7 +123,7 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFA
     const inputs = $(_js_inputs(inputs));
     const enc = (k,v) => {
         if (typeof v === 'bigint') return { __bigint__: v.toString() };
-        if (typeof v === 'number') { if (v===Infinity) return "__Inf__"; if (v===-Infinity) return "__-Inf__"; if (Number.isNaN(v)) return "__NaN__"; }
+        if (typeof v === 'number') { if (v===Infinity) return "__Inf__"; if (v===-Infinity) return "__-Inf__"; if (Number.isNaN(v)) return "__NaN__"; if (Object.is(v, -0)) return "__-0__"; }
         return v;
     };
     const importObject = {};
@@ -196,8 +197,8 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=
     const bvf = a => { const v=e._bv_f64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_f64_set!'](v,BigInt(i+1),a[i]); return v; };
     const marsh = o => o.vi!==undefined ? bvi(o.vi) : o.vf!==undefined ? bvf(o.vf) : o.i!==undefined ? BigInt(o.i) : o.f!==undefined ? o.f : o.s;
     const rdi = v => { const n=Number(e._bv_i64_len(v)); const o=[]; for(let i=0;i<n;i++) o.push({__bigint__: e._bv_i64_get(v,BigInt(i+1)).toString()}); return o; };
-    const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":x);} return o; };
-    const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";} return val; };
+    const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":Object.is(x,-0)?"__-0__":x);} return o; };
+    const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";if(Object.is(val,-0))return"__-0__";} return val; };
     const inputs = $(inarr);
     return inputs.map(args => { try {
         const r = f(...args.map(marsh));

@@ -25,7 +25,8 @@ function _st_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
-        ok = r[1] === :ok ? (nat[1] && _ST_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok = r[1] === :ok ? (nat[1] && _ST_B.tree_matches(rdesc, nat[2], r[2];
+                                                          nonportable = get(_ST_NONPORTABLE, fn, nothing))) : !nat[1]
         if !ok
             @error("Statistics differential mismatch",
                 function_name=string(nameof(fn)), argument_types=argTs,
@@ -47,6 +48,12 @@ _st_meanb(r, A) = mean!(r, A)
 # the chain directly; 2-arg uses the corm reroute (Statistics ext) for the value.
 _st_cor1(v)    = cor(v)
 _st_cor2(a, b) = cor(a, b)
+
+# The cases whose native value's last bits are not Julia's portable answer: Statistics.corm
+# accumulates under `@simd`, and native vectorizes that reduction in an order its target's
+# vector width decides (it differs from the sequential order in 2074 of 3000 random inputs on
+# arm64). Every other case is compared bit-exact.
+const _ST_NONPORTABLE = Dict{Function,String}(_st_cor2 => "@simd Statistics.corm")
 
 function run_stats_tests(; reps::Int = 40)
     rng = MersenneTwister(0x57A7)
