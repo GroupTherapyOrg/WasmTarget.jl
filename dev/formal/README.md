@@ -49,7 +49,7 @@ anchor in `src/` has a row.)
 | Dead-statement proof | `stmt_is_proven_unreachable`, `analyze_blocks` (generate.jl) | ProvenDead |
 | Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
 | Native sidecar protocol | test/sidecar | Sidecar |
-| Closure-local capture typing | `f3_self_box_joins` (box_capture.jl) | — none yet: an optimistic seed with a verify pass, the shape NumericJoin found unsound |
+| Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
 | External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_closure_dispatch_trampoline!` (closures.jl) | ClassIdSwitch |
 | `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | — none yet: MARCH 13.4 replaces it with dart's `identical`; model it with that change |

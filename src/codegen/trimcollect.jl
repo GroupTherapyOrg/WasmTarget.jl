@@ -378,6 +378,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         empty!(_fn_dyn_sigs)
         return
     end
+    # captured variables' types over the whole world collected so far (record_capture_contents!)
+    capture_record = record_capture_contents(Any[
+        (nir_for(codeinfos[k]), nir_slot_types(codeinfos[k]),
+         isempty(nir_slot_types(codeinfos[k])) ? nothing : nir_slot_types(codeinfos[k])[1])
+        for k in 2:2:length(codeinfos) if codeinfos[k] isa Core.CodeInfo])
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
@@ -391,19 +396,13 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         hsig = host_mi.specTypes
         hparams = (hsig isa DataType && hsig <: Tuple) ? collect(hsig.parameters) : Any[]
         local nir = nir_for(src)
-        # Capture typing is a closed-world fact, not merely a codegen hint. Feed
-        # the same optimistic-and-verified proof used for local representation
-        # into dependency discovery, so a call erased by Core.Box inference can
-        # enroll its exact MethodInstance before function indices are frozen.
-        local _capture_joins = Dict{Int,Type}()
-        if !isempty(hparams)
-            local _selfT = hparams[1]
-            if _selfT isa DataType && isstructtype(_selfT)
-                merge!(_capture_joins, f3_self_box_joins(
-                    nir, nir, _selfT;
-                    argtypes=Tuple(hparams[2:end]), self_shift=1))
-            end
-        end
+        # Capture typing is a closed-world fact, not merely a codegen hint: the same
+        # record codegen types box reads from (capture_read_types) types them here, so a
+        # call erased by Core.Box inference enrolls its exact MethodInstance before
+        # function indices are frozen.
+        local _capture_joins = capture_read_types(nir, nir, capture_record,
+                                                  isempty(hparams) ? nothing : hparams[1];
+                                                  spectypes=nir_slot_types(src))
         local _call_type = function(a)
             if a isa NirSSA && haskey(_capture_joins, a.id)
                 return _capture_joins[a.id]

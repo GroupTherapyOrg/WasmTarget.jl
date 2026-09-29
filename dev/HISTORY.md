@@ -124,6 +124,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   Memory allocation as instantiations (smoke memoryref_erased).
 - Every definition carries its return type, `::Any` only in R30_ANY_SEAMS's named seams
   (R30 = 0; C4 closed). The reduce/foldl overlays gave way to Julia's own bodies.
+- A captured variable is typed by every write into its box across the closed world, never by
+  a closure body's guess (CaptureType; the guess trapped where Julia answers).
 
 ## Why the archive was consolidated
 

@@ -850,6 +850,24 @@ _g("memoryref_erased", Any[
     ("erased_closure_memory", (n::Int64) -> (h = m -> (length(m)::Int64) + n; fs = Any[h];
                                              (fs[1](Memory{Int64}(undef, n))::Int64) * 10 + (fs[1]([1, 2])::Int64)), Int64(3)),
 ])
+# A captured variable's type is the join of every write into its Core.Box across the closed world,
+# the creator's included (record_capture_contents; dev/formal/CaptureType.tla). A closure body once
+# guessed it alone from its own arithmetic: `c = c + 1` over a box its creator filled with 0.25
+# guessed Int64, and the read unboxed a Float64 box as an Int64 one (a trap; Julia answers 2.25).
+@noinline _sm_cap_int(x::Int64) = (c = x; () -> (c = c + 1; c))
+@noinline _sm_cap_float(x::Float64) = (c = x; () -> (c = c + 0.5; c))
+@noinline _sm_cap_undef() = (local r; () -> (r = Int64[]; push!(r, 1); r))
+_g("captured_variables", Any[
+    ("int_counter", (x::Int64) -> (f = _sm_cap_int(x); f(); f()), Int64(3)),
+    ("float_counter", (x::Float64) -> (f = _sm_cap_float(x); f(); f()), 0.25),
+    ("undefined_then_written", (n::Int64) -> (f = _sm_cap_undef(); length(f()) + n), Int64(3)),
+])
+# The same shape with a Float64 creator and an Int64 step reads its Float64 correctly, and then
+# `+(::Float64, ::Int64)` rejects: arithmetic on two concrete types that differ (MARCH 13.10).
+@noinline _sm_cap_mixed(x::Float64) = (c = x; () -> (c = c + 1; c))
+_xf("captured_mixed_step", Any[
+    ("float_counter_int_step", (x::Float64) -> (f = _sm_cap_mixed(x); f(); f()), 0.25),
+])
 # Loads and stores through a storage pointer: one offset for every arm, `ptr - base + (i - 1) *
 # sizeof(T)`, with a String's or Symbol's pointer carrying base 1 and a Memory's base 0
 # (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on

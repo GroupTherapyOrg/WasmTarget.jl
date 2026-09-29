@@ -8,7 +8,8 @@
 # unrelated concrete-result calls.
 
 @testset "F3 L2b: f3_box_value_types value-type propagation" begin
-    @test isempty(WasmTarget.f3_self_box_joins(WasmTarget.NirStmt[], Any[], Tuple{Vararg{Int64}}))
+    @test isempty(WasmTarget.capture_read_types(WasmTarget.NirStmt[], Any[],
+                                                Dict{Tuple{Type,Symbol},Type}(), Tuple{Vararg{Int64}}))
     # counter: `s` mutated capture → Core.Box{Int64}; getfield(box,:contents)::Any must propagate Int64.
     fcounter(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     ci = code_typed(fcounter, (Int64,); optimize = true)[1].first
@@ -49,7 +50,15 @@
     vf = vector_capture()
     vci = only(code_typed(vf, ())).first
     vnir = WasmTarget.build_nir(vci)
-    vjoins = WasmTarget.f3_self_box_joins(vnir, vnir, typeof(vf); argtypes=())
+    # the creator records the box's type (its only write is the closure's, so the box starts
+    # undefined and holds Vector{Int64}); the closure's reads are typed from that record
+    cci = only(code_typed(vector_capture, ())).first
+    vst, cst = WasmTarget.nir_slot_types(vci), WasmTarget.nir_slot_types(cci)
+    vrec = WasmTarget.record_capture_contents(Any[(WasmTarget.build_nir(cci), cst, cst[1]),
+                                                  (vnir, vst, vst[1])])
+    @test vrec[(typeof(vf), :result)] === Vector{Int64}
+    vjoins = WasmTarget.capture_read_types(vnir, vnir, vrec, typeof(vf);
+                                           spectypes=WasmTarget.nir_slot_types(vci))
     @test Vector{Int64} in values(vjoins)
 
     # The recovered contents type must reach codegen, not merely the analysis
@@ -80,10 +89,13 @@
     bodies = WasmTarget._f3_capturing_closure_bodies(cnir, bid)
     @test !isempty(bodies)
     for (bnir, bspec) in bodies
-        seeds = WasmTarget.f3_closure_box_seeds(bnir, bspec[1], Int64)
-        @test !isempty(seeds) && all(==(Int64), values(seeds))          # captured-box field reads
-        vt = WasmTarget.f3_box_value_types(bnir; extra_box_seeds = seeds, spectypes = bspec)
-        # both the getfield read AND the s+i add (resolved Int64 via spectypes) propagate
+        local boxf = only(fieldname(bspec[1], k) for k in 1:fieldcount(bspec[1])
+                          if fieldtype(bspec[1], k) === Core.Box)
+        vt = WasmTarget.capture_read_types(bnir, bnir,
+                                           Dict{Tuple{Type,Symbol},Type}((bspec[1], boxf) => Int64),
+                                           bspec[1]; spectypes = bspec)
+        # both the contents read AND the s+i add (resolved Int64 via spectypes) propagate;
+        # the box reads themselves are never retyped
         @test count(==(Int64), values(vt)) >= 2
     end
 end

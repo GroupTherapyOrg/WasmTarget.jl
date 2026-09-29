@@ -103,10 +103,10 @@ mutable struct TypeRegistry
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
     box_types::Union{Nothing, Dict{WasmValType, UInt32}}
-    # F3 L2 cross-function glue: closure type → the WASM contents type of the Core.Box it captures.
-    # Populated by a pre-pass over an enclosing fn's IR (populate_box_field_types!); consulted by
-    # register_closure_type! to type the captured-box field as a typed Box{contents} (else anyref).
-    box_contents_types::Union{Nothing, Dict{Type, WasmValType}}
+    # (closure type, captured field) → the captured variable's type (Any: erased), recorded over
+    # every body before any compiles (record_capture_contents; CaptureType.tla); the box reads
+    # of a closure body or a closure value are typed from it (capture_read_types).
+    box_contents_types::Union{Nothing, Dict{Tuple{Type,Symbol}, Type}}
     # THE ensureConstant funnel's registry (dart constants.dart:154 constantInfo — ONE
     # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
@@ -161,7 +161,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,  # egal_func_idx
     nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
-    Dict{Type, WasmValType}(),    # box_contents_types (F3 L2)
+    Dict{Tuple{Type,Symbol}, Type}(),  # box_contents_types (record_capture_contents)
     Dict{Any, UInt32}(),          # constant_globals (ensureConstant)
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions

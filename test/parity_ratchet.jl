@@ -1020,7 +1020,7 @@ const LOCKS = [
             forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
             count(p -> occursin(p, strings_src), forbidden)
         end),
-    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation — the joins are computed once, by numeric_local_joins, whose body holds no catch",
+    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation — the joins are computed once, by numeric_local_joins, whose body holds no catch (restated 2026-09-28: the captured-variable record replaced the closure-local guess)",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             capture_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
@@ -1030,8 +1030,8 @@ const LOCKS = [
             # a failure inside any capture/value-channel proof propagates
             required = ["_numeric_joins = numeric_local_joins(ctx)",
                         "propagate_numeric_value_types",
-                        "f3_self_box_joins", "f3_closure_box_seeds",
-                        "isconcretetype(T) && isstructtype(T)",
+                        "capture_read_types(ctx.nir", "function record_capture_contents(",
+                        "no fixpoint within the bound: every captured variable stays erased",
                         "Tuple{Vararg{Int64}}"]
             body = match(r"(?s)\nfunction numeric_local_joins\(.*?\nend\n", context_src)
             all_src = context_src * capture_src * capture_test
@@ -1314,14 +1314,15 @@ const LOCKS = [
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
         end),
-    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup",
+    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup (restated 2026-09-28: the types come from record_capture_contents over the collected world)",
         () -> begin
             box_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
-            required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
+            required = ["capture_record = record_capture_contents(",
+                        "capture_read_types(nir, nir, capture_record",
                         "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
                         "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
                         "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",

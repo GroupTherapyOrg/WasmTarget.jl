@@ -464,37 +464,23 @@ _is_getfield_callee(@nospecialize(f))::Bool =
 
 The Any-but-really-numeric joins of the function being compiled: Julia leaves a scalar-replaced
 `Core.Box` accumulator and its phis typed `Any`, and these recover the one numeric type such an
-SSA carries so its local is that type. The parent side first records each `%new(Core.Box)`'s
-contents type for the capturing closure's body (populate_box_field_types!); then
-propagate_numeric_value_types (NumericJoin.tla); in a closure body, f3_self_box_joins (the
-closure-local solver, optimistic with a verify pass: not modeled yet) and the seeds for the
-captured Box fields the parent recorded, propagated by f3_box_value_types (BoxValueTypes.tla).
+SSA carries so its local is that type: propagate_numeric_value_types (NumericJoin.tla), and the
+reads of a captured box, typed by the contents type recorded for the closure type before any
+body compiled (capture_read_types; CaptureType.tla) and propagated by f3_box_value_types
+(BoxValueTypes.tla).
 Computed once per compilation context (analyze_control_flow!); every join it returns is
 applied to an erased SSA type.
 parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): a variable's local is
 typed by its real inferred type, not the erased one.
 """
 function numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type}
-    populate_box_field_types!(ctx.mod, ctx.type_registry, ctx.nir, ctx.ssa_types)
     joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
         argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
-    selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
-    if selfT isa DataType && isstructtype(selfT)
-        # Julia inference's own SSA types (the NIR boundary's widened answer)
-        merge!(joins, f3_self_box_joins(ctx.nir, ctx.nir, selfT;
-            argtypes=ctx.arg_types, self_shift=1))
-    end
-    if selfT isa DataType && ctx.type_registry.box_contents_types !== nothing
-        contents = get(ctx.type_registry.box_contents_types, selfT, nothing)
-        contentsT = contents === I64 ? Int64 : contents === I32 ? Int32 :
-                    contents === F64 ? Float64 : contents === F32 ? Float32 : nothing
-        if contentsT !== nothing
-            seeds = f3_closure_box_seeds(ctx.nir, selfT, contentsT)
-            if !isempty(seeds)
-                merge!(joins, f3_box_value_types(ctx.nir, ctx.ssa_types; extra_box_seeds=seeds))
-                merge!(joins, seeds)
-            end
-        end
+    local record = ctx.type_registry.box_contents_types
+    if record !== nothing
+        local selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
+        merge!(joins, capture_read_types(ctx.nir, ctx.ssa_types, record, selfT;
+                                         spectypes=ctx.slot_types))
     end
     return joins
 end

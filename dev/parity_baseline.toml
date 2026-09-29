@@ -139,7 +139,7 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
-L131_every_algorithm_has_its_model = 3
+L131_every_algorithm_has_its_model = 2
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 0
 R17_unwrapped_value_emissions = 0
@@ -157,5 +157,5 @@ R37_name_keyed_callee_arms = 0
 R38_overlays_without_reason = 132
 R39_smoke_runtime_xfails = 0
 R3_infer_value_type = 59
-R5_julia_type_reguess = 64
+R5_julia_type_reguess = 63
 R7_raw_coercion_ops = 21

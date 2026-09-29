@@ -1,35 +1,40 @@
-# F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch) — cross-function pre-pass that maps a capturing closure type
-# to the WASM contents type of the Core.Box it captures (registry.box_contents_types).
-#
-# populate_box_field_types!(mod, reg, nir, ssa_types) scans an enclosing fn's NIR boundary: for each
-# %new(Core.Box) with a CONCRETE contents type (box_contents_type), it maps every closure type
-# capturing it → the contents wasm type. register_closure_type! (L2 wiring) will consult this to
-# type the captured-box field as a typed Box{contents}. DORMANT: nothing reads the side-table yet
-# (byte-identical). Dynamic-contents boxes get NO entry → anyref fallback.
+# record_capture_contents: every captured variable's type, keyed by (closure type, field), is
+# the least fixpoint of the writes into its Core.Box across the closed world's bodies — the
+# creator's (an argument typed by its signature) and every body writing through the field;
+# a field whose writes are not one concrete type, or whose box no body creates, records Any
+# (dev/formal/CaptureType.tla).
 
-@testset "F3 L2a: populate_box_field_types! pre-pass" begin
-    # counter: `s` is a mutated capture → Core.Box{Int64}; the foreach closure captures it.
+_rc_mki(x::Int64) = (c = x; () -> (c = c + 1; c))
+_rc_mkf(x::Float64) = (c = x; () -> (c = c + 1; c))
+_rc_mkmix(x::Int64) = (c = x; () -> (c = c + 0.5; c))
+_rc_undef() = (local r; () -> (r = Int64[]; push!(r, 1); r))
+
+# the (nir, slot types, #self# type) of `f(argtypes...)`
+_rc_body(f, argtypes) = begin
+    ci = code_typed(f, argtypes; optimize = true)[1].first
+    st = WasmTarget.nir_slot_types(ci)
+    (WasmTarget.build_nir(ci), st, st[1])
+end
+# a creator and the closure it returns, as the closed world holds them
+_rc_world(mk, args...) = Any[_rc_body(mk, map(typeof, args)), _rc_body(mk(args...), ())]
+_rc_values(world) = collect(values(WasmTarget.record_capture_contents(world)))
+
+@testset "record_capture_contents: captured variables' types from every write" begin
+    # counter: `s` is a mutated capture → Core.Box; the foreach closure captures it.
     fcounter() = (s = 0; foreach(i -> (s += i), 1:5); s)
-    ci = code_typed(fcounter, (); optimize = true)[1].first
-    mod = WasmTarget.WasmModule()
-    reg = WasmTarget.TypeRegistry()
-    nir = WasmTarget.build_nir(ci)
-    WasmTarget.populate_box_field_types!(mod, reg, nir, nir)
+    @test length(WasmTarget.find_box_news(_rc_body(fcounter, ())[1])) == 1
+    @test _rc_values(Any[_rc_body(fcounter, ())]) == [Int64]
 
-    @test length(WasmTarget.find_box_news(nir)) == 1                # one Core.Box
-    @test !isempty(reg.box_contents_types)                          # captor mapped
-    @test all(==(WasmTarget.I64), values(reg.box_contents_types))   # contents = Int64 → I64
-
-    # dynamic contents (heterogeneous writes) → no concrete type → no entry (anyref fallback).
-    fdyn(b::Bool) = (c = 0; foreach(i -> (c = b ? i : "x"), 1:3); c)
-    cid = code_typed(fdyn, (Bool,); optimize = true)[1].first
-    reg2 = WasmTarget.TypeRegistry()
-    local dnir = WasmTarget.build_nir(cid)
-    WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg2, dnir, dnir)
-    @test isempty(reg2.box_contents_types)                          # dynamic ⇒ anyref, no typed entry
-
-    # box_contents_types === nothing (e.g. the minimal self-host registry) is a no-op, never errors.
-    reg3 = WasmTarget.TypeRegistry()
-    reg3.box_contents_types = nothing
-    @test WasmTarget.populate_box_field_types!(WasmTarget.WasmModule(), reg3, nir, nir) === nothing
+    # an argument written in is typed by the creator's signature, and the closure's own
+    # `c = c + 1` keeps it Int64
+    @test _rc_values(_rc_world(_rc_mki, 1)) == [Int64]
+    # a Float64 creator and an Int64 increment are Float64 (a body alone guessed Int64 from the
+    # `+ 1` and the read unboxed a Float64 box as an Int64 one)
+    @test _rc_values(_rc_world(_rc_mkf, 0.25)) == [Float64]
+    # an Int64 creator and a Float64 increment disagree: erased
+    @test _rc_values(_rc_world(_rc_mkmix, 1)) == [Any]
+    # the closure alone, its creator outside the world: its base is unknown, never concrete
+    @test all(==(Any), _rc_values(Any[_rc_body(_rc_mkf(0.25), ())]))
+    # a box its creator never writes starts undefined: its type is the closures' writes'
+    @test _rc_values(_rc_world(_rc_undef)) == [Vector{Int64}]
 end
