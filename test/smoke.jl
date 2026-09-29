@@ -914,9 +914,6 @@ _xf("builtin_crashes", Any[
     # ::Symbol) rejects "getfield call shape not lowerable"
     ("getproperty_any", (x::Int64) -> (v = Any[_Pt(x, 2)]; v[1].x::Int64), Int64(5)),
     ("setproperty_any", (x::Int64) -> (v = Any[_Box(1)]; v[1].v = x; (v[1]::_Box).v), Int64(5)),
-    # Core.invoke_in_world: the re-dispatched `abs` is not in the closed world
-    # ("unresolved dynamic call Main.abs (Int64,)")
-    ("invoke_in_world", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
 ])
 # A dynamic call binds to no specialization compiled for other argument types. `_RW(::Any)`
 # holding a Symbol once ran the compiled `_RW(::String)` (get_function matched the Any
@@ -1442,6 +1439,15 @@ _g("closed_world_reflection", Any[
     ("isdefinedglobal_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(isdefinedglobal(tn.module, tn.singletonname))), Int64(-1)),
     ("isdeprecated_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(Base.isdeprecated(tn.module, tn.name))), Int64(1)),
     ("isconst_runtime", (x::Int64) -> (tn = _sm_rt_type2(x).name; Int64(isconst(tn.module, tn.singletonname))), Int64(-1)),
+])
+# invoke_in_world(world, f, args...) calls f(args...): the closed world has one world, so the
+# collector's edge is that call's dispatch, with each operand typed as the call site types it.
+# Until 2026-09-29 an argument operand went untyped and no edge was added ("unresolved dynamic
+# call Main.abs (Int64,)").
+_g("invoke_in_world", Any[
+    ("argument_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
+    ("ssa_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), +, x * 2, 1)::Int64, Int64(4)),
+    ("float_result", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), sqrt, Float64(x))::Float64 > 2.0 ? 1 : 0, Int64(5)),
 ])
 _g("sizeof_values", Any[
     ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),

@@ -32,6 +32,8 @@ MCDynTargets == [t \in MCTypes |->
 MCSpecializeFails == {"D"}
 MCRoundCeiling    == 0
 MCSwallowFailures == FALSE
+MCHiddenEdges     == [m \in MCMethods |-> {}]
+MCPrunerSeesHidden == TRUE
 
 RejectReachable == <>(status = "Rejected")
 =============================================================================

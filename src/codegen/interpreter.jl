@@ -57,11 +57,13 @@ end
     return string(first(xs)) * _wasm_print_to_string_tuple(Base.tail(xs))
 end
 
-# Julia's print_to_string builds an IOBuffer (which takes pointer_from_objref, jl_value_ptr)
-# and prints each part through show — a vector's through show_vector, which asks
-# Base.invoke_in_world (arrayshow.jl:553). WT lowers neither, so each part is its string.
-# parity(quarantine: Julia's print_to_string writes an IOBuffer through pointer_from_objref,
-# and shows a vector through Base.invoke_in_world; WT lowers neither.)
+# Julia's print_to_string prints each part into an IOBuffer through show. Its own body
+# compiles for scalar parts (measured 2026-09-29: "a7b", a Float64, a Char, a Symbol), but a
+# vector part's show_vector reaches show_type_name, whose is_global_function asks
+# `isa(getglobal(tn.module, globname), tn.wrapper)` — an isa against a runtime type, which WT
+# does not lower — so each part is its string.
+# parity(quarantine: a vector part's show reaches show_type_name's isa against a runtime type
+# (show.jl:1046 is_global_function), which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.print_to_string(xs...)
     # Tuple recursion preserves each fixed call site's concrete heterogeneous
     # field types. Iterating `xs` widens the element to Any and enrolls the
@@ -210,11 +212,12 @@ end
     return String(out)
 end
 
-# Julia's string of a vector runs show_vector, which asks Base.invoke_in_world for
-# _typeinfo_implicit (arrayshow.jl:553); WT does not lower invoke_in_world (R33). These write
-# Julia's text for the three element types a program prints: "[1, 2]", "[1.5, 2.0]",
-# ["a", "b"] with its quotes.
-# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
+# Julia's string of a vector runs show_vector, which reaches show_type_name, whose
+# is_global_function asks `isa(getglobal(tn.module, globname), tn.wrapper)` — an isa against a
+# runtime type, which WT does not lower (measured 2026-09-29, Base.show_vector into an IOBuffer).
+# These write Julia's text for the three element types a program prints: "[1, 2]",
+# "[1.5, 2.0]", ["a", "b"] with its quotes.
+# parity(quarantine: Julia's show_vector reaches show_type_name's isa against a runtime type (show.jl:1046 is_global_function), which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Int64})
     n = length(v)
     bytes = UInt8[]
@@ -246,7 +249,7 @@ end
     return String(bytes)
 end
 
-# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
+# parity(quarantine: Julia's show_vector reaches show_type_name's isa against a runtime type (show.jl:1046 is_global_function), which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{Float64})
     n = length(v)
     bytes = UInt8[]
@@ -277,7 +280,7 @@ end
     return String(bytes)
 end
 
-# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
+# parity(quarantine: Julia's show_vector reaches show_type_name's isa against a runtime type (show.jl:1046 is_global_function), which WT does not lower.)
 @noinline @overlay WASM_METHOD_TABLE function Base.string(v::Vector{String})
     n = length(v)
     bytes = UInt8[]
@@ -318,9 +321,9 @@ end
     return String(bytes)
 end
 
-# Julia's repr of a vector runs show_vector, which asks Base.invoke_in_world for
-# _typeinfo_implicit (arrayshow.jl:553); WT does not lower invoke_in_world (R33).
-# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
+# Julia's repr of a vector runs show_vector, which reaches show_type_name's isa against a
+# runtime type (show.jl:1046 is_global_function); WT does not lower it.
+# parity(quarantine: Julia's show_vector reaches show_type_name's isa against a runtime type (show.jl:1046 is_global_function), which WT does not lower.)
 @overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
 
 # Julia's hvcat of tuple elements shapes the matrix through _typed_hvncat_shape

@@ -82,17 +82,28 @@ end
 # and a closed-world module has exactly one.)
 function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) >= 2 || return nothing
-    # The intrinsic's Julia SSA result is `Any`, but that is a consumer-side
-    # widening, not the callee's return contract. Do not use it to reject the
-    # concrete collected target; statement storage will box/widen afterward.
-    had_result = haskey(ctx.ssa_types, idx)
-    old_result = get(ctx.ssa_types, idx, Any)
-    delete!(ctx.ssa_types, idx)
+    # The call is typed by its own static type — Julia's inference of f(args...) at the
+    # operands' types, as a dart call's static type is its target's return type — and the
+    # statement's type (`Any`: inference does not see through the world-age builtin) is the
+    # consumer's widening, converted to afterwards. A callee that is not a constant is a
+    # dynamic call typed `Any`.
+    local f = _invoke_in_world_callee(args[2])
+    local R = f === nothing ? Any :
+        infer_return_type(f, Tuple(Any[get_ssa_type(ctx, a) for a in args[3:end]]))
+    local had_result = haskey(ctx.ssa_types, idx)
+    local old_result = get(ctx.ssa_types, idx, Any)
+    ctx.ssa_types[idx] = R
     try
-        return compile_call!(b, nir_call(args[2], args[3:end]), idx, ctx)
+        compile_call!(b, nir_call(args[2], args[3:end]), idx, ctx)
     finally
-        had_result && (ctx.ssa_types[idx] = old_result)
+        had_result ? (ctx.ssa_types[idx] = old_result) : delete!(ctx.ssa_types, idx)
     end
+    (ctx.last_stmt_was_stub || R === Union{} || isempty(b.v.stack)) && return b
+    # a numeric result stored under a non-concrete statement type is boxed by its own type,
+    # the value the call returns (statement storage has only the statement's type to box by)
+    (!_wt_is_ref(b.v.stack[end]) && !isconcretetype(old_result)) &&
+        coerce_stack_top!(b, AnyRef, ctx; from_julia=R)
+    return b
 end
 
 # parity(quarantine: Julia's `isdefinedglobal` asks whether a module binding exists; dart has no

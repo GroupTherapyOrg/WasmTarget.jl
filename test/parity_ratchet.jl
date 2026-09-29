@@ -1109,13 +1109,17 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
-    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure; a call a builtin hides (invoke_in_world, a runtime-Vararg splat) is ONE edge relation, _builtin_call_edge_mi, that the collector enrolls its callee by and the pruner keeps it by, resolved in the overlay table (never the native `which`). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
             forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
-                         "try CC.specialize_method", "try collect(methods", "try which(f, ats)"]
-            required = ["while true", "hasmethod(f, ats) ? which(f, ats) : nothing",
+                         "try CC.specialize_method", "try collect(methods", "which(f, ats)"]
+            required = ["while true",
+                        "mi = _builtin_call_edge_mi(node, src_slot_types,",
+                        "local hidden = _builtin_call_edge_mi(node, pair_slot_types,",
+                        "return _invoke_in_world_target_mi(node, arg_type, lookup_table)",
+                        "matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
                         "collect_new_pairs!", "original_mi in protected ||",
                         "append!(prune_roots, _DYNAMIC_ROOT_MIS[])",

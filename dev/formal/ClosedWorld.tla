@@ -41,12 +41,16 @@
 (* the claim is only whether a throw during collection of a REACHABLE      *)
 (* method can be silently absorbed, not why it throws. The                 *)
 (* MethodInstance-identity bookkeeping in `_missing_explicit_invoke_mis`   *)
-(* (original vs. re-specialized invoke target) and the                     *)
-(* `_prune_external_leaf_subgraphs` reachability trim it triggers are      *)
-(* abstracted away entirely: they exist to keep stale abstract call edges  *)
-(* out of the FINAL codegen inputs, but they do not change WHICH methods   *)
-(* end up reachable, which is the only thing Completeness/NoOptOut/        *)
-(* FailureIsLoud/Idempotence are claims about. "Framework roots are        *)
+(* (original vs. re-specialized invoke target) is abstracted away. The     *)
+(* `_prune_external_leaf_subgraphs` reachability trim it triggers is NOT:  *)
+(* it keeps only what its own edge relation reaches, and a method it drops *)
+(* stays in `invoke_seen`, so it is never proposed again. A trim whose     *)
+(* relation is smaller than the collector's therefore changes which        *)
+(* methods end up collected -- until 2026-09-29 the pruner knew the        *)
+(* runtime-Vararg splat edge but not invoke_in_world's, and pruned the     *)
+(* callee the collector had just enrolled (smoke invoke_in_world). The     *)
+(* model carries the calls a builtin hides (HiddenEdges) and the trim      *)
+(* (Prune); PrunerSeesHidden = FALSE is that retired pruner. "Framework roots are        *)
 (* declarative" (L91) is modeled by seeding `collected` with `Roots`       *)
 (* unconditionally at Init, with no discovery step required to admit them. *)
 (*                                                                         *)
@@ -89,7 +93,9 @@ CONSTANTS
     DynTargets,       \* [Types -> SUBSET Methods]: concrete dispatch targets admitted for an observed runtime type
     SpecializeFails,  \* SUBSET Methods: methods whose CC.specialize_method throws (adversarial input)
     RoundCeiling,     \* Nat: 0 = unconditional (the real algorithm); k > 0 = the retired "for _round in 1:8" cap
-    SwallowFailures   \* BOOLEAN: FALSE = the real algorithm (a throw aborts); TRUE = a caught-and-dropped throw
+    SwallowFailures,  \* BOOLEAN: FALSE = the real algorithm (a throw aborts); TRUE = a caught-and-dropped throw
+    HiddenEdges,      \* [Methods -> SUBSET Methods]: calls a builtin hides in a collected method's IR (invoke_in_world, a runtime-Vararg splat)
+    PrunerSeesHidden  \* BOOLEAN: TRUE = the real algorithm (one relation, _builtin_call_edge_mi); FALSE = the retired splat-only pruner
 
 VARIABLES
     collected,        \* SUBSET Methods: methods with a compiled (CodeInstance, CodeInfo) pair -- codeinfos
@@ -97,11 +103,15 @@ VARIABLES
     discarded,        \* SUBSET Methods: methods whose specialization was swallowed (SwallowFailures branch only)
     observedTypes,    \* SUBSET Types: union of TypeSites over `collected` -- the real code's `runtime_types`
     status,           \* "Running" | "Done" | "Rejected"
-    steps             \* Nat: discovery actions taken so far -- what RoundCeiling bounds
+    steps,            \* Nat: discovery actions taken so far -- what RoundCeiling bounds
+    pruned            \* SUBSET Methods: methods the trim dropped -- still in invoke_seen, never proposed again
 
-vars == <<collected, pending, discarded, observedTypes, status, steps>>
+vars == <<collected, pending, discarded, observedTypes, status, steps, pruned>>
 
-Known == collected \cup pending \cup discarded
+Known == collected \cup pending \cup discarded \cup pruned
+
+(* the edges discovery follows out of a collected method *)
+CollectEdges(m) == InvokeEdges[m] \cup HiddenEdges[m]
 
 TypeOK ==
     /\ collected \subseteq Methods
@@ -110,14 +120,16 @@ TypeOK ==
     /\ observedTypes \subseteq Types
     /\ status \in {"Running", "Done", "Rejected"}
     /\ steps \in Nat
+    /\ pruned \subseteq Methods
 
 Init ==
     /\ collected = Roots
-    /\ pending = (UNION {InvokeEdges[m] : m \in Roots}) \ Roots
+    /\ pending = (UNION {CollectEdges(m) : m \in Roots}) \ Roots
     /\ discarded = {}
     /\ observedTypes = UNION {TypeSites[m] : m \in Roots}
     /\ status = "Running"
     /\ steps = 0
+    /\ pruned = {}
 
 ----------------------------------------------------------------------------
 (* Is there a dynamic call site, in an already-collected method, whose     *)
@@ -141,19 +153,19 @@ CollectMethod(m) ==
           \* the retired bug class: catch the throw and just drop the candidate
           /\ pending' = pending \ {m}
           /\ discarded' = discarded \cup {m}
-          /\ UNCHANGED <<collected, observedTypes, status>>
+          /\ UNCHANGED <<collected, observedTypes, status, pruned>>
        \/ /\ m \in SpecializeFails
           /\ ~SwallowFailures
           \* the real algorithm: specialize_method is never wrapped in a
           \* swallowing try/catch (L78) -- a throw aborts the whole plan
           /\ status' = "Rejected"
           /\ pending' = pending \ {m}
-          /\ UNCHANGED <<collected, observedTypes, discarded>>
+          /\ UNCHANGED <<collected, observedTypes, discarded, pruned>>
        \/ /\ m \notin SpecializeFails
           /\ collected' = collected \cup {m}
-          /\ pending' = (pending \ {m}) \cup (InvokeEdges[m] \ (collected' \cup discarded))
+          /\ pending' = (pending \ {m}) \cup (CollectEdges(m) \ (collected' \cup discarded \cup pruned))
           /\ observedTypes' = observedTypes \cup TypeSites[m]
-          /\ UNCHANGED <<status, discarded>>
+          /\ UNCHANGED <<status, discarded, pruned>>
 
 (* Re-scan every currently-collected method's dynamic call sites against   *)
 (* the CURRENT observed-types set and enqueue one newly-admitted target.   *)
@@ -170,7 +182,30 @@ DiscoverDynamic ==
                    /\ n \notin Known
                    /\ pending' = pending \cup {n}
     /\ steps' = steps + 1
-    /\ UNCHANGED <<collected, discarded, observedTypes, status>>
+    /\ UNCHANGED <<collected, discarded, observedTypes, status, pruned>>
+
+(* The reachability trim (`_prune_external_leaf_subgraphs`): keep only the *)
+(* collected methods its relation reaches from the roots and the dynamic   *)
+(* candidates (protected roots, `_DYNAMIC_ROOT_MIS`). It walks :invoke      *)
+(* edges and, when PrunerSeesHidden, the calls a builtin hides -- the same *)
+(* relation discovery enrolled them by. The real loop runs it whenever the *)
+(* superseded-invoke set grows; here it may run at any point.              *)
+PruneEdges(m) == InvokeEdges[m] \cup (IF PrunerSeesHidden THEN HiddenEdges[m] ELSE {})
+RECURSIVE PruneClosure(_)
+PruneClosure(S) ==
+    LET Live     == S \cap collected
+        Observed == UNION {TypeSites[m] : m \in Live}
+        Grown    == S \cup UNION {PruneEdges(m) : m \in Live}
+                      \cup UNION {DynTargets[T] : T \in UNION {DynSites[m] \cap Observed : m \in Live}}
+    IN  IF Grown = S THEN S ELSE PruneClosure(Grown)
+
+Prune ==
+    /\ status = "Running"
+    /\ LET keep == collected \cap PruneClosure(Roots)
+       IN  /\ keep # collected
+           /\ collected' = keep
+           /\ pruned' = pruned \cup (collected \ keep)
+    /\ UNCHANGED <<pending, discarded, observedTypes, status, steps>>
 
 (* The loop's `changed || break`: stop only once neither mechanism can add *)
 (* anything more -- a real, unconditional fixpoint. *)
@@ -179,7 +214,7 @@ Finish ==
     /\ pending = {}
     /\ ~DynamicWorkAvailable
     /\ status' = "Done"
-    /\ UNCHANGED <<collected, pending, discarded, observedTypes, steps>>
+    /\ UNCHANGED <<collected, pending, discarded, observedTypes, steps, pruned>>
 
 (* THE BROKEN VARIANT: a round/method-count cap forces the plan "done"     *)
 (* even though the worklist (or a still-resolvable dynamic candidate) is   *)
@@ -191,7 +226,7 @@ ForceStopAtCeiling ==
     /\ RoundCeiling > 0
     /\ steps >= RoundCeiling
     /\ status' = "Done"
-    /\ UNCHANGED <<collected, pending, discarded, observedTypes, steps>>
+    /\ UNCHANGED <<collected, pending, discarded, observedTypes, steps, pruned>>
 
 Stutter ==
     /\ status # "Running"
@@ -200,6 +235,7 @@ Stutter ==
 Next ==
     \/ \E m \in Methods : CollectMethod(m)
     \/ DiscoverDynamic
+    \/ Prune
     \/ Finish
     \/ ForceStopAtCeiling
     \/ Stutter
@@ -215,7 +251,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 RECURSIVE ReachClosure(_)
 ReachClosure(S) ==
     LET Observed          == UNION {TypeSites[m] : m \in S}
-        DirectTargets      == UNION {InvokeEdges[m] : m \in S}
+        DirectTargets      == UNION {CollectEdges(m) : m \in S}
         DynTargetsFrom(m)  == UNION {DynTargets[T] : T \in (DynSites[m] \cap Observed)}
         DynAll             == UNION {DynTargetsFrom(m) : m \in S}
         Grown              == S \cup DirectTargets \cup DynAll

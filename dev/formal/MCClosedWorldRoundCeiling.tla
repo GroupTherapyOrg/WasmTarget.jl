@@ -34,4 +34,6 @@ MCDynTargets == [t \in MCTypes |->
 MCSpecializeFails == {}
 MCRoundCeiling    == 3
 MCSwallowFailures == FALSE
+MCHiddenEdges     == [m \in MCMethods |-> {}]
+MCPrunerSeesHidden == TRUE
 =============================================================================

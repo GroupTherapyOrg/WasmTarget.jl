@@ -16,9 +16,14 @@
 (* dynamic-dispatch discovery to a fixpoint once, then invoke discovery    *)
 (* once, would still miss D discovered via B's dynamic site after B itself *)
 (* was found by an EARLIER dynamic-discovery pass.                         *)
+(*                                                                         *)
+(*   A  --hidden--> E   (invoke_in_world: no :invoke records it)           *)
+(*                                                                         *)
+(* E is reachable only through a call a builtin hides; the trim must keep  *)
+(* it (MCClosedWorldPrune drops it).                                       *)
 EXTENDS ClosedWorld
 
-MCMethods == {"R1", "R2", "A", "B", "C", "D"}
+MCMethods == {"R1", "R2", "A", "B", "C", "D", "E"}
 MCRoots   == {"R1", "R2"}
 MCTypes   == {"T1", "T2"}
 
@@ -44,4 +49,6 @@ MCDynTargets == [t \in MCTypes |->
 MCSpecializeFails == {}
 MCRoundCeiling    == 0
 MCSwallowFailures == FALSE
+MCHiddenEdges     == [m \in MCMethods |-> IF m = "A" THEN {"E"} ELSE {}]
+MCPrunerSeesHidden == TRUE
 =============================================================================

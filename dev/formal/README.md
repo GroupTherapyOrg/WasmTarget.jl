@@ -35,7 +35,7 @@ anchor in `src/` has a row.)
 | Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `emit_duplicated_terminal!` (stackified.jl) | Stackifier |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
-| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis` (trimcollect.jl) | ClosedWorld |
+| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis`, `_builtin_call_edge_mi`, `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
 | Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
 | Coercion funnel | `convert_type!` (values.jl) | Coercion |
 | Constant interning | `ensure_constant_global!` (types.jl) | Constants |

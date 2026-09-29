@@ -88,6 +88,90 @@ function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type}
     return CC.specialize_method(matches[1])
 end
 
+"""
+    _call_site_arg_type(node, slot_types, joins) -> Type | nothing
+
+The type a call site gives an operand: an SSA value's numeric join (`joins`, from
+propagate_numeric_value_types) or its inferred type, an argument's slot type, a constant's
+type. A slot, or a GlobalRef whose binding does not exist, has no call-site type to rebuild a
+specialization from. Declining is the only sound answer — an invented one would monomorphize
+the call onto a signature the program never calls.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+"""
+function _call_site_arg_type(node::NirNode, slot_types::Vector{Type},
+                             joins::Dict{Int,Type})::Union{Type,Nothing}
+    T = if node isa NirSSA && haskey(joins, node.id)
+        joins[node.id]
+    elseif node isa NirSSA
+        node.julia_type
+    elseif node isa NirArgument && 1 <= node.n <= length(slot_types)
+        slot_types[node.n]
+    elseif node isa NirGlobalRef && node.bound
+        Core.Const(node.value)
+    elseif node isa NirLiteral
+        Core.Const(node.value)
+    else
+        nothing
+    end
+    T === nothing && return nothing
+    T = CC.widenconst(T)
+    return T isa Type ? T : nothing
+end
+
+# The callee of `invoke_in_world(world, f, args...)` when `f` is a constant (a literal or a
+# bound global): a function or a type; otherwise nothing (a dynamic callee).
+# parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age, and a closed-world module has exactly one.)
+function _invoke_in_world_callee(target::NirNode)::Union{Function,Type,Nothing}
+    local f = target isa NirGlobalRef ? (target.bound ? target.value : nothing) :
+              target isa NirLiteral ? target.value : nothing
+    return (f isa Function || f isa Type) ? f : nothing
+end
+
+"""
+    _invoke_in_world_target_mi(node, arg_type, lookup_table) -> MethodInstance | nothing
+
+THE call edge of `Core.invoke_in_world(world, f, args...)`, which calls `f(args...)`: a
+closed world has one world, so the edge is that call's dispatch in the overlay table — the
+one method applicable to the operands' call-site types (`arg_type`). A callee that is not a
+constant, an operand with no call-site type, or a call more than one method matches has no
+static edge (the call site then rejects as a dynamic call).
+parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age,
+and a closed-world module has exactly one.)
+"""
+function _invoke_in_world_target_mi(node::NirCall, arg_type,
+                                    lookup_table)::Union{Core.MethodInstance,Nothing}
+    (length(node.operands) >= 2 && _nir_callee_object(node.callee) === Core.invoke_in_world) ||
+        return nothing
+    local f = _invoke_in_world_callee(node.operands[2])
+    f === nothing && return nothing
+    local arg_types = Any[]
+    for a in @view node.operands[3:end]
+        local T = arg_type(a)
+        T === nothing && return nothing
+        push!(arg_types, T)
+    end
+    local matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)
+    (matches !== nothing && length(matches) == 1) || return nothing
+    return CC.specialize_method(matches[1])
+end
+
+"""
+    _builtin_call_edge_mi(node, slot_types, arg_type, lookup_table) -> MethodInstance | nothing
+
+The static call a builtin hides and no `:invoke` records: a runtime-Vararg splat's
+(`_apply_iterate_vararg_target_mi`) or `invoke_in_world`'s (`_invoke_in_world_target_mi`).
+The one relation the collector enrolls these callees by and the pruner keeps them by, so a
+callee one enrolls the other cannot prune.
+formal(dev/formal/ClosedWorld.tla): the collected world is exactly the methods reachable from the roots
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+"""
+function _builtin_call_edge_mi(node::NirCall, slot_types::Vector{Type}, arg_type,
+                               lookup_table)::Union{Core.MethodInstance,Nothing}
+    local mi = _apply_iterate_vararg_target_mi(node, slot_types, lookup_table)
+    mi === nothing || return mi
+    return _invoke_in_world_target_mi(node, arg_type, lookup_table)
+end
+
 """Return explicit `:invoke` MethodInstances missing from a collected world.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
@@ -99,26 +183,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
         joins = get!(numeric_types, src) do
             propagate_numeric_value_types(nir)
         end
-        T = if node isa NirSSA && haskey(joins, node.id)
-            joins[node.id]
-        elseif node isa NirSSA
-            node.julia_type
-        elseif node isa NirArgument && 1 <= node.n <= length(slot_types)
-            slot_types[node.n]
-        elseif node isa NirGlobalRef && node.bound
-            Core.Const(node.value)
-        elseif node isa NirLiteral
-            Core.Const(node.value)
-        else
-            # A slot, or a GlobalRef whose binding does not exist: no call-site type to
-            # rebuild a specialization from. Declining is the only sound answer — an
-            # invented one would monomorphize the invoke onto a signature the program
-            # never calls.
-            nothing
-        end
-        T === nothing && return nothing
-        T = CC.widenconst(T)
-        return T isa Type ? T : nothing
+        return _call_site_arg_type(node, slot_types, joins)
     end
     for i in 2:2:length(codeinfos)
         src = codeinfos[i]
@@ -217,36 +282,13 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                     nir_retarget_invoke!(src, nir, k, mi)
                     original_mi in protected || push!(superseded, original_mi)
                 end
-            elseif node isa NirCall && length(node.operands) >= 2 &&
-                   _nir_callee_object(node.callee) === Core.invoke_in_world
-                # invoke_in_world(world, f, args...) — the callee is the SECOND operand.
-                local operands = node.operands
-                local target = operands[2]
-                f = target isa NirGlobalRef ? (target.bound ? target.value : nothing) :
-                    target isa NirLiteral ? target.value : nothing
-                (f isa Function || f isa Type) || continue
-                arg_types = Any[]
-                valid = true
-                for a in @view operands[3:end]
-                    T = a isa NirSSA ? a.julia_type :
-                        a isa NirLiteral ? Core.Typeof(a.value) :
-                        (a isa NirGlobalRef && a.bound) ? Core.Typeof(a.value) : nothing
-                    T isa Type || (valid = false; break)
-                    push!(arg_types, T)
-                end
-                if valid
-                    ats = Tuple(arg_types)
-                    m = hasmethod(f, ats) ? which(f, ats) : nothing
-                    m === nothing || (mi = CC.specialize_method(
-                        m, Tuple{Core.Typeof(f), arg_types...}, Core.svec()))
-                end
-            else
-                # The runtime-Vararg splat edge (_apply_iterate_vararg_target_mi, ir.jl):
-                # a static call the collector cannot see, because it hides behind a
-                # builtin and no `:invoke` records it.
-                node isa NirCall || continue
-                mi = _apply_iterate_vararg_target_mi(node, src_slot_types, lookup_table)
+            elseif node isa NirCall
+                # the static call a builtin hides (_builtin_call_edge_mi)
+                mi = _builtin_call_edge_mi(node, src_slot_types,
+                                           a -> ir_arg_type(a, src, nir, src_slot_types), lookup_table)
                 mi === nothing && continue
+            else
+                continue
             end
             mi isa Core.MethodInstance || continue
             mi in seen && continue
@@ -635,17 +677,20 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
         pair = get(pairs, mi, nothing)
         pair === nothing && continue
         local pair_slot_types = nir_slot_types(pair[2])
-        for s in build_nir(pair[2])
+        local pair_nir = build_nir(pair[2])
+        local pair_joins = propagate_numeric_value_types(pair_nir)
+        for s in pair_nir
             local node = s.node
             if node isa NirInvoke
                 node.mi isa Core.MethodInstance && push!(queue, node.mi)
             elseif node isa NirCall
-                # The reachability relation must contain EVERY call edge, including the
-                # runtime-Vararg splat's (_apply_iterate_vararg_target_mi, ir.jl) —
-                # otherwise the callee that _missing_explicit_invoke_mis enrolled is
-                # pruned right back out and the call site rejects a lowerable splat.
-                splat_mi = _apply_iterate_vararg_target_mi(node, pair_slot_types, lookup_table)
-                splat_mi === nothing || push!(queue, splat_mi)
+                # The reachability relation must contain EVERY call edge, including those a
+                # builtin hides (_builtin_call_edge_mi, the relation the collector enrolled
+                # them by) — otherwise the callee _missing_explicit_invoke_mis enrolled is
+                # pruned right back out and the call site rejects a lowerable call.
+                local hidden = _builtin_call_edge_mi(node, pair_slot_types,
+                    a -> _call_site_arg_type(a, pair_slot_types, pair_joins), lookup_table)
+                hidden === nothing || push!(queue, hidden)
             end
         end
     end
