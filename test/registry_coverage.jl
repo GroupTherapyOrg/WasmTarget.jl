@@ -87,8 +87,8 @@ end
 # UNREACHED/UNREACHABLE (a deletion candidate) or the smoke xfail case that reaches it.
 const ALLOWLIST = Dict{Tuple{Symbol,String},String}(
     (:BUILTIN_LOWERINGS, "Core.apply_type") => "fires for a runtime Union{T, Nothing} and rejects: jl_type_union's normalization is not ported — smoke xfail apply_type_union (measured 2026-09-27)",
-    (:BUILTIN_LOWERINGS, "Base.getproperty") => "fires on an Any receiver, then the compile rejects in the getproperty(::UInt64, ::Symbol) dispatch candidate — smoke xfail builtin_crashes/getproperty_any (measured 2026-09-22)",
-    (:BUILTIN_LOWERINGS, "Base.setproperty!") => "fires on an Any receiver, then the compile rejects — smoke xfail builtin_crashes/setproperty_any (measured 2026-09-22)",
+    (:BUILTIN_LOWERINGS, "Base.getproperty") => "fires on an Any receiver; the struct and primitive candidates compile (smoke getfield_runtime_name), and the getproperty(::Memory{Any}, ::Symbol) candidate rejects: a runtime-name read of a Memory could be its `ptr` — smoke xfail builtin_crashes/getproperty_any (measured 2026-09-29)",
+    (:BUILTIN_LOWERINGS, "Base.setproperty!") => "fires on an Any receiver; the setproperty!(::Memory{Any}, ::Symbol, ::Int64) candidate rejects at fieldtype(Memory{Any}, name) with a runtime name — smoke xfail builtin_crashes/setproperty_any (measured 2026-09-29)",
     (:FOREIGN_LOWERINGS, "jl_ptr_to_array_1d") => "fires for unsafe_wrap(Array, pointer(v), n) and declines (pointer not traced) — smoke xfail pointer_foreigncalls/unsafe_wrap_pointer (measured 2026-09-22)",
     (:FOREIGN_LOWERINGS, "jl_value_ptr") => "every measured spelling (pointer_from_objref of a Ref, graphemes, isgraphemebreak!) rejects 'escapes storage-relative WasmGC operations' — smoke xfail pointer_foreigncalls/ref_pointer_load (measured 2026-09-22)",
 )

@@ -287,6 +287,24 @@ nop!(b::InstrBuilder)::InstrBuilder = _emit!(b, InstrIR.Nop())
 # under-counted (the .block strict family). Derive the tracked results from the
 # positional blocktype when the kwarg is empty. (An Int blocktype = an s33 type-index
 # multi-value frame — callers pass `results` explicitly there.)
+# The encoded block type and the tracked frame signature are one fact — dart derives the block
+# type from the frame's inputs and outputs (instructions.dart:729) — so a disagreement is a
+# codegen bug, rejected here rather than encoded: a void 0x40 frame has no inputs or results, a
+# value-type frame has that one result, and only a type-index frame carries inputs or several
+# results. `if_!(b; results=[T])` once validated as typed and encoded void: the engine rejected
+# the module ("expected 0 elements on the stack for fallthru").
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
+function _check_blocktype(blocktype, inputs, results)::Nothing
+    local ok = blocktype === 0x40 ? (isempty(inputs) && isempty(results)) :
+               blocktype isa UInt8 ? false :   # a raw value-type byte: the frame names its type
+               blocktype isa WasmValType ?
+                   (isempty(inputs) && (isempty(results) || (length(results) == 1 && results[1] == blocktype))) :
+               blocktype isa Int
+    ok || throw(ArgumentError("block type $(repr(blocktype)) disagrees with the frame's inputs " *
+                              "$(inputs) and results $(results)"))
+    return nothing
+end
+
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
 @inline _blocktype_results(blocktype, results)::Vector{WasmValType} =
     !isempty(results) ? WasmValType[r for r in results] :
@@ -296,6 +314,7 @@ nop!(b::InstrBuilder)::InstrBuilder = _emit!(b, InstrIR.Nop())
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block)
 function block!(b::InstrBuilder, blocktype=0x40;
                 inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
+    _check_blocktype(blocktype, inputs, results)
     label = validate_block_start!(b.v, :block, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Block(blocktype)); return label
@@ -303,6 +322,7 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:741 InstructionsBuilder.loop)
 function loop!(b::InstrBuilder, blocktype=0x40;
                inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
+    _check_blocktype(blocktype, inputs, results)
     label = validate_block_start!(b.v, :loop, WasmValType[t for t in inputs],
                                   _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.Loop(blocktype)); return label
@@ -310,6 +330,7 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:753 InstructionsBuilder.if_)
 function if_!(b::InstrBuilder, blocktype=0x40;
               inputs::Vector{<:Any}=WasmValType[], results::Vector{<:Any}=WasmValType[])::ControlLabel
+    _check_blocktype(blocktype, inputs, results)
     label = validate_if_start!(b.v, WasmValType[t for t in inputs],
                                _blocktype_results(blocktype, results))
     _emit!(b, InstrIR.If(blocktype)); return label
@@ -516,6 +537,7 @@ catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
 # so here we only start the block label — matching how block!/loop! work.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:907 InstructionsBuilder.try_table)
 function try_table!(b::InstrBuilder, catches::Vector, blocktype=0x40; results::Vector{<:Any}=WasmValType[])::ControlLabel
+    _check_blocktype(blocktype, WasmValType[], results)
     for c in catches
         c isa SymbolicTryCatch || throw(ArgumentError(
             "try_table catches must retain symbolic ControlLabel targets"))

@@ -910,8 +910,10 @@ _xf("builtin_crashes", Any[
     # reverse-subtype pass then bound it to a compiled `Symbol(::String)`.
     ("symbol_any_int", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === Symbol("12") ? 1 : 0), Int64(1)),
     ("symbol_any_string", (x::Int64) -> (v = Any[12, "cde"]; Symbol(v[x]) === :cde ? 1 : 0), Int64(2)),
-    # Base.getproperty on an Any element: the dispatch candidate getproperty(::UInt64,
-    # ::Symbol) rejects "getfield call shape not lowerable"
+    # Base.getproperty/setproperty! on an Any element: the struct and primitive dispatch
+    # candidates compile (getfield_runtime_name); the Memory{Any} candidate rejects — its
+    # getfield by a runtime name could read `ptr`, which escapes the storage-pointer algebra,
+    # and setproperty! asks fieldtype(Memory{Any}, name) (MARCH 13.10)
     ("getproperty_any", (x::Int64) -> (v = Any[_Pt(x, 2)]; v[1].x::Int64), Int64(5)),
     ("setproperty_any", (x::Int64) -> (v = Any[_Box(1)]; v[1].v = x; (v[1]::_Box).v), Int64(5)),
 ])
@@ -1448,6 +1450,22 @@ _g("invoke_in_world", Any[
     ("argument_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), abs, x)::Int64, Int64(-3)),
     ("ssa_operand", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), +, x * 2, 1)::Int64, Int64(4)),
     ("float_result", (x::Int64) -> Base.invoke_in_world(Base.tls_world_age(), sqrt, Float64(x))::Float64 > 2.0 ? 1 : 0, Int64(5)),
+])
+# getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
+# getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
+# that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field
+# names), always throws. Until 2026-09-29 it rejected "getfield call shape not lowerable".
+struct _SmMix; a::Int64; b::Float64; s::String; end
+_sm_rn_name(x) = x > 2 ? :x : x > 0 ? :y : :z
+_g("getfield_runtime_name", Any[
+    ("struct_first_field", (x::Int64) -> getfield(_Pt(x, 20), _sm_rn_name(x))::Int64, Int64(3)),
+    ("struct_second_field", (x::Int64) -> getfield(_Pt(x, 20), _sm_rn_name(x))::Int64, Int64(1)),
+    ("struct_no_such_field", (x::Int64) -> (try; getfield(_Pt(x, 20), _sm_rn_name(x)); 0; catch e; e isa FieldError && e.field === :z && e.type === _Pt ? 1 : 2; end), Int64(0)),
+    ("mixed_fields_boxed", (x::Int64) -> (v = getfield(_SmMix(x, 1.5, "q"), x > 0 ? :b : :a); v isa Float64 ? 1 : 2), Int64(1)),
+    ("mixed_fields_boxed_int", (x::Int64) -> (v = getfield(_SmMix(x, 1.5, "q"), x > 0 ? :b : :a); v isa Int64 ? (v::Int64) : -1), Int64(-4)),
+    ("string_field", (x::Int64) -> (v = getfield(_SmMix(x, 1.5, "qq"), x > 0 ? :s : :a); v isa String ? ncodeunits(v) : -1), Int64(1)),
+    ("primitive_has_no_fields", (x::Int64) -> (try; getfield(UInt64(x), _sm_rn_name(x)); 0; catch e; e isa FieldError && e.type === UInt64 ? 7 : 8; end), Int64(1)),
+    ("tuple_names_are_integers", (x::Int64) -> (try; getfield((x, 2), _sm_rn_name(x)); 0; catch e; e isa FieldError ? 1 : 2; end), Int64(3)),
 ])
 _g("sizeof_values", Any[
     ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),

@@ -206,11 +206,11 @@ function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
     local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
 
     # If lengths differ → 0; else compare elements
-    if_!(b, 0x7F; results=WasmValType[I32])
+    if_!(b, I32)
         i32_const!(b, 0)                                   # lengths differ → not equal
     else_!(b)
         i32_const!(b, 0); local_set!(b, i_local)           # i = 0
-        done_label = block!(b, 0x7F; results=WasmValType[I32]) # break-with-result block
+        done_label = block!(b, I32) # break-with-result block
             loop_label = loop!(b, 0x40)                    # void loop
                 # if i >= len → all matched, push 1 and break to block
                 local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)

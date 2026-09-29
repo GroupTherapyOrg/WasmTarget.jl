@@ -150,10 +150,11 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     return bld
 end
 
-"""Emit Julia's exact `FieldError(type, field)` through the typed exception tag.
+"""Emit Julia's exact `FieldError(type, field)` through the typed exception tag; `field` is
+the name, or the operand that holds it at run time.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
-                            @nospecialize(owner_type), field::Symbol)::InstrBuilder
+                            @nospecialize(owner_type), field::Union{Symbol,NirNode})::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, FieldError)
@@ -162,14 +163,66 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     fields = ctx.mod.types[info.wasm_type_idx + 1].fields
     emit_value!(bld, NirLiteral(owner_type), ctx, fields[Int(info.field_offset) + 1].valtype;
                 from_julia=DataType)
-    emit_value!(bld, NirLiteral(field), ctx, fields[Int(info.field_offset) + 2].valtype;
-                from_julia=Symbol)
+    emit_value!(bld, field isa Symbol ? NirLiteral(field) : field, ctx,
+                fields[Int(info.field_offset) + 2].valtype; from_julia=Symbol)
     struct_new!(bld, info.wasm_type_idx)
     global_set!(bld, exn_global)
     global_get!(bld, exn_global, AnyRef)
     ref_null!(bld, ExternRef)
     throw_!(bld, 0; inputs=WasmValType[AnyRef, ExternRef])
     return bld
+end
+
+"""
+    _emit_getfield_runtime_name!(bld, ctx, idx, obj, name, T) -> Bool
+
+`getfield(obj::T, name)` with a Symbol known only at run time, as jl_f_getfield answers it:
+the field whose name equals `name`, compared in declaration order (jl_field_index), else
+`FieldError(T, name)`. A type with no fields, or a Tuple (its field names are integers),
+always throws. The value lands at the statement's type: a concrete statement type is every
+field's own (each field read as the constant-name read reads it); otherwise each field is
+boxed into anyref by its field type. False, leaving the call to reject, for a layout this
+does not read by field (an array, a NamedTuple, a MemoryRef) or fields of mixed types
+under a concrete statement type.
+parity(quarantine: jl_f_getfield with a runtime field name (builtins.c, jl_field_index); a dart member is selected statically or by a dynamic invocation forwarder's selector, never by a runtime name.)
+"""
+function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilationContext, idx::Int,
+                                      obj::NirNode, name::NirNode, T::DataType)::Bool
+    local names = fieldcount(T) == 0 || T <: Tuple ? () : fieldnames(T)
+    if isempty(names)
+        local eb = _ctx_builder(ctx, "compile_call.fielderror")
+        _emit_field_error!(eb, ctx, T, name)
+        append_builder!(bld, eb)
+        return true
+    end
+    is_struct_type(T) || return false
+    local info = haskey(ctx.type_registry.structs, T) ? ctx.type_registry.structs[T] :
+                 register_struct_type!(ctx.mod, ctx.type_registry, T)
+    info === nothing && return false
+    local flds = ctx.mod.types[info.wasm_type_idx + 1].fields
+    local R = get(ctx.ssa_types, idx, Any)
+    local out = if isconcretetype(R)
+        all(i -> fieldtype(T, i) === R, eachindex(names)) || return false
+        flds[Int(info.field_offset) + 1].valtype
+    else
+        AnyRef
+    end
+    local ib = _ctx_builder(ctx, "compile_call.getfield_runtime_name")
+    for (i, fname) in enumerate(names)
+        append_builder!(ib, compile_string_equal_b(name, NirLiteral(fname), ctx))
+        if_!(ib, out)
+        local wfi = UInt32(i - 1 + Int(info.field_offset))
+        emit_value!(ib, obj, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
+        struct_get!(ib, info.wasm_type_idx, wfi, flds[Int(wfi) + 1].valtype)
+        out === AnyRef && coerce_stack_top!(ib, AnyRef, ctx; from_julia=fieldtype(T, i))
+        else_!(ib)
+    end
+    _emit_field_error!(ib, ctx, T, name)
+    for _ in names
+        end_block!(ib)
+    end
+    append_builder!(bld, ib)
+    return true
 end
 
 """Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot.
@@ -3809,6 +3862,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                   end
                 end
             end
+        end
+        # getfield(x::T, f) with a field name known only at run time: a dispatch candidate of
+        # getproperty(x, f::Symbol) over a concrete class (_emit_getfield_runtime_name!)
+        if !_gfc_done && func === Core.getfield && length(args) == 2 &&
+           !(nir_const(args[2]) isa Symbol) && get_ssa_type(ctx, args[2]) === Symbol
+            local _rn_T = get_ssa_type(ctx, args[1])
+            _rn_T isa DataType && isconcretetype(_rn_T) &&
+                (_gfc_done = _emit_getfield_runtime_name!(fb, ctx, idx, args[1], args[2], _rn_T))
         end
         if !_gfc_done
             record_unsupported!(ctx, :unsupported_method,

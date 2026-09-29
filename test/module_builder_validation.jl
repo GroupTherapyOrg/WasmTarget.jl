@@ -374,7 +374,10 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             MBV.WasmValType[MBV.AnyRef, MBV.ExternRef], MBV.WasmValType[]))
         tag = MBV.add_tag!(m, tag_type)
         catches = MBV.InstrBuilder(; mod=m)
-        landing = MBV.block!(catches; results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
+        landing_type = MBV.add_type!(m, MBV.FuncType(
+            MBV.WasmValType[], MBV.WasmValType[MBV.AnyRef, MBV.ExternRef]))
+        landing = MBV.block!(catches, Int(landing_type);
+                             results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
         MBV.try_table!(catches, [MBV.catch_clause(tag, landing)])
         MBV.end_block!(catches)
         MBV.unreachable!(catches)
@@ -384,9 +387,31 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.finish_function!(catches)
 
         bad_catch = MBV.InstrBuilder(; mod=m)
-        wrong = MBV.block!(bad_catch; results=MBV.WasmValType[MBV.I32])
+        wrong = MBV.block!(bad_catch, MBV.I32)
         @test_throws MBV.StackImbalanceError MBV.try_table!(
             bad_catch, [MBV.catch_clause(tag, wrong)])
+    end
+
+    @testset "a frame's encoded block type is its signature (dart derives it, instructions.dart:729)" begin
+        # `if_!(b; results=[T])` once validated as typed and encoded a void block type: the
+        # engine rejected the module ("expected 0 elements on the stack for fallthru")
+        m = MBV.WasmModule()
+        mk() = (b = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[]; mod=m);
+                MBV.local_get!(b, 0); b)
+        @test_throws ArgumentError MBV.if_!(mk(); results=MBV.WasmValType[MBV.I32])
+        @test_throws ArgumentError MBV.if_!(mk(), MBV.I32; results=MBV.WasmValType[MBV.I64])
+        @test_throws ArgumentError MBV.if_!(mk(), 0x7f)
+        @test_throws ArgumentError MBV.block!(MBV.InstrBuilder(; mod=m); results=MBV.WasmValType[MBV.I32])
+        @test_throws ArgumentError MBV.loop!(MBV.InstrBuilder(; mod=m); inputs=MBV.WasmValType[MBV.I32])
+        ok = mk()
+        MBV.if_!(ok, MBV.I32)
+        MBV.i32_const!(ok, 1)
+        MBV.else_!(ok)
+        MBV.i32_const!(ok, 2)
+        MBV.end_block!(ok)
+        MBV.drop!(ok)
+        MBV.finish_function!(ok)
+        @test true
     end
 
     @testset "an if's then-branch is typed against the if's results at else" begin

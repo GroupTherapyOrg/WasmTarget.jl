@@ -2405,8 +2405,14 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 # Get the field index (1-indexed in Julia)
                 field_idx = if nir_const(field_ref) isa Integer
                     nir_const(field_ref)
-                elseif field_ref isa NirSSA || field_ref isa NirArgument
-                    # Dynamic index - will be handled below for homogeneous tuples.
+                elseif (field_ref isa NirSSA || field_ref isa NirArgument) &&
+                       typeintersect(get_ssa_type(ctx, field_ref), Integer) !== Union{}
+                    # Dynamic index - will be handled below for homogeneous tuples. A field
+                    # operand that cannot be an integer (a Symbol name) is not an index: the
+                    # call declines here and compile_call! reads it by name
+                    # (_emit_getfield_runtime_name!: a Tuple's names are integers, so it
+                    # throws FieldError). Until 2026-09-29 a Symbol was cast to an Int box
+                    # here and trapped (smoke getfield_runtime_name/tuple_names_are_integers).
                     # `Core.Argument`: the index is a bare function parameter, e.g.
                     # `f(x) = (31,28,…)[x]` → `getfield(tuple, _2, boundscheck)` (gap
                     # d4409a896f5b — daysinmonth's DAYSINMONTH[m] lookup table). Without
